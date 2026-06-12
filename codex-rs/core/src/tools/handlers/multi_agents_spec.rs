@@ -26,7 +26,6 @@ pub struct SpawnAgentToolOptions {
     pub hide_agent_type_model_reasoning: bool,
     pub include_usage_hint: bool,
     pub usage_hint_text: Option<String>,
-    pub max_concurrent_threads_per_session: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,7 +101,6 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions) -> ToolSpec {
             inherited_model_guidance,
             options.include_usage_hint,
             options.usage_hint_text,
-            options.max_concurrent_threads_per_session,
         ),
         strict: false,
         defer_loading: None,
@@ -722,17 +720,9 @@ fn spawn_agent_tool_description_v2(
     inherited_model_guidance: Option<&str>,
     include_usage_hint: bool,
     usage_hint_text: Option<String>,
-    max_concurrent_threads_per_session: Option<usize>,
 ) -> String {
     let agent_role_guidance = available_models_description.unwrap_or_default();
     let inherited_model_guidance = inherited_model_guidance.unwrap_or_default();
-    let concurrency_guidance = max_concurrent_threads_per_session
-        .map(|limit| {
-            format!(
-                "This session is configured with `max_concurrent_threads_per_session = {limit}` for concurrently open agent threads."
-            )
-        })
-        .unwrap_or_default();
 
     let tool_description = format!(
         r#"
@@ -743,8 +733,7 @@ The spawned agent will have the same tools as you and the ability to spawn its o
 {inherited_model_guidance}
 Only call this tool for a concrete, bounded subtask that can run independently alongside useful local work; otherwise continue locally.
 It will be able to send you and other running agents messages, and its final answer will be provided to you when it finishes.
-The new agent's canonical task name will be provided to it along with the message.
-{concurrency_guidance}"#
+The new agent's canonical task name will be provided to it along with the message."#
     );
 
     if !include_usage_hint {

@@ -4,6 +4,7 @@ use std::sync::PoisonError;
 use std::sync::Weak;
 use std::time::Duration;
 
+use codex_analytics::AnalyticsEventsClient;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -1114,6 +1115,7 @@ async fn installed_tools_with_start(
     install_with_backend(
         &mut builder,
         runtime,
+        AnalyticsEventsClient::disabled(),
         /*metrics_client*/ None,
         Weak::new(),
         goal_service,
@@ -1164,6 +1166,7 @@ impl GoalExtensionHarness {
         install_with_backend(
             &mut builder,
             runtime,
+            AnalyticsEventsClient::disabled(),
             /*metrics_client*/ None,
             Weak::new(),
             Arc::clone(&goal_service),
@@ -1338,6 +1341,7 @@ fn tool_call(tool_name: &str, call_id: &str, arguments: serde_json::Value) -> To
         truncation_policy: TruncationPolicy::Bytes(1024),
         conversation_history: codex_extension_api::ConversationHistory::default(),
         turn_item_emitter: Arc::new(NoopTurnItemEmitter),
+        environments: Vec::new(),
         payload: ToolPayload::Function {
             arguments: arguments.to_string(),
         },

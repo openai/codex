@@ -8,6 +8,7 @@ use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
 use crate::error_code::invalid_request;
+use crate::extensions::ThreadExtensionDependencies;
 use crate::extensions::app_server_extension_event_sink;
 use crate::extensions::guardian_agent_spawner;
 use crate::extensions::thread_extensions;
@@ -45,7 +46,6 @@ use crate::thread_state::ConnectionCapabilities;
 use crate::thread_state::ThreadStateManager;
 use crate::transport::AppServerTransport;
 use crate::transport::RemoteControlHandle;
-use async_trait::async_trait;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::AuthMode as LoginAuthMode;
@@ -71,6 +71,7 @@ use codex_core::config::Config;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_goal_extension::GoalService;
+use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::AuthManager;
 use codex_login::auth::ExternalAuth;
 use codex_login::auth::ExternalAuthRefreshContext;
@@ -103,13 +104,6 @@ impl ExternalAuthRefreshBridge {
         match reason {
             ExternalAuthRefreshReason::Unauthorized => ChatgptAuthTokensRefreshReason::Unauthorized,
         }
-    }
-}
-
-#[async_trait]
-impl ExternalAuth for ExternalAuthRefreshBridge {
-    fn auth_mode(&self) -> LoginAuthMode {
-        LoginAuthMode::Chatgpt
     }
 
     async fn refresh(
@@ -158,6 +152,19 @@ impl ExternalAuth for ExternalAuthRefreshBridge {
             response.chatgpt_account_id,
             response.chatgpt_plan_type,
         ))
+    }
+}
+
+impl ExternalAuth for ExternalAuthRefreshBridge {
+    fn auth_mode(&self) -> LoginAuthMode {
+        LoginAuthMode::Chatgpt
+    }
+
+    fn refresh(
+        &self,
+        context: ExternalAuthRefreshContext,
+    ) -> codex_login::ExternalAuthFuture<'_, ExternalAuthTokens> {
+        Box::pin(ExternalAuthRefreshBridge::refresh(self, context))
     }
 }
 
@@ -324,13 +331,23 @@ impl MessageProcessor {
                 environment_manager,
                 thread_extensions(
                     guardian_agent_spawner(thread_manager.clone()),
-                    app_server_extension_event_sink(outgoing.clone(), thread_state_manager.clone()),
-                    auth_manager.clone(),
-                    state_db.clone(),
-                    thread_manager.clone(),
-                    Arc::clone(&goal_service),
-                    Arc::clone(&executor_skill_provider),
+                    ThreadExtensionDependencies {
+                        event_sink: app_server_extension_event_sink(
+                            outgoing.clone(),
+                            thread_state_manager.clone(),
+                        ),
+                        auth_manager: auth_manager.clone(),
+                        state_db: state_db.clone(),
+                        analytics_events_client: analytics_events_client.clone(),
+                        thread_manager: thread_manager.clone(),
+                        goal_service: Arc::clone(&goal_service),
+                        executor_skill_provider: Arc::clone(&executor_skill_provider),
+                        thread_store: Arc::clone(&thread_store),
+                    },
                 ),
+                Arc::new(CodexHomeUserInstructionsProvider::new(
+                    config.codex_home.clone(),
+                )),
                 Some(analytics_events_client.clone()),
                 Arc::clone(&thread_store),
                 state_db.clone(),
@@ -393,7 +410,7 @@ impl MessageProcessor {
             Arc::clone(&thread_manager),
             Arc::clone(&config),
             feedback,
-            log_db,
+            log_db.clone(),
             state_db.clone(),
         );
         let git_processor = GitRequestProcessor::new();
@@ -447,6 +464,7 @@ impl MessageProcessor {
             Arc::clone(&thread_list_state_permit),
             thread_goal_processor.clone(),
             state_db,
+            log_db,
             Arc::clone(&skills_watcher),
         );
         let turn_processor = TurnRequestProcessor::new(
@@ -1064,6 +1082,11 @@ impl MessageProcessor {
                     .thread_archive(request_id.clone(), params)
                     .await
             }
+            ClientRequest::ThreadDelete { params, .. } => {
+                self.thread_processor
+                    .thread_delete(request_id.clone(), params)
+                    .await
+            }
             ClientRequest::ThreadIncrementElicitation { params, .. } => {
                 self.thread_processor
                     .thread_increment_elicitation(params)
@@ -1117,6 +1140,16 @@ impl MessageProcessor {
             ClientRequest::ThreadBackgroundTerminalsClean { params, .. } => {
                 self.thread_processor
                     .thread_background_terminals_clean(&request_id, params)
+                    .await
+            }
+            ClientRequest::ThreadBackgroundTerminalsList { params, .. } => {
+                self.thread_processor
+                    .thread_background_terminals_list(params)
+                    .await
+            }
+            ClientRequest::ThreadBackgroundTerminalsTerminate { params, .. } => {
+                self.thread_processor
+                    .thread_background_terminals_terminate(params)
                     .await
             }
             ClientRequest::ThreadRollback { params, .. } => {

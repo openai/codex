@@ -34,7 +34,6 @@ use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_compact_json_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -1441,21 +1440,32 @@ async fn resumed_thread_runs_resume_then_compact_session_start_hooks() -> Result
     let remote_summary = "remote compact summary";
     let resume_context = "remember the resumed reef";
     let compact_context = "remember the compacted reef";
-    let compacted_history = vec![
-        ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: remote_summary.to_string(),
-            }],
-            phase: None,
-        },
-        ResponseItem::Compaction {
-            encrypted_content: "encrypted compact summary".to_string(),
-        },
-    ];
-    let compact_mock =
-        mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
+    let responses_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "hello before resume"),
+                ev_completed_with_tokens("resp-1", over_limit_tokens),
+            ]),
+            sse(vec![
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": remote_summary,
+                    }
+                }),
+                ev_completed("resp-compact"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "hello after resume"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
 
     let mut builder = test_codex()
         .with_pre_build_hook(move |home| {
@@ -1479,37 +1489,19 @@ async fn resumed_thread_runs_resume_then_compact_session_start_hooks() -> Result
         .clone()
         .context("rollout path")?;
 
-    mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "hello before resume"),
-            ev_completed_with_tokens("resp-1", over_limit_tokens),
-        ]),
-    )
-    .await;
     initial.submit_turn("hello before resume").await?;
-    assert!(compact_mock.requests().is_empty());
+    assert_eq!(responses_mock.requests().len(), 1);
 
     let mut resume_builder = test_codex().with_config(move |config| {
         config.model_auto_compact_token_limit = Some(limit);
         trust_discovered_hooks(config);
     });
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
-    let follow_up = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-2"),
-            ev_assistant_message("msg-2", "hello after resume"),
-            ev_completed("resp-2"),
-        ]),
-    )
-    .await;
-
     resumed.submit_turn("hello after resume").await?;
 
-    assert_eq!(compact_mock.requests().len(), 1);
-    let developer_messages = follow_up.single_request().message_input_texts("developer");
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let developer_messages = requests[2].message_input_texts("developer");
     assert!(
         developer_messages
             .iter()
