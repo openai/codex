@@ -16,7 +16,6 @@ use crate::session::turn_context::TurnContext;
 use codex_api::OPENAI_FILE_UPLOAD_LIMIT_BYTES;
 use codex_api::upload_openai_file;
 use codex_login::CodexAuth;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use serde_json::Value as JsonValue;
 
@@ -123,8 +122,7 @@ async fn build_uploaded_argument_value(
             "no primary turn environment is available".to_string(),
         ));
     };
-    let resolved_path = AbsolutePathBuf::try_from(file_path)
-        .map_err(|error| contextualize_error(error.to_string()))?;
+    let resolved_path = turn_environment.cwd().join(file_path);
     let path_uri = PathUri::from_abs_path(&resolved_path).map_err(|error| {
         contextualize_error(format!(
             "unable to resolve `{}`: {error}",
@@ -187,6 +185,7 @@ mod tests {
     use super::*;
     use crate::session::tests::make_session_and_context;
     use crate::session::turn_context::TurnEnvironment;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::path::Path;
     use std::sync::Arc;
@@ -291,7 +290,7 @@ mod tests {
             Some(&auth),
             "file",
             /*index*/ None,
-            local_path.to_string_lossy().as_ref(),
+            "file_report.csv",
         )
         .await
         .expect("rewrite should upload the local file");
@@ -325,7 +324,7 @@ mod tests {
             Some(&auth),
             "file",
             /*index*/ None,
-            file_path.to_string_lossy().as_ref(),
+            "oversized.bin",
         )
         .await
         .expect_err("oversized file should be rejected");
@@ -395,7 +394,7 @@ mod tests {
             &turn_context,
             Some(&auth),
             "file",
-            &serde_json::json!(local_path),
+            &serde_json::json!("file_report.csv"),
         )
         .await
         .expect("rewrite should succeed");
@@ -494,12 +493,10 @@ mod tests {
         let (_, mut turn_context) = make_session_and_context().await;
         let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
         let dir = tempdir().expect("temp dir");
-        let one_path = dir.path().join("one.csv");
-        let two_path = dir.path().join("two.csv");
-        tokio::fs::write(&one_path, b"one")
+        tokio::fs::write(dir.path().join("one.csv"), b"one")
             .await
             .expect("write first local file");
-        tokio::fs::write(&two_path, b"two")
+        tokio::fs::write(dir.path().join("two.csv"), b"two")
             .await
             .expect("write second local file");
         set_primary_environment_cwd(&mut turn_context, dir.path());
@@ -511,7 +508,7 @@ mod tests {
             &turn_context,
             Some(&auth),
             "files",
-            &serde_json::json!([one_path, two_path]),
+            &serde_json::json!(["one.csv", "two.csv"]),
         )
         .await
         .expect("rewrite should succeed");
