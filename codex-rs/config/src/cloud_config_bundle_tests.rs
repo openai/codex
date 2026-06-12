@@ -4,23 +4,104 @@ use crate::ConfigRequirementsToml;
 use crate::compose_requirements;
 use codex_protocol::protocol::AskForApproval;
 use pretty_assertions::assert_eq;
-use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 use tempfile::tempdir;
 
-#[tokio::test]
-async fn shared_future_runs_once() {
-    let counter = Arc::new(AtomicUsize::new(0));
-    let counter_clone = Arc::clone(&counter);
-    let loader = CloudConfigBundleLoader::new(async move {
-        counter_clone.fetch_add(1, Ordering::SeqCst);
-        Ok(Some(CloudConfigBundle::default()))
-    });
+fn bundle_with_model(model: &str) -> CloudConfigBundle {
+    CloudConfigBundle {
+        config_toml: CloudConfigTomlBundle {
+            enterprise_managed: vec![CloudConfigFragment {
+                id: model.to_string(),
+                name: model.to_string(),
+                contents: format!("model = \"{model}\""),
+            }],
+        },
+        ..Default::default()
+    }
+}
 
-    let (first, second) = tokio::join!(loader.get(), loader.get());
-    assert_eq!(first, second);
-    assert_eq!(counter.load(Ordering::SeqCst), 1);
+#[tokio::test]
+async fn pending_loader_receives_initial_result() {
+    let bundle = bundle_with_model("initial");
+    let (loader, publisher) = CloudConfigBundleLoader::pending();
+    let cloned_loader = loader.clone();
+    let load_task = tokio::spawn(async move { tokio::join!(loader.get(), cloned_loader.get()) });
+    tokio::task::yield_now().await;
+
+    assert!(publisher.publish(Ok(Some(bundle.clone()))));
+
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(1), load_task)
+            .await
+            .expect("initial result should wake loaders")
+            .expect("loader task"),
+        (Ok(Some(bundle.clone())), Ok(Some(bundle)))
+    );
+}
+
+#[tokio::test]
+async fn successful_result_replaces_error_and_later_error_is_ignored() {
+    let bundle = bundle_with_model("recovered");
+    let initial_error = CloudConfigBundleLoadError::new(
+        CloudConfigBundleLoadErrorCode::RequestFailed,
+        /*status_code*/ None,
+        "initial load failed",
+    );
+    let (loader, publisher) = CloudConfigBundleLoader::pending();
+
+    assert!(publisher.publish(Err(initial_error.clone())));
+    assert_eq!(loader.get().await, Err(initial_error));
+
+    assert!(publisher.publish(Ok(Some(bundle.clone()))));
+    assert_eq!(loader.get().await, Ok(Some(bundle.clone())));
+
+    assert!(publisher.publish(Err(CloudConfigBundleLoadError::new(
+        CloudConfigBundleLoadErrorCode::RequestFailed,
+        /*status_code*/ None,
+        "refresh failed",
+    ))));
+    assert_eq!(loader.get().await, Ok(Some(bundle)));
+}
+
+#[tokio::test]
+async fn refresh_updates_only_loader_and_its_clones() {
+    let initial_bundle = bundle_with_model("initial");
+    let refreshed_bundle = bundle_with_model("refreshed");
+    let independent_loader = CloudConfigBundleLoader::from_result(Ok(None));
+    let (loader, publisher) = CloudConfigBundleLoader::pending();
+    let cloned_loader = loader.clone();
+
+    assert!(publisher.publish(Ok(Some(initial_bundle.clone()))));
+    assert_eq!(loader.get().await, Ok(Some(initial_bundle)));
+
+    assert!(publisher.publish(Ok(Some(refreshed_bundle.clone()))));
+
+    assert_eq!(loader.get().await, Ok(Some(refreshed_bundle.clone())));
+    assert_eq!(cloned_loader.get().await, Ok(Some(refreshed_bundle)));
+    assert_eq!(independent_loader.get().await, Ok(None));
+
+    assert!(publisher.publish(Ok(None)));
+
+    assert_eq!(loader.get().await, Ok(None));
+
+    drop(cloned_loader);
+    drop(loader);
+    assert!(!publisher.publish(Ok(Some(CloudConfigBundle::default()))));
+}
+
+#[tokio::test]
+async fn pending_loader_reports_dropped_publisher() {
+    let (loader, publisher) = CloudConfigBundleLoader::pending();
+
+    drop(publisher);
+
+    assert_eq!(
+        loader.get().await,
+        Err(CloudConfigBundleLoadError::new(
+            CloudConfigBundleLoadErrorCode::Internal,
+            /*status_code*/ None,
+            "cloud config bundle lifecycle ended before startup completed",
+        ))
+    );
 }
 
 #[test]

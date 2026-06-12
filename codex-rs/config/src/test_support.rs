@@ -71,7 +71,7 @@ impl CloudConfigBundleFixture {
 
     pub fn into_loader(self) -> CloudConfigBundleLoader {
         let bundle = self.into_bundle();
-        CloudConfigBundleLoader::new(async move { Ok(Some(bundle)) })
+        CloudConfigBundleLoader::from_result(Ok(Some(bundle)))
     }
 }
 

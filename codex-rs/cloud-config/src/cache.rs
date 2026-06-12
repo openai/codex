@@ -87,7 +87,7 @@ impl CloudConfigBundleCache {
         &self,
         chatgpt_user_id: Option<&str>,
         account_id: Option<&str>,
-    ) -> Result<CloudConfigBundleCacheSignedPayload, CacheLoadStatus> {
+    ) -> Result<LoadedCloudConfigBundleCache, CacheLoadStatus> {
         let (Some(chatgpt_user_id), Some(account_id)) = (chatgpt_user_id, account_id) else {
             return Err(CacheLoadStatus::AuthIdentityIncomplete);
         };
@@ -139,14 +139,27 @@ impl CloudConfigBundleCache {
         let now = Utc::now();
         let cache_age = now
             .signed_duration_since(cache_file.signed_payload.cached_at)
-            .to_std();
-        if cache_file.signed_payload.expires_at <= now
-            || !matches!(cache_age, Ok(cache_age) if cache_age < CLOUD_CONFIG_BUNDLE_CACHE_TTL)
+            .to_std()
+            .map_err(|_| CacheLoadStatus::CacheExpired)?;
+        if cache_file.signed_payload.expires_at <= now || cache_age >= CLOUD_CONFIG_BUNDLE_CACHE_TTL
         {
             return Err(CacheLoadStatus::CacheExpired);
         }
 
-        Ok(cache_file.signed_payload)
+        let expires_in = cache_file
+            .signed_payload
+            .expires_at
+            .signed_duration_since(now)
+            .to_std()
+            .map_err(|_| CacheLoadStatus::CacheExpired)?;
+        let ttl_remaining = CLOUD_CONFIG_BUNDLE_CACHE_TTL
+            .checked_sub(cache_age)
+            .ok_or(CacheLoadStatus::CacheExpired)?;
+
+        Ok(LoadedCloudConfigBundleCache {
+            signed_payload: cache_file.signed_payload,
+            refresh_in: expires_in.min(ttl_remaining),
+        })
     }
 
     pub(super) fn log_load_status(&self, status: &CacheLoadStatus) {
@@ -173,7 +186,7 @@ impl CloudConfigBundleCache {
         chatgpt_user_id: Option<String>,
         account_id: Option<String>,
         bundle: CloudConfigBundle,
-    ) -> Result<(), CloudConfigBundleCacheError> {
+    ) -> Result<Duration, CloudConfigBundleCacheError> {
         let now = Utc::now();
         let expires_at = now
             .checked_add_signed(
@@ -206,7 +219,10 @@ impl CloudConfigBundleCache {
         fs::write(&self.path, serialized)
             .await
             .map_err(|_| CloudConfigBundleCacheError)?;
-        Ok(())
+        expires_at
+            .signed_duration_since(Utc::now())
+            .to_std()
+            .map_err(|_| CloudConfigBundleCacheError)
     }
 }
 
@@ -237,6 +253,12 @@ pub(super) enum CacheLoadStatus {
 #[derive(Debug, Error)]
 #[error("failed to write cloud config bundle cache")]
 pub(super) struct CloudConfigBundleCacheError;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct LoadedCloudConfigBundleCache {
+    pub(super) signed_payload: CloudConfigBundleCacheSignedPayload,
+    pub(super) refresh_in: Duration,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(super) struct CloudConfigBundleCacheFile {
