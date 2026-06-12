@@ -307,8 +307,12 @@ pub async fn run_login_with_device_code(
         eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
-    clear_existing_auth_before_login(&config.codex_home, config.cli_auth_credentials_store_mode)
-        .await;
+    clear_existing_auth_before_login(
+        &config.codex_home,
+        config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
+    )
+    .await;
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
     let mut opts = ServerOptions::new(
         config.codex_home.to_path_buf(),
@@ -348,8 +352,12 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
-    clear_existing_auth_before_login(&config.codex_home, config.cli_auth_credentials_store_mode)
-        .await;
+    clear_existing_auth_before_login(
+        &config.codex_home,
+        config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
+    )
+    .await;
 
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
     let mut opts = ServerOptions::new(
