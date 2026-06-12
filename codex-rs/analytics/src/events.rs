@@ -423,32 +423,36 @@ impl GuardianReviewAnalyticsResult {
         }
     }
 
-    pub fn from_session(
-        guardian_thread_id: String,
-        guardian_session_kind: GuardianReviewSessionKind,
-        guardian_model: String,
-        guardian_reasoning_effort: Option<String>,
-        guardian_default_review_model_id: String,
-        guardian_catalog_contains_auto_review: bool,
-        guardian_review_model_overridden: bool,
-        guardian_review_model_override: Option<String>,
-        guardian_model_provider_id: String,
-        had_prior_review_context: bool,
-    ) -> Self {
+    pub fn from_session(params: GuardianReviewSessionAnalyticsParams) -> Self {
         Self {
-            guardian_thread_id: Some(guardian_thread_id),
-            guardian_session_kind: Some(guardian_session_kind),
-            guardian_model: Some(guardian_model),
-            guardian_reasoning_effort,
-            guardian_default_review_model_id: Some(guardian_default_review_model_id),
-            guardian_catalog_contains_auto_review: Some(guardian_catalog_contains_auto_review),
-            guardian_review_model_overridden: Some(guardian_review_model_overridden),
-            guardian_review_model_override,
-            guardian_model_provider_id: Some(guardian_model_provider_id),
-            had_prior_review_context: Some(had_prior_review_context),
+            guardian_thread_id: Some(params.guardian_thread_id),
+            guardian_session_kind: Some(params.guardian_session_kind),
+            guardian_model: Some(params.guardian_model),
+            guardian_reasoning_effort: params.guardian_reasoning_effort,
+            guardian_default_review_model_id: Some(params.guardian_default_review_model_id),
+            guardian_catalog_contains_auto_review: Some(
+                params.guardian_catalog_contains_auto_review,
+            ),
+            guardian_review_model_overridden: Some(params.guardian_review_model_overridden),
+            guardian_review_model_override: params.guardian_review_model_override,
+            guardian_model_provider_id: Some(params.guardian_model_provider_id),
+            had_prior_review_context: Some(params.had_prior_review_context),
             ..Self::without_session()
         }
     }
+}
+
+pub struct GuardianReviewSessionAnalyticsParams {
+    pub guardian_thread_id: String,
+    pub guardian_session_kind: GuardianReviewSessionKind,
+    pub guardian_model: String,
+    pub guardian_reasoning_effort: Option<String>,
+    pub guardian_default_review_model_id: String,
+    pub guardian_catalog_contains_auto_review: bool,
+    pub guardian_review_model_overridden: bool,
+    pub guardian_review_model_override: Option<String>,
+    pub guardian_model_provider_id: String,
+    pub had_prior_review_context: bool,
 }
 
 #[derive(Serialize)]

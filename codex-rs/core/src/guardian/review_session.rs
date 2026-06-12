@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use codex_analytics::GuardianReviewAnalyticsResult;
+use codex_analytics::GuardianReviewSessionAnalyticsParams;
 use codex_analytics::GuardianReviewSessionKind;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
@@ -667,18 +668,19 @@ async fn run_review_on_session(
     } else {
         None
     };
-    let mut analytics_result = GuardianReviewAnalyticsResult::from_session(
-        review_session.codex.session.thread_id.to_string(),
-        guardian_session_kind,
-        params.model.clone(),
-        guardian_reasoning_effort.map(|effort| effort.to_string()),
-        params.guardian_default_review_model_id.clone(),
-        params.guardian_catalog_contains_auto_review,
-        params.guardian_review_model_overridden,
-        params.guardian_review_model_override.clone(),
-        params.spawn_config.model_provider_id.clone(),
-        had_prior_review_context(&prompt_mode),
-    );
+    let mut analytics_result =
+        GuardianReviewAnalyticsResult::from_session(GuardianReviewSessionAnalyticsParams {
+            guardian_thread_id: review_session.codex.session.thread_id.to_string(),
+            guardian_session_kind,
+            guardian_model: params.model.clone(),
+            guardian_reasoning_effort: guardian_reasoning_effort.map(|effort| effort.to_string()),
+            guardian_default_review_model_id: params.guardian_default_review_model_id.clone(),
+            guardian_catalog_contains_auto_review: params.guardian_catalog_contains_auto_review,
+            guardian_review_model_overridden: params.guardian_review_model_overridden,
+            guardian_review_model_override: params.guardian_review_model_override.clone(),
+            guardian_model_provider_id: params.spawn_config.model_provider_id.clone(),
+            had_prior_review_context: had_prior_review_context(&prompt_mode),
+        });
     if send_followup_reminder {
         append_guardian_followup_reminder(review_session).await;
     }
