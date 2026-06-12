@@ -1,0 +1,29 @@
+# What: retain the UCRT compatibility archive when targeting Windows MSVCRT.
+# Why: rules_rs correctly models windows-gnullvm as MSVCRT, while V8 and libc++
+# still reference a small set of UCRT compatibility symbols.
+
+diff --git a/runtimes/mingw/BUILD.bazel b/runtimes/mingw/BUILD.bazel
+index 12f3507..a93d4e7 100644
+--- a/runtimes/mingw/BUILD.bazel
++++ b/runtimes/mingw/BUILD.bazel
+@@ -429,6 +429,7 @@ copy_to_directory(
+         "//constraints/windows/crt:msvcrt": [
+             ":msvcrt_common",
+             ":msvcrt_extra",
++            ":ucrt",
+         ],
+         "//constraints/windows/crt:ucrt": [
+             ":ucrt",
+diff --git a/toolchain/args/windows/BUILD.bazel b/toolchain/args/windows/BUILD.bazel
+index f8f6d49..edcedf0 100644
+--- a/toolchain/args/windows/BUILD.bazel
++++ b/toolchain/args/windows/BUILD.bazel
+@@ -54,6 +54,8 @@ cc_args(
+             "-lmsvcrt_common",
+             "-lmsvcrt_extra",
+             "-lmsvcrt",
++            # V8 and libc++ still reference UCRT compatibility symbols.
++            "-lucrt",
+         ],
+         "//constraints/windows/crt:ucrt": [
+             "-lucrt",
