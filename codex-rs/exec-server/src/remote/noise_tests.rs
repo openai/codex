@@ -33,7 +33,7 @@ fn static_registry_auth_provider() -> SharedAuthProvider {
 }
 
 #[tokio::test]
-async fn register_noise_environment_posts_security_profile_and_public_key() {
+async fn register_environment_posts_security_profile_and_public_key() {
     let server = MockServer::start().await;
     let executor_public_key = NoiseChannelIdentity::generate()
         .expect("identity")
@@ -57,7 +57,7 @@ async fn register_noise_environment_posts_security_profile_and_public_key() {
         .expect("client");
 
     let response = client
-        .register_noise_environment("environment-requested", &executor_public_key)
+        .register_environment("environment-requested", &executor_public_key)
         .await
         .expect("register Noise environment");
 
