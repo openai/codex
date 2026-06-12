@@ -398,6 +398,16 @@ pub struct ConversationAudioParams {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConversationTextParams {
     pub text: String,
+    pub role: ConversationTextRole,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum ConversationTextRole {
+    #[default]
+    User,
+    Developer,
 }
 
 /// Persistent thread-settings overrides that can be applied before user input or
