@@ -183,6 +183,9 @@ pub struct McpServerRefreshConfig {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConversationStartParams {
+    /// Sends automatic backend Codex output as silent realtime context instead of speakable
+    /// handoff output.
+    pub auto_handoff_output_as_context: bool,
     /// Overrides the configured realtime model for this session only.
     pub model: Option<String>,
     /// Selects whether the realtime session should produce text or audio output.

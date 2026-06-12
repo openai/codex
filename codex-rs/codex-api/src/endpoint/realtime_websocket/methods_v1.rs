@@ -16,10 +16,21 @@ use crate::endpoint::realtime_websocket::protocol::SessionType;
 use crate::endpoint::realtime_websocket::protocol::SessionUpdateSession;
 
 pub(super) fn conversation_item_create_message(text: String) -> RealtimeOutboundMessage {
+    conversation_message_item_create_message(ConversationRole::User, text)
+}
+
+pub(super) fn conversation_context_item_create_message(text: String) -> RealtimeOutboundMessage {
+    conversation_message_item_create_message(ConversationRole::Developer, text)
+}
+
+fn conversation_message_item_create_message(
+    role: ConversationRole,
+    text: String,
+) -> RealtimeOutboundMessage {
     RealtimeOutboundMessage::ConversationItemCreate {
         item: ConversationItemPayload::Message(ConversationMessageItem {
             r#type: ConversationItemType::Message,
-            role: ConversationRole::User,
+            role,
             content: vec![ConversationItemContent {
                 r#type: ConversationContentType::InputText,
                 text,

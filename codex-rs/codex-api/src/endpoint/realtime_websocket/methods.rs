@@ -296,10 +296,7 @@ impl RealtimeWebsocketWriter {
         &self,
         text: String,
     ) -> Result<(), ApiError> {
-        let Some(message) = conversation_context_item_create_message(self.event_parser, text)
-        else {
-            return Ok(());
-        };
+        let message = conversation_context_item_create_message(self.event_parser, text);
         self.send_json(&message).await
     }
 

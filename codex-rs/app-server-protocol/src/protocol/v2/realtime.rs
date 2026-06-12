@@ -65,6 +65,10 @@ impl From<ThreadRealtimeAudioChunk> for CoreRealtimeAudioFrame {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartParams {
     pub thread_id: String,
+    /// Sends automatic backend Codex output as silent realtime context instead of speakable
+    /// handoff output.
+    #[ts(optional = nullable)]
+    pub auto_handoff_output_as_context: Option<bool>,
     /// Overrides the configured realtime model for this session only.
     #[ts(optional = nullable)]
     pub model: Option<String>,

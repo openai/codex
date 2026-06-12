@@ -102,12 +102,14 @@ enum RealtimeSessionKind {
 struct RealtimeHandoffState {
     output_tx: Sender<HandoffOutput>,
     active_handoff: Arc<Mutex<Option<String>>>,
+    auto_handoff_output_as_context: bool,
     session_kind: RealtimeSessionKind,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum HandoffOutput {
     ContextUpdate {
+        as_context: bool,
         handoff_id: Option<String>,
         output_text: String,
     },
@@ -206,10 +208,15 @@ struct RealtimeInputChannels {
 }
 
 impl RealtimeHandoffState {
-    fn new(output_tx: Sender<HandoffOutput>, session_kind: RealtimeSessionKind) -> Self {
+    fn new(
+        output_tx: Sender<HandoffOutput>,
+        auto_handoff_output_as_context: bool,
+        session_kind: RealtimeSessionKind,
+    ) -> Self {
         Self {
             output_tx,
             active_handoff: Arc::new(Mutex::new(None)),
+            auto_handoff_output_as_context,
             session_kind,
         }
     }
@@ -229,6 +236,7 @@ struct ConversationState {
 struct RealtimeStart {
     api_provider: ApiProvider,
     extra_headers: Option<HeaderMap>,
+    auto_handoff_output_as_context: bool,
     session_config: RealtimeSessionConfig,
     model_client: ModelClient,
     sdp: Option<String>,
@@ -281,6 +289,7 @@ impl RealtimeConversationManager {
         let RealtimeStart {
             api_provider,
             extra_headers,
+            auto_handoff_output_as_context,
             session_config,
             model_client,
             sdp,
@@ -301,7 +310,11 @@ impl RealtimeConversationManager {
             async_channel::bounded::<RealtimeEvent>(OUTPUT_EVENTS_QUEUE_CAPACITY);
 
         let realtime_active = Arc::new(AtomicBool::new(true));
-        let handoff = RealtimeHandoffState::new(handoff_output_tx, session_kind);
+        let handoff = RealtimeHandoffState::new(
+            handoff_output_tx,
+            auto_handoff_output_as_context,
+            session_kind,
+        );
         let input_channels = RealtimeInputChannels {
             user_text_rx,
             handoff_output_rx,
@@ -469,6 +482,7 @@ impl RealtimeConversationManager {
         handoff
             .output_tx
             .send(HandoffOutput::ContextUpdate {
+                as_context: handoff.auto_handoff_output_as_context,
                 handoff_id,
                 output_text: realtime_backend_output(output_text, handoff.session_kind),
             })
@@ -606,6 +620,7 @@ pub(crate) async fn handle_start(
 struct PreparedRealtimeConversationStart {
     api_provider: ApiProvider,
     extra_headers: Option<HeaderMap>,
+    auto_handoff_output_as_context: bool,
     requested_realtime_session_id: Option<String>,
     version: RealtimeWsVersion,
     session_config: RealtimeSessionConfig,
@@ -663,6 +678,7 @@ async fn prepare_realtime_start(
     Ok(PreparedRealtimeConversationStart {
         api_provider,
         extra_headers,
+        auto_handoff_output_as_context: params.auto_handoff_output_as_context,
         requested_realtime_session_id,
         version,
         session_config,
@@ -784,6 +800,7 @@ async fn handle_start_inner(
     let PreparedRealtimeConversationStart {
         api_provider,
         extra_headers,
+        auto_handoff_output_as_context,
         requested_realtime_session_id,
         version,
         session_config,
@@ -797,6 +814,7 @@ async fn handle_start_inner(
     let start = RealtimeStart {
         api_provider,
         extra_headers,
+        auto_handoff_output_as_context,
         session_config,
         model_client: sess.services.model_client.clone(),
         sdp,
@@ -1215,10 +1233,15 @@ async fn handle_handoff_output(
     let result = match event_parser {
         RealtimeEventParser::V1 => match handoff_output {
             HandoffOutput::ContextUpdate {
+                as_context,
                 handoff_id,
                 output_text,
             } => {
-                if let Some(handoff_id) = handoff_id {
+                if as_context {
+                    writer
+                        .send_conversation_context_item_create(output_text)
+                        .await
+                } else if let Some(handoff_id) = handoff_id {
                     writer
                         .send_conversation_function_call_output(handoff_id, output_text)
                         .await
@@ -1244,12 +1267,21 @@ async fn handle_handoff_output(
         },
         RealtimeEventParser::RealtimeV2 => match handoff_output {
             HandoffOutput::ContextUpdate {
+                as_context,
                 handoff_id: _,
                 output_text,
             } => {
-                writer
-                    .send_conversation_context_item_create(output_text)
-                    .await
+                if as_context {
+                    writer
+                        .send_conversation_context_item_create(output_text)
+                        .await
+                } else if let Err(err) = writer.send_conversation_item_create(output_text).await {
+                    Err(err)
+                } else {
+                    return response_create_queue
+                        .request_create(writer, events_tx, "handoff output")
+                        .await;
+                }
             }
             HandoffOutput::HandoffComplete { handoff_id } => {
                 writer

@@ -944,6 +944,9 @@ impl TurnRequestProcessor {
             request_id,
             thread.as_ref(),
             Op::RealtimeConversationStart(ConversationStartParams {
+                auto_handoff_output_as_context: params
+                    .auto_handoff_output_as_context
+                    .unwrap_or(false),
                 model: params.model,
                 output_modality: params.output_modality,
                 prompt: params.prompt,

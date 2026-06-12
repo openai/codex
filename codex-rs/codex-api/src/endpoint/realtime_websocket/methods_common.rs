@@ -1,3 +1,4 @@
+use crate::endpoint::realtime_websocket::methods_v1::conversation_context_item_create_message as v1_conversation_context_item_create_message;
 use crate::endpoint::realtime_websocket::methods_v1::conversation_handoff_append_message as v1_conversation_handoff_append_message;
 use crate::endpoint::realtime_websocket::methods_v1::conversation_item_create_message as v1_conversation_item_create_message;
 use crate::endpoint::realtime_websocket::methods_v1::session_update_session as v1_session_update_session;
@@ -44,10 +45,10 @@ pub(super) fn conversation_item_create_message(
 pub(super) fn conversation_context_item_create_message(
     event_parser: RealtimeEventParser,
     text: String,
-) -> Option<RealtimeOutboundMessage> {
+) -> RealtimeOutboundMessage {
     match event_parser {
-        RealtimeEventParser::V1 => None,
-        RealtimeEventParser::RealtimeV2 => Some(v2_conversation_context_item_create_message(text)),
+        RealtimeEventParser::V1 => v1_conversation_context_item_create_message(text),
+        RealtimeEventParser::RealtimeV2 => v2_conversation_context_item_create_message(text),
     }
 }
 
