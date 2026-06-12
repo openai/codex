@@ -417,7 +417,6 @@ fn loaded_instructions_with_only_empty_or_whitespace_entries_are_empty() {
             contents: String::new(),
             provenance: InstructionProvenance::Internal,
         }],
-        legacy_cwd_fallback: None,
     };
     let whitespace = LoadedAgentsMd {
         user_instructions: None,
@@ -425,7 +424,6 @@ fn loaded_instructions_with_only_empty_or_whitespace_entries_are_empty() {
             contents: " \n\t".to_string(),
             provenance: InstructionProvenance::Internal,
         }],
-        legacy_cwd_fallback: None,
     };
 
     assert!(empty.is_empty());
@@ -517,7 +515,6 @@ async fn total_byte_limit_truncates_later_project_docs() {
                 ),
             },
         ],
-        legacy_cwd_fallback: None,
     };
 
     assert_eq!(loaded, expected);
@@ -884,20 +881,10 @@ async fn keeps_existing_instructions_when_doc_missing() {
     let tmp = tempfile::tempdir().expect("tempdir");
 
     const INSTRUCTIONS: &str = "some instructions";
-    let config = make_config(&tmp, /*limit*/ 4096, Some(INSTRUCTIONS)).await;
-    let mut warnings = Vec::new();
-    let loaded = load_agents_md(&config, &mut warnings)
-        .await
-        .expect("global instructions");
+    let res =
+        get_user_instructions(&make_config(&tmp, /*limit*/ 4096, Some(INSTRUCTIONS)).await).await;
 
-    assert_eq!(loaded.text(), INSTRUCTIONS);
-    assert_eq!(
-        loaded.render(),
-        format!(
-            "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\n{INSTRUCTIONS}\n</INSTRUCTIONS>",
-            config.cwd.display()
-        )
-    );
+    assert_eq!(res, Some(INSTRUCTIONS.to_string()));
 }
 
 /// When both the repository root and the working directory contain
@@ -942,7 +929,6 @@ async fn concatenates_root_and_cwd_docs() {
                 provenance: primary_project_provenance(crate_agents.clone(), cfg.cwd.clone()),
             },
         ],
-        legacy_cwd_fallback: None,
     };
 
     assert_eq!(loaded, expected);
@@ -1068,7 +1054,6 @@ async fn child_agents_message_after_global_instructions_uses_plain_separator() {
             contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
             provenance: InstructionProvenance::Internal,
         }],
-        legacy_cwd_fallback: Some(cfg.cwd.clone()),
     };
 
     assert_eq!(loaded, expected);
@@ -1103,7 +1088,6 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
             contents: "project doc".to_string(),
             provenance: primary_project_provenance(project_agents.clone(), cfg.cwd.clone()),
         }],
-        legacy_cwd_fallback: None,
     };
     assert_eq!(loaded, expected);
     assert_eq!(loaded.user_instructions(), cfg.user_instructions.as_ref());
@@ -1149,7 +1133,6 @@ async fn child_agents_message_after_project_docs_is_not_an_instruction_source() 
                 provenance: InstructionProvenance::Internal,
             },
         ],
-        legacy_cwd_fallback: None,
     };
     assert_eq!(loaded, expected);
     assert_eq!(

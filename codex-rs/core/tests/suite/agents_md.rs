@@ -92,6 +92,10 @@ fn expected_instruction_fragment(cwd: &AbsolutePathBuf, contents: &str) -> Strin
     format!("# AGENTS.md instructions for {cwd}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
 }
 
+fn expected_provider_only_instruction_fragment(contents: &str) -> String {
+    format!("# AGENTS.md instructions\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
+}
+
 fn assert_single_instruction_fragment(request: &responses::ResponsesRequest, expected: &str) {
     assert_eq!(instruction_fragments(request), vec![expected.to_string()]);
 }
@@ -745,7 +749,7 @@ async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> 
         "expected warning to contain \"invalid UTF-8\"; observed: {warning}"
     );
     let expected_fragment =
-        expected_instruction_fragment(&test.config.cwd, "global\u{FFFD}instructions");
+        expected_provider_only_instruction_fragment("global\u{FFFD}instructions");
     assert_single_instruction_fragment(&response_mock.single_request(), &expected_fragment);
 
     Ok(())
@@ -831,8 +835,7 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
         Some(initial_input.as_slice()),
         "cold resume should replay the original structured input prefix"
     );
-    let expected_fragment =
-        expected_instruction_fragment(&initial.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    let expected_fragment = expected_provider_only_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
     assert_single_instruction_fragment(&requests[0], &expected_fragment);
     assert_single_instruction_fragment(&requests[1], &expected_fragment);
 
@@ -938,8 +941,7 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
         Some(parent_input.as_slice()),
         "fork should replay the parent's original structured input prefix"
     );
-    let expected_fragment =
-        expected_instruction_fragment(&parent.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    let expected_fragment = expected_provider_only_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
     assert_single_instruction_fragment(&requests[0], &expected_fragment);
     assert_single_instruction_fragment(&requests[1], &expected_fragment);
 
@@ -1074,8 +1076,7 @@ async fn run_subagent_global_instruction_case(fork_context: bool) -> Result<()> 
     .map_err(|_| anyhow!("timed out waiting for the subagent request"))?;
 
     // Assert parent and child report and render the parent's creation-time snapshot exactly once.
-    let expected_fragment =
-        expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    let expected_fragment = expected_provider_only_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
     assert_single_instruction_fragment(&seed_request, &expected_fragment);
     assert_single_instruction_fragment(&spawn_request, &expected_fragment);
     assert_single_instruction_fragment(&child_request, &expected_fragment);

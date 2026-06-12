@@ -91,16 +91,6 @@ pub(crate) async fn load_project_instructions(
         });
     }
 
-    // Project entries already carry their creation-time environment cwd. Retain a separate
-    // fallback only for legacy provider/internal-only fragments, which have no project entry from
-    // which to recover the cwd.
-    if !loaded.is_empty()
-        && !loaded.uses_environment_labels()
-        && loaded.primary_project_cwd().is_none()
-    {
-        loaded.legacy_cwd_fallback = Some(config.cwd.clone());
-    }
-
     (!loaded.is_empty()).then_some(loaded)
 }
 
@@ -301,9 +291,6 @@ pub struct LoadedAgentsMd {
 
     /// Ordered instructions and their provenance.
     entries: Vec<InstructionEntry>,
-
-    /// Creation-time cwd for legacy fragments that have no primary project entry.
-    legacy_cwd_fallback: Option<AbsolutePathBuf>,
 }
 
 impl LoadedAgentsMd {
@@ -318,7 +305,6 @@ impl LoadedAgentsMd {
                 source: path,
             }),
             entries: Vec::new(),
-            legacy_cwd_fallback: None,
         }
     }
 
@@ -327,7 +313,6 @@ impl LoadedAgentsMd {
             user_instructions: user_instructions
                 .filter(|instructions| !instructions.text.trim().is_empty()),
             entries: Vec::new(),
-            legacy_cwd_fallback: None,
         }
     }
 
@@ -346,7 +331,6 @@ impl LoadedAgentsMd {
                 contents,
                 provenance: InstructionProvenance::Internal,
             }],
-            legacy_cwd_fallback: None,
         }
     }
 
@@ -446,13 +430,10 @@ impl LoadedAgentsMd {
         // The legacy wrapper attributes the complete fragment to the primary cwd. Once a
         // non-primary environment contributes, the body labels every environment itself, so the
         // outer cwd must be omitted to avoid falsely attributing secondary instructions to it.
-        // Prefer the cwd already frozen into the first primary project entry. The fallback is only
-        // populated for provider/internal-only legacy fragments that have no project provenance.
         let directory = if self.uses_environment_labels() {
             None
         } else {
             self.primary_project_cwd()
-                .or(self.legacy_cwd_fallback.as_ref())
                 .map(|cwd| cwd.to_string_lossy().into_owned())
         };
         ContextUserInstructions {
