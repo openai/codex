@@ -117,9 +117,17 @@ pub(crate) async fn plan_workspace_mutation(
         });
     };
     let requested = current.cwd.join(path);
+    let requested_uri =
+        PathUri::from_abs_path(&requested).map_err(|err| WorkspaceMutationError {
+            code: io_error_code(&err),
+            message: err.to_string(),
+            cwd: current.cwd.clone(),
+            workspace_roots: current.workspace_roots.clone(),
+            omitted_workspace_roots: 0,
+        })?;
     let fs = environment.environment.get_filesystem();
     let canonical = fs
-        .canonicalize(&requested, /*sandbox*/ None)
+        .canonicalize(&requested_uri, /*sandbox*/ None)
         .await
         .map_err(|err| WorkspaceMutationError {
             code: io_error_code(&err),
@@ -131,6 +139,15 @@ pub(crate) async fn plan_workspace_mutation(
     let metadata = fs
         .get_metadata(&canonical, /*sandbox*/ None)
         .await
+        .map_err(|err| WorkspaceMutationError {
+            code: io_error_code(&err),
+            message: err.to_string(),
+            cwd: current.cwd.clone(),
+            workspace_roots: current.workspace_roots.clone(),
+            omitted_workspace_roots: 0,
+        })?;
+    let canonical = canonical
+        .to_abs_path()
         .map_err(|err| WorkspaceMutationError {
             code: io_error_code(&err),
             message: err.to_string(),
