@@ -381,6 +381,13 @@ impl ResolvedMcpCatalog {
             .collect()
     }
 
+    /// Returns the names of winning servers supplied by thread-selected plugins.
+    pub(crate) fn selected_plugin_server_names(&self) -> impl Iterator<Item = &str> {
+        self.servers.iter().filter_map(|(name, server)| {
+            matches!(server.source(), McpServerSource::SelectedPlugin(_)).then_some(name.as_str())
+        })
+    }
+
     pub fn conflicts(&self) -> &[McpServerConflict] {
         &self.conflicts
     }

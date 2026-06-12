@@ -166,6 +166,13 @@ pub(crate) async fn handle_mcp_tool_call(
     };
     let approval_mode = if server == CODEX_APPS_MCP_SERVER_NAME {
         app_tool_policy.approval
+    } else if let Some(approval_mode) = {
+        let manager = sess.services.mcp_connection_manager.load();
+        manager
+            .is_selected_plugin_mcp_server(&server)
+            .then(|| manager.tool_approval_mode(&server, &tool_name))
+    } {
+        approval_mode
     } else {
         custom_mcp_tool_approval_mode(sess.as_ref(), turn_context.as_ref(), &server, &tool_name)
             .await
@@ -1168,8 +1175,16 @@ async fn maybe_request_mcp_tool_approval(
     }
 
     let session_approval_key = session_mcp_tool_approval_key(invocation, metadata, approval_mode);
-    let persistent_approval_key =
-        persistent_mcp_tool_approval_key(invocation, metadata, approval_mode);
+    let persistent_approval_key = if sess
+        .services
+        .mcp_connection_manager
+        .load()
+        .is_selected_plugin_mcp_server(&invocation.server)
+    {
+        None
+    } else {
+        persistent_mcp_tool_approval_key(invocation, metadata, approval_mode)
+    };
     if let Some(key) = session_approval_key.as_ref()
         && mcp_tool_approval_is_remembered(sess, key).await
     {

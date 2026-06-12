@@ -378,6 +378,22 @@ impl McpConnectionManager {
             .plugin_id_for_mcp_server_name(server_name)
     }
 
+    pub fn is_selected_plugin_mcp_server(&self, server_name: &str) -> bool {
+        self.tool_plugin_provenance
+            .is_selected_plugin_mcp_server(server_name)
+    }
+
+    pub fn tool_approval_mode(
+        &self,
+        server_name: &str,
+        tool_name: &str,
+    ) -> codex_config::AppToolApproval {
+        self.server_metadata
+            .get(server_name)
+            .map(|metadata| metadata.tool_approval_mode(tool_name))
+            .unwrap_or_default()
+    }
+
     pub fn is_host_owned_codex_apps_server(&self, server_name: &str) -> bool {
         self.host_owned_codex_apps_enabled && server_name == CODEX_APPS_MCP_SERVER_NAME
     }

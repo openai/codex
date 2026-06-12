@@ -13,6 +13,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GranularApprovalConfig;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
@@ -173,6 +174,7 @@ fn tool_plugin_provenance_collects_app_and_mcp_sources() {
                 "alpha".to_string(),
                 "alpha@test".to_string(),
             )]),
+            selected_plugin_mcp_server_names: HashSet::new(),
         }
     );
     assert_eq!(
@@ -217,8 +219,10 @@ fn selected_mcp_attribution_does_not_join_an_unrelated_local_summary() {
                 "github".to_string(),
                 "shared-plugin-id".to_string(),
             )]),
+            selected_plugin_mcp_server_names: HashSet::from(["github".to_string()]),
         }
     );
+    assert!(provenance.is_selected_plugin_mcp_server("github"));
 }
 
 #[test]

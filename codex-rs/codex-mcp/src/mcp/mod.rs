@@ -12,6 +12,7 @@ pub use auth::should_retry_without_scopes;
 pub(crate) mod auth;
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -148,6 +149,7 @@ pub struct ToolPluginProvenance {
     plugin_display_names_by_connector_id: HashMap<String, Vec<String>>,
     plugin_display_names_by_mcp_server_name: HashMap<String, Vec<String>>,
     plugin_ids_by_mcp_server_name: HashMap<String, String>,
+    selected_plugin_mcp_server_names: HashSet<String>,
 }
 
 impl ToolPluginProvenance {
@@ -169,6 +171,10 @@ impl ToolPluginProvenance {
         self.plugin_ids_by_mcp_server_name
             .get(server_name)
             .map(String::as_str)
+    }
+
+    pub(crate) fn is_selected_plugin_mcp_server(&self, server_name: &str) -> bool {
+        self.selected_plugin_mcp_server_names.contains(server_name)
     }
 
     fn from_config(config: &McpConfig) -> Self {
@@ -197,6 +203,14 @@ impl ToolPluginProvenance {
                 .plugin_ids_by_mcp_server_name
                 .insert(server_name, attribution.plugin_id().to_string());
         }
+        tool_plugin_provenance
+            .selected_plugin_mcp_server_names
+            .extend(
+                config
+                    .mcp_server_catalog
+                    .selected_plugin_server_names()
+                    .map(str::to_string),
+            );
 
         for plugin_names in tool_plugin_provenance
             .plugin_display_names_by_connector_id

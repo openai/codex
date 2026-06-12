@@ -257,6 +257,7 @@ fn selected_plugins_override_discovered_plugins_but_not_config() {
     let selected = server("https://selected-alpha.example/mcp");
     let mut discovered = server("https://local.example/mcp");
     discovered.enabled = false;
+    discovered.default_tools_approval_mode = Some(AppToolApproval::Auto);
     let mut builder = ResolvedMcpCatalog::builder();
     builder.register(McpServerRegistration::from_plugin(
         "docs".to_string(),
