@@ -202,7 +202,6 @@ async fn try_new_creates_and_deletes_snapshot_file() -> Result<()> {
         ThreadId::new(),
         &dir.path().abs(),
         &shell,
-        /*state_db*/ None,
     )
     .await
     .expect("snapshot should be created");
@@ -228,24 +227,14 @@ async fn try_new_uses_distinct_generation_paths() -> Result<()> {
         shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     };
 
-    let initial_snapshot = ShellSnapshot::try_new(
-        &dir.path().abs(),
-        session_id,
-        &dir.path().abs(),
-        &shell,
-        /*state_db*/ None,
-    )
-    .await
-    .expect("initial snapshot should be created");
-    let refreshed_snapshot = ShellSnapshot::try_new(
-        &dir.path().abs(),
-        session_id,
-        &dir.path().abs(),
-        &shell,
-        /*state_db*/ None,
-    )
-    .await
-    .expect("refreshed snapshot should be created");
+    let initial_snapshot =
+        ShellSnapshot::try_new(&dir.path().abs(), session_id, &dir.path().abs(), &shell)
+            .await
+            .expect("initial snapshot should be created");
+    let refreshed_snapshot =
+        ShellSnapshot::try_new(&dir.path().abs(), session_id, &dir.path().abs(), &shell)
+            .await
+            .expect("refreshed snapshot should be created");
     let initial_path = initial_snapshot.path.clone();
     let refreshed_path = refreshed_snapshot.path.clone();
 
@@ -409,47 +398,30 @@ async fn windows_powershell_snapshot_includes_sections() -> Result<()> {
     Ok(())
 }
 
-async fn write_rollout_stub(codex_home: &Path, session_id: ThreadId) -> Result<PathBuf> {
-    let dir = codex_home
-        .join("sessions")
-        .join("2025")
-        .join("01")
-        .join("01");
-    fs::create_dir_all(&dir).await?;
-    let path = dir.join(format!("rollout-2025-01-01T00-00-00-{session_id}.jsonl"));
-    fs::write(&path, "").await?;
-    Ok(path)
-}
-
 #[tokio::test]
-async fn cleanup_stale_snapshots_removes_orphans_and_keeps_live() -> Result<()> {
+async fn cleanup_stale_snapshots_removes_invalid_and_keeps_recent() -> Result<()> {
     let dir = tempdir()?;
     let codex_home = dir.path().abs();
     let snapshot_dir = codex_home.join(SNAPSHOT_DIR);
     fs::create_dir_all(&snapshot_dir).await?;
 
-    let live_session = ThreadId::new();
-    let orphan_session = ThreadId::new();
-    let live_snapshot = snapshot_dir.join(format!("{live_session}.123.sh"));
-    let orphan_snapshot = snapshot_dir.join(format!("{orphan_session}.456.sh"));
+    let recent_session = ThreadId::new();
+    let recent_snapshot = snapshot_dir.join(format!("{recent_session}.123.sh"));
     let invalid_snapshot = snapshot_dir.join("not-a-snapshot.txt");
 
-    write_rollout_stub(&codex_home, live_session).await?;
-    fs::write(&live_snapshot, "live").await?;
-    fs::write(&orphan_snapshot, "orphan").await?;
+    fs::write(&recent_snapshot, "recent").await?;
     fs::write(&invalid_snapshot, "invalid").await?;
 
-    cleanup_stale_snapshots(&codex_home, ThreadId::new(), /*state_db*/ None).await?;
+    cleanup_stale_snapshots(&codex_home, ThreadId::new()).await?;
 
-    assert_eq!(live_snapshot.exists(), true);
-    assert_eq!(orphan_snapshot.exists(), false);
+    assert_eq!(recent_snapshot.exists(), true);
     assert_eq!(invalid_snapshot.exists(), false);
     Ok(())
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn cleanup_stale_snapshots_removes_stale_rollouts() -> Result<()> {
+async fn cleanup_stale_snapshots_removes_stale_snapshots() -> Result<()> {
     let dir = tempdir()?;
     let codex_home = dir.path().abs();
     let snapshot_dir = codex_home.join(SNAPSHOT_DIR);
@@ -457,12 +429,14 @@ async fn cleanup_stale_snapshots_removes_stale_rollouts() -> Result<()> {
 
     let stale_session = ThreadId::new();
     let stale_snapshot = snapshot_dir.join(format!("{stale_session}.123.sh"));
-    let rollout_path = write_rollout_stub(&codex_home, stale_session).await?;
     fs::write(&stale_snapshot, "stale").await?;
 
-    set_file_mtime(&rollout_path, SNAPSHOT_RETENTION + Duration::from_secs(60))?;
+    set_file_mtime(
+        &stale_snapshot,
+        SNAPSHOT_RETENTION + Duration::from_secs(60),
+    )?;
 
-    cleanup_stale_snapshots(&codex_home, ThreadId::new(), /*state_db*/ None).await?;
+    cleanup_stale_snapshots(&codex_home, ThreadId::new()).await?;
 
     assert_eq!(stale_snapshot.exists(), false);
     Ok(())
@@ -478,12 +452,14 @@ async fn cleanup_stale_snapshots_skips_active_session() -> Result<()> {
 
     let active_session = ThreadId::new();
     let active_snapshot = snapshot_dir.join(format!("{active_session}.123.sh"));
-    let rollout_path = write_rollout_stub(&codex_home, active_session).await?;
     fs::write(&active_snapshot, "active").await?;
 
-    set_file_mtime(&rollout_path, SNAPSHOT_RETENTION + Duration::from_secs(60))?;
+    set_file_mtime(
+        &active_snapshot,
+        SNAPSHOT_RETENTION + Duration::from_secs(60),
+    )?;
 
-    cleanup_stale_snapshots(&codex_home, active_session, /*state_db*/ None).await?;
+    cleanup_stale_snapshots(&codex_home, active_session).await?;
 
     assert_eq!(active_snapshot.exists(), true);
     Ok(())
