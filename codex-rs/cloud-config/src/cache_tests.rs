@@ -6,7 +6,9 @@ use codex_config::CloudRequirementsFragment;
 use codex_config::CloudRequirementsTomlBundle;
 use pretty_assertions::assert_eq;
 use std::path::Path;
+use std::time::Duration;
 use tempfile::tempdir;
+use tokio::time::timeout;
 
 fn test_bundle() -> CloudConfigBundle {
     CloudConfigBundle {
@@ -42,7 +44,7 @@ fn valid_signed_payload() -> CloudConfigBundleCacheSignedPayload {
     CloudConfigBundleCacheSignedPayload {
         version: CLOUD_CONFIG_BUNDLE_CACHE_VERSION,
         cached_at,
-        expires_at: cached_at + ChronoDuration::minutes(30),
+        expires_at: cached_at + ChronoDuration::minutes(15),
         chatgpt_user_id: Some("user-12345".to_string()),
         account_id: Some("account-12345".to_string()),
         bundle: test_bundle(),
@@ -81,7 +83,7 @@ async fn save_writes_signed_payload_and_loads_for_matching_identity() {
             .expect("parse cache");
     assert!(
         cache_file.signed_payload.expires_at
-            <= cache_file.signed_payload.cached_at + ChronoDuration::minutes(60)
+            <= cache_file.signed_payload.cached_at + ChronoDuration::minutes(15)
     );
     assert!(cache_file.signed_payload.expires_at > cache_file.signed_payload.cached_at);
     assert_eq!(
@@ -192,6 +194,22 @@ async fn load_rejects_expired_cache() {
 }
 
 #[tokio::test]
+async fn load_rejects_cache_older_than_ttl_even_when_expiry_is_later() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = create_test_cache(codex_home.path());
+    let mut signed_payload = valid_signed_payload();
+    signed_payload.cached_at =
+        Utc::now() - ChronoDuration::minutes(15) - ChronoDuration::seconds(1);
+    signed_payload.expires_at = Utc::now() + ChronoDuration::minutes(15);
+    write_cache_file(&cache, &signed_cache_file(signed_payload));
+
+    assert_eq!(
+        cache.load(Some("user-12345"), Some("account-12345")).await,
+        Err(CacheLoadStatus::CacheExpired)
+    );
+}
+
+#[tokio::test]
 async fn load_rejects_unsupported_cache_version() {
     let codex_home = tempdir().expect("tempdir");
     let cache = create_test_cache(codex_home.path());
@@ -202,5 +220,60 @@ async fn load_rejects_unsupported_cache_version() {
     assert_eq!(
         cache.load(Some("user-12345"), Some("account-12345")).await,
         Err(CacheLoadStatus::CacheVersionUnsupported(2))
+    );
+}
+
+#[tokio::test]
+async fn cache_lock_reuses_persistent_lock_file() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = create_test_cache(codex_home.path());
+    let lock_path = codex_home
+        .path()
+        .join(CLOUD_CONFIG_BUNDLE_CACHE_LOCK_FILENAME);
+    std::fs::write(&lock_path, []).expect("create persistent lock file");
+
+    let first_lock = cache
+        .try_acquire_lock()
+        .await
+        .expect("acquire first cache lock");
+    let CacheLockAttempt::Acquired(first_lock) = first_lock else {
+        panic!("first cache lock should be acquired");
+    };
+    drop(first_lock);
+    assert!(lock_path.exists());
+
+    let second_lock = cache
+        .try_acquire_lock()
+        .await
+        .expect("reacquire cache lock from persistent file");
+    assert!(matches!(second_lock, CacheLockAttempt::Acquired(_)));
+}
+
+#[tokio::test]
+async fn contended_cache_lock_returns_without_waiting() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = create_test_cache(codex_home.path());
+    let first_lock = cache
+        .try_acquire_lock()
+        .await
+        .expect("acquire first cache lock");
+    let CacheLockAttempt::Acquired(first_lock) = first_lock else {
+        panic!("first cache lock should be acquired");
+    };
+
+    let second_lock = timeout(Duration::from_millis(100), cache.try_acquire_lock())
+        .await
+        .expect("contended cache lock should return without waiting")
+        .expect("contended cache lock should not error");
+    assert!(matches!(second_lock, CacheLockAttempt::Contended));
+
+    drop(first_lock);
+    let third_lock = cache
+        .try_acquire_lock()
+        .await
+        .expect("acquire cache lock after first owner exits");
+    assert!(
+        matches!(third_lock, CacheLockAttempt::Acquired(_)),
+        "next owner should acquire after the first owner exits"
     );
 }
