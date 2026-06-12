@@ -1,10 +1,12 @@
-//! Shared plugin identifiers and telemetry-facing summaries.
+//! Shared plugin package models, source providers, identifiers, and telemetry summaries.
 
 pub use codex_utils_plugins::mention_syntax;
 pub use codex_utils_plugins::plugin_namespace_for_skill_path;
 
 mod load_outcome;
+pub mod manifest;
 mod plugin_id;
+mod provider;
 
 use codex_config::HookEventsToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -15,6 +17,11 @@ pub use load_outcome::prompt_safe_plugin_description;
 pub use plugin_id::PluginId;
 pub use plugin_id::PluginIdError;
 pub use plugin_id::validate_plugin_segment;
+pub use provider::PluginProvider;
+pub use provider::PluginResourceLocator;
+pub use provider::ResolvedPlugin;
+pub use provider::ResolvedPluginError;
+pub use provider::ResolvedPluginLocation;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AppConnectorId(pub String);
