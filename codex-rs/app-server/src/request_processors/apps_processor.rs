@@ -182,7 +182,10 @@ impl AppsRequestProcessor {
             None => 0,
         };
 
-        let plugin_apps = plugin_apps_for_config(&config, plugins_manager.as_ref()).await;
+        let plugin_apps = plugins_manager
+            .plugins_for_config(&config.plugins_config_input())
+            .await
+            .effective_apps();
         let (mut accessible_connectors, mut all_connectors) = tokio::join!(
             connectors::list_cached_accessible_connectors_from_mcp_tools(&config),
             connectors::list_cached_all_connectors(&config, &plugin_apps)
@@ -369,17 +372,6 @@ fn merge_loaded_apps(
     let all = all_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
     let accessible = accessible_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
     connectors::merge_connectors_with_accessible(all, accessible, all_connectors_loaded)
-}
-
-async fn plugin_apps_for_config(
-    config: &Config,
-    plugins_manager: &PluginsManager,
-) -> Vec<codex_plugin::AppConnectorId> {
-    let plugins_input = config.plugins_config_input();
-    plugins_manager
-        .plugins_for_config(&plugins_input)
-        .await
-        .effective_apps()
 }
 
 fn should_send_app_list_updated_notification(
