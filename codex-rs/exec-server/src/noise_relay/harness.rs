@@ -101,18 +101,7 @@ where
         // virtual relay stream before emitting any handshake bytes. A captured
         // handshake cannot be spliced onto a different routed connection.
         let prologue =
-            match noise_channel_prologue(&environment_id, &executor_registration_id, &stream_id) {
-                Ok(prologue) => prologue,
-                Err(error) => {
-                    send_disconnected(
-                        &incoming_tx,
-                        &disconnected_tx,
-                        format!("failed to build Noise relay prologue: {error}"),
-                    )
-                    .await;
-                    return;
-                }
-            };
+            noise_channel_prologue(&environment_id, &executor_registration_id, &stream_id);
         let (initiator_handshake, request) = match InitiatorHandshake::start(
             &identity,
             &responder_public_key,

@@ -90,21 +90,13 @@ impl std::fmt::Debug for NoiseRendezvousConnectArgs {
 }
 
 /// Supplies fresh registry-authorized material for Noise rendezvous connections.
-///
-/// Implementations preserve one endpoint-local harness identity while fetching
-/// a fresh atomic connect bundle for every physical connection attempt. A
-/// failed secure connection must remain a failure; providers must not fall back
-/// to an unauthenticated transport.
 pub trait NoiseRendezvousConnectProvider: Send + Sync {
-    /// Environment ID this provider is authorized to connect to.
-    fn environment_id(&self) -> &str;
-
-    /// Returns fresh arguments for one physical connection attempt.
-    fn connect_args(&self) -> BoxFuture<'_, Result<NoiseRendezvousConnectArgs, ExecServerError>>;
+    /// Fetch a bundle authorizing this harness key for one physical connection.
+    fn connect_bundle(
+        &self,
+        harness_public_key: NoiseChannelPublicKey,
+    ) -> BoxFuture<'_, Result<NoiseRendezvousConnectBundle, ExecServerError>>;
 }
-
-/// Shared provider used by reconnect-capable remote environments.
-pub type SharedNoiseRendezvousConnectProvider = Arc<dyn NoiseRendezvousConnectProvider>;
 
 /// Stdio connection arguments for a command-backed exec-server.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,7 +125,8 @@ pub(crate) enum ExecServerTransportParams {
         initialize_timeout: Duration,
     },
     NoiseRendezvous {
-        provider: SharedNoiseRendezvousConnectProvider,
+        provider: Arc<dyn NoiseRendezvousConnectProvider>,
+        identity: NoiseChannelIdentity,
     },
     #[allow(dead_code)]
     StdioCommand {
@@ -155,10 +148,9 @@ impl std::fmt::Debug for ExecServerTransportParams {
                 .field("connect_timeout", connect_timeout)
                 .field("initialize_timeout", initialize_timeout)
                 .finish(),
-            Self::NoiseRendezvous { provider } => f
-                .debug_struct("NoiseRendezvous")
-                .field("environment_id", &provider.environment_id())
-                .finish(),
+            Self::NoiseRendezvous { .. } => {
+                f.debug_struct("NoiseRendezvous").finish_non_exhaustive()
+            }
             Self::StdioCommand {
                 command,
                 initialize_timeout,

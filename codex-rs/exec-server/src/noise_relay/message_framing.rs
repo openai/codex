@@ -51,10 +51,15 @@ impl JsonRpcMessageDecoder {
         // multiple records. Parse only after the authenticated length prefix
         // and the full declared payload are present.
         let mut messages = Vec::new();
-        loop {
-            let Some(message_len) = self.next_message_len()? else {
-                break;
-            };
+        while let Some(prefix) = self.buffered.get(..LENGTH_PREFIX_BYTES) {
+            let message_len =
+                u32::from_be_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]) as usize;
+            // Reject the authenticated length before waiting for its payload.
+            if message_len == 0 || message_len > MAX_NOISE_JSONRPC_MESSAGE_LEN {
+                return Err(ExecServerError::Protocol(
+                    "Noise relay JSON-RPC message has invalid length".to_string(),
+                ));
+            }
             let framed_len = LENGTH_PREFIX_BYTES + message_len;
             if self.buffered.len() < framed_len {
                 break;
@@ -72,21 +77,6 @@ impl JsonRpcMessageDecoder {
             ));
         }
         Ok(messages)
-    }
-
-    fn next_message_len(&self) -> Result<Option<usize>, ExecServerError> {
-        let Some(prefix) = self.buffered.get(..LENGTH_PREFIX_BYTES) else {
-            return Ok(None);
-        };
-        let message_len = u32::from_be_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]) as usize;
-        // Zero-length is never a JSON-RPC message, and rejecting an oversized
-        // declaration immediately avoids waiting for attacker-controlled data.
-        if message_len == 0 || message_len > MAX_NOISE_JSONRPC_MESSAGE_LEN {
-            return Err(ExecServerError::Protocol(
-                "Noise relay JSON-RPC message has invalid length".to_string(),
-            ));
-        }
-        Ok(Some(message_len))
     }
 }
 
