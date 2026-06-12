@@ -4,7 +4,6 @@ use super::EXIT_SENTINEL;
 use super::RuntimeEvent;
 use super::RuntimeState;
 use super::timers;
-use super::value::ImageUrlPolicy;
 use super::value::json_to_v8;
 use super::value::normalize_output_image;
 use super::value::serialize_output_text;
@@ -120,11 +119,10 @@ pub(super) fn image_callback(
             return;
         }
     };
-    let image_item =
-        match normalize_output_image(scope, value, ImageUrlPolicy::DataOnly, detail_override) {
-            Ok(image_item) => image_item,
-            Err(()) => return,
-        };
+    let image_item = match normalize_output_image(scope, value, detail_override) {
+        Ok(image_item) => image_item,
+        Err(()) => return,
+    };
     if let Some(state) = scope.get_slot::<RuntimeState>() {
         let _ = state.event_tx.send(RuntimeEvent::ContentItem(image_item));
     }
@@ -148,12 +146,7 @@ pub(super) fn generated_image_callback(
             return;
         }
     };
-    let image_item = match normalize_output_image(
-        scope,
-        value,
-        ImageUrlPolicy::HttpOrData,
-        /*detail_override*/ None,
-    ) {
+    let image_item = match normalize_output_image(scope, value, /*detail_override*/ None) {
         Ok(image_item) => image_item,
         Err(()) => return,
     };

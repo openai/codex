@@ -1572,7 +1572,7 @@ image({
             ExecuteRequest {
                 source: r#"
 generatedImage({
-  image_url: "https://example.com/image.jpg",
+  image_url: "data:image/png;base64,AAA",
   output_hint: "generated image save hint",
 });
 "#
@@ -1589,7 +1589,7 @@ generatedImage({
                 cell_id: cell_id("1"),
                 content_items: vec![
                     FunctionCallOutputContentItem::InputImage {
-                        image_url: "https://example.com/image.jpg".to_string(),
+                        image_url: "data:image/png;base64,AAA".to_string(),
                         detail: Some(crate::DEFAULT_IMAGE_DETAIL),
                     },
                     FunctionCallOutputContentItem::InputText {
@@ -1709,33 +1709,38 @@ image({
     }
 
     #[tokio::test]
-    async fn image_helper_rejects_remote_urls() {
+    async fn image_helpers_reject_remote_urls() {
         for image_url in [
             "http://example.com/image.jpg",
             "https://example.com/image.jpg",
         ] {
-            let service = CodeModeService::new();
+            for source in [
+                format!("image({image_url:?});"),
+                format!("generatedImage({{ image_url: {image_url:?} }});"),
+            ] {
+                let service = CodeModeService::new();
 
-            let response = execute(
-                &service,
-                ExecuteRequest {
-                    source: format!("image({image_url:?});"),
-                    yield_time_ms: None,
-                    ..execute_request("")
-                },
-            )
-            .await;
+                let response = execute(
+                    &service,
+                    ExecuteRequest {
+                        source,
+                        yield_time_ms: None,
+                        ..execute_request("")
+                    },
+                )
+                .await;
 
-            assert_eq!(
-                response,
-                RuntimeResponse::Result {
-                    cell_id: cell_id("1"),
-                    content_items: Vec::new(),
-                    error_text: Some(
-                        "Tool call failed: remote image URLs are not supported in tool outputs. Pass a base64 data URI or an image returned by an approved image tool instead.".to_string(),
-                    ),
-                }
-            );
+                assert_eq!(
+                    response,
+                    RuntimeResponse::Result {
+                        cell_id: cell_id("1"),
+                        content_items: Vec::new(),
+                        error_text: Some(
+                            "Tool call failed: remote image URLs are not supported in tool outputs. Pass a base64 data URI or an image returned by an approved image tool instead.".to_string(),
+                        ),
+                    }
+                );
+            }
         }
     }
 

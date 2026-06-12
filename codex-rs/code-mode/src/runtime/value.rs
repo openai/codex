@@ -8,12 +8,6 @@ const IMAGE_HELPER_EXPECTS_MESSAGE: &str = "image expects a non-empty image URL 
 const REMOTE_IMAGE_URL_ERROR: &str = "Tool call failed: remote image URLs are not supported in tool outputs. Pass a base64 data URI or an image returned by an approved image tool instead.";
 const CODEX_IMAGE_DETAIL_META_KEY: &str = "codex/imageDetail";
 
-#[derive(Clone, Copy)]
-pub(super) enum ImageUrlPolicy {
-    DataOnly,
-    HttpOrData,
-}
-
 pub(super) fn serialize_output_text(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
@@ -45,7 +39,6 @@ pub(super) fn serialize_output_text(
 pub(super) fn normalize_output_image(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
-    url_policy: ImageUrlPolicy,
     detail_override: Option<String>,
 ) -> Result<FunctionCallOutputContentItem, ()> {
     let result = (|| -> Result<FunctionCallOutputContentItem, String> {
@@ -67,19 +60,11 @@ pub(super) fn normalize_output_image(
             return Err(IMAGE_HELPER_EXPECTS_MESSAGE.to_string());
         }
         let lower = image_url.to_ascii_lowercase();
-        let is_http_url = lower.starts_with("http://") || lower.starts_with("https://");
-        let is_data_url = lower.starts_with("data:");
-        match url_policy {
-            ImageUrlPolicy::DataOnly if is_http_url => {
-                return Err(REMOTE_IMAGE_URL_ERROR.to_string());
-            }
-            ImageUrlPolicy::DataOnly if !is_data_url => {
-                return Err("image expects a data URL or raw MCP image block".to_string());
-            }
-            ImageUrlPolicy::HttpOrData if !(is_http_url || is_data_url) => {
-                return Err("image expects an http(s) or data URL".to_string());
-            }
-            ImageUrlPolicy::DataOnly | ImageUrlPolicy::HttpOrData => {}
+        if lower.starts_with("http://") || lower.starts_with("https://") {
+            return Err(REMOTE_IMAGE_URL_ERROR.to_string());
+        }
+        if !lower.starts_with("data:") {
+            return Err("image expects a data URL or raw MCP image block".to_string());
         }
 
         let detail = detail_override.or(detail);
