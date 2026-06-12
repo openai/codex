@@ -122,15 +122,17 @@ async fn build_uploaded_argument_value(
             "no primary turn environment is available".to_string(),
         ));
     };
-    let resolved_path = turn_environment.cwd.join(file_path);
+    let resolved_path = turn_environment.cwd().join(file_path);
     let path_uri = PathUri::from_abs_path(&resolved_path).map_err(|error| {
         contextualize_error(format!(
             "unable to resolve `{}`: {error}",
             resolved_path.display()
         ))
     })?;
-    let sandbox = turn_context
-        .file_system_sandbox_context(/*additional_permissions*/ None, &turn_environment.cwd);
+    let sandbox = turn_context.file_system_sandbox_context(
+        /*additional_permissions*/ None,
+        turn_environment.cwd_uri(),
+    );
     let fs = turn_environment.environment.get_filesystem();
     let metadata = fs
         .get_metadata(&path_uri, Some(&sandbox))
@@ -182,6 +184,7 @@ async fn build_uploaded_argument_value(
 mod tests {
     use super::*;
     use crate::session::tests::make_session_and_context;
+    use crate::session::turn_context::TurnEnvironment;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::path::Path;
@@ -191,12 +194,18 @@ mod tests {
     fn set_primary_environment_cwd(turn_context: &mut TurnContext, cwd: &Path) {
         let cwd = AbsolutePathBuf::try_from(cwd).expect("absolute path");
         turn_context.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
-        turn_context
+        let primary = turn_context
             .environments
             .turn_environments
             .first_mut()
-            .expect("primary environment")
-            .cwd = cwd;
+            .expect("primary environment");
+        *primary = TurnEnvironment::new(
+            primary.environment_id.clone(),
+            Arc::clone(&primary.environment),
+            cwd,
+            primary.shell.clone(),
+        )
+        .expect("valid environment cwd");
     }
 
     #[tokio::test]
