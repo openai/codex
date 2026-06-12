@@ -2,6 +2,7 @@ use super::LoadedPlugin;
 use super::PluginLoadOutcome;
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
+use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::is_openai_curated_marketplace_name;
 use crate::loader::PluginHookLoadOutcome;
 use crate::loader::configured_curated_plugin_ids_from_codex_home;
@@ -1091,6 +1092,7 @@ impl PluginsManager {
                 return Err(err.into());
             }
         };
+        self.validate_curated_marketplace_install_source(&request.marketplace_path, &resolved)?;
         let plugin_id = resolved.plugin_id.clone();
         match self.install_resolved_plugin(resolved).await {
             Ok(outcome) => Ok(outcome),
@@ -1122,6 +1124,7 @@ impl PluginsManager {
                 return Err(err.into());
             }
         };
+        self.validate_curated_marketplace_install_source(&request.marketplace_path, &resolved)?;
         let plugin_id = resolved.plugin_id.as_key();
         // This only forwards the backend mutation before the local install flow.
         if let Err(err) = crate::remote_legacy::enable_remote_plugin(
@@ -1206,6 +1209,33 @@ impl PluginsManager {
                 error_type.to_string(),
             );
         }
+    }
+
+    fn validate_curated_marketplace_install_source(
+        &self,
+        marketplace_path: &AbsolutePathBuf,
+        resolved: &ResolvedMarketplacePlugin,
+    ) -> Result<(), PluginInstallError> {
+        if resolved.plugin_id.marketplace_name != OPENAI_CURATED_MARKETPLACE_NAME {
+            return Ok(());
+        }
+
+        let expected_path = curated_plugins_repo_path(self.codex_home.as_path())
+            .join(".agents/plugins/marketplace.json");
+        let expected_path = AbsolutePathBuf::try_from(expected_path)
+            .ok()
+            .and_then(|path| path.canonicalize().ok());
+        let requested_path = marketplace_path.canonicalize().ok();
+        if requested_path
+            .zip(expected_path)
+            .is_none_or(|(requested, expected)| requested != expected)
+        {
+            return Err(PluginStoreError::Invalid(format!(
+                "marketplace '{OPENAI_CURATED_MARKETPLACE_NAME}' can only be installed from the synced curated marketplace"
+            ))
+            .into());
+        }
+        Ok(())
     }
 
     async fn install_resolved_plugin(

@@ -574,7 +574,10 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
         &plugin_root.join(".codex-plugin/plugin.json"),
         r#"{
   "name": "sample",
-  "description": "Plugin that includes the sample MCP server and Skills"
+  "description": "Plugin that includes the sample MCP server and Skills",
+  "interface": {
+    "developerName": "OpenAI"
+  }
 }"#,
     );
     write_file(
@@ -622,6 +625,7 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
             manifest_description: Some(
                 "Plugin that includes the sample MCP server and Skills".to_string(),
             ),
+            is_first_party: false,
             root: AbsolutePathBuf::try_from(plugin_root.clone()).unwrap(),
             enabled: true,
             skill_roots: vec![plugin_root.join("skills").abs()],
@@ -1586,6 +1590,7 @@ async fn load_plugins_preserves_disabled_plugins_without_effective_contributions
             config_name: "sample@test".to_string(),
             manifest_name: None,
             manifest_description: None,
+            is_first_party: false,
             root: AbsolutePathBuf::try_from(plugin_root).unwrap(),
             enabled: false,
             skill_roots: Vec::new(),
@@ -1754,6 +1759,7 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         config_name: config_name.to_string(),
         manifest_name: Some(manifest_name.to_string()),
         manifest_description: None,
+        is_first_party: false,
         root: AbsolutePathBuf::try_from(codex_home.path().join(dir_name)).unwrap(),
         enabled: true,
         skill_roots: Vec::new(),
@@ -2074,6 +2080,38 @@ async fn install_openai_curated_plugin_uses_short_sha_cache_version() {
             installed_path: AbsolutePathBuf::try_from(installed_path).unwrap(),
             auth_policy: MarketplacePluginAuthPolicy::OnInstall,
         }
+    );
+}
+
+#[tokio::test]
+async fn install_plugin_rejects_spoofed_openai_curated_marketplace() {
+    let tmp = tempfile::tempdir().unwrap();
+    let curated_root = curated_plugins_repo_path(tmp.path());
+    write_openai_curated_marketplace(&curated_root, &["slack"]);
+    write_curated_plugin_sha(tmp.path(), TEST_CURATED_PLUGIN_SHA);
+    let spoofed_root = tmp.path().join("spoofed-marketplace");
+    write_openai_curated_marketplace(&spoofed_root, &["slack"]);
+
+    let err = PluginsManager::new(tmp.path().to_path_buf())
+        .install_plugin(PluginInstallRequest {
+            plugin_name: "slack".to_string(),
+            marketplace_path: AbsolutePathBuf::try_from(
+                spoofed_root.join(".agents/plugins/marketplace.json"),
+            )
+            .unwrap(),
+        })
+        .await
+        .unwrap_err();
+
+    assert!(err.is_invalid_request());
+    assert!(
+        err.to_string()
+            .contains("can only be installed from the synced curated marketplace")
+    );
+    assert!(
+        !tmp.path()
+            .join("plugins/cache/openai-curated/slack")
+            .exists()
     );
 }
 
