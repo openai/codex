@@ -3535,10 +3535,11 @@ async fn build_hooks_for_config(
     let hook_shell_program = hook_shell_argv.remove(0);
     let _ = hook_shell_argv.pop();
     let plugins_input = config.plugins_config_input();
-    // Hook roots include live Desktop distribution verification state, so do
-    // not reuse the cache for ordinary plugin capabilities here. A transient
-    // verification failure or app update must be observable by the next hook
-    // engine rebuild.
+    // Preserve cache-backed loading for every non-hook plugin capability, then
+    // refresh only the hook outcome because it includes live Desktop
+    // distribution verification state. A transient verification failure or
+    // app update must be observable by the next hook engine rebuild.
+    let _ = plugins_manager.plugins_for_config(&plugins_input).await;
     let plugin_hooks = plugins_manager
         .plugin_hooks_for_layer_stack(&config.config_layer_stack, &plugins_input)
         .await;

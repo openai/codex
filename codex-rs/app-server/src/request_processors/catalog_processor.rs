@@ -647,8 +647,11 @@ impl CatalogRequestProcessor {
                 config.features.enabled(Feature::Plugins) && workspace_codex_plugins_enabled;
             let plugin_hooks = if plugins_enabled {
                 let plugins_input = config.plugins_config_input();
-                // Hook discovery includes live Desktop distribution state and
-                // intentionally bypasses the cache for other plugin capabilities.
+                // Preserve the existing cache warmup for skills, MCP servers,
+                // apps, assets, and ordinary metadata. Hook discovery also
+                // includes live Desktop distribution state, so refresh only
+                // that hook outcome independently below.
+                let _ = plugins_manager.plugins_for_config(&plugins_input).await;
                 plugins_manager
                     .plugin_hooks_for_layer_stack(&config.config_layer_stack, &plugins_input)
                     .await
