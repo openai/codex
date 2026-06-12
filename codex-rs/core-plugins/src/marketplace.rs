@@ -571,25 +571,31 @@ fn marketplace_plugin_is_visible(
     plugin: &ResolvedMarketplacePlugin,
     context: MarketplaceLoadContext,
 ) -> bool {
-    let capability_context =
-        PluginCapabilityContext::new(context.auth_mode, /*plugin_active*/ true);
-    if !capability_context.filters_marketplace_plugins() {
-        return true;
-    }
-
     let MarketplacePluginSource::Local { path } = &plugin.source else {
         // Remote Git entries are not materialized while listing marketplaces, so keep them visible
         // until install/read flows have a local plugin root to inspect.
         return true;
     };
 
-    let Some(manifest) = &plugin.manifest else {
-        // Preserve existing marketplace behavior for local entries that do not expose a readable
-        // plugin manifest; the marketplace loader cannot prove these are unusable.
+    marketplace_plugin_root_is_visible(path, context)
+}
+
+pub(crate) fn marketplace_plugin_root_is_visible(
+    plugin_root: &AbsolutePathBuf,
+    context: MarketplaceLoadContext,
+) -> bool {
+    let capability_context =
+        PluginCapabilityContext::new(context.auth_mode, /*plugin_active*/ true);
+    if !capability_context.filters_marketplace_plugins() {
+        return true;
+    }
+
+    let Some(manifest) = load_plugin_manifest(plugin_root.as_path()) else {
+        // Preserve existing validation errors for missing or invalid plugin manifests.
         return true;
     };
 
-    let declared_capabilities = load_declared_plugin_capabilities(path, &manifest.paths);
+    let declared_capabilities = load_declared_plugin_capabilities(plugin_root, &manifest.paths);
     let has_skills = !declared_capabilities.skills.is_empty();
     let apps = declared_capabilities
         .apps

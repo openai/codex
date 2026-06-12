@@ -2043,6 +2043,69 @@ async fn install_plugin_supports_git_subdir_marketplace_sources() {
 }
 
 #[tokio::test]
+async fn install_plugin_rejects_git_sources_without_capabilities_for_auth_mode() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("marketplace");
+    let remote_repo = tmp.path().join("remote-plugin-repo");
+    let remote_repo_url = url::Url::from_directory_path(&remote_repo)
+        .unwrap()
+        .to_string();
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    let remote_plugin_root = remote_repo.join("plugins/linear");
+    write_file(
+        &remote_plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"linear"}"#,
+    );
+    write_file(
+        &remote_plugin_root.join(".app.json"),
+        r#"{"apps":{"linear":{"id":"connector_linear"}}}"#,
+    );
+    init_git_repo(&remote_repo);
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        format!(
+            r#"{{
+  "name": "debug",
+  "plugins": [
+    {{
+      "name": "linear",
+      "source": {{
+        "source": "git-subdir",
+        "url": "{remote_repo_url}",
+        "path": "plugins/linear"
+      }}
+    }}
+  ]
+}}"#
+        ),
+    )
+    .unwrap();
+
+    let err = PluginsManager::new_with_options(
+        tmp.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::ApiKey),
+    )
+    .install_plugin(PluginInstallRequest {
+        plugin_name: "linear".to_string(),
+        marketplace_path: AbsolutePathBuf::try_from(
+            repo_root.join(".agents/plugins/marketplace.json"),
+        )
+        .unwrap(),
+    })
+    .await
+    .unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "plugin `linear@debug` does not declare usable capabilities for the current authentication mode"
+    );
+    assert!(!tmp.path().join("plugins/cache/debug/linear/local").exists());
+    assert!(!tmp.path().join(CONFIG_TOML_FILE).exists());
+}
+
+#[tokio::test]
 async fn install_plugin_supports_relative_git_subdir_marketplace_sources() {
     let tmp = tempfile::tempdir().unwrap();
     let repo_root = tmp.path().join("marketplace");

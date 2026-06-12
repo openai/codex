@@ -32,6 +32,7 @@ use crate::marketplace::ResolvedMarketplacePlugin;
 use crate::marketplace::find_installable_marketplace_plugin;
 use crate::marketplace::find_marketplace_plugin;
 use crate::marketplace::list_marketplaces;
+use crate::marketplace::marketplace_plugin_root_is_visible;
 use crate::marketplace::plugin_interface_with_marketplace_category;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
@@ -931,11 +932,21 @@ impl PluginsManager {
             };
         let store = self.store.clone();
         let codex_home = self.codex_home.clone();
+        let auth_mode = self.auth_mode();
         let result: StorePluginInstallResult = tokio::task::spawn_blocking(move || {
             let materialized =
                 materialize_marketplace_plugin_source(codex_home.as_path(), &resolved.source)
                     .map_err(PluginStoreError::Invalid)?;
             let source_path = materialized.path;
+            if !marketplace_plugin_root_is_visible(
+                &source_path,
+                MarketplaceLoadContext::for_auth(auth_mode),
+            ) {
+                return Err(PluginStoreError::Invalid(format!(
+                    "plugin `{}` does not declare usable capabilities for the current authentication mode",
+                    resolved.plugin_id.as_key()
+                )));
+            }
             if let Some(plugin_version) = plugin_version {
                 store.install_with_version(source_path, resolved.plugin_id, plugin_version)
             } else {
