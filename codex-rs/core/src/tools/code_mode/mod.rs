@@ -14,6 +14,7 @@ use codex_code_mode_protocol::CodeModeSession;
 use codex_code_mode_protocol::CodeModeSessionProvider;
 use codex_code_mode_protocol::CodeModeToolKind;
 use codex_code_mode_protocol::RuntimeResponse;
+use codex_code_mode_protocol::WaitOutcome;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use serde_json::Value as JsonValue;
 use std::sync::atomic::AtomicBool;
@@ -94,22 +95,20 @@ impl CodeModeService {
         &self,
         request: codex_code_mode_protocol::WaitRequest,
     ) -> Result<codex_code_mode_protocol::WaitOutcome, String> {
-        self.current_session()
-            .await
-            .ok_or_else(|| "code mode session is unavailable".to_string())?
-            .wait(request)
-            .await
+        match self.current_session().await {
+            Some(session) => session.wait(request).await,
+            None => Ok(missing_cell_outcome(request.cell_id)),
+        }
     }
 
     pub(crate) async fn terminate(
         &self,
         cell_id: CellId,
     ) -> Result<codex_code_mode_protocol::WaitOutcome, String> {
-        self.current_session()
-            .await
-            .ok_or_else(|| "code mode session is unavailable".to_string())?
-            .terminate(cell_id)
-            .await
+        match self.current_session().await {
+            Some(session) => session.terminate(cell_id).await,
+            None => Ok(missing_cell_outcome(cell_id)),
+        }
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), String> {
@@ -364,6 +363,14 @@ fn serialize_function_tool_arguments(
     }
 }
 
+fn missing_cell_outcome(cell_id: CellId) -> WaitOutcome {
+    WaitOutcome::MissingCell(RuntimeResponse::Result {
+        error_text: Some(format!("exec cell {cell_id} not found")),
+        cell_id,
+        content_items: Vec::new(),
+    })
+}
+
 fn build_freeform_tool_payload(
     tool_name: &ToolName,
     input: Option<JsonValue>,
@@ -536,20 +543,22 @@ mod tests {
                     cell_id: CellId::new("host1_1".to_string()),
                     yield_time_ms: 1,
                 })
-                .await
-                .err()
-                .as_deref(),
-            Some("code mode session is unavailable")
+                .await,
+            Ok(WaitOutcome::MissingCell(RuntimeResponse::Result {
+                cell_id: CellId::new("host1_1".to_string()),
+                content_items: Vec::new(),
+                error_text: Some("exec cell host1_1 not found".to_string()),
+            }))
         );
         assert_eq!(provider.sessions_created.load(Ordering::Relaxed), 1);
 
         assert_eq!(
-            service
-                .terminate(CellId::new("host1_1".to_string()))
-                .await
-                .err()
-                .as_deref(),
-            Some("code mode session is unavailable")
+            service.terminate(CellId::new("host1_1".to_string())).await,
+            Ok(WaitOutcome::MissingCell(RuntimeResponse::Result {
+                cell_id: CellId::new("host1_1".to_string()),
+                content_items: Vec::new(),
+                error_text: Some("exec cell host1_1 not found".to_string()),
+            }))
         );
         assert_eq!(provider.sessions_created.load(Ordering::Relaxed), 1);
 
