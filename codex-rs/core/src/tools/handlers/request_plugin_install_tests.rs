@@ -104,6 +104,129 @@ fn request_plugin_install_response_persists_only_decline_always_mode() {
     );
 }
 
+#[test]
+fn validate_request_plugin_install_picker_args_supports_categories() {
+    let args = RequestPluginInstallPickerArgs {
+        action_type: DiscoverableToolAction::Install,
+        suggest_reason: "Connect tools for better results".to_string(),
+        title: Some("Connect tools".to_string()),
+        entries: None,
+        categories: Some(vec![RequestPluginInstallPickerCategory {
+            id: "calendar".to_string(),
+            title: "Calendar".to_string(),
+            required: Some(true),
+            min_installed: Some(1),
+            entries: vec![RequestPluginInstallPickerEntry {
+                id: "calendar".to_string(),
+                tool_id: "connector_calendar".to_string(),
+                tool_name: "Google Calendar".to_string(),
+                tool_type: DiscoverableToolType::Connector,
+                description: None,
+            }],
+        }]),
+    };
+    let discoverable_tools = vec![connector_tool("connector_calendar", "Google Calendar")];
+
+    let resolved_entries =
+        validate_request_plugin_install_picker_args(&args, &discoverable_tools, None)
+            .expect("categorized picker args");
+
+    assert_eq!(resolved_entries.len(), 1);
+    assert_eq!(resolved_entries[0].category_id, Some("calendar"));
+    assert_eq!(resolved_entries[0].entry_id, "calendar");
+}
+
+#[test]
+fn validate_request_plugin_install_picker_args_rejects_mixed_sources() {
+    let entry = RequestPluginInstallPickerEntry {
+        id: "calendar".to_string(),
+        tool_id: "connector_calendar".to_string(),
+        tool_name: "Google Calendar".to_string(),
+        tool_type: DiscoverableToolType::Connector,
+        description: None,
+    };
+    let args = RequestPluginInstallPickerArgs {
+        action_type: DiscoverableToolAction::Install,
+        suggest_reason: "Connect tools for better results".to_string(),
+        title: Some("Connect tools".to_string()),
+        entries: Some(vec![entry]),
+        categories: Some(vec![RequestPluginInstallPickerCategory {
+            id: "calendar".to_string(),
+            title: "Calendar".to_string(),
+            required: Some(true),
+            min_installed: Some(1),
+            entries: vec![RequestPluginInstallPickerEntry {
+                id: "calendar".to_string(),
+                tool_id: "connector_calendar".to_string(),
+                tool_name: "Google Calendar".to_string(),
+                tool_type: DiscoverableToolType::Connector,
+                description: None,
+            }],
+        }]),
+    };
+    let discoverable_tools = vec![connector_tool("connector_calendar", "Google Calendar")];
+
+    assert_eq!(
+        validate_request_plugin_install_picker_args(&args, &discoverable_tools, None)
+            .expect_err("mixed picker args"),
+        FunctionCallError::RespondToModel(
+            "picker install requests must include exactly one of entries or categories".to_string(),
+        ),
+    );
+}
+
+#[test]
+fn categorized_picker_completion_uses_required_category_minimums() {
+    let args = RequestPluginInstallPickerArgs {
+        action_type: DiscoverableToolAction::Install,
+        suggest_reason: "Connect tools for better results".to_string(),
+        title: Some("Connect tools".to_string()),
+        entries: None,
+        categories: Some(vec![RequestPluginInstallPickerCategory {
+            id: "crm".to_string(),
+            title: "CRM".to_string(),
+            required: Some(true),
+            min_installed: Some(1),
+            entries: vec![
+                RequestPluginInstallPickerEntry {
+                    id: "salesforce".to_string(),
+                    tool_id: "connector_salesforce".to_string(),
+                    tool_name: "Salesforce".to_string(),
+                    tool_type: DiscoverableToolType::Connector,
+                    description: None,
+                },
+                RequestPluginInstallPickerEntry {
+                    id: "hubspot".to_string(),
+                    tool_id: "connector_hubspot".to_string(),
+                    tool_name: "HubSpot".to_string(),
+                    tool_type: DiscoverableToolType::Connector,
+                    description: None,
+                },
+            ],
+        }]),
+    };
+    let entries = vec![
+        RequestPluginInstallEntryResult {
+            category_id: Some("crm".to_string()),
+            entry_id: "salesforce".to_string(),
+            tool_type: DiscoverableToolType::Connector,
+            tool_id: "connector_salesforce".to_string(),
+            tool_name: "Salesforce".to_string(),
+            completed: true,
+        },
+        RequestPluginInstallEntryResult {
+            category_id: Some("crm".to_string()),
+            entry_id: "hubspot".to_string(),
+            tool_type: DiscoverableToolType::Connector,
+            tool_id: "connector_hubspot".to_string(),
+            tool_name: "HubSpot".to_string(),
+            completed: false,
+        },
+    ];
+
+    assert!(request_plugin_install_picker_completed(&args, &entries));
+}
+
 #[tokio::test]
 async fn persist_disabled_install_request_writes_connector_config() {
     let codex_home = tempdir().expect("tempdir should succeed");

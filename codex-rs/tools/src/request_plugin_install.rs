@@ -37,7 +37,8 @@ pub struct RequestPluginInstallPickerArgs {
     pub action_type: DiscoverableToolAction,
     pub suggest_reason: String,
     pub title: Option<String>,
-    pub entries: Vec<RequestPluginInstallPickerEntry>,
+    pub entries: Option<Vec<RequestPluginInstallPickerEntry>>,
+    pub categories: Option<Vec<RequestPluginInstallPickerCategory>>,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -47,6 +48,15 @@ pub struct RequestPluginInstallPickerEntry {
     pub tool_name: String,
     pub tool_type: DiscoverableToolType,
     pub description: Option<String>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+pub struct RequestPluginInstallPickerCategory {
+    pub id: String,
+    pub title: String,
+    pub required: Option<bool>,
+    pub min_installed: Option<u32>,
+    pub entries: Vec<RequestPluginInstallPickerEntry>,
 }
 
 impl RequestPluginInstallArgs {
@@ -88,6 +98,8 @@ pub struct RequestPluginInstallPickerResult {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RequestPluginInstallInstalledEntry {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category_id: Option<String>,
     pub entry_id: String,
     pub tool_id: String,
     pub tool_type: DiscoverableToolType,
@@ -95,6 +107,8 @@ pub struct RequestPluginInstallInstalledEntry {
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct RequestPluginInstallEntryResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category_id: Option<String>,
     pub entry_id: String,
     pub tool_type: DiscoverableToolType,
     pub tool_id: String,
@@ -111,11 +125,15 @@ pub struct RequestPluginInstallMeta<'a> {
     pub suggest_reason: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<&'a str>,
-    pub entries: Vec<RequestPluginInstallEntryMeta<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entries: Option<Vec<RequestPluginInstallEntryMeta<'a>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub categories: Option<Vec<RequestPluginInstallCategoryMeta<'a>>>,
 }
 
 #[derive(Debug)]
 pub struct RequestPluginInstallResolvedPickerEntry<'a> {
+    pub category_id: Option<&'a str>,
     pub entry_id: &'a str,
     pub tool: &'a DiscoverableTool,
 }
@@ -134,6 +152,17 @@ pub struct RequestPluginInstallEntryMeta<'a> {
     pub remote_plugin_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_connector_ids: Option<&'a [String]>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct RequestPluginInstallCategoryMeta<'a> {
+    pub id: &'a str,
+    pub title: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_installed: Option<u32>,
+    pub entries: Vec<RequestPluginInstallEntryMeta<'a>>,
 }
 
 pub fn build_request_plugin_install_elicitation_request(
@@ -224,27 +253,61 @@ fn build_request_plugin_install_picker_meta<'a>(
 ) -> Result<RequestPluginInstallMeta<'a>, String> {
     let entries = args
         .entries
-        .iter()
-        .map(|entry| picker_entry_meta(entry, resolved_entries))
-        .collect::<Result<Vec<_>, String>>()?;
+        .as_ref()
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|entry| picker_entry_meta(None, entry, resolved_entries))
+                .collect::<Result<Vec<_>, String>>()
+        })
+        .transpose()?;
+    let categories = args
+        .categories
+        .as_ref()
+        .map(|categories| {
+            categories
+                .iter()
+                .map(|category| {
+                    let entries = category
+                        .entries
+                        .iter()
+                        .map(|entry| {
+                            picker_entry_meta(Some(category.id.as_str()), entry, resolved_entries)
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
+                    Ok(RequestPluginInstallCategoryMeta {
+                        id: category.id.as_str(),
+                        title: category.title.as_str(),
+                        required: category.required,
+                        min_installed: category.min_installed,
+                        entries,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })
+        .transpose()?;
 
     Ok(RequestPluginInstallMeta {
         codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
-        persist: None,
+        persist: Some(REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE),
         suggest_type: args.action_type,
         suggest_reason,
         title: args.title.as_deref(),
         entries,
+        categories,
     })
 }
 
 fn picker_entry_meta<'a>(
+    category_id: Option<&str>,
     entry: &'a RequestPluginInstallPickerEntry,
     resolved_entries: &'a [RequestPluginInstallResolvedPickerEntry<'a>],
 ) -> Result<RequestPluginInstallEntryMeta<'a>, String> {
     let tool = resolved_entries
         .iter()
-        .find(|resolved_entry| resolved_entry.entry_id == entry.id)
+        .find(|resolved_entry| {
+            resolved_entry.category_id == category_id && resolved_entry.entry_id == entry.id
+        })
         .map(|resolved_entry| resolved_entry.tool)
         .ok_or_else(|| format!("missing resolved picker entry for {}", entry.id))?;
     Ok(build_request_plugin_install_entry_meta(
@@ -268,11 +331,12 @@ fn build_request_plugin_install_meta<'a>(
         suggest_type: action_type,
         suggest_reason,
         title: None,
-        entries: vec![build_request_plugin_install_entry_meta(
+        entries: Some(vec![build_request_plugin_install_entry_meta(
             tool.id(),
             discoverable_tool_description(tool),
             tool,
-        )],
+        )]),
+        categories: None,
     }
 }
 
