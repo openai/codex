@@ -442,8 +442,8 @@ fn parse_update_file_chunk(
                 match line_contents.chars().next() {
                     None => {
                         // Interpret this as an empty line.
-                        chunk.old_lines.push(String::new());
-                        chunk.new_lines.push(String::new());
+                        chunk.old_lines.push(line.to_string());
+                        chunk.new_lines.push(line.to_string());
                     }
                     Some(' ') => {
                         chunk.old_lines.push(line[1..].to_string());
@@ -583,6 +583,34 @@ fn test_update_file_chunk() {
                 is_end_of_file: true,
             },
             3,
+        ))
+    );
+}
+
+#[test]
+fn test_update_file_chunk_preserves_crlf_for_bare_empty_context_line() {
+    assert_eq!(
+        parse_update_file_chunk(
+            &["@@\r", " before\r", "\r", " after\r", "*** End Patch\r"],
+            /*line_number*/ 123,
+            /*allow_missing_context*/ false,
+        ),
+        Ok((
+            UpdateFileChunk {
+                change_context: None,
+                old_lines: vec![
+                    "before\r".to_string(),
+                    "\r".to_string(),
+                    "after\r".to_string(),
+                ],
+                new_lines: vec![
+                    "before\r".to_string(),
+                    "\r".to_string(),
+                    "after\r".to_string(),
+                ],
+                is_end_of_file: false,
+            },
+            4,
         ))
     );
 }

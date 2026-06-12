@@ -1,8 +1,6 @@
 use std::io::Read;
 use std::io::Write;
 
-const PRESERVE_CRLF_FLAG: &str = "--preserve-crlf";
-
 pub fn main() -> ! {
     let exit_code = run_main();
     std::process::exit(exit_code);
@@ -17,7 +15,7 @@ pub fn run_main() -> i32 {
     let _argv0 = args.next();
     let first_arg = args.next();
     let (options, patch_arg) = match first_arg {
-        Some(arg) if arg.to_str() == Some(PRESERVE_CRLF_FLAG) => {
+        Some(arg) if arg == crate::APPLY_PATCH_PRESERVE_CRLF_ARG => {
             (crate::ApplyPatchOptions::preserve_crlf(), args.next())
         }
         patch_arg => (crate::ApplyPatchOptions::default(), patch_arg),

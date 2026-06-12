@@ -44,6 +44,9 @@ use crate::invocation::ExtractHeredocError;
 /// surface.
 pub const CODEX_CORE_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
 
+/// Enables CRLF preservation for the standalone `apply_patch` command.
+pub const APPLY_PATCH_PRESERVE_CRLF_ARG: &str = "--preserve-crlf";
+
 /// Controls optional behavior when parsing or applying a patch.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ApplyPatchOptions {

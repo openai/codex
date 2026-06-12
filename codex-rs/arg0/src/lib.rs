@@ -4,6 +4,7 @@ use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_apply_patch::APPLY_PATCH_PRESERVE_CRLF_ARG;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_exec_server::CODEX_FS_HELPER_ARG1;
 use codex_install_context::InstallContext;
@@ -100,7 +101,15 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
         codex_exec_server::run_fs_helper_main();
     }
     if argv1 == CODEX_CORE_APPLY_PATCH_ARG1 {
-        let patch_arg = args.next().and_then(|s| s.to_str().map(str::to_owned));
+        let first_arg = args.next();
+        let (options, patch_arg) = match first_arg {
+            Some(arg) if arg == APPLY_PATCH_PRESERVE_CRLF_ARG => (
+                codex_apply_patch::ApplyPatchOptions::preserve_crlf(),
+                args.next(),
+            ),
+            patch_arg => (codex_apply_patch::ApplyPatchOptions::default(), patch_arg),
+        };
+        let patch_arg = patch_arg.and_then(|s| s.to_str().map(str::to_owned));
         let exit_code = match patch_arg {
             Some(patch_arg) => {
                 let mut stdout = std::io::stdout();
@@ -116,8 +125,9 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
                     Ok(runtime) => runtime,
                     Err(_) => std::process::exit(1),
                 };
-                match runtime.block_on(codex_apply_patch::apply_patch(
+                match runtime.block_on(codex_apply_patch::apply_patch_with_options(
                     &patch_arg,
+                    options,
                     &cwd,
                     &mut stdout,
                     &mut stderr,

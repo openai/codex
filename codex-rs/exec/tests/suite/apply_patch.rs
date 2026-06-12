@@ -44,6 +44,31 @@ fn test_standalone_exec_cli_can_use_apply_patch() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_standalone_exec_cli_can_preserve_crlf() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let relative_path = "source.txt";
+    let absolute_path = tmp.path().join(relative_path);
+    fs::write(&absolute_path, "original content\r\n")?;
+
+    Command::new(codex_utils_cargo_bin::cargo_bin("codex-exec")?)
+        .arg(CODEX_CORE_APPLY_PATCH_ARG1)
+        .arg("--preserve-crlf")
+        .arg(
+            "*** Begin Patch\r\n*** Update File: source.txt\r\n@@\r\n-original content\r\n+modified by apply_patch\r\n*** End Patch\r\n",
+        )
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout("Success. Updated the following files:\nM source.txt\n")
+        .stderr(predicates::str::is_empty());
+    assert_eq!(
+        fs::read_to_string(absolute_path)?,
+        "modified by apply_patch\r\n"
+    );
+    Ok(())
+}
+
 #[cfg(not(target_os = "windows"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_apply_patch_tool() -> anyhow::Result<()> {
