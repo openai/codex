@@ -75,7 +75,7 @@ impl InputQueue {
             .lock()
             .await
             .drain(..)
-            .map(|mail| ResponseItem::from(mail.to_response_input_item()))
+            .map(|mail| mail.to_model_input_item())
             .collect()
     }
 
@@ -303,8 +303,8 @@ mod tests {
         assert_eq!(
             input_queue.drain_mailbox_input_items().await,
             vec![
-                ResponseItem::from(mail_one.to_response_input_item()),
-                ResponseItem::from(mail_two.to_response_input_item())
+                mail_one.to_model_input_item(),
+                mail_two.to_model_input_item()
             ]
         );
         assert!(!input_queue.has_pending_mailbox_items().await);

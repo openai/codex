@@ -526,7 +526,7 @@ pub enum Op {
         thread_settings: ThreadSettingsOverrides,
     },
 
-    /// Inter-agent communication that should be recorded as assistant history
+    /// Inter-agent communication that should be recorded as agent-message history
     /// while still using the normal thread submission lifecycle.
     InterAgentCommunication {
         communication: InterAgentCommunication,
@@ -712,15 +712,18 @@ impl InterAgentCommunication {
     }
 
     pub fn to_model_input_item(&self) -> ResponseItem {
-        match &self.encrypted_content {
-            Some(encrypted_content) => ResponseItem::AgentMessage {
-                author: self.author.to_string(),
-                recipient: self.recipient.to_string(),
-                content: vec![AgentMessageInputContent::EncryptedContent {
-                    encrypted_content: encrypted_content.clone(),
-                }],
+        let content = match &self.encrypted_content {
+            Some(encrypted_content) => AgentMessageInputContent::EncryptedContent {
+                encrypted_content: encrypted_content.clone(),
             },
-            None => self.to_response_input_item().into(),
+            None => AgentMessageInputContent::InputText {
+                text: self.content.clone(),
+            },
+        };
+        ResponseItem::AgentMessage {
+            author: self.author.to_string(),
+            recipient: self.recipient.to_string(),
+            content: vec![content],
         }
     }
 
