@@ -9,6 +9,7 @@ use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_extension_api::empty_extension_registry;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_protocol::SegmentId;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::models::ContentItem;
@@ -22,6 +23,8 @@ use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::RolloutReferenceItem;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -168,7 +171,21 @@ async fn interrupted_snapshot_detects_turn_started_in_referenced_segment() {
     let codex_home = tempdir().expect("codex home");
     let predecessor_path = codex_home.path().join("predecessor.jsonl");
     let timestamp = "2026-06-12T00:00:00Z";
+    let thread_id = ThreadId::new();
+    let segment_id = SegmentId::new();
     let predecessor_items = [
+        RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                id: thread_id,
+                segment_id: Some(segment_id),
+                timestamp: timestamp.to_string(),
+                cwd: codex_home.path().to_path_buf(),
+                originator: "test".to_string(),
+                cli_version: "test".to_string(),
+                ..SessionMeta::default()
+            },
+            git: None,
+        }),
         RolloutItem::ResponseItem(user_msg("turn started before rotation")),
         RolloutItem::ResponseItem(assistant_msg("partial answer")),
     ];
@@ -190,9 +207,9 @@ async fn interrupted_snapshot_detects_turn_started_in_referenced_segment() {
     let raw_history = InitialHistory::Forked(vec![
         RolloutItem::RolloutReference(RolloutReferenceItem {
             rollout_path: predecessor_path,
-            thread_id: None,
+            thread_id: Some(thread_id),
             rollout_timestamp: None,
-            segment_id: None,
+            segment_id: Some(segment_id),
             max_depth: 1,
             nth_user_message: None,
             compacted_replacement_history_filter_texts: None,
