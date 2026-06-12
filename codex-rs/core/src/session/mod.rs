@@ -1401,10 +1401,6 @@ impl Session {
             return;
         }
 
-        if !self.features.enabled(Feature::ShellSnapshot) {
-            return;
-        }
-
         if matches!(
             session_source,
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
@@ -1412,15 +1408,16 @@ impl Session {
             return;
         }
 
-        ShellSnapshot::refresh_snapshot(
-            codex_home.clone(),
-            self.thread_id,
-            next_cwd.clone(),
-            self.services.user_shell.as_ref().clone(),
-            self.services.shell_snapshot_tx.clone(),
-            self.services.session_telemetry.clone(),
-            self.services.state_db.clone(),
-        );
+        if self.services.shell_snapshot.load().is_some() {
+            self.services.shell_snapshot.store(Some(ShellSnapshot::new(
+                codex_home.clone(),
+                self.thread_id,
+                next_cwd.clone(),
+                self.services.user_shell.as_ref(),
+                self.services.session_telemetry.clone(),
+                self.services.state_db.clone(),
+            )));
+        }
     }
 
     pub(crate) async fn update_settings(

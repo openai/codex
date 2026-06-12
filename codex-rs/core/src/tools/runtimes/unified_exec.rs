@@ -264,6 +264,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
     ) -> Result<UnifiedExecProcess, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
+        let shell_snapshot = ctx.session.services.shell_snapshot.load_full();
+        let shell_snapshot_location = shell_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.location(&req.cwd));
         let (file_system_sandbox_policy, _) = attempt.permissions.to_runtime_permissions();
         let launch_sandbox_permissions = sandbox_permissions_preserving_denied_reads(
             req.sandbox_permissions,
@@ -305,7 +309,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             maybe_wrap_shell_lc_with_snapshot(
                 base_command,
                 session_shell.as_ref(),
-                &req.cwd,
+                shell_snapshot_location.as_ref(),
                 &explicit_env_overrides,
                 &env,
                 &runtime_path_prepends,

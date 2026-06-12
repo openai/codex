@@ -22,7 +22,6 @@ fn fake_shell_name() -> String {
     let shell = crate::shell::Shell {
         shell_type: ShellType::Bash,
         shell_path: PathBuf::from("/bin/bash"),
-        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     };
     shell.name().to_string()
 }

@@ -5,7 +5,6 @@ Concrete ToolRuntime implementations for specific tools. Each runtime stays
 small and focused and reuses the orchestrator for approvals + sandbox + retry.
 */
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
-use crate::path_utils;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
@@ -249,7 +248,7 @@ pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
 pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     command: &[String],
     session_shell: &Shell,
-    cwd: &AbsolutePathBuf,
+    shell_snapshot: Option<&AbsolutePathBuf>,
     explicit_env_overrides: &HashMap<String, String>,
     env: &HashMap<String, String>,
     runtime_path_prepends: &RuntimePathPrepends,
@@ -258,15 +257,11 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         return command.to_vec();
     }
 
-    let Some(snapshot) = session_shell.shell_snapshot() else {
+    let Some(snapshot) = shell_snapshot else {
         return command.to_vec();
     };
 
-    if !snapshot.path.exists() {
-        return command.to_vec();
-    }
-
-    if !path_utils::paths_match_after_normalization(snapshot.cwd.as_path(), cwd) {
+    if !snapshot.exists() {
         return command.to_vec();
     }
 
@@ -279,7 +274,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         return command.to_vec();
     }
 
-    let snapshot_path = snapshot.path.to_string_lossy();
+    let snapshot_path = snapshot.to_string_lossy();
     let shell_path = session_shell.shell_path.to_string_lossy();
     let original_shell = shell_single_quote(&command[0]);
     let original_script = shell_single_quote(&command[2]);
