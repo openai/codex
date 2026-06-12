@@ -41,13 +41,6 @@ module-name = "openai_codex"
 source-include = [
   "examples/README.md",
 ]
-source-exclude = [
-  ".venv/**",
-  ".venv2/**",
-  ".pytest_cache/**",
-  "dist/**",
-  "build/**",
-]
 
 [tool.pytest.ini_options]
 addopts = "-q"
