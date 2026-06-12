@@ -193,7 +193,12 @@ async fn fail_and_terminate_preserves_failure_message() {
 #[tokio::test]
 async fn fail_and_terminate_forwards_terminal_failure() {
     let (state, lifecycle) = recording_lifecycle();
-    let process = remote_process_with_lifecycle(WriteStatus::Accepted, None, lifecycle).await;
+    let process = remote_process_with_lifecycle(
+        WriteStatus::Accepted,
+        /*terminate_error*/ None,
+        lifecycle,
+    )
+    .await;
 
     process.fail_and_terminate("network denied".to_string());
 
@@ -206,7 +211,12 @@ async fn fail_and_terminate_forwards_terminal_failure() {
 #[tokio::test]
 async fn dropping_live_process_marks_cancelled_and_failed() {
     let (state, lifecycle) = recording_lifecycle();
-    let process = remote_process_with_lifecycle(WriteStatus::Accepted, None, lifecycle).await;
+    let process = remote_process_with_lifecycle(
+        WriteStatus::Accepted,
+        /*terminate_error*/ None,
+        lifecycle,
+    )
+    .await;
 
     drop(process);
 
@@ -220,7 +230,12 @@ async fn dropping_live_process_marks_cancelled_and_failed() {
 #[tokio::test]
 async fn dropping_exited_process_does_not_mark_cancelled() {
     let (state, lifecycle) = recording_lifecycle();
-    let process = remote_process_with_lifecycle(WriteStatus::UnknownProcess, None, lifecycle).await;
+    let process = remote_process_with_lifecycle(
+        WriteStatus::UnknownProcess,
+        /*terminate_error*/ None,
+        lifecycle,
+    )
+    .await;
     process
         .write(b"hello")
         .await
@@ -233,7 +248,7 @@ async fn dropping_exited_process_does_not_mark_cancelled() {
 
 #[tokio::test]
 async fn noop_spawn_lifecycle_preserves_process_behavior() {
-    let process = remote_process(WriteStatus::Accepted, None).await;
+    let process = remote_process(WriteStatus::Accepted, /*terminate_error*/ None).await;
 
     process.fail_and_terminate("network denied".to_string());
 

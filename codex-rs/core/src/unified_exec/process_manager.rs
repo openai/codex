@@ -73,7 +73,7 @@ const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
 const NETWORK_ACCESS_DENIED_MESSAGE: &str =
     "Network access was denied by the Codex sandbox network proxy.";
 const LATE_NETWORK_DENIAL_GRACE_PERIOD: Duration = Duration::from_millis(100);
-const INTERRUPT: &str = "\u{3}";
+pub(super) const INTERRUPT: &str = "\u{3}";
 
 /// Test-only override for deterministic unified exec process IDs.
 ///
@@ -642,8 +642,8 @@ impl UnifiedExecProcessManager {
         if !request.input.is_empty() {
             if !tty {
                 if request.input == INTERRUPT {
-                    process.notify_lifecycle_cancelled();
                     process.interrupt().await?;
+                    process.notify_lifecycle_cancelled();
                 } else {
                     return Err(UnifiedExecError::StdinClosed);
                 }

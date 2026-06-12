@@ -10,6 +10,7 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::process::OutputHandles;
+use crate::unified_exec::process_manager::INTERRUPT;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEventReceiver;
 use codex_exec_server::ExecProcessFuture;
@@ -218,11 +219,23 @@ impl SpawnLifecycle for TestSpawnLifecycle {
     }
 }
 
+#[derive(Debug)]
+struct RecordingCancellationLifecycle {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl SpawnLifecycle for RecordingCancellationLifecycle {
+    fn mark_cancelled(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+}
+
 struct BlockingTerminateExecProcess {
     process_id: ProcessId,
     terminate_started: watch::Sender<bool>,
     allow_terminate: Arc<Notify>,
     wake_tx: watch::Sender<u64>,
+    signal_error: Option<String>,
 }
 
 impl BlockingTerminateExecProcess {
@@ -277,7 +290,14 @@ impl ExecProcess for BlockingTerminateExecProcess {
     }
 
     fn signal(&self, _signal: ProcessSignal) -> ExecProcessFuture<'_, ()> {
-        Box::pin(async { Ok(()) })
+        Box::pin(async {
+            match self.signal_error.as_ref() {
+                Some(signal_error) => Err(codex_exec_server::ExecServerError::Protocol(
+                    signal_error.clone(),
+                )),
+                None => Ok(()),
+            }
+        })
     }
 
     fn terminate(&self) -> ExecProcessFuture<'_, ()> {
@@ -289,6 +309,8 @@ async fn blocking_terminate_unified_process(
     process_id: i32,
     terminate_started: watch::Sender<bool>,
     allow_terminate: Arc<Notify>,
+    signal_error: Option<String>,
+    spawn_lifecycle: SpawnLifecycleHandle,
 ) -> anyhow::Result<Arc<UnifiedExecProcess>> {
     let (wake_tx, _wake_rx) = watch::channel(0);
     Ok(Arc::new(
@@ -299,10 +321,11 @@ async fn blocking_terminate_unified_process(
                     terminate_started,
                     allow_terminate,
                     wake_tx,
+                    signal_error,
                 }),
             },
             SandboxType::None,
-            Box::new(NoopSpawnLifecycle),
+            spawn_lifecycle,
         )
         .await?,
     ))
@@ -673,6 +696,8 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
         process_id,
         terminate_started_tx,
         Arc::clone(&allow_terminate),
+        /*signal_error*/ None,
+        Box::new(NoopSpawnLifecycle),
     )
     .await?;
     #[allow(deprecated)]
@@ -745,6 +770,8 @@ async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Resu
         process_id,
         terminate_started_tx,
         Arc::clone(&allow_terminate),
+        /*signal_error*/ None,
+        Box::new(NoopSpawnLifecycle),
     )
     .await?;
     #[allow(deprecated)]
@@ -801,6 +828,58 @@ async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Resu
     assert_eq!(output.process_id, None);
     assert!(manager.process_store.lock().await.processes.is_empty());
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_interrupt_failure_does_not_mark_lifecycle_cancelled() -> anyhow::Result<()> {
+    let (session, turn) = test_session_and_turn().await;
+    let manager = &session.services.unified_exec_manager;
+    let process_id = manager.allocate_process_id().await;
+    let (terminate_started_tx, _terminate_started_rx) = watch::channel(false);
+    let allow_terminate = Arc::new(Notify::new());
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let process = blocking_terminate_unified_process(
+        process_id,
+        terminate_started_tx,
+        Arc::clone(&allow_terminate),
+        Some("interrupt unavailable".to_string()),
+        Box::new(RecordingCancellationLifecycle {
+            cancelled: Arc::clone(&cancelled),
+        }),
+    )
+    .await?;
+    #[allow(deprecated)]
+    let cwd = turn.cwd.clone();
+    manager.process_store.lock().await.processes.insert(
+        process_id,
+        ProcessEntry {
+            process: Arc::clone(&process),
+            call_id: "call".to_string(),
+            process_id,
+            cwd,
+            initial_exec_command_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            hook_command: "sleep 60".to_string(),
+            tty: false,
+            network_approval: None,
+            session: Arc::downgrade(&session),
+            last_used: Instant::now(),
+        },
+    );
+
+    let err = write_stdin(&session, process_id, INTERRUPT, /*yield_time_ms*/ 100)
+        .await
+        .expect_err("remote interrupt should fail");
+    assert!(matches!(
+        err,
+        UnifiedExecError::ProcessFailed { message }
+            if message.contains("interrupt unavailable")
+    ));
+    assert!(!cancelled.load(Ordering::SeqCst));
+
+    manager.release_process_id(process_id).await;
+    allow_terminate.notify_one();
+    process.terminate_confirmed().await?;
     Ok(())
 }
 
