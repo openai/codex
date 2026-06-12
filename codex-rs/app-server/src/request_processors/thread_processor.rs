@@ -2572,6 +2572,7 @@ impl ThreadRequestProcessor {
                 .map(|thread_history| (thread_history, None))
         } else if let Some(stored_thread) = stored_thread_from_running_probe {
             self.stored_thread_to_initial_history(&stored_thread)
+                .instrument(info_span!("app_server.thread_resume.load_history"))
                 .await
                 .map(|thread_history| (thread_history, Some(*stored_thread)))
         } else {
