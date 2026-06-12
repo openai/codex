@@ -786,8 +786,8 @@ async fn run_guardian_review_session_before_deadline(
     external_cancel: Option<CancellationToken>,
     deadline: Instant,
 ) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
-    let setup = match guardian_review_session_setup(&session, &turn).await {
-        Ok(setup) => setup,
+    let review_session_setup = match guardian_review_session_setup(&session, &turn).await {
+        Ok(review_session_setup) => review_session_setup,
         Err(err) => {
             return (
                 GuardianReviewOutcome::Error(GuardianReviewError::prompt_build(err)),
@@ -802,12 +802,12 @@ async fn run_guardian_review_session_before_deadline(
             .run_review(GuardianReviewSessionParams {
                 parent_session: Arc::clone(&session),
                 parent_turn: turn.clone(),
-                spawn_config: setup.spawn_config,
+                spawn_config: review_session_setup.spawn_config,
                 request,
                 retry_reason,
                 schema,
-                model: setup.model,
-                reasoning_effort: setup.reasoning_effort,
+                model: review_session_setup.model,
+                reasoning_effort: review_session_setup.reasoning_effort,
                 reasoning_summary: turn.reasoning_summary,
                 personality: turn.personality,
                 external_cancel,
