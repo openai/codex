@@ -319,11 +319,11 @@ impl Session {
         .await;
         let mcp_runtime_context = match turn_context.environments.primary() {
             Some(turn_environment) => McpRuntimeContext::new(
-                Arc::clone(&self.services.environment_manager),
+                Arc::clone(&turn_context.environments.environment_manager),
                 turn_environment.cwd().to_path_buf(),
             ),
             None => McpRuntimeContext::new(
-                Arc::clone(&self.services.environment_manager),
+                Arc::clone(&turn_context.environments.environment_manager),
                 #[allow(deprecated)]
                 turn_context.cwd.to_path_buf(),
             ),

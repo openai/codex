@@ -1,6 +1,6 @@
 use super::*;
 use crate::compact::InitialContextInjection;
-use crate::environment_selection::ResolvedTurnEnvironments;
+use crate::environment_selection::TurnEnvironments;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::sandboxing::SandboxPermissions;
@@ -709,7 +709,6 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
         models_manager,
-        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         skills_manager,
         plugins_manager,
         mcp_manager,
@@ -729,7 +728,8 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell_override: None,
         parent_trace: None,
-        environment_selections: ResolvedTurnEnvironments {
+        turn_environments: TurnEnvironments {
+            environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
             turn_environments: Vec::new(),
         },
         thread_extension_init: codex_extension_api::ExtensionDataInit::default(),

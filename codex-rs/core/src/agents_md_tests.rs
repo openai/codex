@@ -1,6 +1,6 @@
 use super::*;
 use crate::config::ConfigBuilder;
-use crate::environment_selection::ResolvedTurnEnvironments;
+use crate::environment_selection::TurnEnvironments;
 use crate::session::turn_context::TurnEnvironment;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
@@ -9,6 +9,7 @@ use codex_config::ConfigRequirementsToml;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
+use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorFileSystemFuture;
 use codex_exec_server::FileMetadata;
 use codex_exec_server::FileSystemSandboxContext;
@@ -254,8 +255,9 @@ async fn agents_md_paths(config: &TestConfig) -> std::io::Result<Vec<AbsolutePat
 
 fn resolved_local_environments<const N: usize>(
     environments: [(&str, AbsolutePathBuf); N],
-) -> ResolvedTurnEnvironments {
-    ResolvedTurnEnvironments {
+) -> TurnEnvironments {
+    TurnEnvironments {
+        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         turn_environments: environments
             .into_iter()
             .map(|(environment_id, cwd)| {

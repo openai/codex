@@ -2,7 +2,7 @@ use super::*;
 use crate::SkillLoadOutcome;
 use crate::agents_md::LoadedAgentsMd;
 use crate::config::GhostSnapshotConfig;
-use crate::environment_selection::ResolvedTurnEnvironments;
+use crate::environment_selection::TurnEnvironments;
 use codex_core_skills::HostLoadedSkills;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
@@ -102,7 +102,7 @@ pub struct TurnContext {
     pub(crate) session_source: SessionSource,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
-    pub(crate) environments: ResolvedTurnEnvironments,
+    pub(crate) environments: TurnEnvironments,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
@@ -502,7 +502,7 @@ impl Session {
         model_info: ModelInfo,
         models_manager: &SharedModelsManager,
         network: Option<NetworkProxy>,
-        environments: ResolvedTurnEnvironments,
+        environments: TurnEnvironments,
         cwd: AbsolutePathBuf,
         sub_id: String,
         skills_outcome: Arc<SkillLoadOutcome>,
@@ -612,11 +612,34 @@ impl Session {
         }
     }
 
+    pub(super) async fn turn_environments_for_update(
+        &self,
+        updates: &SessionSettingsUpdate,
+    ) -> Option<TurnEnvironments> {
+        let selections = updates.environments.as_ref()?.environments.as_slice();
+        let current = {
+            let state = self.state.lock().await;
+            state.turn_environments.clone()
+        };
+        let turn_environments = match current.with_selections(selections).await {
+            Ok(turn_environments) => turn_environments,
+            Err(err) => {
+                warn!("failed to resolve turn environments: {err}");
+                current
+                    .with_selections(&[])
+                    .await
+                    .expect("empty turn environment selections should resolve")
+            }
+        };
+        Some(turn_environments)
+    }
+
     pub(crate) async fn new_turn_with_sub_id(
         &self,
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> CodexResult<Arc<TurnContext>> {
+        let updated_turn_environments = self.turn_environments_for_update(&updates).await;
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let update_result: CodexResult<_> = {
             let mut state = self.state.lock().await;
@@ -636,6 +659,9 @@ impl Session {
                     let new_config = notify_config_contributors
                         .then(|| Self::build_effective_session_config(&next));
                     state.session_configuration = next.clone();
+                    if let Some(turn_environments) = updated_turn_environments {
+                        state.turn_environments = turn_environments;
+                    }
                     Ok((
                         next,
                         permission_profile_changed,
@@ -688,60 +714,28 @@ impl Session {
         }
 
         Ok(self
-            .new_turn_from_configuration(
+            .new_turn_context_from_state(
                 sub_id,
-                session_configuration,
                 updates.final_output_json_schema,
+                TurnMultiAgentRuntime::ResolveAndStore,
             )
             .await)
     }
 
-    async fn new_turn_from_configuration(
-        &self,
-        sub_id: String,
-        session_configuration: SessionConfiguration,
-        final_output_json_schema: Option<Option<Value>>,
-    ) -> Arc<TurnContext> {
-        self.new_turn_context_from_configuration(
-            sub_id,
-            session_configuration,
-            final_output_json_schema,
-            TurnMultiAgentRuntime::ResolveAndStore,
-        )
-        .await
-    }
-
-    async fn new_startup_prewarm_turn_from_configuration(
-        &self,
-        sub_id: String,
-        session_configuration: SessionConfiguration,
-    ) -> Arc<TurnContext> {
-        self.new_turn_context_from_configuration(
-            sub_id,
-            session_configuration,
-            /*final_output_json_schema*/ None,
-            TurnMultiAgentRuntime::Preview,
-        )
-        .await
-    }
-
     #[instrument(name = "turn_context.build", level = "trace", skip_all)]
-    async fn new_turn_context_from_configuration(
+    async fn new_turn_context_from_state(
         &self,
         sub_id: String,
-        session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
         multi_agent_runtime: TurnMultiAgentRuntime,
     ) -> Arc<TurnContext> {
-        let turn_environments = crate::environment_selection::resolve_environment_selections(
-            self.services.environment_manager.as_ref(),
-            session_configuration.environment_selections(),
-        )
-        .await
-        .unwrap_or_else(|err| {
-            warn!("failed to resolve turn environments: {err}");
-            ResolvedTurnEnvironments::default()
-        });
+        let (session_configuration, turn_environments) = {
+            let state = self.state.lock().await;
+            (
+                state.session_configuration.clone(),
+                state.turn_environments.clone(),
+            )
+        };
         let primary_turn_environment = turn_environments.primary().cloned();
         let cwd = primary_turn_environment
             .as_ref()
@@ -854,11 +848,10 @@ impl Session {
     }
 
     pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {
-        let session_configuration = self.default_turn_configuration().await;
-        self.new_turn_from_configuration(
+        self.new_turn_context_from_state(
             sub_id,
-            session_configuration,
             /*final_output_json_schema*/ None,
+            TurnMultiAgentRuntime::ResolveAndStore,
         )
         .await
     }
@@ -867,13 +860,11 @@ impl Session {
         &self,
         sub_id: String,
     ) -> Arc<TurnContext> {
-        let session_configuration = self.default_turn_configuration().await;
-        self.new_startup_prewarm_turn_from_configuration(sub_id, session_configuration)
-            .await
-    }
-
-    async fn default_turn_configuration(&self) -> SessionConfiguration {
-        let state = self.state.lock().await;
-        state.session_configuration.clone()
+        self.new_turn_context_from_state(
+            sub_id,
+            /*final_output_json_schema*/ None,
+            TurnMultiAgentRuntime::Preview,
+        )
+        .await
     }
 }

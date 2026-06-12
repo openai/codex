@@ -31,7 +31,7 @@ use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
-use crate::environment_selection::ResolvedTurnEnvironments;
+use crate::environment_selection::TurnEnvironments;
 use crate::exec_policy::ExecPolicyManager;
 use crate::image_preparation::prepare_response_items;
 use crate::parse_turn_item;
@@ -53,7 +53,6 @@ use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
-use codex_exec_server::EnvironmentManager;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::LoadedUserInstructions;
@@ -408,7 +407,6 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) installation_id: String,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: SharedModelsManager,
-    pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
@@ -430,7 +428,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) parent_rollout_thread_trace: ThreadTraceContext,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
-    pub(crate) environment_selections: ResolvedTurnEnvironments,
+    pub(crate) turn_environments: TurnEnvironments,
     pub(crate) thread_extension_init: ExtensionDataInit,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
@@ -494,7 +492,6 @@ impl Codex {
             installation_id,
             auth_manager,
             models_manager,
-            environment_manager,
             skills_manager,
             plugins_manager,
             mcp_manager,
@@ -512,7 +509,7 @@ impl Codex {
             inherited_exec_policy,
             parent_rollout_thread_trace,
             parent_trace: _,
-            environment_selections,
+            turn_environments,
             thread_extension_init,
             analytics_events_client,
             thread_store,
@@ -531,8 +528,7 @@ impl Codex {
             .startup_warnings
             .extend(user_instruction_provider_warnings);
         let loaded_agents_md =
-            load_project_instructions(&mut config, user_instructions, &environment_selections)
-                .await;
+            load_project_instructions(&mut config, user_instructions, &turn_environments).await;
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -622,7 +618,7 @@ impl Codex {
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             environments: TurnEnvironmentSelections::new(
                 config.cwd.clone(),
-                environment_selections.to_selections(),
+                turn_environments.to_selections(),
             ),
             workspace_roots: config.workspace_roots.clone(),
             codex_home: config.codex_home.clone(),
@@ -661,7 +657,7 @@ impl Codex {
             extensions,
             thread_extension_init,
             agent_control,
-            environment_manager,
+            turn_environments,
             analytics_events_client,
             thread_store,
             parent_rollout_thread_trace,
@@ -1431,6 +1427,7 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
+        let updated_turn_environments = self.turn_environments_for_update(&updates).await;
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let (
             previous_config,
@@ -1463,6 +1460,9 @@ impl Session {
             let codex_home = updated.codex_home.clone();
             let session_source = updated.session_source.clone();
             state.session_configuration = updated;
+            if let Some(turn_environments) = updated_turn_environments {
+                state.turn_environments = turn_environments;
+            }
             (
                 previous_config,
                 new_config,

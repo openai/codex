@@ -435,18 +435,11 @@ pub(crate) struct AppServerClientMetadata {
 
 async fn warm_plugins_and_skills_for_session_init(
     config: Arc<Config>,
-    environment_manager: Arc<EnvironmentManager>,
     plugins_manager: Arc<PluginsManager>,
     skills_manager: Arc<SkillsManager>,
-    environments: Vec<TurnEnvironmentSelection>,
+    turn_environments: TurnEnvironments,
 ) -> Vec<SkillError> {
-    let fs = crate::environment_selection::resolve_environment_selections(
-        environment_manager.as_ref(),
-        &environments,
-    )
-    .await
-    .ok()
-    .and_then(|resolved| resolved.primary_filesystem());
+    let fs = turn_environments.primary_filesystem();
     let plugins_input = config.plugins_config_input();
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
@@ -487,7 +480,7 @@ impl Session {
         extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
         thread_extension_init: ExtensionDataInit,
         agent_control: AgentControl,
-        environment_manager: Arc<EnvironmentManager>,
+        turn_environments: TurnEnvironments,
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
@@ -627,10 +620,9 @@ impl Session {
 
         let plugin_and_skill_warmup_fut = warm_plugins_and_skills_for_session_init(
             Arc::clone(&config),
-            Arc::clone(&environment_manager),
             Arc::clone(&plugins_manager),
             Arc::clone(&skills_manager),
-            session_configuration.environment_selections().to_vec(),
+            turn_environments.clone(),
         )
         .instrument(info_span!(
             "session_init.plugin_skill_warmup",
@@ -855,7 +847,7 @@ impl Session {
             session_configuration.thread_name = thread_name.clone();
             validate_config_lock_if_configured(&session_configuration).await?;
             export_config_lock_if_configured(&session_configuration, thread_id).await?;
-            let state = SessionState::new(session_configuration.clone());
+            let state = SessionState::new(session_configuration.clone(), turn_environments);
             let managed_network_requirements_configured = config
                 .config_layer_stack
                 .requirements_toml()
@@ -1034,7 +1026,6 @@ impl Session {
                 ),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 tool_search_handler_cache: Default::default(),
-                environment_manager,
             };
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
                 watch::channel(false);
@@ -1116,28 +1107,17 @@ impl Session {
                 *cancel_guard = cancel_token.clone();
                 cancel_token
             };
-            let turn_environment = crate::environment_selection::resolve_environment_selections(
-                sess.services.environment_manager.as_ref(),
-                session_configuration.environment_selections(),
-            )
-            .await
-            .map_err(|err| {
-                CodexErr::InvalidRequest(err.to_string().replace(
-                    "unknown turn environment id",
-                    "unknown stored MCP environment id",
-                ))
-            })?
-            .primary()
-            .cloned();
-            let mcp_runtime_context = match turn_environment {
-                Some(turn_environment) => McpRuntimeContext::new(
-                    Arc::clone(&sess.services.environment_manager),
-                    turn_environment.cwd().to_path_buf(),
-                ),
-                None => McpRuntimeContext::new(
-                    Arc::clone(&sess.services.environment_manager),
-                    session_configuration.cwd().to_path_buf(),
-                ),
+            let mcp_runtime_context = {
+                let state = sess.state.lock().await;
+                let cwd = state
+                    .turn_environments
+                    .primary()
+                    .map(|turn_environment| turn_environment.cwd().to_path_buf())
+                    .unwrap_or_else(|| session_configuration.cwd().to_path_buf());
+                McpRuntimeContext::new(
+                    Arc::clone(&state.turn_environments.environment_manager),
+                    cwd,
+                )
             };
             let mcp_connection_manager = McpConnectionManager::new(
                 &mcp_servers,
