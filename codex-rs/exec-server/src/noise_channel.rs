@@ -14,18 +14,17 @@ use base64::engine::general_purpose::STANDARD;
 use clatter::KeyPair;
 use clatter::bytearray::ByteArray;
 use clatter::crypto::dh::X25519;
+use clatter::crypto::kem::rust_crypto_ml_kem::MlKem768;
 use clatter::traits::Dh;
 use clatter::traits::Kem;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::aws_lc_ml_kem::AwsLcMlKem768;
-
 /// Identifies the handshake pattern and algorithms used by this channel.
 pub const NOISE_CHANNEL_SUITE: &str = "Noise_hybridIK_X25519+MLKEM768_AESGCM_SHA256";
 
 type DhKeyPair = KeyPair<<X25519 as Dh>::PubKey, <X25519 as Dh>::PrivateKey>;
-type KemKeyPair = KeyPair<<AwsLcMlKem768 as Kem>::PubKey, <AwsLcMlKem768 as Kem>::SecretKey>;
+type KemKeyPair = KeyPair<<MlKem768 as Kem>::PubKey, <MlKem768 as Kem>::SecretKey>;
 
 /// Public key material for the exec-server Noise suite.
 /// The suite tag prevents keys for another protocol from being accepted just
@@ -77,7 +76,7 @@ impl NoiseChannelIdentity {
     pub fn generate() -> Result<Self, NoiseChannelError> {
         let dh = X25519::genkey()
             .map_err(|error| NoiseChannelError::KeyGeneration(error.to_string()))?;
-        let kem = AwsLcMlKem768::genkey()
+        let kem = MlKem768::genkey()
             .map_err(|error| NoiseChannelError::KeyGeneration(error.to_string()))?;
         Ok(Self { dh, kem })
     }

@@ -1,4 +1,3 @@
-mod aws_lc_ml_kem;
 mod client;
 mod client_api;
 mod client_transport;

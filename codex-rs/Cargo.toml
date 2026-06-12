@@ -281,6 +281,7 @@ clatter = { version = "2.2.0", default-features = false, features = [
     "getrandom",
     "use-25519",
     "use-aes-gcm",
+    "use-rust-crypto-ml-kem",
     "use-sha",
 ] }
 color-eyre = "0.6.3"
