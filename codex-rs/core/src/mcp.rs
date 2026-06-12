@@ -4,8 +4,10 @@ use std::sync::Arc;
 use crate::config::Config;
 use codex_config::McpServerConfig;
 use codex_core_plugins::PluginsManager;
+use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::McpServerContribution;
+use codex_extension_api::McpServerContributionContext;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::EffectiveMcpServer;
@@ -45,6 +47,24 @@ impl McpManager {
     /// Returns the MCP config after applying compatibility built-ins and
     /// runtime-only extension overlays.
     pub async fn runtime_config(&self, config: &Config) -> McpConfig {
+        self.runtime_config_with_context(config, /*thread_init*/ None)
+            .await
+    }
+
+    pub(crate) async fn runtime_config_for_thread(
+        &self,
+        config: &Config,
+        thread_init: &ExtensionDataInit,
+    ) -> McpConfig {
+        self.runtime_config_with_context(config, Some(thread_init))
+            .await
+    }
+
+    async fn runtime_config_with_context(
+        &self,
+        config: &Config,
+        thread_init: Option<&ExtensionDataInit>,
+    ) -> McpConfig {
         let mut mcp_config = config.to_mcp_config(self.plugins_manager.as_ref()).await;
         let mut catalog = mcp_config.mcp_server_catalog.to_builder();
         if mcp_config.apps_enabled {
@@ -63,9 +83,13 @@ impl McpManager {
             );
         }
 
+        let context = match thread_init {
+            Some(thread_init) => McpServerContributionContext::for_thread(config, thread_init),
+            None => McpServerContributionContext::global(config),
+        };
         let mut contribution_order = 0;
         for contributor in self.extensions.mcp_server_contributors() {
-            for contribution in contributor.contribute(config).await {
+            for contribution in contributor.contribute(context).await {
                 match contribution {
                     McpServerContribution::Set {
                         name,

@@ -7,6 +7,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core_plugins::PluginsManager;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::McpServerContribution;
+use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -191,7 +192,7 @@ impl McpServerContributor<Config> for RemoveCodexApps {
 
     fn contribute<'a>(
         &'a self,
-        _config: &'a Config,
+        _context: McpServerContributionContext<'a, Config>,
     ) -> codex_extension_api::ExtensionFuture<'a, Vec<McpServerContribution>> {
         Box::pin(async move {
             vec![McpServerContribution::Remove {

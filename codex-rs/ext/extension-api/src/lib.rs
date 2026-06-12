@@ -36,6 +36,7 @@ pub use contributors::ConfigContributor;
 pub use contributors::ContextContributor;
 pub use contributors::ExtensionFuture;
 pub use contributors::McpServerContribution;
+pub use contributors::McpServerContributionContext;
 pub use contributors::McpServerContributor;
 pub use contributors::PromptFragment;
 pub use contributors::PromptSlot;
