@@ -24,6 +24,9 @@ impl ChatWidget {
     pub(super) fn on_image_generation_begin(&mut self) {
         self.record_visible_turn_activity();
         self.flush_answer_stream_with_separator();
+        self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Working;
+        self.set_status_header(String::from("Generating image"));
+        self.request_redraw();
     }
 
     pub(super) fn on_image_generation_end(
@@ -40,6 +43,7 @@ impl ChatWidget {
             revised_prompt,
             saved_path,
         ));
+        self.restore_reasoning_status_header();
         self.request_redraw();
     }
 

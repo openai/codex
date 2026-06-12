@@ -715,6 +715,24 @@ pub(super) fn handle_image_generation_end(
     );
 }
 
+pub(super) fn handle_image_generation_started(chat: &mut ChatWidget, call_id: impl Into<String>) {
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: thread_id(chat),
+            turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
+            item: AppServerThreadItem::ImageGeneration {
+                id: call_id.into(),
+                status: "in_progress".to_string(),
+                revised_prompt: None,
+                result: String::new(),
+                saved_path: None,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+}
+
 pub(super) fn replay_user_message_inputs(
     chat: &mut ChatWidget,
     item_id: &str,

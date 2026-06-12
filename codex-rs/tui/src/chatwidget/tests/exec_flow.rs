@@ -895,6 +895,32 @@ async fn image_generation_call_adds_history_cell() {
 }
 
 #[tokio::test]
+async fn standalone_image_generation_started_updates_status() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    handle_turn_started(&mut chat, "turn-1");
+
+    handle_image_generation_started(&mut chat, "call-image-generation");
+    assert_eq!(chat.status_state.current_status.header, "Generating image");
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Generating image");
+    assert!(chat.transcript.active_cell.is_none());
+
+    let height = chat.desired_height(/*width*/ 80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw image generation status");
+    assert_chatwidget_snapshot!(
+        "standalone_image_generation_status",
+        normalized_backend_snapshot(terminal.backend())
+    );
+}
+
+#[tokio::test]
 async fn exec_history_extends_previous_when_consecutive() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
