@@ -35,15 +35,18 @@ use super::keyring_service;
 
 const SECRETS_VERSION: u8 = 1;
 const LOCAL_SECRETS_FILENAME: &str = "local.age";
-const CLI_AUTH_SECRETS_FILENAME: &str = "cli_auth.age";
+const CODEX_AUTH_SECRETS_FILENAME: &str = "codex_auth.age";
 const MCP_OAUTH_SECRETS_FILENAME: &str = "mcp_oauth.age";
 
 /// Selects the local encrypted file used by a `LocalSecretsBackend`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LocalSecretsNamespace {
+    /// General managed secrets stored in `local.age`.
     #[default]
-    Shared,
-    CliAuth,
+    ManagedSecrets,
+    /// Codex authentication credentials used by the CLI, TUI, app server, and other clients.
+    CodexAuth,
+    /// OAuth credentials for external MCP servers.
     McpOAuth,
 }
 
@@ -71,7 +74,11 @@ pub struct LocalSecretsBackend {
 
 impl LocalSecretsBackend {
     pub fn new(codex_home: PathBuf, keyring_store: Arc<dyn KeyringStore>) -> Self {
-        Self::new_with_namespace(codex_home, keyring_store, LocalSecretsNamespace::Shared)
+        Self::new_with_namespace(
+            codex_home,
+            keyring_store,
+            LocalSecretsNamespace::ManagedSecrets,
+        )
     }
 
     pub fn new_with_namespace(
@@ -134,8 +141,8 @@ impl LocalSecretsBackend {
 
     fn secrets_path(&self) -> PathBuf {
         let filename = match self.namespace {
-            LocalSecretsNamespace::Shared => LOCAL_SECRETS_FILENAME,
-            LocalSecretsNamespace::CliAuth => CLI_AUTH_SECRETS_FILENAME,
+            LocalSecretsNamespace::ManagedSecrets => LOCAL_SECRETS_FILENAME,
+            LocalSecretsNamespace::CodexAuth => CODEX_AUTH_SECRETS_FILENAME,
             LocalSecretsNamespace::McpOAuth => MCP_OAUTH_SECRETS_FILENAME,
         };
         self.secrets_dir().join(filename)
@@ -446,10 +453,10 @@ mod tests {
     fn local_namespaces_write_separate_files() -> Result<()> {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let keyring = Arc::new(MockKeyringStore::default());
-        let cli_backend = LocalSecretsBackend::new_with_namespace(
+        let codex_auth_backend = LocalSecretsBackend::new_with_namespace(
             codex_home.path().to_path_buf(),
             keyring.clone(),
-            LocalSecretsNamespace::CliAuth,
+            LocalSecretsNamespace::CodexAuth,
         );
         let mcp_backend = LocalSecretsBackend::new_with_namespace(
             codex_home.path().to_path_buf(),
@@ -459,12 +466,12 @@ mod tests {
         let scope = SecretScope::Global;
         let name = SecretName::new("TEST_SECRET")?;
 
-        cli_backend.set(&scope, &name, "cli-value")?;
+        codex_auth_backend.set(&scope, &name, "codex-auth-value")?;
         mcp_backend.set(&scope, &name, "mcp-value")?;
 
         assert_eq!(
-            cli_backend.get(&scope, &name)?,
-            Some("cli-value".to_string())
+            codex_auth_backend.get(&scope, &name)?,
+            Some("codex-auth-value".to_string())
         );
         assert_eq!(
             mcp_backend.get(&scope, &name)?,
@@ -474,7 +481,7 @@ mod tests {
             codex_home
                 .path()
                 .join("secrets")
-                .join("cli_auth.age")
+                .join("codex_auth.age")
                 .exists()
         );
         assert!(
