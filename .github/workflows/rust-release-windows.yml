@@ -100,6 +100,11 @@ jobs:
           target="${{ matrix.target }}"
           if [[ "$target" == "x86_64-pc-windows-msvc" ]]; then
             export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+            if [[ "${{ matrix.bundle }}" == "primary" ]]; then
+              # At four units, this build was the release critical path; eight
+              # measured faster on its 16-logical-CPU runner.
+              export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=8
+            fi
           fi
           build_args=()
           for binary in ${{ matrix.binaries }}; do
