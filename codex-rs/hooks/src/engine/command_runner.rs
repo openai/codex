@@ -37,8 +37,17 @@ const INTERNAL_AMBIENT_ENV_ALLOWLIST: &[&str] = &[
 #[cfg(not(any(target_os = "macos", windows)))]
 const INTERNAL_AMBIENT_ENV_ALLOWLIST: &[&str] = &[];
 #[cfg(windows)]
-const INTERNAL_AMBIENT_ENV_ALLOWLIST: &[&str] =
-    &["APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "USERPROFILE"];
+// The Computer Use helper includes the resolved Codex home in its named-event scope. These are
+// data-path inputs, not code-loading inputs, and must match the warm helper for custom/WSL homes.
+const INTERNAL_AMBIENT_ENV_ALLOWLIST: &[&str] = &[
+    "APPDATA",
+    "CODEX_HOME",
+    "LOCALAPPDATA",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "WSL_DISTRO_NAME",
+];
 
 #[derive(Debug)]
 pub(crate) struct CommandRunResult {
@@ -628,10 +637,19 @@ mod tests {
     #[cfg(not(target_os = "macos"))]
     use super::CommandShell;
     use super::ConfiguredHandler;
+    #[cfg(windows)]
+    use super::INTERNAL_AMBIENT_ENV_ALLOWLIST;
     #[cfg(not(target_os = "macos"))]
     use super::build_command;
     use super::failed_run;
     use super::run_with_internal_timeout;
+
+    #[cfg(windows)]
+    #[test]
+    fn app_bundled_internal_windows_environment_preserves_codex_home_scope() {
+        assert!(INTERNAL_AMBIENT_ENV_ALLOWLIST.contains(&"CODEX_HOME"));
+        assert!(INTERNAL_AMBIENT_ENV_ALLOWLIST.contains(&"WSL_DISTRO_NAME"));
+    }
 
     #[tokio::test]
     async fn app_bundled_internal_timeout_covers_pre_spawn_verification() {
