@@ -206,6 +206,7 @@ pub(crate) struct LazyRemoteExecServerClient {
 }
 
 struct LazyRemoteExecServerClientState {
+    // None means we do not know how to connect to this environment yet.
     transport_params: Option<Arc<ExecServerTransportParams>>,
     client: Option<ExecServerClient>,
 }
@@ -220,6 +221,7 @@ impl LazyRemoteExecServerClient {
     }
 
     fn with_transport(transport_params: Option<ExecServerTransportParams>) -> Self {
+        // The revision channel wakes pending callers and cancels stale connection attempts.
         let (transport_revision_tx, _transport_revision_rx) = watch::channel(0);
         Self {
             state: Arc::new(StdMutex::new(LazyRemoteExecServerClientState {
@@ -237,6 +239,7 @@ impl LazyRemoteExecServerClient {
                 return Ok(client);
             }
 
+            // Only one caller creates and publishes a connection; followers recheck the cache.
             let _connect_permit = self.connect_lock.acquire().await.map_err(|_| {
                 ExecServerError::Protocol("exec-server connect lock closed".to_string())
             })?;
@@ -244,6 +247,7 @@ impl LazyRemoteExecServerClient {
                 return Ok(client);
             }
 
+            // Wait here until upsert provides the environment's connection details.
             let transport_params = self.wait_for_transport().await?;
             if let Some(client) = self.cached_client()
                 && matches!(
@@ -257,6 +261,7 @@ impl LazyRemoteExecServerClient {
             if !self.is_current_transport(&transport_params) {
                 continue;
             }
+            // Stop waiting on an obsolete endpoint as soon as a replacement arrives.
             let next_client = tokio::select! {
                 result = ExecServerClient::connect_for_transport(transport_params.as_ref().clone()) => {
                     match result {
@@ -271,6 +276,7 @@ impl LazyRemoteExecServerClient {
                 }
             };
 
+            // Publish only if this connection still belongs to the current transport.
             let mut state = self
                 .state
                 .lock()
@@ -301,6 +307,7 @@ impl LazyRemoteExecServerClient {
         state.transport_params = Some(Arc::new(transport_params));
         state.client = None;
         drop(state);
+        // Notify after releasing the state lock so woken callers can inspect it immediately.
         self.transport_revision_tx
             .send_modify(|revision| *revision += 1);
     }
@@ -318,6 +325,7 @@ impl LazyRemoteExecServerClient {
     ) -> Result<Arc<ExecServerTransportParams>, ExecServerError> {
         let mut transport_revision_rx = self.transport_revision_tx.subscribe();
         loop {
+            // This only waits for connection details; it does not connect yet.
             if let Some(transport_params) = self.transport_params() {
                 return Ok(transport_params);
             }

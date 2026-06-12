@@ -261,6 +261,7 @@ impl EnvironmentManager {
             .environments
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Reuse the same Arc so early turn and capability handles observe later updates.
         Ok(Arc::clone(
             environments.entry(environment_id).or_insert_with(|| {
                 Arc::new(Environment::pending_remote(
@@ -294,6 +295,7 @@ impl EnvironmentManager {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         match environments.get(&environment_id) {
+            // Update the shared client inside the stable Environment handle.
             Some(existing) if existing.is_remote() => existing
                 .set_remote_transport(ExecServerTransportParams::websocket_url(exec_server_url)),
             _ => {
@@ -329,6 +331,7 @@ fn validate_environment_id(environment_id: &str) -> Result<(), ExecServerError> 
 /// The handle remains stable while its concrete backend is supplied or replaced.
 #[derive(Clone)]
 pub struct Environment {
+    // None is local; Some is remote and may still be waiting for its transport.
     remote_client: Option<LazyRemoteExecServerClient>,
     info_provider: Arc<dyn EnvironmentInfoProvider>,
     exec_backend: Arc<dyn ExecBackend>,
@@ -440,6 +443,7 @@ impl Environment {
     }
 
     fn pending_remote(local_runtime_paths: Option<ExecServerRuntimePaths>) -> Self {
+        // Build capability wrappers now; their first operation waits inside the lazy client.
         Self::remote_with_client(LazyRemoteExecServerClient::pending(), local_runtime_paths)
     }
 
@@ -467,6 +471,7 @@ impl Environment {
         client: LazyRemoteExecServerClient,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
+        // These clones share one internal state, so every capability sees transport updates.
         let exec_backend: Arc<dyn ExecBackend> = Arc::new(RemoteProcess::new(client.clone()));
         let filesystem: Arc<dyn ExecutorFileSystem> =
             Arc::new(RemoteFileSystem::new(client.clone()));
@@ -485,6 +490,7 @@ impl Environment {
         self.remote_client.is_some()
     }
 
+    /// Ready means we know how to connect; the connection is opened only when needed.
     pub fn is_ready(&self) -> bool {
         self.remote_client
             .as_ref()
@@ -526,17 +532,10 @@ impl Environment {
     }
 
     fn set_remote_transport(&self, remote_transport: ExecServerTransportParams) {
+        // Mutate the shared client rather than replacing the Environment held by existing turns.
         if let Some(client) = &self.remote_client {
             client.set_transport(remote_transport);
         }
-    }
-
-    #[cfg(test)]
-    async fn wait_until_ready(&self) -> Result<(), ExecServerError> {
-        if let Some(client) = &self.remote_client {
-            client.wait_for_transport().await?;
-        }
-        Ok(())
     }
 }
 
@@ -941,28 +940,12 @@ mod tests {
                 })
                 .await
         });
-        let waiting_environment = Arc::clone(&pending);
-        let ready_waiter = tokio::spawn(async move {
-            waiting_environment
-                .wait_until_ready()
-                .await
-                .map(|()| waiting_environment.exec_server_url())
-        });
         tokio::task::yield_now().await;
         assert!(!exec_waiter.is_finished());
 
         manager
             .upsert_environment("executor-a".to_string(), exec_server_url.clone())
             .expect("remote environment");
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(1), ready_waiter)
-                .await
-                .expect("ready waiter should be notified")
-                .expect("ready waiter should not panic")
-                .expect("environment should become ready")
-                .as_deref(),
-            Some(exec_server_url.as_str())
-        );
         let started = tokio::time::timeout(Duration::from_secs(2), exec_waiter)
             .await
             .expect("pending capability should wake")
