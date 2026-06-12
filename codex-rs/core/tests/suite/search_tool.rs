@@ -2,6 +2,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
+use codex_config::types::ApprovalsReviewer;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_features::Feature;
@@ -29,6 +30,7 @@ use core_test_support::apps_test_server::SEARCH_CALENDAR_NAMESPACE;
 use core_test_support::apps_test_server::apps_enabled_builder;
 use core_test_support::apps_test_server::configure_search_capable_apps;
 use core_test_support::apps_test_server::configure_search_capable_model;
+use core_test_support::apps_test_server::recorded_apps_json_rpc_requests;
 use core_test_support::apps_test_server::recorded_apps_tool_call_by_call_id;
 use core_test_support::apps_test_server::recorded_apps_tool_calls;
 use core_test_support::apps_test_server::search_capable_apps_builder as configured_builder;
@@ -290,6 +292,71 @@ async fn app_only_tools_are_not_visible_or_runnable_by_direct_model_calls() -> R
     assert!(
         recorded_apps_tool_calls(&server).await.is_empty(),
         "forced app-only direct call should not reach the MCP server"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trusted_deterministic_app_review_skips_guardian_model_review() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server =
+        AppsTestServer::mount_with_deterministic_review(&server, /*safe*/ true).await?;
+    let call_id = "calendar-deterministic-review-call";
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call_with_namespace(
+                    call_id,
+                    SEARCH_CALENDAR_NAMESPACE,
+                    SEARCH_CALENDAR_CREATE_TOOL,
+                    r#"{"title":"Lunch","starts_at":"2026-06-12T12:00:00Z"}"#,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder =
+        apps_enabled_builder(apps_server.chatgpt_base_url.clone()).with_config(|config| {
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        });
+    let test = builder.build(&server).await?;
+    test.submit_turn_with_approval_and_permission_profile(
+        "Create a lunch calendar event.",
+        AskForApproval::OnRequest,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    assert_eq!(
+        mock.requests().len(),
+        2,
+        "deterministic review should not start a Guardian model request"
+    );
+    let review_requests =
+        recorded_apps_json_rpc_requests(&server, "tools/deterministic-review").await;
+    assert_eq!(review_requests.len(), 1);
+    assert_eq!(
+        review_requests[0]
+            .pointer("/params/name")
+            .and_then(Value::as_str),
+        Some("calendar_create_event")
+    );
+    let tool_call = recorded_apps_tool_call_by_call_id(&server, call_id).await;
+    assert_eq!(
+        tool_call.pointer("/params/name").and_then(Value::as_str),
+        Some("calendar_create_event")
     );
 
     Ok(())

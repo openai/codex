@@ -17,3 +17,4 @@ pub const TOOL_TITLE_KEY: &str = "tool_title";
 pub const TOOL_DESCRIPTION_KEY: &str = "tool_description";
 pub const TOOL_PARAMS_KEY: &str = "tool_params";
 pub const TOOL_PARAMS_DISPLAY_KEY: &str = "tool_params_display";
+pub const CODEX_APPS_GUARDIAN_DETERMINISTIC_REVIEW_META_KEY: &str = "guardian_deterministic_review";

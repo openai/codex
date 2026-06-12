@@ -64,6 +64,7 @@ use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use rmcp::model::Resource;
 use rmcp::model::ResourceTemplate;
+use rmcp::model::ServerResult;
 use serde_json::Value as JsonValue;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -690,6 +691,28 @@ impl McpConnectionManager {
             is_error: result.is_error,
             meta: result.meta.and_then(|meta| serde_json::to_value(meta).ok()),
         })
+    }
+
+    /// Send a custom JSON-RPC request to the specified MCP server.
+    pub async fn send_custom_request(
+        &self,
+        server: &str,
+        method: &str,
+        params: Option<JsonValue>,
+        timeout: Duration,
+    ) -> Result<JsonValue> {
+        let client = self.client_by_name(server).await?;
+        let result =
+            tokio::time::timeout(timeout, client.client.send_custom_request(method, params))
+                .await
+                .with_context(|| format!("custom request timed out for `{server}/{method}`"))?
+                .with_context(|| format!("custom request failed for `{server}/{method}`"))?;
+        match result {
+            ServerResult::CustomResult(result) => Ok(result.0),
+            _ => Err(anyhow!(
+                "custom request `{server}/{method}` returned an unexpected result"
+            )),
+        }
     }
 
     pub async fn server_supports_sandbox_state_meta_capability(

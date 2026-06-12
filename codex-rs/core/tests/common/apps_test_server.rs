@@ -22,6 +22,8 @@ const DISCOVERABLE_CALENDAR_ID: &str = "connector_2128aebfecb84f64a069897515042a
 const DISCOVERABLE_GMAIL_ID: &str = "connector_68df038e0ba48191908c8434991bbac2";
 const CONNECTOR_DESCRIPTION: &str = "Plan events and manage your calendar.";
 const CODEX_APPS_META_KEY: &str = "_codex_apps";
+const GUARDIAN_DETERMINISTIC_REVIEW_META_KEY: &str = "guardian_deterministic_review";
+const GUARDIAN_DETERMINISTIC_REVIEW_METHOD: &str = "tools/deterministic-review";
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const SERVER_NAME: &str = "codex-apps-test";
 const SERVER_VERSION: &str = "1.0.0";
@@ -72,6 +74,7 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             /*searchable*/ true,
             /*include_app_only_tool*/ false,
+            /*deterministic_review_safe*/ None,
         )
         .await;
         Ok(Self {
@@ -91,6 +94,7 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             /*searchable*/ false,
             /*include_app_only_tool*/ false,
+            /*deterministic_review_safe*/ None,
         )
         .await;
         Ok(Self {
@@ -110,6 +114,24 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             matches!(tool_loading, AppsTestToolLoading::Searchable),
             /*include_app_only_tool*/ true,
+            /*deterministic_review_safe*/ None,
+        )
+        .await;
+        Ok(Self {
+            chatgpt_base_url: server.uri(),
+        })
+    }
+
+    pub async fn mount_with_deterministic_review(server: &MockServer, safe: bool) -> Result<Self> {
+        mount_oauth_metadata(server).await;
+        mount_connectors_directory(server).await;
+        mount_streamable_http_json_rpc(
+            server,
+            CONNECTOR_NAME.to_string(),
+            CONNECTOR_DESCRIPTION.to_string(),
+            /*searchable*/ false,
+            /*include_app_only_tool*/ false,
+            Some(safe),
         )
         .await;
         Ok(Self {
@@ -167,6 +189,10 @@ fn apps_tool_call_id(body: &Value) -> Option<&str> {
 }
 
 pub async fn recorded_apps_tool_calls(server: &MockServer) -> Vec<Value> {
+    recorded_apps_json_rpc_requests(server, "tools/call").await
+}
+
+pub async fn recorded_apps_json_rpc_requests(server: &MockServer, method: &str) -> Vec<Value> {
     server
         .received_requests()
         .await
@@ -175,7 +201,7 @@ pub async fn recorded_apps_tool_calls(server: &MockServer) -> Vec<Value> {
         .filter_map(|request| {
             let body: Value = serde_json::from_slice(&request.body).ok()?;
             (request.url.path() == "/api/codex/apps"
-                && body.get("method").and_then(Value::as_str) == Some("tools/call"))
+                && body.get("method").and_then(Value::as_str) == Some(method))
             .then_some(body)
         })
         .collect()
@@ -264,6 +290,7 @@ async fn mount_streamable_http_json_rpc(
     connector_description: String,
     searchable: bool,
     include_app_only_tool: bool,
+    deterministic_review_safe: Option<bool>,
 ) {
     Mock::given(method("POST"))
         .and(path_regex("^/api/codex/apps/?$"))
@@ -272,6 +299,7 @@ async fn mount_streamable_http_json_rpc(
             connector_description,
             searchable,
             include_app_only_tool,
+            deterministic_review_safe,
         })
         .mount(server)
         .await;
@@ -282,6 +310,7 @@ struct CodexAppsJsonRpcResponder {
     connector_description: String,
     searchable: bool,
     include_app_only_tool: bool,
+    deterministic_review_safe: Option<bool>,
 }
 
 impl Respond for CodexAppsJsonRpcResponder {
@@ -339,7 +368,7 @@ impl Respond for CodexAppsJsonRpcResponder {
                                 "annotations": {
                                     "readOnlyHint": false,
                                     "destructiveHint": false,
-                                    "openWorldHint": false
+                                    "openWorldHint": self.deterministic_review_safe.is_some()
                                 },
                                 "inputSchema": {
                                     "type": "object",
@@ -425,6 +454,16 @@ impl Respond for CodexAppsJsonRpcResponder {
                         "nextCursor": null
                     }
                 });
+                if self.deterministic_review_safe.is_some()
+                    && let Some(codex_apps_meta) = response
+                        .pointer_mut("/result/tools/0/_meta/_codex_apps")
+                        .and_then(Value::as_object_mut)
+                {
+                    codex_apps_meta.insert(
+                        GUARDIAN_DETERMINISTIC_REVIEW_META_KEY.to_string(),
+                        Value::String(GUARDIAN_DETERMINISTIC_REVIEW_METHOD.to_string()),
+                    );
+                }
                 if self.searchable
                     && let Some(tools) = response
                         .pointer_mut("/result/tools")
@@ -509,6 +548,18 @@ impl Respond for CodexAppsJsonRpcResponder {
                             "_codex_apps": codex_apps_meta,
                         },
                         "isError": false
+                    }
+                }))
+            }
+            GUARDIAN_DETERMINISTIC_REVIEW_METHOD => {
+                let id = body.get("id").cloned().unwrap_or(Value::Null);
+                let safe = self.deterministic_review_safe.unwrap_or(false);
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "safe": safe,
+                        "rationale": safe.then_some("safe search"),
                     }
                 }))
             }

@@ -8,6 +8,7 @@ use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::connectors;
 use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::GuardianAssessment;
 use crate::guardian::GuardianMcpAnnotations;
 use crate::guardian::GuardianReviewMode;
 use crate::guardian::guardian_rejection_message;
@@ -52,6 +53,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY as MCP_TOOL_APPROVAL_KIND_KEY;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_MCP_TOOL_CALL as MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL;
+use codex_protocol::mcp_approval_meta::CODEX_APPS_GUARDIAN_DETERMINISTIC_REVIEW_META_KEY as MCP_TOOL_CODEX_APPS_GUARDIAN_DETERMINISTIC_REVIEW_META_KEY;
 use codex_protocol::mcp_approval_meta::CONNECTOR_DESCRIPTION_KEY as MCP_TOOL_APPROVAL_CONNECTOR_DESCRIPTION_KEY;
 use codex_protocol::mcp_approval_meta::CONNECTOR_ID_KEY as MCP_TOOL_APPROVAL_CONNECTOR_ID_KEY;
 use codex_protocol::mcp_approval_meta::CONNECTOR_NAME_KEY as MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY;
@@ -66,6 +68,10 @@ use codex_protocol::mcp_approval_meta::TOOL_PARAMS_KEY as MCP_TOOL_APPROVAL_TOOL
 use codex_protocol::mcp_approval_meta::TOOL_TITLE_KEY as MCP_TOOL_APPROVAL_TOOL_TITLE_KEY;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::GuardianAssessmentDecisionSource;
+use codex_protocol::protocol::GuardianAssessmentOutcome;
+use codex_protocol::protocol::GuardianRiskLevel;
+use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
@@ -90,6 +96,7 @@ use tracing::Instrument;
 use tracing::Span;
 use tracing::error;
 use tracing::field::Empty;
+use tracing::warn;
 use url::Url;
 
 const MCP_CALL_COUNT_METRIC: &str = "codex.mcp.call";
@@ -968,10 +975,17 @@ pub(crate) struct McpToolApprovalMetadata {
     openai_file_input_params: Option<Vec<String>>,
 }
 
+#[derive(Debug, Deserialize)]
+struct GuardianDeterministicReviewResponse {
+    safe: bool,
+    rationale: Option<String>,
+}
+
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
 const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
 const MCP_TOOL_PLUGIN_ID_META_KEY: &str = "plugin_id";
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
+const GUARDIAN_DETERMINISTIC_REVIEW_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 
 async fn custom_mcp_tool_approval_mode(
     sess: &Session,
@@ -1088,6 +1102,91 @@ fn with_mcp_tool_call_thread_id_meta(
         }
         other => other,
     }
+}
+
+async fn guardian_review_mode_for_mcp_tool_call(
+    sess: &Session,
+    turn_context: &TurnContext,
+    call_id: &str,
+    invocation: &McpInvocation,
+    metadata: Option<&McpToolApprovalMetadata>,
+) -> GuardianReviewMode {
+    let Some(method) = guardian_deterministic_review_method(metadata) else {
+        return GuardianReviewMode::Agent;
+    };
+    let manager = sess.services.mcp_connection_manager.load_full();
+    if invocation.server != CODEX_APPS_MCP_SERVER_NAME
+        || !manager.is_host_owned_codex_apps_server(&invocation.server)
+    {
+        return GuardianReviewMode::Agent;
+    }
+
+    let mut params = serde_json::Map::new();
+    params.insert(
+        "name".to_string(),
+        JsonValue::String(invocation.tool.clone()),
+    );
+    params.insert(
+        "arguments".to_string(),
+        invocation
+            .arguments
+            .clone()
+            .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new())),
+    );
+    if let Some(meta) = with_mcp_tool_call_thread_id_meta(
+        build_mcp_tool_call_request_meta(turn_context, &invocation.server, call_id, metadata),
+        &sess.thread_id.to_string(),
+    ) {
+        params.insert("_meta".to_string(), meta);
+    }
+
+    let response = match manager
+        .send_custom_request(
+            &invocation.server,
+            method,
+            Some(JsonValue::Object(params)),
+            GUARDIAN_DETERMINISTIC_REVIEW_TIMEOUT,
+        )
+        .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            warn!("deterministic Guardian review request failed: {err:#}");
+            return GuardianReviewMode::Agent;
+        }
+    };
+    let response = match serde_json::from_value::<GuardianDeterministicReviewResponse>(response) {
+        Ok(response) => response,
+        Err(err) => {
+            warn!("deterministic Guardian review response was invalid: {err:#}");
+            return GuardianReviewMode::Agent;
+        }
+    };
+    if !response.safe {
+        return GuardianReviewMode::Agent;
+    }
+
+    GuardianReviewMode::Deterministic(GuardianAssessment {
+        risk_level: GuardianRiskLevel::Low,
+        user_authorization: GuardianUserAuthorization::High,
+        outcome: GuardianAssessmentOutcome::Allow,
+        rationale: response
+            .rationale
+            .filter(|rationale| !rationale.trim().is_empty())
+            .unwrap_or_else(|| "Trusted deterministic Guardian review approved.".to_string()),
+        source: GuardianAssessmentDecisionSource::Deterministic,
+    })
+}
+
+fn guardian_deterministic_review_method(
+    metadata: Option<&McpToolApprovalMetadata>,
+) -> Option<&str> {
+    metadata?
+        .codex_apps_meta
+        .as_ref()?
+        .get(MCP_TOOL_CODEX_APPS_GUARDIAN_DETERMINISTIC_REVIEW_META_KEY)?
+        .as_str()
+        .filter(|method| !method.is_empty())
 }
 
 #[derive(Clone, Copy)]
@@ -1209,12 +1308,20 @@ async fn maybe_request_mcp_tool_approval(
 
     if routes_approval_to_guardian_with_reviewer(turn_context, approvals_reviewer) {
         let review_id = new_guardian_review_id();
+        let review_mode = guardian_review_mode_for_mcp_tool_call(
+            sess,
+            turn_context,
+            call_id,
+            invocation,
+            metadata,
+        )
+        .await;
         let decision = review_approval_request(
             sess,
             turn_context,
             review_id.clone(),
             build_guardian_mcp_tool_review_request(call_id, invocation, metadata),
-            GuardianReviewMode::Agent,
+            review_mode,
             /*retry_reason*/ None,
         )
         .await;

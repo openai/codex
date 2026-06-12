@@ -1612,6 +1612,30 @@ fn guardian_mcp_review_request_includes_invocation_metadata() {
 }
 
 #[test]
+fn guardian_deterministic_review_method_reads_codex_apps_meta() {
+    let mut metadata = approval_metadata(
+        Some("search"),
+        Some("Search"),
+        Some("Search the web"),
+        Some("web.run"),
+        Some("Search the web"),
+    );
+    metadata.codex_apps_meta = Some(
+        [(
+            MCP_TOOL_CODEX_APPS_GUARDIAN_DETERMINISTIC_REVIEW_META_KEY.to_string(),
+            serde_json::json!("tools/deterministic-review"),
+        )]
+        .into_iter()
+        .collect(),
+    );
+
+    assert_eq!(
+        guardian_deterministic_review_method(Some(&metadata)),
+        Some("tools/deterministic-review")
+    );
+}
+
+#[test]
 fn guardian_mcp_review_request_includes_annotations_when_present() {
     let invocation = McpInvocation {
         server: "custom_server".to_string(),
