@@ -10,6 +10,7 @@ use std::collections::VecDeque;
 use super::AdditionalContextStore;
 use super::auto_compact_window::AutoCompactWindow;
 use super::auto_compact_window::AutoCompactWindowSnapshot;
+use crate::context::EnvironmentContext;
 use crate::context_manager::ContextManager;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::SessionConfiguration;
@@ -36,6 +37,7 @@ pub(crate) struct SessionState {
     auto_compact_window: AutoCompactWindow,
     /// Startup prewarmed session prepared during session initialization.
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
+    reference_environment_context: Option<EnvironmentContext>,
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_sources: VecDeque<codex_hooks::SessionStartSource>,
     granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile>,
@@ -56,6 +58,7 @@ impl SessionState {
             previous_turn_settings: None,
             auto_compact_window: AutoCompactWindow::new(),
             startup_prewarm: None,
+            reference_environment_context: None,
             active_connector_selection: HashSet::new(),
             pending_session_start_sources: VecDeque::new(),
             granted_permissions_by_environment_id: HashMap::new(),
@@ -104,6 +107,7 @@ impl SessionState {
         self.history.replace(items);
         self.history
             .set_reference_context_item(reference_context_item);
+        self.reference_environment_context = None;
         self.auto_compact_window.clear_prefill();
     }
 
@@ -117,6 +121,17 @@ impl SessionState {
 
     pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
         self.history.reference_context_item()
+    }
+
+    pub(crate) fn reference_environment_context(&self) -> Option<EnvironmentContext> {
+        self.reference_environment_context.clone()
+    }
+
+    pub(crate) fn set_reference_environment_context(
+        &mut self,
+        context: Option<EnvironmentContext>,
+    ) {
+        self.reference_environment_context = context;
     }
 
     // Token/rate limit helpers

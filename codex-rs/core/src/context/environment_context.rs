@@ -93,7 +93,7 @@ impl EnvironmentContextEnvironments {
         }
     }
 
-    fn equals_except_shell(&self, other: &Self) -> bool {
+    pub(crate) fn equals_except_shell(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::None, Self::None) => true,
             (Self::Single(left), Self::Single(right)) => left.cwd == right.cwd,
@@ -104,6 +104,17 @@ impl EnvironmentContextEnvironments {
                         .zip(right.iter())
                         .all(|(left, right)| left.id == right.id && left.cwd == right.cwd)
             }
+            _ => false,
+        }
+    }
+
+    pub(crate) fn equals_visible(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::None, Self::None) => true,
+            (Self::Single(left), Self::Single(right)) => {
+                left.cwd == right.cwd && left.shell == right.shell
+            }
+            (Self::Multiple(left), Self::Multiple(right)) => left == right,
             _ => false,
         }
     }
@@ -362,7 +373,7 @@ impl EnvironmentContext {
         }
     }
 
-    fn new_with_environments(
+    pub(crate) fn new_with_environments(
         environments: EnvironmentContextEnvironments,
         current_date: Option<String>,
         timezone: Option<String>,

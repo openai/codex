@@ -8197,6 +8197,85 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
 }
 
 #[tokio::test]
+async fn environment_baseline_tracks_visible_multi_and_single_updates() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let mut second_environment = turn_context.environments.turn_environments[0].clone();
+    turn_context.environments.turn_environments[0].environment_id = "first".to_string();
+    turn_context.environments.turn_environments[0].environment = Arc::new(
+        codex_exec_server::Environment::create_for_tests(Some("ws://127.0.0.1:1".to_string()))
+            .expect("create first remote environment"),
+    );
+    second_environment.environment_id = "second".to_string();
+    second_environment.environment = Arc::new(
+        codex_exec_server::Environment::create_for_tests(Some("ws://127.0.0.1:2".to_string()))
+            .expect("create second remote environment"),
+    );
+    turn_context
+        .environments
+        .turn_environments
+        .push(second_environment);
+
+    let previous_environment_context = session
+        .environment_context(&turn_context)
+        .expect("environment context enabled");
+    turn_context.environments.turn_environments[0].shell = Some(crate::shell::Shell {
+        shell_type: crate::shell::ShellType::Cmd,
+        shell_path: PathBuf::from("cmd"),
+        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+    });
+    turn_context.environments.turn_environments[1].shell = Some(crate::shell::Shell {
+        shell_type: crate::shell::ShellType::PowerShell,
+        shell_path: PathBuf::from("powershell"),
+        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+    });
+    {
+        let mut state = session.state.lock().await;
+        state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
+        state.set_reference_environment_context(Some(previous_environment_context));
+    }
+
+    session
+        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .await;
+    let history_after_settings = session.clone_history().await.raw_items().to_vec();
+    session
+        .record_environment_context_update_if_changed(&turn_context)
+        .await;
+
+    assert_eq!(
+        session.clone_history().await.raw_items().to_vec(),
+        history_after_settings
+    );
+
+    turn_context.environments.turn_environments.truncate(1);
+    session
+        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .await;
+    let history_before_reduction_update = session.clone_history().await.raw_items().to_vec();
+    assert_eq!(history_before_reduction_update, history_after_settings);
+    session
+        .record_environment_context_update_if_changed(&turn_context)
+        .await;
+    let history_after_reduction_update = session.clone_history().await.raw_items().to_vec();
+    assert_eq!(
+        history_after_reduction_update.len(),
+        history_before_reduction_update.len() + 1
+    );
+
+    turn_context.environments.turn_environments[0].environment_id = "renamed".to_string();
+    session
+        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .await;
+    session
+        .record_environment_context_update_if_changed(&turn_context)
+        .await;
+    assert_eq!(
+        session.clone_history().await.raw_items().to_vec(),
+        history_after_reduction_update
+    );
+}
+
+#[tokio::test]
 async fn record_context_updates_and_set_reference_context_item_persists_split_file_system_policy_to_rollout()
  {
     let (mut session, mut turn_context) = make_session_and_context().await;

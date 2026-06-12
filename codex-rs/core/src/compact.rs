@@ -299,14 +299,19 @@ async fn run_compact_task_inner_impl(
     let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
     let window_id = sess.advance_auto_compact_window_id().await;
 
-    if matches!(
+    let reference_environment_context = if matches!(
         initial_context_injection,
         InitialContextInjection::BeforeLastUserMessage
     ) {
-        let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+        let (initial_context, environment_context) = sess
+            .build_initial_context_snapshot(turn_context.as_ref())
+            .await;
         new_history =
             insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
-    }
+        environment_context
+    } else {
+        None
+    };
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
@@ -316,8 +321,13 @@ async fn run_compact_task_inner_impl(
         replacement_history: Some(new_history.clone()),
         window_id: Some(window_id),
     };
-    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
-        .await;
+    sess.replace_compacted_history(
+        new_history,
+        reference_context_item,
+        reference_environment_context,
+        compacted_item,
+    )
+    .await;
     sess.recompute_token_usage(&turn_context).await;
 
     sess.emit_turn_item_completed(&turn_context, compaction_item)

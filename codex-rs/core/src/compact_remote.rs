@@ -231,7 +231,7 @@ async fn run_remote_compact_task_inner_impl(
         window_id,
         CodexResponsesRequestKind::Compaction(compaction_metadata),
     );
-    let mut new_history = sess
+    let new_history = sess
         .services
         .model_client
         .compact_conversation_history(
@@ -252,7 +252,7 @@ async fn run_remote_compact_task_inner_impl(
         )
         .await?;
     let new_window_id = sess.advance_auto_compact_window_id().await;
-    new_history = process_compacted_history(
+    let (new_history, reference_environment_context) = process_compacted_history(
         sess.as_ref(),
         turn_context.as_ref(),
         new_history,
@@ -276,8 +276,13 @@ async fn run_remote_compact_task_inner_impl(
         input_history: &trace_input_history,
         replacement_history: &new_history,
     });
-    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
-        .await;
+    sess.replace_compacted_history(
+        new_history,
+        reference_context_item,
+        reference_environment_context,
+        compacted_item,
+    )
+    .await;
     sess.recompute_token_usage(turn_context).await;
 
     sess.emit_turn_item_completed(turn_context, compaction_item)
@@ -290,21 +295,27 @@ pub(crate) async fn process_compacted_history(
     turn_context: &TurnContext,
     mut compacted_history: Vec<ResponseItem>,
     initial_context_injection: InitialContextInjection,
-) -> Vec<ResponseItem> {
+) -> (
+    Vec<ResponseItem>,
+    Option<crate::context::EnvironmentContext>,
+) {
     // Mid-turn compaction is the only path that must inject initial context above the last user
     // message in the replacement history. Pre-turn compaction instead injects context after the
     // compaction item, but mid-turn compaction keeps the compaction item last for model training.
-    let initial_context = if matches!(
+    let (initial_context, reference_environment_context) = if matches!(
         initial_context_injection,
         InitialContextInjection::BeforeLastUserMessage
     ) {
-        sess.build_initial_context(turn_context).await
+        sess.build_initial_context_snapshot(turn_context).await
     } else {
-        Vec::new()
+        (Vec::new(), None)
     };
 
     compacted_history.retain(should_keep_compacted_history_item);
-    insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context)
+    (
+        insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context),
+        reference_environment_context,
+    )
 }
 
 /// Returns whether an item from remote compaction output should be preserved.

@@ -49,6 +49,7 @@ mod compact_remote;
 mod compact_remote_parity;
 mod compact_resume_fork;
 mod deprecation_notice;
+mod environment_readiness;
 mod exec;
 mod exec_policy;
 #[cfg(not(target_os = "windows"))]

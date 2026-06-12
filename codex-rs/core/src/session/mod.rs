@@ -27,6 +27,7 @@ use crate::context::AvailablePluginsInstructions;
 use crate::context::AvailableSkillsInstructions;
 use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
+use crate::context::EnvironmentContext;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
@@ -1662,10 +1663,26 @@ impl Session {
         self.refresh_runtime_config(next_config).await;
     }
 
+    #[cfg(test)]
     async fn build_settings_update_items(
         &self,
         reference_context_item: Option<&TurnContextItem>,
         current_context: &TurnContext,
+    ) -> Vec<ResponseItem> {
+        let environment_context = self.environment_context(current_context);
+        self.build_settings_update_items_with_environment_context(
+            reference_context_item,
+            current_context,
+            environment_context.as_ref(),
+        )
+        .await
+    }
+
+    async fn build_settings_update_items_with_environment_context(
+        &self,
+        reference_context_item: Option<&TurnContextItem>,
+        current_context: &TurnContext,
+        environment_context: Option<&EnvironmentContext>,
     ) -> Vec<ResponseItem> {
         // TODO: Make context updates a pure diff of persisted previous/current TurnContextItem
         // state so replay/backtracking is deterministic. Runtime inputs that affect model-visible
@@ -1681,6 +1698,7 @@ impl Session {
             reference_context_item,
             previous_turn_settings.as_ref(),
             current_context,
+            environment_context,
             shell.as_ref(),
             exec_policy.as_ref(),
             self.features.enabled(Feature::Personality),
@@ -2733,11 +2751,13 @@ impl Session {
         &self,
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
+        reference_environment_context: Option<EnvironmentContext>,
         compacted_item: CompactedItem,
     ) {
         {
             let mut state = self.state.lock().await;
             state.replace_history(items, reference_context_item.clone());
+            state.set_reference_environment_context(reference_environment_context);
         }
 
         self.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
@@ -2811,9 +2831,38 @@ impl Session {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn build_initial_context(
         &self,
         turn_context: &TurnContext,
+    ) -> Vec<ResponseItem> {
+        self.build_initial_context_snapshot(turn_context).await.0
+    }
+
+    pub(crate) async fn build_initial_context_snapshot(
+        &self,
+        turn_context: &TurnContext,
+    ) -> (Vec<ResponseItem>, Option<EnvironmentContext>) {
+        let environment_context = self.environment_context(turn_context);
+        let context_items = self
+            .build_initial_context_with_environment_context(
+                turn_context,
+                environment_context.as_ref(),
+            )
+            .await;
+        (context_items, environment_context)
+    }
+
+    fn environment_context(&self, turn_context: &TurnContext) -> Option<EnvironmentContext> {
+        turn_context.config.include_environment_context.then(|| {
+            EnvironmentContext::from_turn_context(turn_context, self.user_shell().as_ref())
+        })
+    }
+
+    async fn build_initial_context_with_environment_context(
+        &self,
+        turn_context: &TurnContext,
+        environment_context: Option<&EnvironmentContext>,
     ) -> Vec<ResponseItem> {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
@@ -2996,15 +3045,15 @@ impl Session {
                 .render(),
             );
         }
-        if turn_context.config.include_environment_context {
-            let shell = self.user_shell();
+        if let Some(environment_context) = environment_context {
             let subagents = self
                 .services
                 .agent_control
                 .format_environment_context_subagents(self.thread_id)
                 .await;
             contextual_user_sections.push(
-                crate::context::EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
+                environment_context
+                    .clone()
                     .with_subagents(subagents)
                     .render(),
             );
@@ -3093,12 +3142,14 @@ impl Session {
             state.start_new_context_window_if_requested()
         };
         let window_id = window_id?;
-        let context_items = self.build_initial_context(turn_context).await;
+        let (context_items, environment_context) =
+            self.build_initial_context_snapshot(turn_context).await;
         let turn_context_item = turn_context.to_turn_context_item();
         let replacement_history = context_items;
         {
             let mut state = self.state.lock().await;
             state.replace_history(replacement_history.clone(), Some(turn_context_item.clone()));
+            state.set_reference_environment_context(environment_context);
         };
         self.persist_rollout_items(&[
             RolloutItem::Compacted(CompactedItem {
@@ -3140,17 +3191,64 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) {
-        let reference_context_item = {
+        let environment_context = self.environment_context(turn_context);
+        let (reference_context_item, reference_environment_context) = {
             let state = self.state.lock().await;
-            state.reference_context_item()
+            (
+                state.reference_context_item(),
+                state.reference_environment_context(),
+            )
         };
         let should_inject_full_context = reference_context_item.is_none();
-        let context_items = if should_inject_full_context {
-            self.build_initial_context(turn_context).await
+        let mut context_items = if should_inject_full_context {
+            self.build_initial_context_with_environment_context(
+                turn_context,
+                environment_context.as_ref(),
+            )
+            .await
         } else {
             // Steady-state path: append only context diffs to minimize token overhead.
-            self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
-                .await
+            self.build_settings_update_items_with_environment_context(
+                reference_context_item.as_ref(),
+                turn_context,
+                environment_context.as_ref(),
+            )
+            .await
+        };
+        let settings_emitted_environments = reference_context_item
+            .as_ref()
+            .zip(environment_context.as_ref())
+            .is_some_and(|(previous, current)| {
+                let previous = EnvironmentContext::from_turn_context_item(
+                    previous,
+                    self.user_shell().name().to_string(),
+                );
+                !previous
+                    .environments
+                    .equals_except_shell(&current.environments)
+            });
+        let reference_environment_context = if should_inject_full_context {
+            environment_context
+        } else {
+            match (reference_environment_context, environment_context) {
+                (Some(previous), Some(mut current)) => {
+                    // Turn-setting diffs do not emit shell-only changes. Preserve the shell the
+                    // model last saw until the sample-boundary update records the new value.
+                    if !settings_emitted_environments {
+                        current.environments = previous.environments;
+                    }
+                    Some(current)
+                }
+                (None, Some(current)) => {
+                    if !settings_emitted_environments {
+                        // Resume cannot recover the exact environment snapshot from older
+                        // rollouts. Re-establish it before the new user message is recorded.
+                        context_items.push(ContextualUserFragment::into(current.clone()));
+                    }
+                    Some(current)
+                }
+                (_, None) => None,
+            }
         };
         let turn_context_item = turn_context.to_turn_context_item();
         if !context_items.is_empty() {
@@ -3166,6 +3264,31 @@ impl Session {
         // context items. This keeps later runtime diffing aligned with the current turn state.
         let mut state = self.state.lock().await;
         state.set_reference_context_item(Some(turn_context_item));
+        state.set_reference_environment_context(reference_environment_context);
+    }
+
+    pub(crate) async fn record_environment_context_update_if_changed(
+        &self,
+        turn_context: &TurnContext,
+    ) {
+        let Some(environment_context) = self.environment_context(turn_context) else {
+            return;
+        };
+        let reference_environment_context = {
+            let state = self.state.lock().await;
+            state.reference_environment_context()
+        };
+        let Some(item) = crate::context_manager::updates::build_environment_update_item(
+            reference_environment_context.as_ref(),
+            &environment_context,
+        ) else {
+            return;
+        };
+
+        self.record_conversation_items(turn_context, std::slice::from_ref(&item))
+            .await;
+        let mut state = self.state.lock().await;
+        state.set_reference_environment_context(Some(environment_context));
     }
 
     pub(crate) async fn update_token_usage_info(

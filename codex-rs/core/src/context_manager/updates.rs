@@ -18,24 +18,40 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::TurnContextItem;
 
-fn build_environment_update_item(
+fn build_turn_settings_environment_update_item(
     previous: Option<&TurnContextItem>,
-    next: &TurnContext,
+    next: Option<&EnvironmentContext>,
     shell: &Shell,
 ) -> Option<ResponseItem> {
-    if !next.config.include_environment_context {
-        return None;
-    }
-
     let prev = previous?;
+    let next_context = next?;
     let prev_context = EnvironmentContext::from_turn_context_item(prev, shell.name().to_string());
-    let next_context = EnvironmentContext::from_turn_context(next, shell);
-    if prev_context.equals_except_shell(&next_context) {
+    if prev_context.equals_except_shell(next_context) {
         return None;
     }
 
     Some(ContextualUserFragment::into(
-        EnvironmentContext::diff_from_turn_context_item(prev, &next_context),
+        EnvironmentContext::diff_from_turn_context_item(prev, next_context),
+    ))
+}
+
+pub(crate) fn build_environment_update_item(
+    previous: Option<&EnvironmentContext>,
+    next: &EnvironmentContext,
+) -> Option<ResponseItem> {
+    if previous.is_some_and(|previous| previous.environments.equals_visible(&next.environments)) {
+        return None;
+    }
+
+    Some(ContextualUserFragment::into(
+        EnvironmentContext::new_with_environments(
+            next.environments.clone(),
+            /*current_date*/ None,
+            /*timezone*/ None,
+            /*network*/ None,
+            /*filesystem*/ None,
+            /*subagents*/ None,
+        ),
     ))
 }
 
@@ -210,6 +226,7 @@ pub(crate) fn build_settings_update_items(
     previous: Option<&TurnContextItem>,
     previous_turn_settings: Option<&PreviousTurnSettings>,
     next: &TurnContext,
+    next_environment_context: Option<&EnvironmentContext>,
     shell: &Shell,
     exec_policy: &Policy,
     personality_feature_enabled: bool,
@@ -218,7 +235,8 @@ pub(crate) fn build_settings_update_items(
     // model-visible item emitted by build_initial_context. Persist the remaining
     // inputs or add explicit replay events so fork/resume can diff everything
     // deterministically.
-    let contextual_user_message = build_environment_update_item(previous, next, shell);
+    let contextual_user_message =
+        build_turn_settings_environment_update_item(previous, next_environment_context, shell);
     let developer_update_sections = [
         // Keep model-switch instructions first so model-specific guidance is read before
         // any other context diffs on this turn.

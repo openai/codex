@@ -215,6 +215,9 @@ pub(crate) async fn run_turn(
             break;
         }
 
+        sess.record_environment_context_update_if_changed(turn_context.as_ref())
+            .await;
+
         // Construct the input that we will send to the model.
         let sampling_request_input: Vec<ResponseItem> = async {
             sess.clone_history()
