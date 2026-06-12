@@ -16,6 +16,12 @@ use thiserror::Error;
 use ts_rs::TS;
 use url::Url;
 
+mod native_path_string;
+
+pub use native_path_string::NativePathString;
+pub use native_path_string::NativePathStringError;
+pub use native_path_string::PathConvention;
+
 pub const FILE_SCHEME: &str = "file";
 
 /// An immutable, cross-platform representation of a `file:` URI.
