@@ -559,7 +559,13 @@ fn single_text_content(content: &[ContentItem]) -> Option<&str> {
 fn is_internal_context_candidate(content: &[ContentItem]) -> bool {
     single_text_content(content).is_some_and(|text| {
         let text = text.trim_start();
-        text.starts_with("<codex_internal_context") || text.starts_with("<goal_context>")
+        text.strip_prefix("<codex_internal_context")
+            .is_some_and(|rest| {
+                rest.chars()
+                    .next()
+                    .is_some_and(|character| character == '>' || character.is_whitespace())
+            })
+            || text.starts_with("<goal_context>")
     })
 }
 

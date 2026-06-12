@@ -818,9 +818,39 @@ fn collect_guardian_transcript_entries_rejects_non_goal_and_malformed_context() 
             }],
             phase: None,
         },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "<codex_internal_context>malformed internal context".to_string(),
+            }],
+            phase: None,
+        },
     ];
 
     assert!(collect_guardian_transcript_entries(&items).is_empty());
+}
+
+#[test]
+fn collect_guardian_transcript_entries_keeps_internal_context_prefix_collisions() {
+    let text =
+        "<codex_internal_contextual_note>ordinary user text</codex_internal_contextual_note>";
+    let items = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+    }];
+
+    assert_eq!(
+        collect_guardian_transcript_entries(&items),
+        vec![GuardianTranscriptEntry {
+            kind: GuardianTranscriptEntryKind::User,
+            text: text.to_string(),
+        }]
+    );
 }
 
 #[test]
