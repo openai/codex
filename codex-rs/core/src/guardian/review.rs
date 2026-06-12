@@ -19,6 +19,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 use tokio::time::sleep_until;
@@ -211,22 +212,25 @@ fn track_guardian_review(
         .track_guardian_review(tracking, result, completed_at_ms);
 }
 
-async fn record_guardian_non_denial(session: &Arc<Session>, turn_id: &str) {
-    session
-        .services
-        .guardian_rejection_circuit_breaker
+fn guardian_rejection_circuit_breaker(
+    turn: &TurnContext,
+) -> Arc<Mutex<super::GuardianRejectionCircuitBreaker>> {
+    turn.extension_data
+        .get_or_init(|| Mutex::new(super::GuardianRejectionCircuitBreaker::default()))
+}
+
+async fn record_guardian_non_denial(turn: &TurnContext) {
+    guardian_rejection_circuit_breaker(turn)
         .lock()
         .await
-        .record_non_denial(turn_id);
+        .record_non_denial();
 }
 
 async fn record_guardian_denial(session: &Arc<Session>, turn: &Arc<TurnContext>, turn_id: &str) {
-    let action = session
-        .services
-        .guardian_rejection_circuit_breaker
+    let action = guardian_rejection_circuit_breaker(turn)
         .lock()
         .await
-        .record_denial(turn_id);
+        .record_denial();
     let GuardianRejectionCircuitBreakerAction::InterruptTurn {
         consecutive_denials,
         recent_denials,
@@ -350,7 +354,7 @@ async fn run_guardian_review(
                 }),
             )
             .await;
-        record_guardian_non_denial(&session, &assessment_turn_id).await;
+        record_guardian_non_denial(&turn).await;
         return ReviewDecision::Abort;
     }
 
@@ -443,7 +447,7 @@ async fn run_guardian_review(
                         }),
                     )
                     .await;
-                record_guardian_non_denial(&session, &assessment_turn_id).await;
+                record_guardian_non_denial(&turn).await;
                 return ReviewDecision::TimedOut;
             }
             GuardianReviewError::Cancelled => {
@@ -478,7 +482,7 @@ async fn run_guardian_review(
                         }),
                     )
                     .await;
-                record_guardian_non_denial(&session, &assessment_turn_id).await;
+                record_guardian_non_denial(&turn).await;
                 return ReviewDecision::Abort;
             }
             GuardianReviewError::PromptBuild { .. }
@@ -580,7 +584,7 @@ async fn run_guardian_review(
     if count_denial_for_circuit_breaker {
         record_guardian_denial(&session, &turn, &assessment_turn_id).await;
     } else {
-        record_guardian_non_denial(&session, &assessment_turn_id).await;
+        record_guardian_non_denial(&turn).await;
     }
 
     if approved {

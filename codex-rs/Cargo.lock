@@ -3078,6 +3078,7 @@ dependencies = [
  "codex-shell-command",
  "codex-utils-absolute-path",
  "codex-utils-output-truncation",
+ "pretty_assertions",
  "serde",
  "serde_json",
 ]

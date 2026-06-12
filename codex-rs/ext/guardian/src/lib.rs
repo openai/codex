@@ -14,6 +14,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 
 mod approval_request;
+mod circuit_breaker;
 mod truncation;
 
 pub use approval_request::FormattedGuardianAction;
@@ -23,6 +24,11 @@ pub use approval_request::guardian_assessment_action;
 pub use approval_request::guardian_request_target_item_id;
 pub use approval_request::guardian_request_turn_id;
 pub use approval_request::guardian_reviewed_action;
+pub use circuit_breaker::AUTO_REVIEW_DENIAL_WINDOW_SIZE;
+pub use circuit_breaker::GuardianRejectionCircuitBreaker;
+pub use circuit_breaker::GuardianRejectionCircuitBreakerAction;
+pub use circuit_breaker::MAX_CONSECUTIVE_GUARDIAN_DENIALS_PER_TURN;
+pub use circuit_breaker::MAX_RECENT_AUTO_REVIEW_DENIALS_PER_TURN;
 pub use truncation::guardian_truncate_text;
 
 /// Guardian extension dependencies supplied by the host at construction time.

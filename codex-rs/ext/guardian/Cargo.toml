@@ -7,7 +7,6 @@ version.workspace = true
 [lib]
 name = "codex_guardian"
 path = "src/lib.rs"
-test = false
 doctest = false
 
 [lints]
@@ -22,3 +21,6 @@ codex-utils-absolute-path = { workspace = true }
 codex-utils-output-truncation = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
