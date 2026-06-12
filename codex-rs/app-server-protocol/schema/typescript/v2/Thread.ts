@@ -8,7 +8,11 @@ import type { ThreadSource } from "./ThreadSource";
 import type { ThreadStatus } from "./ThreadStatus";
 import type { Turn } from "./Turn";
 
-export type Thread = { id: string,
+export type Thread = {
+/**
+ * Identifier for this thread. Codex-generated thread IDs are UUIDv7.
+ */
+id: string,
 /**
  * Session id shared by threads that belong to the same session tree.
  */
