@@ -9322,6 +9322,10 @@ allow_login_shell = true
 ignore_default_excludes = true
 exclude = ["USER_*"]
 
+[shell_environment_policy.set]
+CONFIGURED = "kept"
+MANAGED = "old"
+
 [otel]
 environment = "user"
 
@@ -9359,6 +9363,9 @@ api = false
 ignore_default_excludes = false
 experimental_use_profile = true
 
+[shell_environment_policy.set]
+MANAGED = "required"
+
 [otel]
 log_user_prompt = false
 environment = "managed"
@@ -9390,6 +9397,10 @@ sandbox_private_desktop = false
             ignore_default_excludes: Some(false),
             exclude: Some(vec!["USER_*".to_string()]),
             experimental_use_profile: Some(true),
+            r#set: Some(HashMap::from([
+                ("CONFIGURED".to_string(), "kept".to_string()),
+                ("MANAGED".to_string(), "required".to_string()),
+            ])),
             ..Default::default()
         }
         .into();
@@ -9430,6 +9441,9 @@ sandbox_private_desktop = false
             ("managed".to_string(), "required".to_string()),
         ])
     );
+    assert!(config.startup_warnings.iter().any(|warning| {
+        warning.contains("Configured leaves under `shell_environment_policy` are overridden")
+    }));
     Ok(())
 }
 

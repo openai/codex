@@ -13,7 +13,7 @@ pub(super) fn merge(
     incoming: Option<OtelConfigToml>,
     source: &RequirementSource,
 ) {
-    let Some(incoming) = incoming.filter(|value| !is_empty(value)) else {
+    let Some(incoming) = incoming.filter(|value| value != &OtelConfigToml::default()) else {
         return;
     };
     let Some(output) = output.as_mut() else {
@@ -76,14 +76,4 @@ fn merge_nested_map(
             output_fields.entry(key).or_insert(value);
         }
     }
-}
-
-fn is_empty(value: &OtelConfigToml) -> bool {
-    value.log_user_prompt.is_none()
-        && value.environment.is_none()
-        && value.exporter.is_none()
-        && value.trace_exporter.is_none()
-        && value.metrics_exporter.is_none()
-        && value.span_attributes.is_none()
-        && value.tracestate.is_none()
 }

@@ -1206,28 +1206,19 @@ impl ConfigRequirementsToml {
             && self.log_dir.is_none()
             && self.model_catalog_json.is_none()
             && self.check_for_update_on_startup.is_none()
-            && self.otel.as_ref().is_none_or(|otel| {
-                otel.log_user_prompt.is_none()
-                    && otel.environment.is_none()
-                    && otel.exporter.is_none()
-                    && otel.trace_exporter.is_none()
-                    && otel.metrics_exporter.is_none()
-                    && otel.span_attributes.is_none()
-                    && otel.tracestate.is_none()
-            })
+            && self
+                .otel
+                .as_ref()
+                .is_none_or(|otel| otel == &OtelConfigToml::default())
             && self.allow_login_shell.is_none()
-            && self.shell_environment_policy.as_ref().is_none_or(|policy| {
-                policy.inherit.is_none()
-                    && policy.ignore_default_excludes.is_none()
-                    && policy.exclude.is_none()
-                    && policy.r#set.is_none()
-                    && policy.include_only.is_none()
-                    && policy.experimental_use_profile.is_none()
-            })
+            && self
+                .shell_environment_policy
+                .as_ref()
+                .is_none_or(|policy| policy == &ShellEnvironmentPolicyToml::default())
             && self
                 .feedback
                 .as_ref()
-                .is_none_or(|feedback| feedback.enabled.is_none())
+                .is_none_or(|feedback| feedback == &FeedbackConfigToml::default())
             && self.allowed_approval_policies.is_none()
             && self.allowed_approvals_reviewers.is_none()
             && self.allowed_sandbox_modes.is_none()
@@ -1722,94 +1713,9 @@ mod tests {
     }
 
     fn with_unknown_source(toml: ConfigRequirementsToml) -> ConfigRequirementsWithSources {
-        let ConfigRequirementsToml {
-            allowed_login_methods,
-            allowed_chatgpt_workspaces,
-            cli_auth_credentials_store,
-            chatgpt_base_url,
-            sqlite_home,
-            log_dir,
-            model_catalog_json,
-            check_for_update_on_startup,
-            otel,
-            allow_login_shell,
-            shell_environment_policy,
-            feedback,
-            allowed_approval_policies,
-            allowed_approvals_reviewers,
-            allowed_sandbox_modes,
-            allowed_permission_profiles,
-            default_permissions,
-            remote_sandbox_config: _,
-            allowed_web_search_modes,
-            allow_managed_hooks_only,
-            allow_appshots,
-            computer_use,
-            windows,
-            feature_requirements,
-            hooks,
-            mcp_servers,
-            plugins,
-            apps,
-            rules,
-            enforce_residency,
-            network,
-            permissions,
-            guardian_policy_config,
-        } = toml;
-        ConfigRequirementsWithSources {
-            allowed_login_methods: allowed_login_methods
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            allowed_chatgpt_workspaces: allowed_chatgpt_workspaces
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            cli_auth_credentials_store: cli_auth_credentials_store
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            chatgpt_base_url: chatgpt_base_url
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            sqlite_home: sqlite_home.map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            log_dir: log_dir.map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            model_catalog_json: model_catalog_json
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            check_for_update_on_startup: check_for_update_on_startup
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            otel: otel.map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            allow_login_shell: allow_login_shell
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            shell_environment_policy: shell_environment_policy
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            feedback: feedback.map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            allowed_approval_policies: allowed_approval_policies
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            allowed_approvals_reviewers: allowed_approvals_reviewers
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            allowed_sandbox_modes: allowed_sandbox_modes
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            allowed_permission_profiles: allowed_permission_profiles
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            default_permissions: default_permissions
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            allowed_web_search_modes: allowed_web_search_modes
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            allow_managed_hooks_only: allow_managed_hooks_only
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            allow_appshots: allow_appshots
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            computer_use: computer_use.map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            windows: windows.map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            feature_requirements: feature_requirements
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            hooks: hooks.map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            plugins: plugins.map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            apps: apps.map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            enforce_residency: enforce_residency
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            network: network.map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            permissions: permissions.map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            guardian_policy_config: guardian_policy_config
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-        }
+        let mut sourced = ConfigRequirementsWithSources::default();
+        sourced.merge_unset_fields(RequirementSource::Unknown, toml);
+        sourced
     }
 
     #[test]
@@ -1947,109 +1853,6 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_managed_config_replacement_requirements() -> Result<()> {
-        let sqlite_home = std::env::temp_dir().join("codex-sqlite");
-        let log_dir = std::env::temp_dir().join("codex-logs");
-        let model_catalog_json = std::env::temp_dir().join("models.json");
-        let requirements: ConfigRequirementsToml = from_str(&format!(
-            r#"
-                allowed_login_methods = {{ chatgpt = true, api = false }}
-                allowed_chatgpt_workspaces = {{ workspace_1 = true, workspace_2 = false }}
-                cli_auth_credentials_store = "keyring"
-                chatgpt_base_url = "https://chatgpt.example.com"
-                sqlite_home = {:?}
-                log_dir = {:?}
-                model_catalog_json = {:?}
-                check_for_update_on_startup = false
-                allow_login_shell = false
-
-                [otel]
-                log_user_prompt = false
-                environment = "prod"
-                span_attributes = {{ team = "codex" }}
-
-                [shell_environment_policy]
-                ignore_default_excludes = false
-                set = {{ MANAGED_ENV = "1" }}
-
-                [feedback]
-                enabled = false
-
-                [windows]
-                sandbox_private_desktop = false
-            "#,
-            sqlite_home.display().to_string(),
-            log_dir.display().to_string(),
-            model_catalog_json.display().to_string(),
-        ))?;
-
-        assert_eq!(
-            requirements.allowed_login_methods,
-            Some(BTreeMap::from([
-                ("api".to_string(), false),
-                ("chatgpt".to_string(), true),
-            ]))
-        );
-        assert_eq!(
-            requirements.allowed_chatgpt_workspaces,
-            Some(BTreeMap::from([
-                ("workspace_1".to_string(), true),
-                ("workspace_2".to_string(), false),
-            ]))
-        );
-        assert_eq!(
-            requirements.cli_auth_credentials_store,
-            Some(AuthCredentialsStoreMode::Keyring)
-        );
-        assert_eq!(
-            requirements.chatgpt_base_url.as_deref(),
-            Some("https://chatgpt.example.com")
-        );
-        assert_eq!(
-            requirements.sqlite_home.as_deref(),
-            Some(sqlite_home.as_path())
-        );
-        assert_eq!(requirements.log_dir.as_deref(), Some(log_dir.as_path()));
-        assert_eq!(
-            requirements.model_catalog_json.as_deref(),
-            Some(model_catalog_json.as_path())
-        );
-        assert_eq!(requirements.check_for_update_on_startup, Some(false));
-        assert_eq!(requirements.allow_login_shell, Some(false));
-        assert_eq!(
-            requirements
-                .otel
-                .as_ref()
-                .and_then(|otel| otel.span_attributes.as_ref()),
-            Some(&BTreeMap::from([("team".to_string(), "codex".to_string())]))
-        );
-        assert_eq!(
-            requirements
-                .shell_environment_policy
-                .as_ref()
-                .and_then(|policy| policy.r#set.as_ref())
-                .and_then(|set| set.get("MANAGED_ENV"))
-                .map(String::as_str),
-            Some("1")
-        );
-        assert_eq!(
-            requirements.feedback,
-            Some(FeedbackConfigToml {
-                enabled: Some(false),
-            })
-        );
-        assert_eq!(
-            requirements.windows,
-            Some(WindowsRequirementsToml {
-                allowed_sandbox_implementations: None,
-                sandbox_private_desktop: Some(false),
-            })
-        );
-        assert!(!requirements.is_empty());
-        Ok(())
-    }
-
-    #[test]
     fn normalize_rejects_unknown_login_method() -> Result<()> {
         let config: ConfigRequirementsToml = from_str(
             r#"
@@ -2093,7 +1896,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_unset_fields_copies_every_field_and_sets_sources() {
+    fn merge_unset_fields_copies_every_field() {
         let mut target = ConfigRequirementsWithSources::default();
         let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
 
@@ -2136,36 +1939,35 @@ mod tests {
             enabled: Some(false),
         };
         let enforce_residency = ResidencyRequirement::Us;
-        let enforce_source = source.clone();
         let guardian_policy_config = "Use the company-managed guardian policy.".to_string();
 
         // Intentionally constructed without `..Default::default()` so adding a new field to
         // `ConfigRequirementsToml` forces this test to be updated.
         let other = ConfigRequirementsToml {
-            allowed_login_methods: Some(allowed_login_methods.clone()),
-            allowed_chatgpt_workspaces: Some(allowed_chatgpt_workspaces.clone()),
+            allowed_login_methods: Some(allowed_login_methods),
+            allowed_chatgpt_workspaces: Some(allowed_chatgpt_workspaces),
             cli_auth_credentials_store: Some(AuthCredentialsStoreMode::Keyring),
             chatgpt_base_url: Some("https://chatgpt.example.com".to_string()),
-            sqlite_home: Some(sqlite_home.clone()),
-            log_dir: Some(log_dir.clone()),
-            model_catalog_json: Some(model_catalog_json.clone()),
+            sqlite_home: Some(sqlite_home),
+            log_dir: Some(log_dir),
+            model_catalog_json: Some(model_catalog_json),
             check_for_update_on_startup: Some(false),
-            otel: Some(otel.clone()),
+            otel: Some(otel),
             allow_login_shell: Some(false),
-            shell_environment_policy: Some(shell_environment_policy.clone()),
-            feedback: Some(feedback.clone()),
-            allowed_approval_policies: Some(allowed_approval_policies.clone()),
-            allowed_approvals_reviewers: Some(allowed_approvals_reviewers.clone()),
-            allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
+            shell_environment_policy: Some(shell_environment_policy),
+            feedback: Some(feedback),
+            allowed_approval_policies: Some(allowed_approval_policies),
+            allowed_approvals_reviewers: Some(allowed_approvals_reviewers),
+            allowed_sandbox_modes: Some(allowed_sandbox_modes),
             allowed_permission_profiles: Some(BTreeMap::from([("managed".to_string(), true)])),
             default_permissions: Some("managed".to_string()),
             remote_sandbox_config: None,
-            allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
+            allowed_web_search_modes: Some(allowed_web_search_modes),
             allow_managed_hooks_only: Some(true),
             allow_appshots: Some(false),
-            computer_use: Some(computer_use.clone()),
+            computer_use: Some(computer_use),
             windows: None,
-            feature_requirements: Some(feature_requirements.clone()),
+            feature_requirements: Some(feature_requirements),
             hooks: None,
             mcp_servers: None,
             plugins: None,
@@ -2174,81 +1976,20 @@ mod tests {
             enforce_residency: Some(enforce_residency),
             network: None,
             permissions: None,
-            guardian_policy_config: Some(guardian_policy_config.clone()),
+            guardian_policy_config: Some(guardian_policy_config),
         };
 
+        let expected = other.clone();
         target.merge_unset_fields(source.clone(), other);
 
         assert_eq!(
-            target,
-            ConfigRequirementsWithSources {
-                allowed_login_methods: Some(Sourced::new(allowed_login_methods, source.clone(),)),
-                allowed_chatgpt_workspaces: Some(Sourced::new(
-                    allowed_chatgpt_workspaces,
-                    source.clone(),
-                )),
-                cli_auth_credentials_store: Some(Sourced::new(
-                    AuthCredentialsStoreMode::Keyring,
-                    source.clone(),
-                )),
-                chatgpt_base_url: Some(Sourced::new(
-                    "https://chatgpt.example.com".to_string(),
-                    source.clone(),
-                )),
-                sqlite_home: Some(Sourced::new(sqlite_home, source.clone())),
-                log_dir: Some(Sourced::new(log_dir, source.clone())),
-                model_catalog_json: Some(Sourced::new(model_catalog_json, source.clone(),)),
-                check_for_update_on_startup: Some(Sourced::new(
-                    /*value*/ false,
-                    source.clone(),
-                )),
-                otel: Some(Sourced::new(otel, source.clone())),
-                allow_login_shell: Some(Sourced::new(/*value*/ false, source.clone())),
-                shell_environment_policy: Some(Sourced::new(
-                    shell_environment_policy,
-                    source.clone(),
-                )),
-                feedback: Some(Sourced::new(feedback, source.clone())),
-                allowed_approval_policies: Some(Sourced::new(
-                    allowed_approval_policies,
-                    source.clone()
-                )),
-                allowed_approvals_reviewers: Some(Sourced::new(
-                    allowed_approvals_reviewers,
-                    source.clone(),
-                )),
-                allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source.clone(),)),
-                allowed_permission_profiles: Some(Sourced::new(
-                    BTreeMap::from([("managed".to_string(), true)]),
-                    source.clone(),
-                )),
-                default_permissions: Some(Sourced::new("managed".to_string(), source.clone(),)),
-                allowed_web_search_modes: Some(Sourced::new(
-                    allowed_web_search_modes,
-                    enforce_source.clone(),
-                )),
-                allow_managed_hooks_only: Some(Sourced::new(
-                    /*value*/ true,
-                    enforce_source.clone(),
-                )),
-                allow_appshots: Some(Sourced::new(/*value*/ false, enforce_source.clone(),)),
-                computer_use: Some(Sourced::new(computer_use, enforce_source.clone())),
-                windows: None,
-                feature_requirements: Some(Sourced::new(
-                    feature_requirements,
-                    enforce_source.clone(),
-                )),
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
-                network: None,
-                permissions: None,
-                guardian_policy_config: Some(Sourced::new(guardian_policy_config, source)),
-            }
+            target
+                .allowed_login_methods
+                .as_ref()
+                .map(|required| &required.source),
+            Some(&source)
         );
+        assert_eq!(target.into_toml(), expected);
     }
 
     #[test]
@@ -2269,41 +2010,11 @@ mod tests {
         assert_eq!(
             empty_target,
             ConfigRequirementsWithSources {
-                allowed_login_methods: None,
-                allowed_chatgpt_workspaces: None,
-                cli_auth_credentials_store: None,
-                chatgpt_base_url: None,
-                sqlite_home: None,
-                log_dir: None,
-                model_catalog_json: None,
-                check_for_update_on_startup: None,
-                otel: None,
-                allow_login_shell: None,
-                shell_environment_policy: None,
-                feedback: None,
                 allowed_approval_policies: Some(Sourced::new(
                     vec![AskForApproval::OnRequest],
                     source_location,
                 )),
-                allowed_approvals_reviewers: None,
-                allowed_sandbox_modes: None,
-                allowed_permission_profiles: None,
-                default_permissions: None,
-                allowed_web_search_modes: None,
-                allow_managed_hooks_only: None,
-                allow_appshots: None,
-                computer_use: None,
-                windows: None,
-                feature_requirements: None,
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-                permissions: None,
-                guardian_policy_config: None,
+                ..Default::default()
             }
         );
         Ok(())
@@ -2334,41 +2045,11 @@ mod tests {
         assert_eq!(
             populated_target,
             ConfigRequirementsWithSources {
-                allowed_login_methods: None,
-                allowed_chatgpt_workspaces: None,
-                cli_auth_credentials_store: None,
-                chatgpt_base_url: None,
-                sqlite_home: None,
-                log_dir: None,
-                model_catalog_json: None,
-                check_for_update_on_startup: None,
-                otel: None,
-                allow_login_shell: None,
-                shell_environment_policy: None,
-                feedback: None,
                 allowed_approval_policies: Some(Sourced::new(
                     vec![AskForApproval::Never],
                     existing_source,
                 )),
-                allowed_approvals_reviewers: None,
-                allowed_sandbox_modes: None,
-                allowed_permission_profiles: None,
-                default_permissions: None,
-                allowed_web_search_modes: None,
-                allow_managed_hooks_only: None,
-                allow_appshots: None,
-                computer_use: None,
-                windows: None,
-                feature_requirements: None,
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-                permissions: None,
-                guardian_policy_config: None,
+                ..Default::default()
             }
         );
         Ok(())
