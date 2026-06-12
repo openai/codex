@@ -947,6 +947,7 @@ impl TurnRequestProcessor {
                 model: params.model,
                 output_modality: params.output_modality,
                 auto_handoff_appends: params.auto_handoff_appends.unwrap_or(true),
+                auto_handoff_updates: params.auto_handoff_updates.unwrap_or(true),
                 prompt: params.prompt,
                 realtime_session_id: params.realtime_session_id,
                 transport: params.transport.map(|transport| match transport {

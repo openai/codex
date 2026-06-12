@@ -107,6 +107,7 @@ struct RealtimeHandoffState {
     last_output_text: Arc<Mutex<Option<String>>>,
     session_kind: RealtimeSessionKind,
     auto_handoff_appends: bool,
+    auto_handoff_updates: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -121,6 +122,7 @@ enum HandoffOutput {
     FinalUpdate {
         handoff_id: String,
         output_text: String,
+        create_response: bool,
     },
 }
 
@@ -215,6 +217,7 @@ impl RealtimeHandoffState {
         output_tx: Sender<HandoffOutput>,
         session_kind: RealtimeSessionKind,
         auto_handoff_appends: bool,
+        auto_handoff_updates: bool,
     ) -> Self {
         Self {
             output_tx,
@@ -222,6 +225,7 @@ impl RealtimeHandoffState {
             last_output_text: Arc::new(Mutex::new(None)),
             session_kind,
             auto_handoff_appends,
+            auto_handoff_updates,
         }
     }
 }
@@ -242,6 +246,7 @@ struct RealtimeStart {
     extra_headers: Option<HeaderMap>,
     session_config: RealtimeSessionConfig,
     auto_handoff_appends: bool,
+    auto_handoff_updates: bool,
     model_client: ModelClient,
     sdp: Option<String>,
 }
@@ -295,6 +300,7 @@ impl RealtimeConversationManager {
             extra_headers,
             session_config,
             auto_handoff_appends,
+            auto_handoff_updates,
             model_client,
             sdp,
         } = start;
@@ -314,8 +320,12 @@ impl RealtimeConversationManager {
             async_channel::bounded::<RealtimeEvent>(OUTPUT_EVENTS_QUEUE_CAPACITY);
 
         let realtime_active = Arc::new(AtomicBool::new(true));
-        let handoff =
-            RealtimeHandoffState::new(handoff_output_tx, session_kind, auto_handoff_appends);
+        let handoff = RealtimeHandoffState::new(
+            handoff_output_tx,
+            session_kind,
+            auto_handoff_appends,
+            auto_handoff_updates,
+        );
         let input_channels = RealtimeInputChannels {
             user_text_rx,
             handoff_output_rx,
@@ -478,7 +488,7 @@ impl RealtimeConversationManager {
 
         let active_handoff = handoff.active_handoff.lock().await.clone();
         let output = match active_handoff {
-            Some(handoff_id) => {
+            Some(handoff_id) if handoff.auto_handoff_updates => {
                 let output_text = prefix_realtime_text(
                     output_text,
                     REALTIME_BACKEND_TEXT_PREFIX,
@@ -490,6 +500,7 @@ impl RealtimeConversationManager {
                     output_text,
                 }
             }
+            Some(_) => return Ok(()),
             None if output_text.trim().is_empty() => return Ok(()),
             None if handoff.auto_handoff_appends => {
                 standalone_assistant_output(output_text, handoff.session_kind)
@@ -546,6 +557,26 @@ impl RealtimeConversationManager {
         let Some(handoff_id) = handoff.active_handoff.lock().await.clone() else {
             return Ok(());
         };
+
+        if !handoff.auto_handoff_updates {
+            match handoff.session_kind {
+                RealtimeSessionKind::V1 => return Ok(()),
+                RealtimeSessionKind::V2 => {
+                    return handoff
+                        .output_tx
+                        .send(HandoffOutput::FinalUpdate {
+                            handoff_id,
+                            output_text: String::new(),
+                            create_response: false,
+                        })
+                        .await
+                        .map_err(|_| {
+                            CodexErr::InvalidRequest("conversation is not running".to_string())
+                        });
+                }
+            }
+        }
+
         let Some(output_text) = handoff.last_output_text.lock().await.clone() else {
             return Ok(());
         };
@@ -555,6 +586,7 @@ impl RealtimeConversationManager {
             .send(HandoffOutput::FinalUpdate {
                 handoff_id,
                 output_text,
+                create_response: true,
             })
             .await
             .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))
@@ -643,6 +675,7 @@ struct PreparedRealtimeConversationStart {
     extra_headers: Option<HeaderMap>,
     requested_realtime_session_id: Option<String>,
     auto_handoff_appends: bool,
+    auto_handoff_updates: bool,
     version: RealtimeWsVersion,
     session_config: RealtimeSessionConfig,
     transport: ConversationStartTransport,
@@ -701,6 +734,7 @@ async fn prepare_realtime_start(
         extra_headers,
         requested_realtime_session_id,
         auto_handoff_appends: params.auto_handoff_appends,
+        auto_handoff_updates: params.auto_handoff_updates,
         version,
         session_config,
         transport,
@@ -831,6 +865,7 @@ async fn handle_start_inner(
         extra_headers,
         requested_realtime_session_id,
         auto_handoff_appends,
+        auto_handoff_updates,
         version,
         session_config,
         transport,
@@ -845,6 +880,7 @@ async fn handle_start_inner(
         extra_headers,
         session_config,
         auto_handoff_appends,
+        auto_handoff_updates,
         model_client: sess.services.model_client.clone(),
         sdp,
     };
@@ -1279,6 +1315,7 @@ async fn handle_handoff_output(
             | HandoffOutput::FinalUpdate {
                 handoff_id,
                 output_text,
+                create_response: _,
             } => {
                 writer
                     .send_conversation_function_call_output(handoff_id, output_text)
@@ -1312,19 +1349,26 @@ async fn handle_handoff_output(
             HandoffOutput::FinalUpdate {
                 handoff_id,
                 output_text: _,
+                create_response,
             } => {
                 if let Err(err) = writer
                     .send_conversation_function_call_output(
                         handoff_id,
-                        REALTIME_V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT.to_string(),
+                        if create_response {
+                            REALTIME_V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT.to_string()
+                        } else {
+                            String::new()
+                        },
                     )
                     .await
                 {
                     Err(err)
-                } else {
+                } else if create_response {
                     return response_create_queue
                         .request_create(writer, events_tx, "handoff")
                         .await;
+                } else {
+                    Ok(())
                 }
             }
         },

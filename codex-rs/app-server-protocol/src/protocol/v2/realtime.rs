@@ -75,6 +75,10 @@ pub struct ThreadRealtimeStartParams {
     /// Omit to keep the default behavior enabled.
     #[ts(optional = nullable)]
     pub auto_handoff_appends: Option<bool>,
+    /// Controls whether Codex automatically forwards active handoff output to realtime.
+    /// Omit to keep the default behavior enabled.
+    #[ts(optional = nullable)]
+    pub auto_handoff_updates: Option<bool>,
     #[serde(
         default,
         deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
