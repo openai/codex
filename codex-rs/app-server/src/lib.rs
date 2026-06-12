@@ -110,10 +110,12 @@ mod transport;
 pub use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 pub use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 pub use crate::transport::AppServerTransport;
+pub use crate::transport::RemoteControlStartupMode;
 pub use crate::transport::app_server_control_socket_path;
 pub use crate::transport::auth::AppServerWebsocketAuthArgs;
 pub use crate::transport::auth::AppServerWebsocketAuthSettings;
 pub use crate::transport::auth::WebsocketAuthCliMode;
+pub use crate::transport::take_remote_control_disabled_env;
 
 const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
 const OTEL_SERVICE_NAME: &str = "codex-app-server";
@@ -408,7 +410,7 @@ pub enum PluginStartupTasks {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppServerRuntimeOptions {
     pub plugin_startup_tasks: PluginStartupTasks,
-    pub remote_control_enabled: bool,
+    pub remote_control_startup_mode: RemoteControlStartupMode,
     pub install_shutdown_signal_handler: bool,
 }
 
@@ -416,7 +418,7 @@ impl Default for AppServerRuntimeOptions {
     fn default() -> Self {
         Self {
             plugin_startup_tasks: PluginStartupTasks::Start,
-            remote_control_enabled: false,
+            remote_control_startup_mode: RemoteControlStartupMode::ResolvePersisted,
             install_shutdown_signal_handler: true,
         }
     }
@@ -717,15 +719,21 @@ pub async fn run_main_with_transport_options(
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
 
-    let remote_control_requested = runtime_options.remote_control_enabled;
-    let remote_control_enabled = remote_control_requested && state_db.is_some();
-    if remote_control_requested && state_db.is_none() {
+    let remote_control_startup_mode = runtime_options.remote_control_startup_mode;
+    let remote_control_explicitly_requested =
+        remote_control_startup_mode == RemoteControlStartupMode::EnabledEphemeral;
+    let remote_control_enabled = remote_control_explicitly_requested && state_db.is_some();
+    if remote_control_explicitly_requested && state_db.is_none() {
         error!("remote control disabled because sqlite state db is unavailable");
     }
-    if transport_accept_handles.is_empty() && !remote_control_enabled {
+    let no_local_transport = transport_accept_handles.is_empty();
+    if no_local_transport
+        && remote_control_startup_mode != RemoteControlStartupMode::ResolvePersisted
+        && !remote_control_enabled
+    {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
-            if remote_control_requested && state_db.is_none() {
+            if remote_control_explicitly_requested && state_db.is_none() {
                 "no transport configured; remote control disabled because sqlite state db is unavailable"
             } else {
                 "no transport configured; use --listen or enable remote control"
@@ -743,9 +751,31 @@ pub async fn run_main_with_transport_options(
         transport_event_tx.clone(),
         transport_shutdown_token.clone(),
         app_server_client_name_rx,
-        remote_control_enabled,
+        remote_control_startup_mode,
     )
     .await?;
+    if no_local_transport
+        && remote_control_startup_mode == RemoteControlStartupMode::ResolvePersisted
+    {
+        let persisted_enabled = match remote_control_handle
+            .resolve_persisted_preference(/*app_server_client_name*/ None)
+            .await
+        {
+            Ok(persisted_enabled) => persisted_enabled,
+            Err(err) => {
+                warn!("failed to resolve persisted remote control preference: {err}");
+                false
+            }
+        };
+        if !persisted_enabled {
+            transport_shutdown_token.cancel();
+            let _ = remote_control_accept_handle.await;
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "no transport configured; use --listen or enable remote control",
+            ));
+        }
+    }
     transport_accept_handles.push(remote_control_accept_handle);
 
     let outbound_handle = tokio::spawn(async move {

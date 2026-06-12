@@ -53,13 +53,14 @@ struct AppServerArgs {
     #[arg(long = "disable-plugin-startup-tasks-for-tests", hide = true)]
     disable_plugin_startup_tasks_for_tests: bool,
 
-    /// Enable remote control for this app-server process.
+    /// Enable remote control for this app-server process without changing persistence.
     #[arg(long = "remote-control", hide = true)]
     remote_control: bool,
 }
 
 fn main() -> anyhow::Result<()> {
-    arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
+    let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
+    arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {
         let AppServerArgs {
             config_overrides,
             listen,
@@ -84,7 +85,12 @@ fn main() -> anyhow::Result<()> {
         if disable_plugin_startup_tasks_for_tests {
             runtime_options.plugin_startup_tasks = PluginStartupTasks::Skip;
         }
-        runtime_options.remote_control_enabled = remote_control;
+        runtime_options.remote_control_startup_mode =
+            match (remote_control, remote_control_disabled) {
+                (true, _) => codex_app_server::RemoteControlStartupMode::EnabledEphemeral,
+                (false, true) => codex_app_server::RemoteControlStartupMode::DisabledEphemeral,
+                (false, false) => codex_app_server::RemoteControlStartupMode::ResolvePersisted,
+            };
 
         run_main_with_transport_options(
             arg0_paths,
