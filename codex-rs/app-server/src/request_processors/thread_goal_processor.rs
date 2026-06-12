@@ -10,17 +10,25 @@ pub(crate) struct ThreadGoalRequestProcessor {
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
     config: Arc<Config>,
+    thread_store: Arc<dyn ThreadStore>,
     thread_state_manager: ThreadStateManager,
+    thread_catalog_subscriptions: ThreadCatalogSubscriptions,
     state_db: Option<StateDbHandle>,
     goal_service: Arc<GoalService>,
 }
 
 impl ThreadGoalRequestProcessor {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "request processor dependencies stay explicit"
+    )]
     pub(crate) fn new(
         thread_manager: Arc<ThreadManager>,
         outgoing: Arc<OutgoingMessageSender>,
         config: Arc<Config>,
+        thread_store: Arc<dyn ThreadStore>,
         thread_state_manager: ThreadStateManager,
+        thread_catalog_subscriptions: ThreadCatalogSubscriptions,
         state_db: Option<StateDbHandle>,
         goal_service: Arc<GoalService>,
     ) -> Self {
@@ -28,7 +36,9 @@ impl ThreadGoalRequestProcessor {
             thread_manager,
             outgoing,
             config,
+            thread_store,
             thread_state_manager,
+            thread_catalog_subscriptions,
             state_db,
             goal_service,
         }
@@ -158,6 +168,7 @@ impl ThreadGoalRequestProcessor {
             .await;
         self.emit_thread_goal_updated_ordered(thread_id, goal, listener_command_tx)
             .await;
+        self.publish_thread_catalog_change(thread_id).await;
         outcome.apply_runtime_effects(&self.goal_service).await;
         Ok(())
     }
@@ -212,8 +223,20 @@ impl ThreadGoalRequestProcessor {
         if cleared {
             self.emit_thread_goal_cleared_ordered(thread_id, listener_command_tx)
                 .await;
+            self.publish_thread_catalog_change(thread_id).await;
         }
         Ok(())
+    }
+
+    async fn publish_thread_catalog_change(&self, thread_id: ThreadId) {
+        self.thread_catalog_subscriptions
+            .publish_thread_change(
+                &self.thread_store,
+                thread_id,
+                self.config.model_provider_id.as_str(),
+                &self.config.cwd,
+            )
+            .await;
     }
 
     async fn state_db_for_materialized_thread(

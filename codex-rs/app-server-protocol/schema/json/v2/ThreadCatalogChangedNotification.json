@@ -181,6 +181,10 @@
           "format": "int64",
           "type": "integer"
         },
+        "createdAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
         "cwd": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
@@ -249,11 +253,16 @@
         "updatedAt": {
           "format": "int64",
           "type": "integer"
+        },
+        "updatedAtMs": {
+          "format": "int64",
+          "type": "integer"
         }
       },
       "required": [
         "cliVersion",
         "createdAt",
+        "createdAtMs",
         "cwd",
         "ephemeral",
         "id",
@@ -261,7 +270,8 @@
         "preview",
         "sessionId",
         "source",
-        "updatedAt"
+        "updatedAt",
+        "updatedAtMs"
       ],
       "type": "object"
     }

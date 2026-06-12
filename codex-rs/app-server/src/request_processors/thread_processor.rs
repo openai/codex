@@ -876,7 +876,6 @@ impl ThreadRequestProcessor {
             thread_state_manager: self.thread_state_manager.clone(),
             outgoing: Arc::clone(&self.outgoing),
             pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
-            thread_store: Arc::clone(&self.thread_store),
             thread_watch_manager: self.thread_watch_manager.clone(),
             thread_catalog_subscriptions: self.thread_catalog_subscriptions.clone(),
             thread_list_state_permit: self.thread_list_state_permit.clone(),
@@ -979,7 +978,6 @@ impl ThreadRequestProcessor {
             thread_state_manager: self.thread_state_manager.clone(),
             outgoing: Arc::clone(&self.outgoing),
             pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
-            thread_store: Arc::clone(&self.thread_store),
             thread_watch_manager: self.thread_watch_manager.clone(),
             thread_catalog_subscriptions: self.thread_catalog_subscriptions.clone(),
             thread_list_state_permit: self.thread_list_state_permit.clone(),
@@ -1239,6 +1237,12 @@ impl ThreadRequestProcessor {
                 otel.name = "app_server.thread_start.config_snapshot",
             ))
             .await;
+        let stored_thread = thread
+            .read_thread(
+                /*include_archived*/ true, /*include_history*/ false,
+            )
+            .await
+            .ok();
         let mut thread = build_thread_from_snapshot(
             thread_id,
             session_configured.session_id.to_string(),
@@ -1309,7 +1313,16 @@ impl ThreadRequestProcessor {
             reasoning_effort: config_snapshot.reasoning_effort,
             multi_agent_mode: config_snapshot.multi_agent_mode,
         };
-        let catalog_summary = thread_summary_from_thread(thread.clone(), /*archived_at*/ None);
+        let catalog_summary = stored_thread.map_or_else(
+            || thread_summary_from_thread(thread.clone(), /*archived_at*/ None),
+            |stored_thread| {
+                thread_summary_from_stored_thread(
+                    stored_thread,
+                    thread.model_provider.as_str(),
+                    &thread.cwd,
+                )
+            },
+        );
         let notif = thread_started_notification(thread);
         listener_task_context
             .outgoing

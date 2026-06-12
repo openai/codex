@@ -1080,6 +1080,14 @@ async fn thread_resume_keeps_paused_goal_paused() -> Result<()> {
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+    let subscribe_id = mcp
+        .send_raw_request("threadCatalog/subscribe", /*params*/ None)
+        .await?;
+    let _: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(subscribe_id)),
+    )
+    .await??;
 
     let goal_id = mcp
         .send_raw_request(
@@ -1100,6 +1108,11 @@ async fn thread_resume_keeps_paused_goal_paused() -> Result<()> {
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("thread/goal/updated"),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("threadCatalog/changed"),
     )
     .await??;
     mcp.clear_message_buffer();

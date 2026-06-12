@@ -416,6 +416,12 @@ impl CodexThread {
         self.codex.next_event().await
     }
 
+    pub fn subscribe_thread_metadata_updated(
+        &self,
+    ) -> Option<tokio::sync::broadcast::Receiver<StoredThread>> {
+        self.codex.session.subscribe_thread_metadata_updated()
+    }
+
     pub async fn agent_status(&self) -> AgentStatus {
         self.codex.agent_status().await
     }

@@ -8,6 +8,7 @@ use codex_rollout::RolloutPersistenceTelemetry;
 use codex_rollout::measure_and_filter_rollout_items;
 use codex_rollout::persisted_rollout_items;
 use tokio::sync::Mutex;
+use tokio::sync::broadcast;
 use tracing::warn;
 
 use crate::AppendThreadItemsParams;
@@ -35,6 +36,7 @@ pub struct LiveThread {
     thread_store: Arc<dyn ThreadStore>,
     metadata_sync: Arc<Mutex<ThreadMetadataSync>>,
     persistence_telemetry: RolloutPersistenceTelemetry,
+    metadata_updated_tx: broadcast::Sender<StoredThread>,
 }
 
 /// Owns a live thread while session initialization is still fallible.
@@ -87,6 +89,8 @@ impl Drop for LiveThreadInitGuard {
 }
 
 impl LiveThread {
+    const METADATA_UPDATED_CHANNEL_CAPACITY: usize = 16;
+
     pub async fn create(
         thread_store: Arc<dyn ThreadStore>,
         params: CreateThreadParams,
@@ -94,11 +98,13 @@ impl LiveThread {
         let thread_id = params.thread_id;
         let metadata_sync = ThreadMetadataSync::for_create(&params).await;
         thread_store.create_thread(params).await?;
+        let (metadata_updated_tx, _) = broadcast::channel(Self::METADATA_UPDATED_CHANNEL_CAPACITY);
         Ok(Self {
             thread_id,
             thread_store,
             metadata_sync: Arc::new(Mutex::new(metadata_sync)),
             persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
+            metadata_updated_tx,
         })
     }
 
@@ -130,12 +136,18 @@ impl LiveThread {
                 }
             }
         }
+        let (metadata_updated_tx, _) = broadcast::channel(Self::METADATA_UPDATED_CHANNEL_CAPACITY);
         Ok(Self {
             thread_id,
             thread_store,
             metadata_sync: Arc::new(Mutex::new(metadata_sync)),
             persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
+            metadata_updated_tx,
         })
+    }
+
+    pub fn subscribe_metadata_updated(&self) -> broadcast::Receiver<StoredThread> {
+        self.metadata_updated_tx.subscribe()
     }
 
     #[tracing::instrument(
@@ -172,13 +184,15 @@ impl LiveThread {
             .await
             .observe_appended_items(canonical_items.as_slice());
         if let Some(update) = update {
-            self.thread_store
+            let stored_thread = self
+                .thread_store
                 .update_thread_metadata(UpdateThreadMetadataParams {
                     thread_id: self.thread_id,
                     patch: update.patch.clone(),
                     include_archived: true,
                 })
                 .await?;
+            self.publish_metadata_updated(stored_thread);
             self.metadata_sync
                 .lock()
                 .await
@@ -240,7 +254,8 @@ impl LiveThread {
         include_archived: bool,
     ) -> ThreadStoreResult<()> {
         self.flush_pending_metadata_update().await?;
-        self.thread_store
+        let stored_thread = self
+            .thread_store
             .update_thread_metadata(UpdateThreadMetadataParams {
                 thread_id: self.thread_id,
                 patch: ThreadMetadataPatch {
@@ -250,6 +265,7 @@ impl LiveThread {
                 include_archived,
             })
             .await?;
+        self.publish_metadata_updated(stored_thread);
         Ok(())
     }
 
@@ -259,13 +275,16 @@ impl LiveThread {
         include_archived: bool,
     ) -> ThreadStoreResult<StoredThread> {
         self.flush_pending_metadata_update().await?;
-        self.thread_store
+        let stored_thread = self
+            .thread_store
             .update_thread_metadata(UpdateThreadMetadataParams {
                 thread_id: self.thread_id,
                 patch,
                 include_archived,
             })
-            .await
+            .await?;
+        self.publish_metadata_updated(stored_thread.clone());
+        Ok(stored_thread)
     }
 
     /// Returns the live local rollout path for legacy local-only callers.
@@ -306,17 +325,23 @@ impl LiveThread {
         let Some(update) = update else {
             return Ok(());
         };
-        self.thread_store
+        let stored_thread = self
+            .thread_store
             .update_thread_metadata(UpdateThreadMetadataParams {
                 thread_id: self.thread_id,
                 patch: update.patch.clone(),
                 include_archived: true,
             })
             .await?;
+        self.publish_metadata_updated(stored_thread);
         self.metadata_sync
             .lock()
             .await
             .mark_pending_update_applied(&update);
         Ok(())
+    }
+
+    fn publish_metadata_updated(&self, stored_thread: StoredThread) {
+        let _ = self.metadata_updated_tx.send(stored_thread);
     }
 }

@@ -4,6 +4,7 @@ use super::*;
 pub(crate) struct ThreadCatalogSubscriptions {
     outgoing: Arc<OutgoingMessageSender>,
     connection_ids: Arc<Mutex<HashSet<ConnectionId>>>,
+    ephemeral_threads: Arc<Mutex<HashMap<String, ThreadSummary>>>,
 }
 
 impl ThreadCatalogSubscriptions {
@@ -11,6 +12,7 @@ impl ThreadCatalogSubscriptions {
         Self {
             outgoing,
             connection_ids: Arc::new(Mutex::new(HashSet::new())),
+            ephemeral_threads: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -35,6 +37,12 @@ impl ThreadCatalogSubscriptions {
     }
 
     pub(super) async fn publish_thread_summary(&self, thread: ThreadSummary) {
+        if thread.ephemeral {
+            self.ephemeral_threads
+                .lock()
+                .await
+                .insert(thread.id.clone(), thread.clone());
+        }
         let connection_ids = self
             .connection_ids
             .lock()
@@ -83,5 +91,31 @@ impl ThreadCatalogSubscriptions {
         let summary =
             thread_summary_from_stored_thread(stored_thread, fallback_provider, fallback_cwd);
         self.publish_thread_summary(summary).await;
+    }
+
+    pub(super) async fn update_ephemeral_thread_summary(
+        &self,
+        thread_id: ThreadId,
+        event: &EventMsg,
+    ) -> Option<ThreadSummary> {
+        let mut threads = self.ephemeral_threads.lock().await;
+        let thread = threads.get_mut(&thread_id.to_string())?;
+        match event {
+            EventMsg::UserMessage(user) if thread.preview.is_empty() => {
+                thread.preview = user.message.clone();
+            }
+            EventMsg::UserMessage(_)
+            | EventMsg::ThreadSettingsApplied(_)
+            | EventMsg::ThreadRolledBack(_)
+            | EventMsg::TurnComplete(_)
+            | EventMsg::TurnAborted(_) => {}
+            _ => return None,
+        }
+        let updated_at_ms =
+            i64::try_from(time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000)
+                .ok()?;
+        thread.updated_at = updated_at_ms / 1_000;
+        thread.updated_at_ms = updated_at_ms;
+        Some(thread.clone())
     }
 }

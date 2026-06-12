@@ -8,7 +8,6 @@ pub(super) struct ListenerTaskContext {
     pub(super) thread_state_manager: ThreadStateManager,
     pub(super) outgoing: Arc<OutgoingMessageSender>,
     pub(super) pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
-    pub(super) thread_store: Arc<dyn ThreadStore>,
     pub(super) thread_watch_manager: ThreadWatchManager,
     pub(super) thread_catalog_subscriptions: ThreadCatalogSubscriptions,
     pub(super) thread_list_state_permit: Arc<Semaphore>,
@@ -120,17 +119,6 @@ impl UnloadingState {
             }
         }
     }
-}
-
-fn catalog_worthy_event(event: &EventMsg) -> bool {
-    matches!(
-        event,
-        EventMsg::TurnStarted(_)
-            | EventMsg::TurnComplete(_)
-            | EventMsg::TurnAborted(_)
-            | EventMsg::ThreadSettingsApplied(_)
-            | EventMsg::ThreadRolledBack(_)
-    )
 }
 
 pub(super) enum ThreadShutdownResult {
@@ -280,7 +268,6 @@ pub(super) async fn ensure_listener_task_running(
         thread_manager,
         thread_state_manager,
         pending_thread_unloads,
-        thread_store,
         thread_watch_manager,
         thread_catalog_subscriptions,
         thread_list_state_permit,
@@ -290,6 +277,8 @@ pub(super) async fn ensure_listener_task_running(
         ..
     } = listener_task_context;
     let outgoing_for_task = Arc::clone(&outgoing);
+    let mut thread_metadata_updated_rx = conversation.subscribe_thread_metadata_updated();
+    let is_ephemeral = conversation.config_snapshot().await.ephemeral;
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -314,6 +303,22 @@ pub(super) async fn ensure_listener_task_running(
                         listener_command,
                     )
                     .await;
+                }
+                stored_thread = async {
+                    match &mut thread_metadata_updated_rx {
+                        Some(rx) => rx.recv().await.ok(),
+                        None => futures::future::pending().await,
+                    }
+                } => {
+                    if let Some(stored_thread) = stored_thread {
+                        thread_catalog_subscriptions
+                            .publish_thread_summary(thread_summary_from_stored_thread(
+                                stored_thread,
+                                fallback_model_provider.as_str(),
+                                &fallback_cwd,
+                            ))
+                            .await;
+                    }
                 }
                 event = conversation.next_event() => {
                     let event = match event {
@@ -366,14 +371,13 @@ pub(super) async fn ensure_listener_task_running(
                         fallback_model_provider.clone(),
                     )
                     .await;
-                    if catalog_worthy_event(&event.msg) {
+                    if is_ephemeral
+                        && let Some(summary) = thread_catalog_subscriptions
+                            .update_ephemeral_thread_summary(conversation_id, &event.msg)
+                            .await
+                    {
                         thread_catalog_subscriptions
-                            .publish_thread_change(
-                                &thread_store,
-                                conversation_id,
-                                fallback_model_provider.as_str(),
-                                &fallback_cwd,
-                            )
+                            .publish_thread_summary(summary)
                             .await;
                     }
                 }

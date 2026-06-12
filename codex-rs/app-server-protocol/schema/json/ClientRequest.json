@@ -5204,9 +5204,9 @@
         },
         "method": {
           "enum": [
-            "thread/catalog/subscribe"
+            "threadCatalog/subscribe"
           ],
-          "title": "Thread/catalog/subscribeRequestMethod",
+          "title": "ThreadCatalog/subscribeRequestMethod",
           "type": "string"
         },
         "params": {
@@ -5217,7 +5217,7 @@
         "id",
         "method"
       ],
-      "title": "Thread/catalog/subscribeRequest",
+      "title": "ThreadCatalog/subscribeRequest",
       "type": "object"
     },
     {
@@ -5227,9 +5227,9 @@
         },
         "method": {
           "enum": [
-            "thread/catalog/unsubscribe"
+            "threadCatalog/unsubscribe"
           ],
-          "title": "Thread/catalog/unsubscribeRequestMethod",
+          "title": "ThreadCatalog/unsubscribeRequestMethod",
           "type": "string"
         },
         "params": {
@@ -5240,7 +5240,7 @@
         "id",
         "method"
       ],
-      "title": "Thread/catalog/unsubscribeRequest",
+      "title": "ThreadCatalog/unsubscribeRequest",
       "type": "object"
     },
     {

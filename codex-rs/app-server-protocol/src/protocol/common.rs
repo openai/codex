@@ -618,12 +618,12 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadListResponse,
     },
-    ThreadCatalogSubscribe => "thread/catalog/subscribe" {
+    ThreadCatalogSubscribe => "threadCatalog/subscribe" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         serialization: None,
         response: v2::ThreadCatalogSubscribeResponse,
     },
-    ThreadCatalogUnsubscribe => "thread/catalog/unsubscribe" {
+    ThreadCatalogUnsubscribe => "threadCatalog/unsubscribe" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         serialization: None,
         response: v2::ThreadCatalogUnsubscribeResponse,
@@ -1612,7 +1612,7 @@ server_notification_definitions! {
     Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
     ThreadStatusChanged => "thread/status/changed" (v2::ThreadStatusChangedNotification),
-    ThreadCatalogChanged => "thread/catalog/changed" (v2::ThreadCatalogChangedNotification),
+    ThreadCatalogChanged => "threadCatalog/changed" (v2::ThreadCatalogChangedNotification),
     ThreadArchived => "thread/archived" (v2::ThreadArchivedNotification),
     ThreadDeleted => "thread/deleted" (v2::ThreadDeletedNotification),
     ThreadUnarchived => "thread/unarchived" (v2::ThreadUnarchivedNotification),

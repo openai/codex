@@ -6,4 +6,4 @@ import type { GitInfo } from "./GitInfo";
 import type { SessionSource } from "./SessionSource";
 import type { ThreadSource } from "./ThreadSource";
 
-export type ThreadSummary = { id: string, sessionId: string, forkedFromId: string | null, parentThreadId: string | null, preview: string, ephemeral: boolean, modelProvider: string, createdAt: number, updatedAt: number, archivedAt: number | null, path: string | null, cwd: AbsolutePathBuf, cliVersion: string, source: SessionSource, threadSource: ThreadSource | null, agentNickname: string | null, agentRole: string | null, gitInfo: GitInfo | null, name: string | null, };
+export type ThreadSummary = { id: string, sessionId: string, forkedFromId: string | null, parentThreadId: string | null, preview: string, ephemeral: boolean, modelProvider: string, createdAt: number, createdAtMs: number, updatedAt: number, updatedAtMs: number, archivedAt: number | null, path: string | null, cwd: AbsolutePathBuf, cliVersion: string, source: SessionSource, threadSource: ThreadSource | null, agentNickname: string | null, agentRole: string | null, gitInfo: GitInfo | null, name: string | null, };
