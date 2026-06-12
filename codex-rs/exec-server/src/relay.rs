@@ -790,8 +790,8 @@ fn send_reset(physical_outgoing_tx: &mpsc::Sender<Vec<u8>>, stream_id: String) {
 }
 
 #[cfg(test)]
-#[path = "noise_relay/environment_tests.rs"]
-mod noise_environment_tests;
+#[path = "relay_noise_tests.rs"]
+mod noise_tests;
 
 #[cfg(test)]
 mod tests {
