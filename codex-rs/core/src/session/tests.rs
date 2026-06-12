@@ -4835,7 +4835,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
-        Arc::new(codex_code_mode_client::IpcCodeModeSessionProvider::default()),
+        Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
         Some(config.multi_agent_version_from_features()),
     )
     .await;
@@ -5003,11 +5003,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(Arc::new(
-            codex_code_mode_client::IpcCodeModeSessionProvider::default(),
+            codex_code_mode::InProcessCodeModeSessionProvider,
         )),
-        code_mode_session_provider: Arc::new(
-            codex_code_mode_client::IpcCodeModeSessionProvider::default(),
-        ),
+        code_mode_session_provider: Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     };
 
@@ -5179,7 +5177,7 @@ async fn make_session_with_config_and_rx(
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
-        Arc::new(codex_code_mode_client::IpcCodeModeSessionProvider::default()),
+        Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
         Some(config.multi_agent_version_from_features()),
     )
     .await?;
@@ -5289,7 +5287,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
-        Arc::new(codex_code_mode_client::IpcCodeModeSessionProvider::default()),
+        Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
         Some(config.multi_agent_version_from_features()),
     )
     .await?;
@@ -7009,11 +7007,9 @@ where
             /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(Arc::new(
-            codex_code_mode_client::IpcCodeModeSessionProvider::default(),
+            codex_code_mode::InProcessCodeModeSessionProvider,
         )),
-        code_mode_session_provider: Arc::new(
-            codex_code_mode_client::IpcCodeModeSessionProvider::default(),
-        ),
+        code_mode_session_provider: Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     };
 

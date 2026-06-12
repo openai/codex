@@ -134,7 +134,6 @@ codex-shell-escalation = { workspace = true }
 [dev-dependencies]
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
-codex-code-mode-client = { workspace = true }
 codex-image-generation-extension = { workspace = true }
 codex-home = { workspace = true }
 codex-otel = { workspace = true }

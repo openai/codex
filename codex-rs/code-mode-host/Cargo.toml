@@ -21,6 +21,7 @@ tokio-util = { workspace = true, features = ["rt"] }
 v8 = { workspace = true, features = ["v8_enable_sandbox"] }
 
 [dev-dependencies]
+codex-code-mode-client = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }

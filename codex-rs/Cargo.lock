@@ -2505,6 +2505,7 @@ name = "codex-code-mode-host"
 version = "0.0.0"
 dependencies = [
  "codex-code-mode",
+ "codex-code-mode-client",
  "codex-code-mode-protocol",
  "codex-protocol",
  "codex-utils-cargo-bin",
@@ -2621,7 +2622,6 @@ dependencies = [
  "codex-apply-patch",
  "codex-async-utils",
  "codex-code-mode",
- "codex-code-mode-client",
  "codex-code-mode-protocol",
  "codex-config",
  "codex-connectors",
@@ -4626,7 +4626,6 @@ dependencies = [
  "assert_cmd",
  "base64 0.22.1",
  "codex-arg0",
- "codex-code-mode-client",
  "codex-config",
  "codex-core",
  "codex-exec-server",
