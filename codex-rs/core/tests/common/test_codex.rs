@@ -569,14 +569,12 @@ impl TestCodexBuilder {
             installation_id,
             /*attestation_provider*/ None,
         );
-        let code_mode_session_provider =
-            match codex_utils_cargo_bin::cargo_bin("codex-code-mode-host") {
-                Ok(program) => IpcCodeModeSessionProvider::new(CodeModeHostCommand {
-                    program,
-                    args: Vec::new(),
-                }),
-                Err(_) => IpcCodeModeSessionProvider::default(),
-            };
+        let program = codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")
+            .context("codex-code-mode-host must be built for core integration tests")?;
+        let code_mode_session_provider = IpcCodeModeSessionProvider::new(CodeModeHostCommand {
+            program,
+            args: Vec::new(),
+        });
         let thread_manager =
             thread_manager.with_code_mode_session_provider(Arc::new(code_mode_session_provider));
         let thread_manager = Arc::new(thread_manager);
