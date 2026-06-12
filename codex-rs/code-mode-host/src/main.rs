@@ -220,6 +220,66 @@ impl HostState {
     }
 }
 
+struct PendingDelegateCall {
+    cleanup: Option<PendingDelegateCallCleanup>,
+}
+
+struct PendingDelegateCallCleanup {
+    peer: Arc<HostPeer>,
+    id: DelegateRequestId,
+    request_sent: bool,
+}
+
+impl PendingDelegateCall {
+    fn new(peer: Arc<HostPeer>, id: DelegateRequestId) -> Self {
+        Self {
+            cleanup: Some(PendingDelegateCallCleanup {
+                peer,
+                id,
+                request_sent: false,
+            }),
+        }
+    }
+
+    fn mark_request_sent(&mut self) {
+        if let Some(cleanup) = self.cleanup.as_mut() {
+            cleanup.request_sent = true;
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.cleanup = None;
+    }
+
+    async fn cleanup(&mut self) {
+        if let Some(task) = self.spawn_cleanup() {
+            let _ = task.await;
+        }
+    }
+
+    fn spawn_cleanup(&mut self) -> Option<tokio::task::JoinHandle<()>> {
+        let handle = tokio::runtime::Handle::try_current().ok()?;
+        let cleanup = self.cleanup.take()?;
+        Some(handle.spawn(cleanup.run()))
+    }
+}
+
+impl PendingDelegateCallCleanup {
+    async fn run(self) {
+        if self.request_sent {
+            self.peer.cancel_pending(self.id).await;
+        } else {
+            self.peer.discard_pending(self.id).await;
+        }
+    }
+}
+
+impl Drop for PendingDelegateCall {
+    fn drop(&mut self) {
+        std::mem::drop(self.spawn_cleanup());
+    }
+}
+
 struct HostPeer {
     outgoing_tx: mpsc::Sender<HostMessage>,
     pending: Mutex<HashMap<DelegateRequestId, oneshot::Sender<Result<DelegateResponse, String>>>>,
@@ -240,7 +300,7 @@ impl HostPeer {
     }
 
     async fn call(
-        &self,
+        self: &Arc<Self>,
         session_id: SessionId,
         request: DelegateRequest,
         cancellation_token: CancellationToken,
@@ -248,6 +308,7 @@ impl HostPeer {
         let id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (response_tx, response_rx) = oneshot::channel();
         self.pending.lock().await.insert(id, response_tx);
+        let mut pending_call = PendingDelegateCall::new(Arc::clone(self), id);
         if self
             .outgoing_tx
             .send(HostMessage::DelegateRequest {
@@ -258,18 +319,29 @@ impl HostPeer {
             .await
             .is_err()
         {
-            self.pending.lock().await.remove(&id);
+            pending_call.cleanup().await;
             return Err("code-mode client connection closed".to_string());
         }
+        pending_call.mark_request_sent();
         tokio::select! {
             response = response_rx => {
+                pending_call.disarm();
                 response.map_err(|_| "code-mode client closed before returning delegate output".to_string())?
             }
             _ = cancellation_token.cancelled() => {
-                self.pending.lock().await.remove(&id);
-                self.send(HostMessage::CancelDelegateRequest { id }).await;
+                pending_call.cleanup().await;
                 Err("code mode delegate request cancelled".to_string())
             }
+        }
+    }
+
+    async fn discard_pending(&self, id: DelegateRequestId) {
+        self.pending.lock().await.remove(&id);
+    }
+
+    async fn cancel_pending(&self, id: DelegateRequestId) {
+        if self.pending.lock().await.remove(&id).is_some() {
+            self.send(HostMessage::CancelDelegateRequest { id }).await;
         }
     }
 

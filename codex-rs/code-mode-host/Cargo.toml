@@ -14,13 +14,14 @@ workspace = true
 [dependencies]
 codex-code-mode = { workspace = true }
 codex-code-mode-protocol = { workspace = true }
-tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt-multi-thread", "sync"] }
+tokio = { workspace = true, features = ["io-std", "io-util", "macros", "process", "rt-multi-thread", "sync"] }
 tokio-util = { workspace = true, features = ["rt"] }
 # The host owns V8 process configuration, so enable the sandbox without an
 # internal workspace-crate feature gate.
 v8 = { workspace = true, features = ["v8_enable_sandbox"] }
 
 [dev-dependencies]
+codex-protocol = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 
