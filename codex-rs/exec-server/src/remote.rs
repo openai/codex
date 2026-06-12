@@ -72,7 +72,31 @@ impl EnvironmentRegistryClient {
             })
             .send()
             .await?;
-        self.parse_json_response(response).await
+        let response: EnvironmentRegistryRegistrationResponse =
+            self.parse_json_response(response).await?;
+        if response.environment_id != environment_id {
+            return Err(ExecServerError::Protocol(
+                "environment registry returned a different environment id".to_string(),
+            ));
+        }
+        if response.security_profile != NOISE_RELAY_SECURITY_PROFILE {
+            return Err(ExecServerError::Protocol(format!(
+                "environment registry returned unsupported security profile `{}`",
+                response.security_profile
+            )));
+        }
+        info!(
+            noise_event = "registration",
+            noise_outcome = "ok",
+            security_profile = NOISE_RELAY_SECURITY_PROFILE,
+            "Noise executor registration completed"
+        );
+        debug!(
+            environment_id = response.environment_id,
+            executor_registration_id = response.executor_registration_id,
+            "Noise executor registration details"
+        );
+        Ok(response)
     }
 
     async fn parse_json_response<R>(
@@ -220,7 +244,8 @@ impl RemoteEnvironmentConfig {
 /// Register an exec-server for remote use and serve requests over Noise.
 ///
 /// The executor identity is generated once per process and reused across
-/// reconnects. Each reconnect gets a fresh registration and rendezvous URL.
+/// reconnects. The registration and rendezvous URL are also reused until
+/// rendezvous rejects the URL, at which point the next attempt registers again.
 /// The websocket carries cleartext routing metadata and encrypted payloads.
 pub async fn run_remote_environment(
     config: RemoteEnvironmentConfig,
@@ -234,34 +259,11 @@ pub async fn run_remote_environment(
         ExecServerError::Protocol(format!("failed to generate Noise relay identity: {error}"))
     })?;
     let mut backoff = Duration::from_secs(1);
+    let mut response = client
+        .register_environment(&config.environment_id, &identity.public_key())
+        .await?;
 
     loop {
-        let response = client
-            .register_environment(&config.environment_id, &identity.public_key())
-            .await?;
-        if response.environment_id != config.environment_id {
-            return Err(ExecServerError::Protocol(
-                "environment registry returned a different environment id".to_string(),
-            ));
-        }
-        if response.security_profile != NOISE_RELAY_SECURITY_PROFILE {
-            return Err(ExecServerError::Protocol(format!(
-                "environment registry returned unsupported security profile `{}`",
-                response.security_profile
-            )));
-        }
-        info!(
-            noise_event = "registration",
-            noise_outcome = "ok",
-            security_profile = NOISE_RELAY_SECURITY_PROFILE,
-            "Noise executor registration completed"
-        );
-        debug!(
-            environment_id = response.environment_id,
-            executor_registration_id = response.executor_registration_id,
-            "Noise executor registration details"
-        );
-
         match connect_async_with_config(
             response.url.as_str(),
             Some(noise_relay_websocket_config()),
@@ -271,7 +273,7 @@ pub async fn run_remote_environment(
         {
             Ok((websocket, _)) => {
                 backoff = Duration::from_secs(1);
-                let executor_registration_id = response.executor_registration_id;
+                let executor_registration_id = response.executor_registration_id.clone();
                 info!(
                     noise_event = "rendezvous_connection",
                     noise_outcome = "ok",
@@ -280,7 +282,7 @@ pub async fn run_remote_environment(
                 run_multiplexed_environment(
                     websocket,
                     processor.clone(),
-                    response.environment_id,
+                    response.environment_id.clone(),
                     executor_registration_id.clone(),
                     identity.clone(),
                     RegistryHarnessKeyValidator {
@@ -292,6 +294,11 @@ pub async fn run_remote_environment(
                 .await;
             }
             Err(error) => {
+                let registration_rejected = matches!(
+                    &error,
+                    tokio_tungstenite::tungstenite::Error::Http(response)
+                        if response.status().is_client_error()
+                );
                 warn!(
                     noise_event = "rendezvous_connection",
                     noise_outcome = "error",
@@ -299,6 +306,11 @@ pub async fn run_remote_environment(
                     "Noise executor failed to connect to rendezvous"
                 );
                 debug!(error = %error, "Noise executor rendezvous connection error");
+                if registration_rejected {
+                    response = client
+                        .register_environment(&config.environment_id, &identity.public_key())
+                        .await?;
+                }
             }
         }
 
