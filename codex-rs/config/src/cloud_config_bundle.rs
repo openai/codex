@@ -238,14 +238,8 @@ impl CloudConfigBundlePublisher {
     ///
     /// An error resolves a pending loader, but does not replace a result that
     /// was already published. Successful results always replace the current
-    /// value. Returns `false` if every associated loader was dropped.
-    pub fn publish(
-        &self,
-        result: Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError>,
-    ) -> bool {
-        if self.state.is_closed() {
-            return false;
-        }
+    /// value.
+    pub fn publish(&self, result: Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError>) {
         self.state.send_if_modified(move |state| {
             if matches!(state, CloudConfigBundleState::Ready(_)) && result.is_err() {
                 return false;
@@ -253,7 +247,6 @@ impl CloudConfigBundlePublisher {
             *state = CloudConfigBundleState::Ready(result);
             true
         });
-        !self.state.is_closed()
     }
 }
 
