@@ -11,7 +11,7 @@ expression: commands
 /approve - approve one retry of a recent auto-review denial
 /memories - configure memory use and generation
 /skills - use skills to improve how Codex performs specific tasks
-/import - import setup, this project, and recent chats from another coding agent
+/import - import setup, this project, and recent chats from Claude Code
 /hooks - view and manage lifecycle hooks
 /review - review my current changes and find issues
 /rename - rename the current thread
