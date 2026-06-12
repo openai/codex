@@ -107,7 +107,7 @@ pub(super) async fn read_config_from_path(
     log_missing_as_info: bool,
     strict_config: bool,
 ) -> io::Result<Option<TomlValue>> {
-    let path_uri = PathUri::from_abs_path(path)?;
+    let path_uri = PathUri::from_abs_path(path);
     match fs.read_file_text(&path_uri, /*sandbox*/ None).await {
         Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
             Ok(value) => {

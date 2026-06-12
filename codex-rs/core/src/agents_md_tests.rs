@@ -268,7 +268,6 @@ fn resolved_local_environments<const N: usize>(
                     cwd,
                     /*shell*/ None,
                 )
-                .expect("local cwd URI")
             })
             .collect(),
     }

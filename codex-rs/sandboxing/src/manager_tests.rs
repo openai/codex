@@ -75,7 +75,7 @@ fn restricted_file_system_uses_platform_sandbox_without_managed_network() {
 fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() {
     let manager = SandboxManager::new();
     let cwd = AbsolutePathBuf::current_dir().expect("current dir");
-    let cwd_uri = PathUri::from_abs_path(&cwd).expect("cwd URI");
+    let cwd_uri = PathUri::from_abs_path(&cwd);
     let permissions = PermissionProfile::from_runtime_permissions(
         &FileSystemSandboxPolicy::unrestricted(),
         NetworkSandboxPolicy::Restricted,
@@ -117,7 +117,7 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
 fn transform_additional_permissions_enable_network_for_external_sandbox() {
     let manager = SandboxManager::new();
     let cwd = AbsolutePathBuf::current_dir().expect("current dir");
-    let cwd_uri = PathUri::from_abs_path(&cwd).expect("cwd URI");
+    let cwd_uri = PathUri::from_abs_path(&cwd);
     let permissions = PermissionProfile::External {
         network: NetworkSandboxPolicy::Restricted,
     };
@@ -171,7 +171,7 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
 fn transform_additional_permissions_preserves_denied_entries() {
     let manager = SandboxManager::new();
     let cwd = AbsolutePathBuf::current_dir().expect("current dir");
-    let cwd_uri = PathUri::from_abs_path(&cwd).expect("cwd URI");
+    let cwd_uri = PathUri::from_abs_path(&cwd);
     let temp_dir = TempDir::new().expect("create temp dir");
     let workspace_root = AbsolutePathBuf::from_absolute_path(
         canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
@@ -297,7 +297,7 @@ fn transform_linux_seccomp_request(
 ) -> super::SandboxExecRequest {
     let manager = SandboxManager::new();
     let cwd = AbsolutePathBuf::current_dir().expect("current dir");
-    let cwd_uri = PathUri::from_abs_path(&cwd).expect("cwd URI");
+    let cwd_uri = PathUri::from_abs_path(&cwd);
     let permissions = PermissionProfile::Disabled;
     manager
         .transform(SandboxTransformRequest {

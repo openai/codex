@@ -423,7 +423,7 @@ impl DirectFileSystem {
         let path = path.to_abs_path()?;
         let canonicalized =
             AbsolutePathBuf::from_absolute_path(tokio::fs::canonicalize(path.as_path()).await?)?;
-        PathUri::from_abs_path(&canonicalized)
+        Ok(PathUri::from_abs_path(&canonicalized))
     }
 
     async fn read_file(

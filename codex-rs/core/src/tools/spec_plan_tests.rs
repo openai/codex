@@ -586,8 +586,7 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
                 ),
                 remote_cwd,
                 /*shell*/ None,
-            )
-            .expect("turn environment"),
+            ),
         );
     })
     .await;

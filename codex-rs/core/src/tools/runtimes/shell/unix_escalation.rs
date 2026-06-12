@@ -969,15 +969,8 @@ impl CoreShellCommandExecutor {
             self.windows_sandbox_level,
             self.network.is_some(),
         );
-        let cwd = PathUri::from_abs_path(workdir).map_err(|_| {
-            CodexErr::InvalidRequest("command cwd cannot be represented as a file URI".to_string())
-        })?;
-        let sandbox_policy_cwd =
-            PathUri::from_abs_path(&self.sandbox_policy_cwd).map_err(|_| {
-                CodexErr::InvalidRequest(
-                    "sandbox policy cwd cannot be represented as a file URI".to_string(),
-                )
-            })?;
+        let cwd = PathUri::from_abs_path(workdir);
+        let sandbox_policy_cwd = PathUri::from_abs_path(&self.sandbox_policy_cwd);
         let command = SandboxCommand {
             program: program.clone().into(),
             args: args.to_vec(),

@@ -102,8 +102,8 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
         /*additional_permissions*/ None,
     )
     .expect("build sandbox command");
-    assert_eq!(command.cwd, PathUri::from_abs_path(&command_cwd)?);
-    let sandbox_policy_cwd = PathUri::from_abs_path(&native_sandbox_policy_cwd)?;
+    assert_eq!(command.cwd, PathUri::from_abs_path(&command_cwd));
+    let sandbox_policy_cwd = PathUri::from_abs_path(&native_sandbox_policy_cwd);
     let options = ExecOptions {
         expiration: ExecExpiration::DefaultTimeout,
         capture_policy: ExecCapturePolicy::ShellTool,

@@ -21,7 +21,6 @@ use codex_network_proxy::PROXY_ENV_KEYS;
 use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
 use codex_network_proxy::is_managed_mitm_ca_trust_bundle_path;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::error::CodexErr;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxType;
@@ -36,8 +35,7 @@ pub(crate) mod shell;
 pub(crate) mod unified_exec;
 
 /// Shared helper to construct sandbox transform inputs from a tokenized command line and native
-/// working directory. Validates that at least a program is present and that the working directory
-/// has a file URI representation.
+/// working directory. Validates that at least a program is present.
 pub(crate) fn build_sandbox_command(
     command: &[String],
     cwd: &AbsolutePathBuf,
@@ -47,11 +45,7 @@ pub(crate) fn build_sandbox_command(
     let (program, args) = command
         .split_first()
         .ok_or_else(|| ToolError::Rejected("command args are empty".to_string()))?;
-    let cwd = PathUri::from_abs_path(cwd).map_err(|_| {
-        ToolError::Codex(CodexErr::InvalidRequest(
-            "command cwd cannot be represented as a file URI".to_string(),
-        ))
-    })?;
+    let cwd = PathUri::from_abs_path(cwd);
     Ok(SandboxCommand {
         program: program.clone().into(),
         args: args.to_vec(),

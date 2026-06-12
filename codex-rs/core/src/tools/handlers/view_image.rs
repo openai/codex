@@ -150,12 +150,7 @@ impl ViewImageHandler {
             turn_environment.cwd_uri(),
         );
         let fs = turn_environment.environment.get_filesystem();
-        let path_uri = PathUri::from_abs_path(&abs_path).map_err(|error| {
-            FunctionCallError::RespondToModel(format!(
-                "unable to locate image at `{}`: {error}",
-                abs_path.display()
-            ))
-        })?;
+        let path_uri = PathUri::from_abs_path(&abs_path);
 
         let metadata = fs
             .get_metadata(&path_uri, Some(&sandbox))
@@ -295,8 +290,7 @@ mod tests {
             current.environment,
             cwd,
             current.shell,
-        )
-        .expect("image cwd URI");
+        );
     }
 
     #[test]

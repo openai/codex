@@ -153,7 +153,7 @@ impl HostLoadedSkills {
             .outcome
             .file_system_for_skill(skill)
             .unwrap_or_else(|| Arc::clone(&LOCAL_FS));
-        let path = PathUri::from_abs_path(&skill.path_to_skills_md)?;
+        let path = PathUri::from_abs_path(&skill.path_to_skills_md);
         fs.read_file_text(&path, /*sandbox*/ None).await
     }
 }

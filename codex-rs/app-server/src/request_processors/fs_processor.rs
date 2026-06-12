@@ -65,7 +65,7 @@ impl FsRequestProcessor {
         &self,
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
-        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
+        let path = PathUri::from_abs_path(&params.path);
         let bytes = self
             .file_system()?
             .read_file(&path, /*sandbox*/ None)
@@ -85,7 +85,7 @@ impl FsRequestProcessor {
                 "fs/writeFile requires valid base64 dataBase64: {err}"
             ))
         })?;
-        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
+        let path = PathUri::from_abs_path(&params.path);
         self.file_system()?
             .write_file(&path, bytes, /*sandbox*/ None)
             .await
@@ -97,7 +97,7 @@ impl FsRequestProcessor {
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
-        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
+        let path = PathUri::from_abs_path(&params.path);
         self.file_system()?
             .create_directory(
                 &path,
@@ -115,7 +115,7 @@ impl FsRequestProcessor {
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
-        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
+        let path = PathUri::from_abs_path(&params.path);
         let metadata = self
             .file_system()?
             .get_metadata(&path, /*sandbox*/ None)
@@ -134,7 +134,7 @@ impl FsRequestProcessor {
         &self,
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
-        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
+        let path = PathUri::from_abs_path(&params.path);
         let entries = self
             .file_system()?
             .read_directory(&path, /*sandbox*/ None)
@@ -156,7 +156,7 @@ impl FsRequestProcessor {
         &self,
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
-        let path = PathUri::from_abs_path(&params.path).map_err(map_fs_error)?;
+        let path = PathUri::from_abs_path(&params.path);
         self.file_system()?
             .remove(
                 &path,
@@ -175,9 +175,8 @@ impl FsRequestProcessor {
         &self,
         params: FsCopyParams,
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
-        let source_path = PathUri::from_abs_path(&params.source_path).map_err(map_fs_error)?;
-        let destination_path =
-            PathUri::from_abs_path(&params.destination_path).map_err(map_fs_error)?;
+        let source_path = PathUri::from_abs_path(&params.source_path);
+        let destination_path = PathUri::from_abs_path(&params.destination_path);
         self.file_system()?
             .copy(
                 &source_path,
