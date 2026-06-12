@@ -1,3 +1,4 @@
+use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationArchitecture;
 use codex_protocol::protocol::RealtimeConversationVersion;
@@ -135,6 +136,8 @@ pub struct ThreadRealtimeAppendAudioResponse {}
 pub struct ThreadRealtimeAppendTextParams {
     pub thread_id: String,
     pub text: String,
+    #[serde(default)]
+    pub role: ConversationTextRole,
 }
 
 /// EXPERIMENTAL - response for appending realtime text input.

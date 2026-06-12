@@ -628,6 +628,13 @@
         }
       ]
     },
+    "ConversationTextRole": {
+      "enum": [
+        "user",
+        "developer"
+      ],
+      "type": "string"
+    },
     "DynamicToolSpec": {
       "properties": {
         "deferLoading": {

@@ -8539,6 +8539,13 @@
         "title": "ContextCompactedNotification",
         "type": "object"
       },
+      "ConversationTextRole": {
+        "enum": [
+          "user",
+          "developer"
+        ],
+        "type": "string"
+      },
       "CreditsSnapshot": {
         "properties": {
           "balance": {

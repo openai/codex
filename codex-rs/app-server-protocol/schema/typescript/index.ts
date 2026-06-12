@@ -14,6 +14,7 @@ export type { CollaborationMode } from "./CollaborationMode";
 export type { ContentItem } from "./ContentItem";
 export type { ConversationGitInfo } from "./ConversationGitInfo";
 export type { ConversationSummary } from "./ConversationSummary";
+export type { ConversationTextRole } from "./ConversationTextRole";
 export type { ExecCommandApprovalParams } from "./ExecCommandApprovalParams";
 export type { ExecCommandApprovalResponse } from "./ExecCommandApprovalResponse";
 export type { ExecPolicyAmendment } from "./ExecPolicyAmendment";
