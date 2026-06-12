@@ -20,6 +20,7 @@ const REQUEST_FILE_FLAG: &str = "--request-file";
 pub struct WindowsSandboxWrapperRequest {
     pub codex_home: PathBuf,
     pub command_cwd: AbsolutePathBuf,
+    pub env_map: HashMap<String, String>,
     pub permission_profile: PermissionProfile,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
@@ -29,6 +30,7 @@ pub struct WindowsSandboxWrapperRequest {
 pub fn create_windows_sandbox_wrapper_request_for_permission_profile(
     command: Vec<String>,
     command_cwd: AbsolutePathBuf,
+    env_map: HashMap<String, String>,
     permission_profile: PermissionProfile,
     windows_sandbox_level: WindowsSandboxLevel,
     windows_sandbox_private_desktop: bool,
@@ -37,6 +39,7 @@ pub fn create_windows_sandbox_wrapper_request_for_permission_profile(
     WindowsSandboxWrapperRequest {
         codex_home,
         command_cwd,
+        env_map,
         permission_profile,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
@@ -88,18 +91,11 @@ async fn run_windows_sandbox_wrapper_args(args: Vec<String>) -> Result<i32> {
     run_windows_sandbox_wrapper_request(request).await
 }
 
-async fn run_windows_sandbox_wrapper_request(request: WindowsSandboxWrapperRequest) -> Result<i32> {
-    if !request.codex_home.is_absolute() {
-        bail!(
-            "windows sandbox wrapper codex_home must be absolute: {}",
-            request.codex_home.display()
-        );
-    }
-    if request.command.is_empty() {
-        bail!("missing sandboxed command in windows sandbox wrapper request");
-    }
-
-    let env = std::env::vars().collect::<HashMap<_, _>>();
+async fn run_windows_sandbox_wrapper_request(
+    mut request: WindowsSandboxWrapperRequest,
+) -> Result<i32> {
+    validate_windows_sandbox_wrapper_request(&request)?;
+    let env_map = std::mem::take(&mut request.env_map);
     let workspace_roots = vec![request.command_cwd.clone()];
     let spawned = match request.windows_sandbox_level {
         WindowsSandboxLevel::Elevated => {
@@ -117,7 +113,7 @@ async fn run_windows_sandbox_wrapper_request(request: WindowsSandboxWrapperReque
                 request.codex_home.as_path(),
                 request.command,
                 request.command_cwd.as_path(),
-                env,
+                env_map,
                 /*timeout_ms*/ None,
                 overrides.read_roots_override.as_deref(),
                 overrides.read_roots_include_platform_defaults,
@@ -145,7 +141,7 @@ async fn run_windows_sandbox_wrapper_request(request: WindowsSandboxWrapperReque
                 request.codex_home.as_path(),
                 request.command,
                 request.command_cwd.as_path(),
-                env,
+                env_map,
                 /*timeout_ms*/ None,
                 &overrides.additional_deny_read_paths,
                 &overrides.additional_deny_write_paths,
@@ -158,6 +154,19 @@ async fn run_windows_sandbox_wrapper_request(request: WindowsSandboxWrapperReque
     }?;
 
     Ok(crate::stdio_bridge::forward_sandbox_session_stdio(spawned).await)
+}
+
+fn validate_windows_sandbox_wrapper_request(request: &WindowsSandboxWrapperRequest) -> Result<()> {
+    if !request.codex_home.is_absolute() {
+        bail!(
+            "windows sandbox wrapper codex_home must be absolute: {}",
+            request.codex_home.display()
+        );
+    }
+    if request.command.is_empty() {
+        bail!("missing sandboxed command in windows sandbox wrapper request");
+    }
+    Ok(())
 }
 
 fn parse_windows_sandbox_wrapper_args(args: Vec<String>) -> Result<PathBuf> {
@@ -188,10 +197,23 @@ fn next_flag_value(args: &mut impl Iterator<Item = String>, flag: &str) -> Resul
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use codex_protocol::permissions::NetworkSandboxPolicy;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+    use tokio::runtime::Builder;
 
     use super::*;
+
+    static WRAPPER_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn current_thread_runtime() -> tokio::runtime::Runtime {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime")
+    }
 
     #[test]
     fn windows_wrapper_args_reference_request_file_only() -> Result<()> {
@@ -225,6 +247,7 @@ mod tests {
                 "--codex-run-as-fs-helper".to_string(),
             ],
             AbsolutePathBuf::from_absolute_path(Path::new(r"C:\work"))?,
+            HashMap::from([("PATH".to_string(), r"C:\Windows\System32".to_string())]),
             permission_profile.clone(),
             WindowsSandboxLevel::RestrictedToken,
             /*windows_sandbox_private_desktop*/ true,
@@ -240,6 +263,10 @@ mod tests {
                 "--codex-run-as-fs-helper".to_string()
             ]
         );
+        assert_eq!(
+            request.env_map,
+            HashMap::from([("PATH".to_string(), r"C:\Windows\System32".to_string())])
+        );
         assert_eq!(request.permission_profile, permission_profile);
         assert_eq!(
             request.windows_sandbox_level,
@@ -247,5 +274,42 @@ mod tests {
         );
         assert_eq!(request.windows_sandbox_private_desktop, true);
         Ok(())
+    }
+
+    #[test]
+    fn windows_wrapper_request_env_reaches_sandboxed_command() -> Result<()> {
+        let _guard = WRAPPER_PROCESS_TEST_LOCK
+            .lock()
+            .expect("wrapper process test lock poisoned");
+        let runtime = current_thread_runtime();
+        runtime.block_on(async move {
+            let workspace = TempDir::new()?;
+            let workspace = AbsolutePathBuf::from_absolute_path(workspace.path())?;
+            let codex_home = TempDir::new()?;
+            let request = create_windows_sandbox_wrapper_request_for_permission_profile(
+                vec![
+                    r"C:\Windows\System32\cmd.exe".to_string(),
+                    "/d".to_string(),
+                    "/s".to_string(),
+                    "/c".to_string(),
+                    r#"if "%CODEX_WRAPPER_REQUEST_ENV%"=="from-request" (exit /b 0) else (exit /b 7)"#
+                        .to_string(),
+                ],
+                workspace,
+                HashMap::from([(
+                    "CODEX_WRAPPER_REQUEST_ENV".to_string(),
+                    "from-request".to_string(),
+                )]),
+                PermissionProfile::read_only(),
+                WindowsSandboxLevel::RestrictedToken,
+                /*windows_sandbox_private_desktop*/ true,
+                codex_home.path().to_path_buf(),
+            );
+
+            let exit_code = run_windows_sandbox_wrapper_request(request).await?;
+
+            assert_eq!(exit_code, 0);
+            Ok(())
+        })
     }
 }
