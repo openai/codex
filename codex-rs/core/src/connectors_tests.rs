@@ -269,6 +269,7 @@ fn app_tool_policy_uses_global_defaults_for_destructive_hints() {
     let apps_config = AppsConfigToml {
         default: Some(AppsDefaultConfig {
             enabled: true,
+            approvals_reviewer: None,
             destructive_enabled: false,
             open_world_enabled: true,
         }),
@@ -298,6 +299,7 @@ fn app_tool_policy_defaults_missing_destructive_hint_to_true() {
     let apps_config = AppsConfigToml {
         default: Some(AppsDefaultConfig {
             enabled: true,
+            approvals_reviewer: None,
             destructive_enabled: false,
             open_world_enabled: true,
         }),
@@ -327,6 +329,7 @@ fn app_tool_policy_defaults_missing_open_world_hint_to_true() {
     let apps_config = AppsConfigToml {
         default: Some(AppsDefaultConfig {
             enabled: true,
+            approvals_reviewer: None,
             destructive_enabled: true,
             open_world_enabled: false,
         }),
@@ -356,6 +359,7 @@ fn app_is_enabled_uses_default_for_unconfigured_apps() {
     let apps_config = AppsConfigToml {
         default: Some(AppsDefaultConfig {
             enabled: false,
+            approvals_reviewer: None,
             destructive_enabled: true,
             open_world_enabled: true,
         }),
@@ -371,6 +375,7 @@ fn app_is_enabled_prefers_per_app_override_over_default() {
     let apps_config = AppsConfigToml {
         default: Some(AppsDefaultConfig {
             enabled: false,
+            approvals_reviewer: None,
             destructive_enabled: true,
             open_world_enabled: true,
         }),
@@ -393,19 +398,23 @@ fn app_is_enabled_prefers_per_app_override_over_default() {
 }
 
 #[tokio::test]
-async fn app_approvals_reviewer_overrides_global_reviewer() {
-    for (global, app, expected_global, expected_app) in [
+async fn app_approvals_reviewer_uses_app_then_default_then_global() {
+    for (global, app_default, app, expected_global, expected_default, expected_app) in [
         (
             "user",
             "auto_review",
+            "user",
             ApprovalsReviewer::User,
             ApprovalsReviewer::AutoReview,
+            ApprovalsReviewer::User,
         ),
         (
             "auto_review",
             "user",
+            "auto_review",
             ApprovalsReviewer::AutoReview,
             ApprovalsReviewer::User,
+            ApprovalsReviewer::AutoReview,
         ),
     ] {
         let codex_home = tempdir().expect("tempdir should succeed");
@@ -414,6 +423,9 @@ async fn app_approvals_reviewer_overrides_global_reviewer() {
             format!(
                 r#"
 approvals_reviewer = "{global}"
+
+[apps._default]
+approvals_reviewer = "{app_default}"
 
 [apps.calendar]
 approvals_reviewer = "{app}"
@@ -433,13 +445,51 @@ approvals_reviewer = "{app}"
         );
         assert_eq!(
             mcp_approvals_reviewer(&config, CODEX_APPS_MCP_SERVER_NAME, Some("drive")),
-            expected_global
+            expected_default
+        );
+        assert_eq!(
+            mcp_approvals_reviewer(
+                &config,
+                CODEX_APPS_MCP_SERVER_NAME,
+                /*connector_id*/ None
+            ),
+            expected_default
         );
         assert_eq!(
             mcp_approvals_reviewer(&config, "custom_server", Some("calendar")),
             expected_global
         );
     }
+}
+
+#[tokio::test]
+async fn default_app_approvals_reviewer_respects_global_reviewer_requirements() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+approvals_reviewer = "auto_review"
+
+[apps._default]
+approvals_reviewer = "user"
+"#,
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_approvals_reviewers = ["auto_review"]"#,
+            ),
+        )
+        .build()
+        .await
+        .expect("config should build");
+
+    assert_eq!(
+        mcp_approvals_reviewer(&config, CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
+        ApprovalsReviewer::AutoReview
+    );
 }
 
 #[tokio::test]
@@ -756,6 +806,7 @@ fn app_tool_policy_honors_default_app_enabled_false() {
     let apps_config = AppsConfigToml {
         default: Some(AppsDefaultConfig {
             enabled: false,
+            approvals_reviewer: None,
             destructive_enabled: true,
             open_world_enabled: true,
         }),
@@ -987,6 +1038,7 @@ fn app_tool_policy_allows_per_app_enable_when_default_is_disabled() {
     let apps_config = AppsConfigToml {
         default: Some(AppsDefaultConfig {
             enabled: false,
+            approvals_reviewer: None,
             destructive_enabled: true,
             open_world_enabled: true,
         }),

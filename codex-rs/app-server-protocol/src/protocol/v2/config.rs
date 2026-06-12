@@ -172,6 +172,7 @@ pub enum AppToolApproval {
 pub struct AppsDefaultConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[serde(default = "default_enabled")]
     pub destructive_enabled: bool,
     #[serde(default = "default_enabled")]
