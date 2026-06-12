@@ -19,7 +19,6 @@ use crate::config::Config;
 use crate::context::ContextualUserFragment;
 use crate::context::UserInstructions as ContextUserInstructions;
 use crate::environment_selection::ResolvedTurnEnvironments;
-use crate::session::turn_context::TurnEnvironment;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::default_project_root_markers;
@@ -32,6 +31,7 @@ use codex_prompts::HIERARCHICAL_AGENTS_MESSAGE;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::io;
+use std::sync::Arc;
 use toml::Value as TomlValue;
 use tracing::error;
 
@@ -61,7 +61,7 @@ pub(crate) async fn load_project_instructions(
         let is_primary =
             primary_environment.is_some_and(|primary| std::ptr::eq(primary, turn_environment));
         let project_environment = ProjectEnvironment {
-            turn_environment,
+            filesystem: turn_environment.environment.get_filesystem(),
             source: ProjectEnvironmentSource {
                 environment_id: turn_environment.environment_id.clone(),
                 cwd: if is_primary {
@@ -102,17 +102,10 @@ pub(crate) async fn load_project_instructions(
 /// decide how to handle them.
 async fn read_agents_md(
     config: &mut Config,
-    environment: &ProjectEnvironment<'_>,
+    environment: &ProjectEnvironment,
 ) -> io::Result<Option<LoadedAgentsMd>> {
-    let fs = environment.turn_environment.environment.get_filesystem();
-    read_agents_md_from_filesystem(config, fs.as_ref(), &environment.source).await
-}
-
-async fn read_agents_md_from_filesystem(
-    config: &mut Config,
-    fs: &dyn ExecutorFileSystem,
-    environment: &ProjectEnvironmentSource,
-) -> io::Result<Option<LoadedAgentsMd>> {
+    let fs = environment.filesystem.as_ref();
+    let environment = &environment.source;
     let max_total = config.project_doc_max_bytes;
 
     if max_total == 0 {
@@ -165,7 +158,7 @@ async fn read_agents_md_from_filesystem(
             loaded.entries.push(InstructionEntry {
                 contents: text,
                 provenance: InstructionProvenance::Project {
-                    path: p,
+                    source_path: p,
                     environment: environment.clone(),
                 },
             });
@@ -471,8 +464,8 @@ impl LoadedAgentsMd {
     }
 }
 
-struct ProjectEnvironment<'a> {
-    turn_environment: &'a TurnEnvironment,
+struct ProjectEnvironment {
+    filesystem: Arc<dyn ExecutorFileSystem>,
     source: ProjectEnvironmentSource,
 }
 
@@ -497,7 +490,8 @@ struct InstructionEntry {
 enum InstructionProvenance {
     /// Workspace instructions discovered from project AGENTS.md files.
     Project {
-        path: AbsolutePathBuf,
+        /// Exact AGENTS.md file, distinct from the environment's selected cwd.
+        source_path: AbsolutePathBuf,
         environment: ProjectEnvironmentSource,
     },
 
@@ -508,7 +502,7 @@ enum InstructionProvenance {
 impl InstructionProvenance {
     fn path(&self) -> Option<&AbsolutePathBuf> {
         match self {
-            Self::Project { path, .. } => Some(path),
+            Self::Project { source_path, .. } => Some(source_path),
             Self::Internal => None,
         }
     }
