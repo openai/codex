@@ -1,6 +1,7 @@
 use pretty_assertions::assert_eq;
 
 use super::InitiatorHandshake;
+use super::MAX_MESSAGE_LEN;
 use super::NOISE_CHANNEL_SUITE;
 use super::NoiseChannelError;
 use super::NoiseChannelIdentity;
@@ -80,26 +81,6 @@ fn initiator_rejects_wrong_responder_key() {
     assert!(
         PendingResponderHandshake::read_request(&actual_responder, &prologue, &request).is_err()
     );
-}
-
-#[test]
-fn initiator_rejects_oversized_payload_before_calling_clatter() {
-    let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
-    let responder = NoiseChannelIdentity::generate().expect("generate responder identity");
-    let prologue = noise_channel_prologue("env-1", "registration-1", "stream-1");
-    let oversized_payload = vec![0; clatter::constants::MAX_MESSAGE_LEN];
-
-    assert!(matches!(
-        InitiatorHandshake::start(
-            &initiator,
-            &responder.public_key(),
-            &prologue,
-            &oversized_payload,
-        ),
-        Err(NoiseChannelError::InvalidMessage(
-            "handshake request is too large"
-        ))
-    ));
 }
 
 #[test]
@@ -225,4 +206,21 @@ fn public_key_serializes_with_expected_suite() {
     let json = serde_json::to_value(key).expect("serialize key");
 
     assert_eq!(json["suite"], NOISE_CHANNEL_SUITE);
+}
+
+#[test]
+fn initiator_rejects_oversized_handshake_payload() {
+    let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
+    let responder = NoiseChannelIdentity::generate().expect("generate responder identity");
+    let payload = vec![0; MAX_MESSAGE_LEN];
+
+    let result =
+        InitiatorHandshake::start(&initiator, &responder.public_key(), b"prologue", &payload);
+
+    assert!(matches!(
+        result,
+        Err(NoiseChannelError::InvalidMessage(
+            "handshake payload is too large"
+        ))
+    ));
 }
