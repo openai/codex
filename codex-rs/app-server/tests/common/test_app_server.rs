@@ -53,7 +53,6 @@ use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceRemoveParams;
 use codex_app_server_protocol::MarketplaceUpgradeParams;
-use codex_app_server_protocol::McpClientCapabilities;
 use codex_app_server_protocol::McpResourceReadParams;
 use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::MockExperimentalMethodParams;
@@ -315,26 +314,6 @@ impl TestAppServer {
         self.initialize_with_params(InitializeParams {
             client_info,
             capabilities,
-            mcp_client_capabilities: None,
-        })
-        .await
-    }
-
-    pub async fn initialize_with_mcp_client_capabilities(
-        &mut self,
-        mcp_client_capabilities: McpClientCapabilities,
-    ) -> anyhow::Result<JSONRPCMessage> {
-        self.initialize_with_params(InitializeParams {
-            client_info: ClientInfo {
-                name: DEFAULT_CLIENT_NAME.to_string(),
-                title: None,
-                version: "0.1.0".to_string(),
-            },
-            capabilities: Some(InitializeCapabilities {
-                experimental_api: true,
-                ..Default::default()
-            }),
-            mcp_client_capabilities: Some(mcp_client_capabilities),
         })
         .await
     }

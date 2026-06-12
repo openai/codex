@@ -16,7 +16,6 @@ use axum::http::header::AUTHORIZATION;
 use axum::routing::get;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::McpClientCapabilities;
 use codex_app_server_protocol::McpElicitationSchema;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequest;
@@ -74,8 +73,7 @@ const CALLABLE_TOOL_NAME: &str = "_confirm_action";
 const TOOL_NAME: &str = "calendar_confirm_action";
 const TOOL_CALL_ID: &str = "call-calendar-confirm";
 const ELICITATION_MESSAGE: &str = "Allow this request?";
-const OPENAI_FORM_MESSAGE: &str = "Choose a report";
-const SELECTED_FILE_PATH: &str = "/tmp/report.csv";
+const OPENAI_FORM_MESSAGE: &str = "Choose a template";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn mcp_server_elicitation_round_trip() -> Result<()> {
@@ -122,17 +120,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
     )?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.initialize_with_mcp_client_capabilities(McpClientCapabilities {
-            extensions: Some(serde_json::from_value(json!({
-                "openai/form": {
-                    "fieldTypes": ["openai/file"]
-                }
-            }))?),
-        }),
-    )
-    .await??;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_id = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -252,12 +240,16 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
     let requested_schema = json!({
         "type": "object",
         "properties": {
-            "path": {
-                "type": "openai/file",
-                "title": "Report",
+            "template": {
+                "type": "openai/choice",
+                "presentation": "cards",
+                "options": [{
+                    "value": "monthly-business-review",
+                    "title": "Monthly business review",
+                }],
             },
         },
-        "required": ["path"],
+        "required": ["template"],
     });
     assert_eq!(
         params,
@@ -278,7 +270,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
         serde_json::to_value(McpServerElicitationRequestResponse {
             action: McpServerElicitationAction::Accept,
             content: Some(json!({
-                "path": SELECTED_FILE_PATH,
+                "template": "monthly-business-review",
             })),
             meta: None,
         })?,
@@ -356,7 +348,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
         serde_json::from_str::<Value>(payload)?,
         json!([{
             "type": "text",
-            "text": format!("accepted {SELECTED_FILE_PATH}")
+            "text": "accepted monthly-business-review"
         }])
     );
 
@@ -462,7 +454,6 @@ impl ServerHandler for ElicitationAppsMcpServer {
                 "fieldTypes": ["openai/file"]
             }))
         );
-
         let result = context
             .peer
             .send_request(McpServerRequest::CustomRequest(CustomRequest::new(
@@ -472,12 +463,16 @@ impl ServerHandler for ElicitationAppsMcpServer {
                     "requestedSchema": {
                         "type": "object",
                         "properties": {
-                            "path": {
-                                "type": "openai/file",
-                                "title": "Report",
+                            "template": {
+                                "type": "openai/choice",
+                                "presentation": "cards",
+                                "options": [{
+                                    "value": "monthly-business-review",
+                                    "title": "Monthly business review",
+                                }],
                             },
                         },
-                        "required": ["path"],
+                        "required": ["template"],
                     },
                 })),
             )))
@@ -501,14 +496,14 @@ impl ServerHandler for ElicitationAppsMcpServer {
             json!({
                 "action": "accept",
                 "content": {
-                    "path": SELECTED_FILE_PATH,
+                    "template": "monthly-business-review",
                 },
             })
         );
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "accepted {SELECTED_FILE_PATH}"
-        ))]))
+        Ok(CallToolResult::success(vec![Content::text(
+            "accepted monthly-business-review",
+        )]))
     }
 }
 

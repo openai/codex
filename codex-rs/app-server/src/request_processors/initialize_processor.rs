@@ -67,7 +67,6 @@ impl InitializeRequestProcessor {
         // experimental API). Proposed direction is instance-global first-write-wins
         // with initialize-time mismatch rejection.
         let analytics_initialize_params = params.clone();
-        let mcp_client_capabilities = params.mcp_client_capabilities.clone();
         let (experimental_api_enabled, request_attestation, opt_out_notification_methods) =
             match params.capabilities {
                 Some(capabilities) => (
@@ -102,7 +101,6 @@ impl InitializeRequestProcessor {
                 app_server_client_name: name.clone(),
                 client_version: version,
                 request_attestation,
-                mcp_client_capabilities,
             })
             .is_err()
         {

@@ -146,7 +146,6 @@ impl TracingHarness {
                             experimental_api: true,
                             ..Default::default()
                         }),
-                        mcp_client_capabilities: None,
                     },
                 },
                 /*trace*/ None,

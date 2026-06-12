@@ -710,24 +710,6 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
-        self.resume_thread_with_history_and_extension_data(
-            config,
-            initial_history,
-            auth_manager,
-            parent_trace,
-            ExtensionDataInit::default(),
-        )
-        .await
-    }
-
-    pub async fn resume_thread_with_history_and_extension_data(
-        &self,
-        config: Config,
-        initial_history: InitialHistory,
-        auth_manager: Arc<AuthManager>,
-        parent_trace: Option<W3cTraceContext>,
-        thread_extension_init: ExtensionDataInit,
-    ) -> CodexResult<NewThread> {
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
@@ -750,7 +732,7 @@ impl ThreadManager {
             /*inherited_exec_policy*/ None,
             parent_trace,
             environments,
-            thread_extension_init,
+            /*thread_extension_init*/ ExtensionDataInit::default(),
             /*user_shell_override*/ None,
         ))
         .await
@@ -928,36 +910,12 @@ impl ThreadManager {
     where
         S: Into<ForkSnapshot>,
     {
-        self.fork_thread_from_history_with_extension_data(
-            snapshot,
-            config,
-            history,
-            thread_source,
-            parent_trace,
-            ExtensionDataInit::default(),
-        )
-        .await
-    }
-
-    pub async fn fork_thread_from_history_with_extension_data<S>(
-        &self,
-        snapshot: S,
-        config: Config,
-        history: InitialHistory,
-        thread_source: Option<ThreadSource>,
-        parent_trace: Option<W3cTraceContext>,
-        thread_extension_init: ExtensionDataInit,
-    ) -> CodexResult<NewThread>
-    where
-        S: Into<ForkSnapshot>,
-    {
         self.fork_thread_with_initial_history(
             snapshot.into(),
             config,
             history,
             thread_source,
             parent_trace,
-            thread_extension_init,
         )
         .await
     }
@@ -969,7 +927,6 @@ impl ThreadManager {
         history: InitialHistory,
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
-        thread_extension_init: ExtensionDataInit,
     ) -> CodexResult<NewThread> {
         // `forked_from_id()` describes this history's existing lineage. When
         // forking a resumed thread, the child copies the resumed thread itself.
@@ -1007,7 +964,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             parent_trace,
             environments,
-            thread_extension_init,
+            /*thread_extension_init*/ ExtensionDataInit::default(),
             /*user_shell_override*/ None,
         ))
         .await

@@ -267,7 +267,6 @@ async fn thread_unarchive_preserves_pathless_store_metadata() -> Result<()> {
                 experimental_api: true,
                 ..Default::default()
             }),
-            mcp_client_capabilities: None,
         },
         channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     })

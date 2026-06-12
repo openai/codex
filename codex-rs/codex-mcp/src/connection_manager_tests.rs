@@ -1266,7 +1266,6 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         /*host_owned_codex_apps_enabled*/ false,
         /*prefix_mcp_tool_names*/ true,
         ElicitationCapability::default(),
-        crate::McpClientCapabilities::default(),
         ToolPluginProvenance::default(),
         /*auth*/ None,
         /*elicitation_reviewer*/ None,

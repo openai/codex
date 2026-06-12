@@ -63,7 +63,6 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::McpClientCapabilities;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
@@ -221,7 +220,6 @@ pub(crate) struct InitializedConnectionSessionState {
     pub(crate) app_server_client_name: String,
     pub(crate) client_version: String,
     pub(crate) request_attestation: bool,
-    pub(crate) mcp_client_capabilities: Option<McpClientCapabilities>,
 }
 
 impl Default for ConnectionSessionState {
@@ -271,12 +269,6 @@ impl ConnectionSessionState {
         self.initialized
             .get()
             .is_some_and(|session| session.request_attestation)
-    }
-
-    pub(crate) fn mcp_client_capabilities(&self) -> Option<McpClientCapabilities> {
-        self.initialized
-            .get()
-            .and_then(|session| session.mcp_client_capabilities.clone())
     }
 
     pub(crate) fn initialize(&self, session: InitializedConnectionSessionState) -> Result<(), ()> {
@@ -883,7 +875,6 @@ impl MessageProcessor {
         let serialization_scope = codex_request.serialization_scope();
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
-        let mcp_client_capabilities = session.mcp_client_capabilities();
         let error_request_id = connection_request_id.clone();
         let rpc_gate = Arc::clone(&session.rpc_gate);
         let processor = Arc::clone(self);
@@ -899,7 +890,6 @@ impl MessageProcessor {
                         request_context,
                         app_server_client_name,
                         client_version,
-                        mcp_client_capabilities,
                     )
                     .await;
                 if let Err(error) = result {
@@ -929,7 +919,6 @@ impl MessageProcessor {
         request_context: RequestContext,
         app_server_client_name: Option<String>,
         client_version: Option<String>,
-        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<(), JSONRPCErrorError> {
         let connection_id = connection_request_id.connection_id;
         let request_id = ConnectionRequestId {
@@ -1082,7 +1071,6 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
-                        mcp_client_capabilities.clone(),
                         request_context,
                     )
                     .await
@@ -1099,7 +1087,6 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
-                        mcp_client_capabilities.clone(),
                     )
                     .await
             }
@@ -1110,7 +1097,6 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
-                        mcp_client_capabilities.clone(),
                     )
                     .await
             }

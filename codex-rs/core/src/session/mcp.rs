@@ -345,12 +345,6 @@ impl Session {
             *guard = cancellation_token.clone();
             cancellation_token
         };
-        let mcp_client_capabilities = self
-            .services
-            .thread_extension_data
-            .get::<codex_mcp::McpClientCapabilities>()
-            .map(|capabilities| capabilities.as_ref().clone())
-            .unwrap_or_default();
         let refreshed_manager = McpConnectionManager::new(
             &mcp_servers,
             store_mode,
@@ -367,7 +361,6 @@ impl Session {
             host_owned_codex_apps_enabled,
             mcp_config.prefix_mcp_tool_names,
             mcp_config.client_elicitation_capability,
-            mcp_client_capabilities,
             tool_plugin_provenance,
             auth.as_ref(),
             elicitation_reviewer,
