@@ -5,6 +5,7 @@ use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::ChildStderr;
 use std::process::Command;
 use std::process::Output;
 use std::process::Stdio;
@@ -22,6 +23,10 @@ const MISSING_BWRAP_WARNING: &str = concat!(
 );
 const USER_NAMESPACE_WARNING: &str =
     "Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces.";
+const PROC_SYS_DISCONNECTED_WARNING: &str = concat!(
+    "Codex's Linux sandbox cannot access /proc/sys because the mount is disconnected. ",
+    "Restart the environment or container before running sandboxed commands.",
+);
 pub(crate) const WSL1_BWRAP_WARNING: &str = concat!(
     "Codex's Linux sandbox uses bubblewrap, which is not supported on WSL1 ",
     "because WSL1 cannot create the required user namespaces. ",
@@ -35,27 +40,39 @@ const USER_NAMESPACE_FAILURES: [&str; 4] = [
 ];
 const SYSTEM_BWRAP_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const SYSTEM_BWRAP_PROBE_POLL_INTERVAL: Duration = Duration::from_millis(50);
-const SYSTEM_BWRAP_PROBE_STDERR_LIMIT_BYTES: u64 = 64 * 1024;
+const SYSTEM_BWRAP_PROBE_SPAWN_RETRY_INTERVAL: Duration = Duration::from_millis(5);
+const SYSTEM_BWRAP_PROBE_STDERR_LIMIT_BYTES: usize = 64 * 1024;
+const SYSTEM_BWRAP_PROBE_DRAIN_LIMIT_BYTES: usize = 256 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SystemBwrapProbeResult {
+    Available,
+    UserNamespaceUnavailable,
+    ProcSysDisconnected,
+    Failed,
+}
 
 pub fn system_bwrap_warning(permission_profile: &PermissionProfile) -> Option<String> {
-    if !should_warn_about_system_bwrap(permission_profile) {
+    let (file_system_policy, network_policy) = permission_profile.to_runtime_permissions();
+    if !should_require_platform_sandbox(
+        &file_system_policy,
+        network_policy,
+        /*has_managed_network_requirements*/ false,
+    ) {
         return None;
     }
 
     let system_bwrap_path = find_system_bwrap_in_path();
-    system_bwrap_warning_for_path(system_bwrap_path.as_deref())
-}
-
-fn should_warn_about_system_bwrap(permission_profile: &PermissionProfile) -> bool {
-    let (file_system_policy, network_policy) = permission_profile.to_runtime_permissions();
-    should_require_platform_sandbox(
-        &file_system_policy,
-        network_policy,
-        /*has_managed_network_requirements*/ false,
+    system_bwrap_warning_for_path(
+        system_bwrap_path.as_deref(),
+        /*unshare_network*/ !network_policy.is_enabled(),
     )
 }
 
-fn system_bwrap_warning_for_path(system_bwrap_path: Option<&Path>) -> Option<String> {
+fn system_bwrap_warning_for_path(
+    system_bwrap_path: Option<&Path>,
+    unshare_network: bool,
+) -> Option<String> {
     if is_wsl1() {
         return Some(WSL1_BWRAP_WARNING.to_string());
     }
@@ -64,75 +81,125 @@ fn system_bwrap_warning_for_path(system_bwrap_path: Option<&Path>) -> Option<Str
         return Some(MISSING_BWRAP_WARNING.to_string());
     };
 
-    if !system_bwrap_has_user_namespace_access(system_bwrap_path, SYSTEM_BWRAP_PROBE_TIMEOUT) {
-        return Some(USER_NAMESPACE_WARNING.to_string());
+    match probe_system_bwrap(
+        system_bwrap_path,
+        SYSTEM_BWRAP_PROBE_TIMEOUT,
+        unshare_network,
+    ) {
+        SystemBwrapProbeResult::Available => None,
+        SystemBwrapProbeResult::UserNamespaceUnavailable => {
+            Some(USER_NAMESPACE_WARNING.to_string())
+        }
+        SystemBwrapProbeResult::ProcSysDisconnected => {
+            Some(PROC_SYS_DISCONNECTED_WARNING.to_string())
+        }
+        // The probe deliberately exercises only a minimal bubblewrap command,
+        // so an unclassified failure does not prove that the real launch will
+        // fail. Warn only for failures that identify an actionable host issue.
+        SystemBwrapProbeResult::Failed => None,
     }
-
-    None
 }
 
-fn system_bwrap_has_user_namespace_access(system_bwrap_path: &Path, timeout: Duration) -> bool {
-    let mut child = match Command::new(system_bwrap_path)
-        .args([
-            "--unshare-user",
-            "--unshare-net",
-            "--ro-bind",
-            "/",
-            "/",
-            "/bin/true",
-        ])
+fn probe_system_bwrap(
+    system_bwrap_path: &Path,
+    timeout: Duration,
+    unshare_network: bool,
+) -> SystemBwrapProbeResult {
+    let mut command = Command::new(system_bwrap_path);
+    command.arg("--unshare-user");
+    if unshare_network {
+        command.arg("--unshare-net");
+    }
+    command
+        .args(["--ro-bind", "/", "/"])
+        .arg(resolve_true_command())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(_) => return true,
-    };
-
+        .stderr(Stdio::piped());
     let deadline = Instant::now() + timeout;
+    let mut child = loop {
+        match command.spawn() {
+            Ok(child) => break child,
+            Err(err) if err.raw_os_error() == Some(libc::ETXTBSY) && Instant::now() < deadline => {
+                thread::sleep(SYSTEM_BWRAP_PROBE_SPAWN_RETRY_INTERVAL);
+            }
+            Err(_) => return SystemBwrapProbeResult::Failed,
+        }
+    };
+    let Some(mut stderr) = child.stderr.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return SystemBwrapProbeResult::Failed;
+    };
+    let fd = stderr.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        let _ = child.kill();
+        let _ = child.wait();
+        return SystemBwrapProbeResult::Failed;
+    }
+
+    let mut stderr_bytes = Vec::new();
     loop {
+        read_available_probe_stderr(&mut stderr, &mut stderr_bytes);
         match child.try_wait() {
             Ok(Some(status)) => {
-                let stderr = child.stderr.take().map_or_else(Vec::new, |stderr| {
-                    let fd = stderr.as_raw_fd();
-                    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-                    if flags < 0
-                        || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
-                    {
-                        return Vec::new();
-                    }
-
-                    let mut bytes = Vec::new();
-                    let mut stderr = stderr.take(SYSTEM_BWRAP_PROBE_STDERR_LIMIT_BYTES);
-                    if let Err(err) = stderr.read_to_end(&mut bytes)
-                        && err.kind() != ErrorKind::WouldBlock
-                    {
-                        return bytes;
-                    }
-                    bytes
-                });
+                if status.success() {
+                    return SystemBwrapProbeResult::Available;
+                }
+                read_available_probe_stderr(&mut stderr, &mut stderr_bytes);
                 let output = Output {
                     status,
                     stdout: Vec::new(),
-                    stderr,
+                    stderr: stderr_bytes,
                 };
-                return output.status.success() || !is_user_namespace_failure(&output);
+                if is_user_namespace_failure(&output) {
+                    return SystemBwrapProbeResult::UserNamespaceUnavailable;
+                }
+                if is_proc_sys_disconnected(&output) {
+                    return SystemBwrapProbeResult::ProcSysDisconnected;
+                }
+                return SystemBwrapProbeResult::Failed;
             }
             Ok(None) => {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return true;
+                    return SystemBwrapProbeResult::Failed;
                 }
                 thread::sleep(SYSTEM_BWRAP_PROBE_POLL_INTERVAL);
             }
+            Err(err) if err.kind() == ErrorKind::Interrupted => continue,
             Err(_) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return true;
+                return SystemBwrapProbeResult::Failed;
             }
         }
     }
+}
+
+fn read_available_probe_stderr(stderr: &mut ChildStderr, bytes: &mut Vec<u8>) {
+    let mut buffer = [0; 4096];
+    let mut drained = 0;
+    while drained < SYSTEM_BWRAP_PROBE_DRAIN_LIMIT_BYTES {
+        match stderr.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                drained += read;
+                let retained = (SYSTEM_BWRAP_PROBE_STDERR_LIMIT_BYTES - bytes.len()).min(read);
+                bytes.extend_from_slice(&buffer[..retained]);
+            }
+            Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+}
+
+fn resolve_true_command() -> &'static str {
+    ["/usr/bin/true", "/bin/true"]
+        .into_iter()
+        .find(|candidate| Path::new(candidate).exists())
+        .unwrap_or("true")
 }
 
 pub(crate) fn is_wsl1() -> bool {
@@ -163,6 +230,13 @@ fn is_user_namespace_failure(output: &Output) -> bool {
     USER_NAMESPACE_FAILURES
         .iter()
         .any(|failure| stderr.contains(failure))
+}
+
+fn is_proc_sys_disconnected(output: &Output) -> bool {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    stderr.contains("/proc/sys")
+        && (stderr.contains("Transport endpoint is not connected")
+            || stderr.contains("Socket not connected"))
 }
 
 pub fn find_system_bwrap_in_path() -> Option<PathBuf> {
