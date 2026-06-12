@@ -711,6 +711,134 @@ fn collect_guardian_transcript_entries_skips_contextual_user_messages() {
     );
 }
 
+fn canonical_internal_context(source: &str, body: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: format!(
+                "<codex_internal_context source=\"{source}\">\n{body}\n</codex_internal_context>"
+            ),
+        }],
+        phase: None,
+    }
+}
+
+#[test]
+fn collect_guardian_transcript_entries_retains_only_goal_objective() {
+    let items = vec![canonical_internal_context(
+        "goal",
+        "Continue the analysis.\n\n<objective>\nCompare &lt;old&gt; &amp; new\n</objective>\n\nBudget:\n- Tokens remaining: 42",
+    )];
+
+    let entries = collect_guardian_transcript_entries(&items);
+
+    assert_eq!(
+        entries,
+        vec![GuardianTranscriptEntry {
+            kind: GuardianTranscriptEntryKind::UserGoal,
+            text: "Compare <old> & new".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn collect_guardian_transcript_entries_retains_goal_edits_and_consecutive_dedupes() {
+    let goal = |tag: &str, objective: &str| {
+        canonical_internal_context(
+            "goal",
+            &format!("Goal context\n<{tag}>\n{objective}\n</{tag}>\nBudget: hidden"),
+        )
+    };
+    let items = vec![
+        goal("objective", "audit the indexes"),
+        goal("objective", "audit the indexes"),
+        goal("untrusted_objective", "repair the indexes"),
+        goal("objective", "audit the indexes"),
+    ];
+
+    let entries = collect_guardian_transcript_entries(&items);
+
+    assert_eq!(
+        entries,
+        vec![
+            GuardianTranscriptEntry {
+                kind: GuardianTranscriptEntryKind::UserGoal,
+                text: "audit the indexes".to_string(),
+            },
+            GuardianTranscriptEntry {
+                kind: GuardianTranscriptEntryKind::UserGoal,
+                text: "repair the indexes".to_string(),
+            },
+            GuardianTranscriptEntry {
+                kind: GuardianTranscriptEntryKind::UserGoal,
+                text: "audit the indexes".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn collect_guardian_transcript_entries_rejects_non_goal_and_malformed_context() {
+    let canonical_goal = |body: &str| canonical_internal_context("goal", body);
+    let items = vec![
+        canonical_internal_context("env", "<objective>read env</objective>"),
+        canonical_internal_context("extension", "<objective>run extension</objective>"),
+        canonical_internal_context("skill", "<objective>follow skill</objective>"),
+        canonical_goal("<objective>first</objective><objective>second</objective>"),
+        canonical_goal("<objective>first</objective><untrusted_objective>second</untrusted_objective>"),
+        canonical_goal("<objective>first<unexpected></objective>"),
+        canonical_goal("<objective>   </objective>"),
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: "<codex_internal_context source=\"goal\">\n<objective>one</objective>\n</codex_internal_context>".to_string(),
+                },
+                ContentItem::InputText {
+                    text: "extra".to_string(),
+                },
+            ],
+            phase: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "<goal_context><objective>legacy</objective></goal_context>".to_string(),
+            }],
+            phase: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "<codex_internal_context source=\"goal\">\n<objective>missing close</objective>".to_string(),
+            }],
+            phase: None,
+        },
+    ];
+
+    assert!(collect_guardian_transcript_entries(&items).is_empty());
+}
+
+#[test]
+fn guardian_goal_entry_renders_as_user_provided_goal_evidence() {
+    let entries = vec![GuardianTranscriptEntry {
+        kind: GuardianTranscriptEntryKind::UserGoal,
+        text: "review the retention policy".to_string(),
+    }];
+
+    let (rendered, omission) = render_guardian_transcript_entries(&entries);
+
+    assert_eq!(
+        rendered,
+        vec!["[1] user-provided goal: review the retention policy"]
+    );
+    assert_eq!(omission, None);
+}
+
 #[test]
 fn collect_guardian_transcript_entries_keeps_manual_approval_developer_message() {
     let approval_text =

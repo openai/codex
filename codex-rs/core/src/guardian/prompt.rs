@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
@@ -8,6 +9,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::compact::content_items_to_text;
+use crate::context::InternalModelContextFragment;
 use crate::event_mapping::is_contextual_user_message_content;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -37,6 +39,7 @@ pub(crate) struct GuardianTranscriptEntry {
 pub(crate) enum GuardianTranscriptEntryKind {
     Developer,
     User,
+    UserGoal,
     Assistant,
     Tool(String),
 }
@@ -46,13 +49,14 @@ impl GuardianTranscriptEntryKind {
         match self {
             Self::Developer => "developer",
             Self::User => "user",
+            Self::UserGoal => "user-provided goal",
             Self::Assistant => "assistant",
             Self::Tool(role) => role.as_str(),
         }
     }
 
     fn is_user(&self) -> bool {
-        matches!(self, Self::User)
+        matches!(self, Self::User | Self::UserGoal)
     }
 
     fn is_tool(&self) -> bool {
@@ -420,6 +424,7 @@ pub(crate) fn collect_guardian_transcript_entries(
 ) -> Vec<GuardianTranscriptEntry> {
     let mut entries = Vec::new();
     let mut tool_names_by_call_id = HashMap::new();
+    let mut last_goal_objective: Option<String> = None;
     let non_empty_entry = |kind, text: String| {
         (!text.trim().is_empty()).then_some(GuardianTranscriptEntry { kind, text })
     };
@@ -431,7 +436,17 @@ pub(crate) fn collect_guardian_transcript_entries(
     for item in items {
         let entry = match item {
             ResponseItem::Message { role, content, .. } if role == "user" => {
-                if is_contextual_user_message_content(content) {
+                if let Some(objective) = guardian_goal_objective(content)
+                    && last_goal_objective.as_deref() != Some(objective.as_str())
+                {
+                    last_goal_objective = Some(objective.clone());
+                    Some(GuardianTranscriptEntry {
+                        kind: GuardianTranscriptEntryKind::UserGoal,
+                        text: objective,
+                    })
+                } else if is_contextual_user_message_content(content)
+                    || is_internal_context_candidate(content)
+                {
                     None
                 } else {
                     content_entry(GuardianTranscriptEntryKind::User, content)
@@ -511,6 +526,65 @@ pub(crate) fn collect_guardian_transcript_entries(
     }
 
     entries
+}
+
+fn guardian_goal_objective(content: &[ContentItem]) -> Option<String> {
+    let text = single_text_content(content)?;
+    let context = InternalModelContextFragment::parse_canonical(text)?;
+    if context.source().as_str() != "goal" {
+        return None;
+    }
+
+    let objective = extract_single_goal_element(context.body(), "objective").ok()?;
+    let untrusted_objective =
+        extract_single_goal_element(context.body(), "untrusted_objective").ok()?;
+    let encoded = match (objective, untrusted_objective) {
+        (Some(objective), None) | (None, Some(objective)) => objective.trim(),
+        _ => return None,
+    };
+    if encoded.is_empty() || encoded.contains('<') || encoded.contains('>') {
+        return None;
+    }
+
+    Some(decode_goal_xml_text(encoded))
+}
+
+fn single_text_content(content: &[ContentItem]) -> Option<&str> {
+    match content {
+        [ContentItem::InputText { text }] | [ContentItem::OutputText { text }] => Some(text),
+        _ => None,
+    }
+}
+
+fn is_internal_context_candidate(content: &[ContentItem]) -> bool {
+    single_text_content(content).is_some_and(|text| {
+        let text = text.trim_start();
+        text.starts_with("<codex_internal_context") || text.starts_with("<goal_context>")
+    })
+}
+
+fn extract_single_goal_element<'a>(body: &'a str, tag: &str) -> Result<Option<&'a str>, ()> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let open_positions = body.match_indices(&open).collect::<Vec<_>>();
+    let close_positions = body.match_indices(&close).collect::<Vec<_>>();
+    match (open_positions.as_slice(), close_positions.as_slice()) {
+        ([], []) => Ok(None),
+        ([(open_index, _)], [(close_index, _)]) => {
+            let content_start = open_index + open.len();
+            if *close_index < content_start {
+                return Err(());
+            }
+            Ok(body.get(content_start..*close_index))
+        }
+        _ => Err(()),
+    }
+}
+
+fn decode_goal_xml_text(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 pub(crate) fn guardian_truncate_text(content: &str, token_cap: usize) -> (String, bool) {
