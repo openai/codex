@@ -99,7 +99,6 @@ mod tests {
     use crate::extensions::ThreadExtensionDependencies;
     use crate::extensions::guardian_agent_spawner;
     use crate::extensions::thread_extensions;
-    use async_trait::async_trait;
     use codex_arg0::Arg0DispatchPaths;
     use codex_config::CloudConfigBundleLoader;
     use codex_config::LoaderOverrides;
@@ -245,8 +244,7 @@ mod tests {
         bad_loads: AtomicUsize,
     }
 
-    #[async_trait]
-    impl ThreadConfigLoader for CountingThreadConfigLoader {
+    impl CountingThreadConfigLoader {
         async fn load(
             &self,
             context: ThreadConfigContext,
@@ -263,6 +261,15 @@ mod tests {
                 ));
             }
             Ok(Vec::new())
+        }
+    }
+
+    impl ThreadConfigLoader for CountingThreadConfigLoader {
+        fn load(
+            &self,
+            context: ThreadConfigContext,
+        ) -> codex_config::ThreadConfigLoaderFuture<'_, Vec<ThreadConfigSource>> {
+            Box::pin(CountingThreadConfigLoader::load(self, context))
         }
     }
 }

@@ -1207,7 +1207,7 @@ pub(super) fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
     String::new()
 }
 
-pub(super) fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
+pub(crate) fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     let height = chat.desired_height(width);
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);

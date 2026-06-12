@@ -20,6 +20,7 @@ use codex_protocol::error::Result;
 use codex_protocol::openai_models::ModelsResponse;
 
 use crate::provider::ModelProvider;
+use crate::provider::ModelProviderFuture;
 use crate::provider::ProviderAccountResult;
 use crate::provider::ProviderAccountState;
 use crate::provider::ProviderCapabilities;
@@ -68,9 +69,32 @@ impl AmazonBedrockModelProvider {
                 | CodexAuth::PersonalAccessToken(_) => None,
             })
     }
+
+    async fn auth(&self) -> Option<CodexAuth> {
+        self.managed_auth().map(CodexAuth::BedrockApiKey)
+    }
+
+    async fn api_provider(&self) -> Result<Provider> {
+        let managed_auth = self.managed_auth();
+        let mut api_provider_info = self.info.clone();
+        api_provider_info.base_url =
+            Some(runtime_base_url(managed_auth.as_ref(), &self.aws).await?);
+        api_provider_info.to_api_provider(/*auth_mode*/ None)
+    }
+
+    async fn runtime_base_url(&self) -> Result<Option<String>> {
+        let managed_auth = self.managed_auth();
+        Ok(Some(
+            runtime_base_url(managed_auth.as_ref(), &self.aws).await?,
+        ))
+    }
+
+    async fn api_auth(&self) -> Result<SharedAuthProvider> {
+        let managed_auth = self.managed_auth();
+        resolve_provider_auth(managed_auth.as_ref(), &self.aws).await
+    }
 }
 
-#[async_trait::async_trait]
 impl ModelProvider for AmazonBedrockModelProvider {
     fn info(&self) -> &ModelProviderInfo {
         &self.info
@@ -101,8 +125,8 @@ impl ModelProvider for AmazonBedrockModelProvider {
             .and_then(|_| self.auth_manager.as_ref().cloned())
     }
 
-    async fn auth(&self) -> Option<CodexAuth> {
-        self.managed_auth().map(CodexAuth::BedrockApiKey)
+    fn auth(&self) -> ModelProviderFuture<'_, Option<CodexAuth>> {
+        Box::pin(AmazonBedrockModelProvider::auth(self))
     }
 
     fn account_state(&self) -> ProviderAccountResult {
@@ -112,24 +136,16 @@ impl ModelProvider for AmazonBedrockModelProvider {
         })
     }
 
-    async fn api_provider(&self) -> Result<Provider> {
-        let managed_auth = self.managed_auth();
-        let mut api_provider_info = self.info.clone();
-        api_provider_info.base_url =
-            Some(runtime_base_url(managed_auth.as_ref(), &self.aws).await?);
-        api_provider_info.to_api_provider(/*auth_mode*/ None)
+    fn api_provider(&self) -> ModelProviderFuture<'_, Result<Provider>> {
+        Box::pin(AmazonBedrockModelProvider::api_provider(self))
     }
 
-    async fn runtime_base_url(&self) -> Result<Option<String>> {
-        let managed_auth = self.managed_auth();
-        Ok(Some(
-            runtime_base_url(managed_auth.as_ref(), &self.aws).await?,
-        ))
+    fn runtime_base_url(&self) -> ModelProviderFuture<'_, Result<Option<String>>> {
+        Box::pin(AmazonBedrockModelProvider::runtime_base_url(self))
     }
 
-    async fn api_auth(&self) -> Result<SharedAuthProvider> {
-        let managed_auth = self.managed_auth();
-        resolve_provider_auth(managed_auth.as_ref(), &self.aws).await
+    fn api_auth(&self) -> ModelProviderFuture<'_, Result<SharedAuthProvider>> {
+        Box::pin(AmazonBedrockModelProvider::api_auth(self))
     }
 
     fn models_manager(

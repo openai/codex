@@ -10532,6 +10532,22 @@
       ],
       "type": "string"
     },
+    "RemoteControlDisableParams": {
+      "properties": {
+        "ephemeral": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "RemoteControlEnableParams": {
+      "properties": {
+        "ephemeral": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "RemoteControlStatusChangedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Current remote-control connection status and remote identity exposed to clients.",

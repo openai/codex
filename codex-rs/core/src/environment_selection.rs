@@ -9,6 +9,7 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::session::turn_context::TurnEnvironment;
+use crate::shell::Shell;
 
 pub(crate) fn default_thread_environment_selections(
     environment_manager: &EnvironmentManager,
@@ -41,6 +42,7 @@ impl ResolvedTurnEnvironments {
         self.turn_environments.first()
     }
 
+    #[cfg(test)]
     pub(crate) fn primary_environment(&self) -> Option<Arc<codex_exec_server::Environment>> {
         self.primary()
             .map(|environment| Arc::clone(&environment.environment))
@@ -60,7 +62,7 @@ impl ResolvedTurnEnvironments {
     }
 }
 
-pub(crate) fn resolve_environment_selections(
+pub(crate) async fn resolve_environment_selections(
     environment_manager: &EnvironmentManager,
     environments: &[TurnEnvironmentSelection],
 ) -> CodexResult<ResolvedTurnEnvironments> {
@@ -79,19 +81,34 @@ pub(crate) fn resolve_environment_selections(
             .ok_or_else(|| {
                 CodexErr::InvalidRequest(format!("unknown turn environment id `{environment_id}`"))
             })?;
+        let shell = match environment.info().await {
+            Ok(info) => match Shell::from_environment_shell_info(info.shell) {
+                Ok(shell) => Some(shell),
+                Err(err) => {
+                    tracing::warn!(
+                        "failed to resolve shell for environment `{environment_id}`: {err}"
+                    );
+                    None
+                }
+            },
+            Err(err) => {
+                tracing::warn!("failed to get info for environment `{environment_id}`: {err}");
+                None
+            }
+        };
         turn_environments.push(TurnEnvironment {
             environment_id,
             environment,
             cwd: selected_environment.cwd.clone(),
-            shell: None,
+            shell,
         });
     }
-
     Ok(ResolvedTurnEnvironments { turn_environments })
 }
 
 #[cfg(test)]
 mod tests {
+    use codex_exec_server::Environment;
     use codex_exec_server::ExecServerRuntimePaths;
     use codex_exec_server::LOCAL_ENVIRONMENT_ID;
     use codex_exec_server::REMOTE_ENVIRONMENT_ID;
@@ -189,6 +206,7 @@ url = "ws://127.0.0.1:8765"
                 },
             ],
         )
+        .await
         .expect_err("duplicate environment id should fail");
 
         assert!(err.to_string().contains("duplicate"));
@@ -207,6 +225,7 @@ url = "ws://127.0.0.1:8765"
                 cwd: selected_cwd,
             }],
         )
+        .await
         .expect("environment selections should resolve");
 
         assert_eq!(
@@ -216,7 +235,21 @@ url = "ws://127.0.0.1:8765"
                 .environment_id,
             "local"
         );
-        assert_eq!(resolved.primary().expect("primary environment").shell, None);
+        assert_eq!(
+            resolved.primary().expect("primary environment").shell,
+            Some(
+                Shell::from_environment_shell_info(
+                    manager
+                        .get_environment("local")
+                        .expect("local environment")
+                        .info()
+                        .await
+                        .expect("local environment info")
+                        .shell
+                )
+                .expect("resolved shell")
+            )
+        );
     }
 
     #[tokio::test]
@@ -230,40 +263,31 @@ url = "ws://127.0.0.1:8765"
                 cwd: cwd.clone(),
             }],
         )
+        .await
         .expect("local environment should resolve");
-        let remote_manager = EnvironmentManager::create_for_tests(
-            Some("ws://127.0.0.1:8765".to_string()),
-            Some(test_runtime_paths()),
-        )
-        .await;
-        let remote = resolve_environment_selections(
-            &remote_manager,
-            &[TurnEnvironmentSelection {
+        let remote_environment = Arc::new(
+            Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
+                .expect("remote environment"),
+        );
+        let remote = ResolvedTurnEnvironments {
+            turn_environments: vec![TurnEnvironment {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                environment: remote_environment.clone(),
                 cwd: cwd.clone(),
+                shell: None,
             }],
-        )
-        .expect("remote environment should resolve");
-        local_manager
-            .upsert_environment(
-                REMOTE_ENVIRONMENT_ID.to_string(),
-                "ws://127.0.0.1:8765".to_string(),
-            )
-            .expect("remote environment should register");
-        let multiple = resolve_environment_selections(
-            &local_manager,
-            &[
-                TurnEnvironmentSelection {
-                    environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                    cwd: cwd.clone(),
-                },
-                TurnEnvironmentSelection {
+        };
+        let multiple = ResolvedTurnEnvironments {
+            turn_environments: vec![
+                local.primary().expect("local environment").clone(),
+                TurnEnvironment {
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                    environment: remote_environment,
                     cwd: cwd.clone(),
+                    shell: None,
                 },
             ],
-        )
-        .expect("multiple environments should resolve");
+        };
 
         assert_eq!(local.single_local_environment_cwd(), Some(&cwd));
         assert_eq!(remote.single_local_environment_cwd(), None);
