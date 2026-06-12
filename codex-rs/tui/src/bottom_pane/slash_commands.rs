@@ -106,12 +106,16 @@ pub(crate) fn commands_for_input(
         .collect()
 }
 
-/// Find a single built-in command by exact name, after applying feature gating.
+/// Find a single built-in command by a recognized name or alias, after applying feature gating.
 ///
-/// Side-conversation gating is intentionally enforced by dispatch rather than exact lookup so a
+/// Side-conversation gating is intentionally enforced by dispatch rather than command lookup so a
 /// typed command can produce a side-specific unavailable message while the popup still hides it.
 pub(crate) fn find_builtin_command(name: &str, flags: BuiltinCommandFlags) -> Option<SlashCommand> {
-    let cmd = SlashCommand::from_str(name).ok()?;
+    let cmd = SlashCommand::from_str(name).ok().or_else(|| {
+        let repeated_os = name.strip_prefix('g')?.strip_suffix("al")?;
+        (!repeated_os.is_empty() && repeated_os.bytes().all(|byte| byte == b'o'))
+            .then_some(SlashCommand::Goal)
+    })?;
     builtins_for_input(BuiltinCommandFlags {
         side_conversation_active: false,
         ..flags
@@ -184,6 +188,14 @@ mod tests {
         assert_eq!(
             find_builtin_command("clear", all_enabled_flags()),
             Some(SlashCommand::Clear)
+        );
+    }
+
+    #[test]
+    fn goal_command_allows_extra_os_for_dispatch() {
+        assert_eq!(
+            find_builtin_command("goooooooooooal", all_enabled_flags()),
+            Some(SlashCommand::Goal)
         );
     }
 

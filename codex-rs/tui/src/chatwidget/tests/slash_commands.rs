@@ -599,12 +599,12 @@ async fn inline_slash_command_is_available_from_local_recall_after_dispatch() {
 }
 
 #[tokio::test]
-async fn goal_slash_command_emits_set_goal_event() {
+async fn goal_slash_command_with_extra_os_emits_set_goal_event() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     let thread_id = ThreadId::new();
     chat.thread_id = Some(thread_id);
-    let command = "/goal --tokens 98.5K improve benchmark coverage";
+    let command = "/goooooooooooal --tokens 98.5K improve benchmark coverage";
 
     submit_composer_text(&mut chat, command);
 
