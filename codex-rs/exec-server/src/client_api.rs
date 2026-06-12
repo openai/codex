@@ -52,13 +52,13 @@ pub struct NoiseRendezvousConnectBundle {
 /// `harness_identity` identifies the logical harness endpoint and may be reused
 /// across reconnects. In contrast, callers must supply a fresh
 /// [`NoiseRendezvousConnectBundle`] for each physical connection attempt.
-pub(crate) struct NoiseRendezvousConnectArgs {
-    pub(crate) bundle: NoiseRendezvousConnectBundle,
-    pub(crate) harness_identity: NoiseChannelIdentity,
-    pub(crate) client_name: String,
-    pub(crate) connect_timeout: Duration,
-    pub(crate) initialize_timeout: Duration,
-    pub(crate) resume_session_id: Option<String>,
+pub struct NoiseRendezvousConnectArgs {
+    pub bundle: NoiseRendezvousConnectBundle,
+    pub harness_identity: NoiseChannelIdentity,
+    pub client_name: String,
+    pub connect_timeout: Duration,
+    pub initialize_timeout: Duration,
+    pub resume_session_id: Option<String>,
 }
 
 /// Supplies fresh registry-authorized material for Noise rendezvous connections.
