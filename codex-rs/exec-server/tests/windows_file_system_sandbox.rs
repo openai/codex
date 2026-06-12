@@ -75,18 +75,6 @@ fn sandboxed_file_system_with_codex_exe(
     })
 }
 
-fn process_is_elevated() -> bool {
-    let status = std::process::Command::new("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "$principal = [Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent(); if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 0 } else { exit 1 }",
-        ])
-        .status();
-    status.is_ok_and(|status| status.success())
-}
-
 fn stage_windows_sandbox_helpers_next_to_codex_exe(codex_exe: &Path) -> Result<()> {
     let helper_dir = codex_exe
         .parent()
@@ -302,13 +290,9 @@ async fn elevated_fs_helper_rejects_unenforceable_reopened_writable_descendant()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires an elevated Windows test process"]
 #[serial(codex_home)]
 async fn elevated_fs_helper_allows_writable_path_when_setup_is_available() -> Result<()> {
-    if !process_is_elevated() {
-        eprintln!("skipping elevated fs-helper write: test process is not elevated");
-        return Ok(());
-    }
-
     let helper_dir = TempDir::new()?;
     let configured_helper = helper_dir.path().join("codex.exe");
     std::fs::copy(std::env::current_exe()?, &configured_helper)?;
