@@ -113,10 +113,12 @@ struct RealtimeHandoffState {
 enum HandoffOutput {
     StandaloneAssistantOutput {
         output_text: String,
+        role: ConversationTextRole,
     },
     ProgressUpdate {
         handoff_id: String,
         output_text: String,
+        role: ConversationTextRole,
     },
     FinalUpdate {
         handoff_id: String,
@@ -466,7 +468,7 @@ impl RealtimeConversationManager {
         Ok(())
     }
 
-    pub(crate) async fn handoff_out(&self, output_text: String) -> CodexResult<()> {
+    pub(crate) async fn handoff_out(&self, mut params: ConversationTextParams) -> CodexResult<()> {
         let handoff = {
             let guard = self.state.lock().await;
             let Some(state) = guard.as_ref() else {
@@ -480,29 +482,32 @@ impl RealtimeConversationManager {
         let active_handoff = handoff.active_handoff.lock().await.clone();
         let output = match active_handoff {
             Some(handoff_id) => {
-                let output_text = prefix_realtime_text(
-                    output_text,
+                params.text = prefix_realtime_text(
+                    params.text,
                     REALTIME_BACKEND_TEXT_PREFIX,
                     handoff.session_kind,
                 );
-                *handoff.last_output_text.lock().await = Some(output_text.clone());
+                *handoff.last_output_text.lock().await = Some(params.text.clone());
                 HandoffOutput::ProgressUpdate {
                     handoff_id,
-                    output_text,
+                    output_text: params.text,
+                    role: params.role,
                 }
             }
-            None if output_text.trim().is_empty() => return Ok(()),
+            None if params.text.trim().is_empty() => return Ok(()),
             None => {
-                let output_text = prefix_realtime_text(
-                    output_text,
+                params.text = prefix_realtime_text(
+                    params.text,
                     REALTIME_BACKEND_TEXT_PREFIX,
                     handoff.session_kind,
                 );
+                params.text = truncate_realtime_text_to_token_budget(
+                    &params.text,
+                    REALTIME_ASSISTANT_OUTPUT_TOKEN_BUDGET,
+                );
                 HandoffOutput::StandaloneAssistantOutput {
-                    output_text: truncate_realtime_text_to_token_budget(
-                        &output_text,
-                        REALTIME_ASSISTANT_OUTPUT_TOKEN_BUDGET,
-                    ),
+                    output_text: params.text,
+                    role: params.role,
                 }
             }
         };
@@ -1267,7 +1272,7 @@ async fn handle_handoff_output(
 
     let result = match event_parser {
         RealtimeEventParser::V1 => match handoff_output {
-            HandoffOutput::StandaloneAssistantOutput { output_text } => {
+            HandoffOutput::StandaloneAssistantOutput { output_text, .. } => {
                 // TODO(guinness): Use the new client event for standalone handoffs once the API changes are complete.
                 writer
                     .send_conversation_handoff_append(
@@ -1279,6 +1284,7 @@ async fn handle_handoff_output(
             HandoffOutput::ProgressUpdate {
                 handoff_id,
                 output_text,
+                ..
             }
             | HandoffOutput::FinalUpdate {
                 handoff_id,
@@ -1290,9 +1296,9 @@ async fn handle_handoff_output(
             }
         },
         RealtimeEventParser::RealtimeV2 => match handoff_output {
-            HandoffOutput::StandaloneAssistantOutput { output_text } => {
+            HandoffOutput::StandaloneAssistantOutput { output_text, role } => {
                 if let Err(err) = writer
-                    .send_conversation_item_create(output_text, ConversationTextRole::User)
+                    .send_conversation_item_create(output_text, role)
                     .await
                 {
                     Err(err)
@@ -1305,6 +1311,7 @@ async fn handle_handoff_output(
             HandoffOutput::ProgressUpdate {
                 handoff_id,
                 output_text,
+                role,
             } => {
                 let active_handoff = handoff_state.active_handoff.lock().await.clone();
                 match active_handoff {
@@ -1315,7 +1322,7 @@ async fn handle_handoff_output(
                     }
                 }
                 writer
-                    .send_conversation_item_create(output_text, ConversationTextRole::User)
+                    .send_conversation_item_create(output_text, role)
                     .await
             }
             HandoffOutput::FinalUpdate {

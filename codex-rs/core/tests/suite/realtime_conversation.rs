@@ -2671,6 +2671,124 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn realtime_v2_mirrors_commentary_as_developer_text() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let _response_mock = responses::mount_sse_once(
+        &api_server,
+        responses::sse(vec![
+            responses::ev_response_created("resp_roles"),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "message",
+                    "role": "assistant",
+                    "id": "commentary_roles",
+                    "content": [{"type": "output_text", "text": "Still working"}],
+                    "phase": "commentary"
+                }
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "message",
+                    "role": "assistant",
+                    "id": "final_roles",
+                    "content": [{"type": "output_text", "text": "Finished"}],
+                    "phase": "final_answer"
+                }
+            }),
+            responses::ev_completed("resp_roles"),
+        ]),
+    )
+    .await;
+
+    let realtime_server = start_websocket_server(vec![vec![
+        vec![
+            json!({
+                "type": "session.updated",
+                "session": { "id": "sess_roles", "instructions": "backend prompt" }
+            }),
+            json!({
+                "type": "conversation.item.done",
+                "item": {
+                    "id": "item_roles",
+                    "type": "function_call",
+                    "name": "background_agent",
+                    "call_id": "handoff_roles",
+                    "arguments": "{\"prompt\":\"Do the task\"}"
+                }
+            }),
+        ],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V2;
+        }
+    });
+    let test = builder.build(&api_server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            architecture: None,
+            model: None,
+            output_modality: RealtimeOutputModality::Audio,
+            prompt: Some(Some("backend prompt".to_string())),
+            realtime_session_id: None,
+            transport: None,
+            version: None,
+            voice: None,
+        }))
+        .await?;
+
+    let _ = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::HandoffRequested(handoff),
+        }) if handoff.handoff_id == "handoff_roles" => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let commentary = wait_for_websocket_request(&realtime_server, 0, 1).await?;
+    assert_eq!(
+        commentary.body_json(),
+        json!({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": "[BACKEND] Still working"}]
+            }
+        })
+    );
+
+    let final_answer = wait_for_websocket_request(&realtime_server, 0, 2).await?;
+    assert_eq!(
+        final_answer.body_json(),
+        json!({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "[BACKEND] Finished"}]
+            }
+        })
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_handoff_persists_across_item_done_until_turn_complete() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

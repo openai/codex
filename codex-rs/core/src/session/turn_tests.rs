@@ -1,7 +1,12 @@
 use super::*;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::TurnItemContributor;
+use codex_protocol::ThreadId;
 use codex_protocol::items::AgentMessageContent;
+use codex_protocol::items::AgentMessageItem;
+use codex_protocol::protocol::ConversationTextParams;
+use codex_protocol::protocol::ConversationTextRole;
+use codex_protocol::protocol::ItemCompletedEvent;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
@@ -33,6 +38,38 @@ fn assistant_output_text(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+    }
+}
+
+#[test]
+fn realtime_agent_message_role_follows_message_phase() {
+    for (phase, role) in [
+        (
+            Some(MessagePhase::Commentary),
+            ConversationTextRole::Developer,
+        ),
+        (Some(MessagePhase::FinalAnswer), ConversationTextRole::User),
+        (None, ConversationTextRole::User),
+    ] {
+        assert_eq!(
+            realtime_text_for_event(&EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id: ThreadId::new(),
+                turn_id: "turn-1".to_string(),
+                item: TurnItem::AgentMessage(AgentMessageItem {
+                    id: "message-1".to_string(),
+                    content: vec![AgentMessageContent::Text {
+                        text: "Status update".to_string(),
+                    }],
+                    phase,
+                    memory_citation: None,
+                }),
+                completed_at_ms: 0,
+            })),
+            Some(ConversationTextParams {
+                text: "Status update".to_string(),
+                role,
+            })
+        );
     }
 }
 

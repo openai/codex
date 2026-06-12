@@ -1824,13 +1824,13 @@ impl Session {
     }
 
     async fn maybe_mirror_event_text_to_realtime(&self, msg: &EventMsg) {
-        let Some(text) = realtime_text_for_event(msg) else {
+        let Some(params) = realtime_text_for_event(msg) else {
             return;
         };
         if self.conversation.running_state().await.is_none() {
             return;
         }
-        if let Err(err) = self.conversation.handoff_out(text).await {
+        if let Err(err) = self.conversation.handoff_out(params).await {
             debug!("failed to mirror event text to realtime conversation: {err}");
         }
     }

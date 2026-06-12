@@ -92,6 +92,8 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentReasoningSectionBreakEvent;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::ConversationTextParams;
+use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::PlanDeltaEvent;
@@ -1402,11 +1404,17 @@ fn agent_message_text(item: &codex_protocol::items::AgentMessageItem) -> String 
         .collect()
 }
 
-pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
+pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<ConversationTextParams> {
     match msg {
-        EventMsg::AgentMessage(event) => Some(event.message.clone()),
+        EventMsg::AgentMessage(event) => Some(ConversationTextParams {
+            text: event.message.clone(),
+            role: realtime_role_for_message_phase(event.phase.as_ref()),
+        }),
         EventMsg::ItemCompleted(event) => match &event.item {
-            TurnItem::AgentMessage(item) => Some(agent_message_text(item)),
+            TurnItem::AgentMessage(item) => Some(ConversationTextParams {
+                text: agent_message_text(item),
+                role: realtime_role_for_message_phase(item.phase.as_ref()),
+            }),
             _ => None,
         },
         EventMsg::Error(_)
@@ -1483,6 +1491,13 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::CollabResumeBegin(_)
         | EventMsg::CollabResumeEnd(_)
         | EventMsg::SubAgentActivity(_) => None,
+    }
+}
+
+fn realtime_role_for_message_phase(phase: Option<&MessagePhase>) -> ConversationTextRole {
+    match phase {
+        Some(MessagePhase::Commentary) => ConversationTextRole::Developer,
+        Some(MessagePhase::FinalAnswer) | None => ConversationTextRole::User,
     }
 }
 
