@@ -257,7 +257,7 @@ fn rendered_status_for(config: &Config) -> String {
         )
         .single()
         .expect("timestamp");
-    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let model_slug = get_model_offline_for_tests(config.model.as_deref());
     let composite = new_status_output(
         config,
         test_status_account_display().as_ref(),
