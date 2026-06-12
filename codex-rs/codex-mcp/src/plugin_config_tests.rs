@@ -116,7 +116,7 @@ fn declared_placement_preserves_local_plugin_normalization() {
 }
 
 #[test]
-fn environment_placement_forces_authority_and_defaults_cwd() {
+fn environment_placement_forces_authority_and_defaults_null_cwd() {
     let plugin_root = plugin_root();
     let outcome = parse_plugin_mcp_config(
         &plugin_root,
@@ -125,6 +125,7 @@ fn environment_placement_forces_authority_and_defaults_cwd() {
             "mcpServers":{"demo":{
                 "command":"demo-mcp",
                 "environment_id":"local",
+                "cwd":null,
                 "env_vars":["EXECUTOR_TOKEN", {"name":"OTHER_TOKEN"}]
             }}
         }"#,
@@ -273,6 +274,31 @@ fn local_environment_placement_preserves_local_env_vars() {
                 ),
             )]),
             errors: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn local_environment_placement_rejects_remote_env_vars() {
+    let plugin_root = plugin_root();
+    let outcome = parse_plugin_mcp_config(
+        &plugin_root,
+        r#"{"demo":{"command":"demo-mcp","env_vars":[{"name":"TOKEN","source":"remote"}]}}"#,
+        PluginMcpServerPlacement::Environment {
+            environment_id: DEFAULT_MCP_SERVER_ENVIRONMENT_ID,
+        },
+    )
+    .expect("parse plugin MCP config");
+
+    assert_eq!(
+        outcome,
+        PluginMcpConfigParseOutcome {
+            servers: BTreeMap::new(),
+            errors: vec![PluginMcpServerParseError {
+                name: "demo".to_string(),
+                message: "env_vars entry `TOKEN` cannot use source `remote` in a local environment"
+                    .to_string(),
+            }],
         }
     );
 }

@@ -102,21 +102,19 @@ fn normalize_plugin_mcp_server(
                             .into_owned(),
                     ),
                 ),
-                Some(value) => object.insert("cwd".to_string(), value),
-                None => object.insert(
+                Some(JsonValue::Null) | None => object.insert(
                     "cwd".to_string(),
                     JsonValue::String(plugin_root.to_string_lossy().into_owned()),
                 ),
+                Some(value) => object.insert("cwd".to_string(), value),
             };
         }
     }
 
     let mut config = serde_json::from_value::<McpServerConfig>(JsonValue::Object(object))
         .map_err(|err| err.to_string())?;
-    if matches!(placement, PluginMcpServerPlacement::Environment { .. })
-        && !config.is_local_environment()
-    {
-        bind_remote_executor_env_vars(&mut config)?;
+    if matches!(placement, PluginMcpServerPlacement::Environment { .. }) {
+        bind_environment_env_vars(&mut config)?;
     }
     Ok(config)
 }
@@ -140,28 +138,37 @@ fn executor_plugin_cwd(plugin_root: &Path, configured_cwd: &str) -> Result<PathB
     Ok(plugin_root.join(cwd))
 }
 
-fn bind_remote_executor_env_vars(config: &mut McpServerConfig) -> Result<(), String> {
+fn bind_environment_env_vars(config: &mut McpServerConfig) -> Result<(), String> {
+    let is_local_environment = config.is_local_environment();
     let McpServerTransportConfig::Stdio { env_vars, .. } = &mut config.transport else {
         return Ok(());
     };
     for env_var in env_vars {
         match env_var {
-            McpServerEnvVar::Name(name) => {
+            McpServerEnvVar::Name(name) if !is_local_environment => {
                 *env_var = McpServerEnvVar::Config {
                     name: std::mem::take(name),
                     source: Some("remote".to_string()),
                 };
             }
-            McpServerEnvVar::Config { name, source } => match source.as_deref() {
-                None => *source = Some("remote".to_string()),
-                Some("remote") => {}
-                Some("local") => {
-                    return Err(format!(
-                        "env_vars entry `{name}` cannot use source `local` in an executor-owned plugin"
-                    ));
+            McpServerEnvVar::Name(_) => {}
+            McpServerEnvVar::Config { name, source } => {
+                match (is_local_environment, source.as_deref()) {
+                    (true, None | Some("local")) | (false, Some("remote")) => {}
+                    (true, Some("remote")) => {
+                        return Err(format!(
+                            "env_vars entry `{name}` cannot use source `remote` in a local environment"
+                        ));
+                    }
+                    (false, None) => *source = Some("remote".to_string()),
+                    (false, Some("local")) => {
+                        return Err(format!(
+                            "env_vars entry `{name}` cannot use source `local` in an executor-owned plugin"
+                        ));
+                    }
+                    (_, Some(source)) => unreachable!("validated env_vars source `{source}`"),
                 }
-                Some(source) => unreachable!("validated env_vars source `{source}`"),
-            },
+            }
         }
     }
     Ok(())
