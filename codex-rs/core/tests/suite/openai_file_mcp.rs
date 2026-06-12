@@ -17,7 +17,7 @@ use core_test_support::apps_test_server::SEARCH_CALENDAR_NAMESPACE as DOCUMENT_E
 use core_test_support::apps_test_server::apps_enabled_builder;
 use core_test_support::apps_test_server::recorded_apps_tool_call_by_name;
 use core_test_support::hooks::trust_discovered_hooks;
-use core_test_support::remote_env_env_var;
+use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
@@ -25,10 +25,12 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::test_codex::TestCodex;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use wiremock::Mock;
+use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::body_json;
 use wiremock::matchers::header;
@@ -70,11 +72,18 @@ fn write_post_tool_use_hook(home: &Path) -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() -> Result<()> {
-    let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount(&server).await?;
+fn uploaded_file(server: &MockServer) -> Value {
+    json!({
+        "download_url": format!("{}/download/file_123", server.uri()),
+        "file_id": "file_123",
+        "mime_type": "text/plain",
+        "file_name": "report.txt",
+        "uri": "sediment://file_123",
+        "file_size_bytes": 11,
+    })
+}
 
+async fn mount_file_upload_mocks(server: &MockServer) {
     Mock::given(method("POST"))
         .and(path("/files"))
         .and(header("chatgpt-account-id", "account_id"))
@@ -88,14 +97,14 @@ async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() 
             "upload_url": format!("{}/upload/file_123", server.uri()),
         })))
         .expect(1)
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("PUT"))
         .and(path("/upload/file_123"))
         .and(header("content-length", "11"))
         .respond_with(ResponseTemplate::new(200))
         .expect(1)
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("POST"))
         .and(path("/files/file_123/uploaded"))
@@ -107,39 +116,18 @@ async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() 
             "file_size_bytes": 11,
         })))
         .expect(1)
-        .mount(&server)
+        .mount(server)
         .await;
+}
 
-    let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone())
-        .with_pre_build_hook(move |home| {
-            write_post_tool_use_hook(home)
-                .expect("failed to write apps file post tool use hook fixture");
-        })
-        .with_workspace_setup(|cwd, fs| async move {
-            let report_path = PathUri::from_abs_path(&cwd.join("report.txt"))?;
-            fs.write_file(&report_path, b"hello world".to_vec(), /*sandbox*/ None)
-                .await?;
-            let hook_path = PathUri::from_abs_path(&cwd.join("post_tool_use_hook.py"))?;
-            fs.write_file(
-                &hook_path,
-                POST_TOOL_USE_HOOK_SCRIPT.as_bytes().to_vec(),
-                /*sandbox*/ None,
-            )
-            .await?;
-            Ok(())
-        })
-        .with_config(move |config| {
-            trust_discovered_hooks(config);
-        });
-    let test = builder.build_with_remote_env(&server).await?;
-    let call_id = "extract-call-1";
+async fn run_extract_turn(test: &TestCodex, server: &MockServer) -> Result<ResponseMock> {
     let mock = mount_sse_sequence(
-        &server,
+        server,
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
                 ev_function_call_with_namespace(
-                    call_id,
+                    "extract-call-1",
                     DOCUMENT_EXTRACT_NAMESPACE,
                     DOCUMENT_EXTRACT_TOOL,
                     &json!({"file": "report.txt"}).to_string(),
@@ -162,6 +150,25 @@ async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() 
     )
     .await?;
 
+    Ok(mock)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() -> Result<()> {
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    mount_file_upload_mocks(&server).await;
+
+    let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone())
+        .with_workspace_setup(|cwd, fs| async move {
+            let report_path = PathUri::from_abs_path(&cwd.join("report.txt"))?;
+            fs.write_file(&report_path, b"hello world".to_vec(), /*sandbox*/ None)
+                .await?;
+            Ok(())
+        });
+    let test = builder.build_with_remote_env(&server).await?;
+    let mock = run_extract_turn(&test, &server).await?;
+
     let requests = mock.requests();
     let body = requests[0].body_json();
     let missing_tool_message = format!(
@@ -183,14 +190,7 @@ async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() 
 
     assert_eq!(
         apps_tool_call.pointer("/params/arguments/file"),
-        Some(&json!({
-            "download_url": format!("{}/download/file_123", server.uri()),
-            "file_id": "file_123",
-            "mime_type": "text/plain",
-            "file_name": "report.txt",
-            "uri": "sediment://file_123",
-            "file_size_bytes": 11,
-        }))
+        Some(&uploaded_file(&server))
     );
     assert_eq!(
         apps_tool_call.pointer("/params/_meta/_codex_apps"),
@@ -202,34 +202,55 @@ async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() 
         }))
     );
 
-    // Hook commands still execute on the host, so their filesystem effects are
-    // only available when this test uses the local environment.
-    if std::env::var_os(remote_env_env_var()).is_none() {
-        let hook_log_path =
-            PathUri::from_abs_path(&test.config.cwd.join("post_tool_use_hook_log.jsonl"))?;
-        let hook_log = test
-            .fs()
-            .read_file_text(&hook_log_path, /*sandbox*/ None)
-            .await
-            .context("read post tool use hook log")?;
-        let hook_inputs = hook_log
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| serde_json::from_str(line).context("parse post tool use hook input"))
-            .collect::<Result<Vec<Value>>>()?;
-        assert_eq!(hook_inputs.len(), 1);
-        assert_eq!(
-            hook_inputs[0]["tool_input"]["file"],
-            json!({
-                "download_url": format!("{}/download/file_123", server.uri()),
-                "file_id": "file_123",
-                "mime_type": "text/plain",
-                "file_name": "report.txt",
-                "uri": "sediment://file_123",
-                "file_size_bytes": 11,
-            })
-        );
-    }
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_apps_file_params_pass_uploaded_file_to_post_tool_use_hook() -> Result<()> {
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    mount_file_upload_mocks(&server).await;
+
+    let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone())
+        .with_pre_build_hook(move |home| {
+            if let Err(error) = write_post_tool_use_hook(home) {
+                panic!("failed to write apps file post tool use hook fixture: {error}");
+            }
+        })
+        .with_workspace_setup(|cwd, fs| async move {
+            let report_path = PathUri::from_abs_path(&cwd.join("report.txt"))?;
+            fs.write_file(&report_path, b"hello world".to_vec(), /*sandbox*/ None)
+                .await?;
+            let hook_path = PathUri::from_abs_path(&cwd.join("post_tool_use_hook.py"))?;
+            fs.write_file(
+                &hook_path,
+                POST_TOOL_USE_HOOK_SCRIPT.as_bytes().to_vec(),
+                /*sandbox*/ None,
+            )
+            .await?;
+            Ok(())
+        })
+        .with_config(move |config| {
+            trust_discovered_hooks(config);
+        });
+    let test = builder.build(&server).await?;
+    let _responses = run_extract_turn(&test, &server).await?;
+
+    let hook_log_path =
+        PathUri::from_abs_path(&test.config.cwd.join("post_tool_use_hook_log.jsonl"))?;
+    let hook_log = test
+        .fs()
+        .read_file_text(&hook_log_path, /*sandbox*/ None)
+        .await
+        .context("read post tool use hook log")?;
+    let hook_inputs = hook_log
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).context("parse post tool use hook input"))
+        .collect::<Result<Vec<Value>>>()?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["tool_input"]["file"], uploaded_file(&server));
 
     server.verify().await;
     Ok(())
