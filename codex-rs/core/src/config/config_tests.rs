@@ -1468,6 +1468,47 @@ mode = "system"
             mode: Some(SystemProxyFeatureModeToml::System),
         })
     );
+
+    for (requirement_key, expected_mode) in [
+        ("system_proxy_mode_auto", SystemProxyFeatureModeToml::Auto),
+        ("system_proxy_mode_env", SystemProxyFeatureModeToml::Env),
+        (
+            "system_proxy_mode_system",
+            SystemProxyFeatureModeToml::System,
+        ),
+        (
+            "system_proxy_mode_direct",
+            SystemProxyFeatureModeToml::Direct,
+        ),
+    ] {
+        let mode_requirement = Sourced::new(
+            FeatureRequirementsToml {
+                entries: BTreeMap::from([(requirement_key.to_string(), true)]),
+            },
+            RequirementSource::Unknown,
+        );
+        assert_eq!(
+            resolve_bootstrap_system_proxy_config(&ConfigToml::default(), Some(&mode_requirement),)?,
+            Some(SystemProxyFeatureConfigToml {
+                enabled: Some(true),
+                mode: Some(expected_mode),
+            })
+        );
+    }
+
+    let direct = Sourced::new(
+        FeatureRequirementsToml {
+            entries: BTreeMap::from([("system_proxy_mode_direct".to_string(), true)]),
+        },
+        RequirementSource::Unknown,
+    );
+    assert_eq!(
+        resolve_bootstrap_system_proxy_config(&configured, Some(&direct))?,
+        Some(SystemProxyFeatureConfigToml {
+            enabled: Some(true),
+            mode: Some(SystemProxyFeatureModeToml::Direct),
+        })
+    );
     Ok(())
 }
 

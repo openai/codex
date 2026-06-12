@@ -1827,6 +1827,11 @@ impl AuthManager {
         self.enable_codex_api_key_env
     }
 
+    /// Returns the route-selection policy used by auth-owned clients.
+    pub fn auth_route_config(&self) -> Option<&AuthRouteConfig> {
+        self.auth_route_config.as_ref()
+    }
+
     /// Convenience constructor returning an `Arc` wrapper.
     pub async fn shared(
         codex_home: PathBuf,

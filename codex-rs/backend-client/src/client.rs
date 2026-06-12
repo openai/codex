@@ -8,6 +8,9 @@ use crate::types::TokenUsageProfile;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
 use codex_api::SharedAuthProvider;
+use codex_client::ClientRouteClass;
+use codex_client::OutboundProxyConfig;
+use codex_client::build_reqwest_client_for_route;
 use codex_client::build_reqwest_client_with_custom_ca;
 use codex_client::with_chatgpt_cloudflare_cookie_store;
 use codex_login::CodexAuth;
@@ -145,23 +148,36 @@ impl fmt::Debug for Client {
 
 impl Client {
     pub fn new(base_url: impl Into<String>) -> Result<Self> {
-        let mut base_url = base_url.into();
-        // Normalize common ChatGPT hostnames to include /backend-api so we hit the WHAM paths.
-        // Also trim trailing slashes for consistent URL building.
-        while base_url.ends_with('/') {
-            base_url.pop();
-        }
-        if (base_url.starts_with("https://chatgpt.com")
-            || base_url.starts_with("https://chat.openai.com"))
-            && !base_url.contains("/backend-api")
-        {
-            base_url = format!("{base_url}/backend-api");
-        }
+        let base_url = normalize_base_url(base_url.into());
         let http = build_reqwest_client_with_custom_ca(with_chatgpt_cloudflare_cookie_store(
             reqwest::Client::builder(),
         ))?;
+        Ok(Self::with_http_client(base_url, http))
+    }
+
+    /// Creates an authenticated client routed for the cloud config bundle endpoint.
+    pub fn from_auth_for_config_bundle(
+        base_url: impl Into<String>,
+        auth: &CodexAuth,
+        outbound_proxy_config: Option<&OutboundProxyConfig>,
+    ) -> Result<Self> {
+        let base_url = normalize_base_url(base_url.into());
         let path_style = PathStyle::from_base_url(&base_url);
-        Ok(Self {
+        let request_url = config_bundle_url(&base_url, path_style);
+        let http = build_reqwest_client_for_route(
+            with_chatgpt_cloudflare_cookie_store(reqwest::Client::builder()),
+            &request_url,
+            ClientRouteClass::Api,
+            outbound_proxy_config,
+        )?;
+        Ok(Self::with_http_client(base_url, http)
+            .with_user_agent(get_codex_user_agent())
+            .with_auth_provider(codex_model_provider::auth_provider_from_auth(auth)))
+    }
+
+    fn with_http_client(base_url: String, http: reqwest::Client) -> Self {
+        let path_style = PathStyle::from_base_url(&base_url);
+        Self {
             base_url,
             http,
             auth_provider: codex_model_provider::unauthenticated_auth_provider(),
@@ -169,7 +185,7 @@ impl Client {
             chatgpt_account_id: None,
             chatgpt_account_is_fedramp: false,
             path_style,
-        })
+        }
     }
 
     pub fn from_auth(base_url: impl Into<String>, auth: &CodexAuth) -> Result<Self> {
@@ -425,10 +441,7 @@ impl Client {
     pub async fn get_config_bundle(
         &self,
     ) -> std::result::Result<ConfigBundleResponse, RequestError> {
-        let url = match self.path_style {
-            PathStyle::CodexApi => format!("{}/api/codex/config/bundle", self.base_url),
-            PathStyle::ChatGptApi => format!("{}/wham/config/bundle", self.base_url),
-        };
+        let url = config_bundle_url(&self.base_url, self.path_style);
         let req = self.http.get(&url).headers(self.headers());
         let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
         self.decode_json::<ConfigBundleResponse>(&url, &ct, &body)
@@ -643,6 +656,26 @@ impl Client {
 
         let seconds_i64 = i64::from(seconds);
         Some((seconds_i64 + 59) / 60)
+    }
+}
+
+fn normalize_base_url(mut base_url: String) -> String {
+    while base_url.ends_with('/') {
+        base_url.pop();
+    }
+    if (base_url.starts_with("https://chatgpt.com")
+        || base_url.starts_with("https://chat.openai.com"))
+        && !base_url.contains("/backend-api")
+    {
+        base_url = format!("{base_url}/backend-api");
+    }
+    base_url
+}
+
+fn config_bundle_url(base_url: &str, path_style: PathStyle) -> String {
+    match path_style {
+        PathStyle::CodexApi => format!("{base_url}/api/codex/config/bundle"),
+        PathStyle::ChatGptApi => format!("{base_url}/wham/config/bundle"),
     }
 }
 

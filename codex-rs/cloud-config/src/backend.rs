@@ -6,6 +6,8 @@ use codex_config::CloudConfigFragment;
 use codex_config::CloudConfigTomlBundle;
 use codex_config::CloudRequirementsFragment;
 use codex_config::CloudRequirementsTomlBundle;
+use codex_login::AuthManager;
+use codex_login::AuthRouteConfig;
 use codex_login::CodexAuth;
 use std::future::Future;
 
@@ -46,24 +48,34 @@ pub(crate) trait BundleClient: Send + Sync {
 
 pub(crate) struct BackendBundleClient {
     base_url: String,
+    auth_route_config: Option<AuthRouteConfig>,
 }
 
 impl BackendBundleClient {
-    pub(crate) fn new(base_url: String) -> Self {
-        Self { base_url }
+    pub(crate) fn from_auth_manager(base_url: String, auth_manager: &AuthManager) -> Self {
+        Self {
+            base_url,
+            auth_route_config: auth_manager.auth_route_config().cloned(),
+        }
     }
 }
 
 impl BundleClient for BackendBundleClient {
     async fn get_bundle(&self, auth: &CodexAuth) -> Result<CloudConfigBundle, BundleRequestError> {
-        let client = BackendClient::from_auth(self.base_url.clone(), auth)
-            .inspect_err(|err| {
-                tracing::warn!(
-                    error = %err,
-                    "Failed to construct backend client for cloud config bundle"
-                );
-            })
-            .map_err(|_| BundleRequestError::Retryable(RetryableFailureKind::BackendClientInit))?;
+        let client = BackendClient::from_auth_for_config_bundle(
+            self.base_url.clone(),
+            auth,
+            self.auth_route_config
+                .as_ref()
+                .and_then(AuthRouteConfig::route_config),
+        )
+        .inspect_err(|err| {
+            tracing::warn!(
+                error = %err,
+                "Failed to construct backend client for cloud config bundle"
+            );
+        })
+        .map_err(|_| BundleRequestError::Retryable(RetryableFailureKind::BackendClientInit))?;
 
         let response = client
             .get_config_bundle()
@@ -134,3 +146,7 @@ fn requirements_fragment_from_delivered(
         contents: fragment.contents,
     }
 }
+
+#[cfg(test)]
+#[path = "backend_tests.rs"]
+mod tests;

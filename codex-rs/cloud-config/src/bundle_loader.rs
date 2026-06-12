@@ -23,9 +23,10 @@ pub fn cloud_config_bundle_loader(
     chatgpt_base_url: String,
     codex_home: PathBuf,
 ) -> CloudConfigBundleLoader {
+    let backend_client = BackendBundleClient::from_auth_manager(chatgpt_base_url, &auth_manager);
     let service = CloudConfigBundleService::new(
         auth_manager,
-        Arc::new(BackendBundleClient::new(chatgpt_base_url)),
+        Arc::new(backend_client),
         codex_home,
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );

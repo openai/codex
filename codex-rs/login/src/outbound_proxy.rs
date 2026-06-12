@@ -30,7 +30,8 @@ impl AuthRouteConfig {
         Self::from_outbound_proxy_mode(OutboundProxyMode::Direct)
     }
 
-    pub(crate) fn route_config(&self) -> Option<&OutboundProxyConfig> {
+    /// Returns the shared outbound proxy policy for route-aware clients.
+    pub fn route_config(&self) -> Option<&OutboundProxyConfig> {
         self.route_config.as_ref()
     }
 
@@ -52,17 +53,11 @@ pub fn auth_route_config_from_system_proxy_config(
     }
 }
 
-/// Returns the auth route config for the explicit platform system-proxy startup path.
+/// Returns the auth route config for the system-proxy startup path.
 pub fn bootstrap_auth_route_config_from_system_proxy_config(
     system_proxy: Option<&SystemProxyFeatureConfigToml>,
 ) -> Option<AuthRouteConfig> {
-    let system_proxy = system_proxy?;
-    if system_proxy.mode != Some(SystemProxyFeatureModeToml::System) {
-        return None;
-    }
-
-    // Legacy startup auth builders only need the explicit platform system-proxy selection here.
-    Some(auth_route_config_from_system_proxy_config(system_proxy))
+    system_proxy.map(auth_route_config_from_system_proxy_config)
 }
 
 #[cfg(test)]
@@ -79,34 +74,21 @@ mod tests {
             None
         );
 
-        let system_config = AuthRouteConfig {
-            route_config: Some(OutboundProxyConfig::new(OutboundProxyMode::System)),
-        };
         let cases = [
-            (None, AuthRouteConfig::auto(), None),
-            (
-                Some(SystemProxyFeatureMode::Auto),
-                AuthRouteConfig::auto(),
-                None,
-            ),
-            (
-                Some(SystemProxyFeatureMode::Env),
-                AuthRouteConfig::env(),
-                None,
-            ),
+            (None, AuthRouteConfig::auto()),
+            (Some(SystemProxyFeatureMode::Auto), AuthRouteConfig::auto()),
+            (Some(SystemProxyFeatureMode::Env), AuthRouteConfig::env()),
             (
                 Some(SystemProxyFeatureMode::Direct),
                 AuthRouteConfig::direct(),
-                None,
             ),
             (
                 Some(SystemProxyFeatureMode::System),
-                system_config.clone(),
-                Some(system_config),
+                AuthRouteConfig::system(),
             ),
         ];
 
-        for (mode, expected_config, expected_startup_config) in cases {
+        for (mode, expected_config) in cases {
             let system_proxy = SystemProxyFeatureConfigToml {
                 enabled: Some(true),
                 mode,
@@ -117,7 +99,7 @@ mod tests {
             );
             assert_eq!(
                 bootstrap_auth_route_config_from_system_proxy_config(Some(&system_proxy)),
-                expected_startup_config
+                Some(expected_config)
             );
         }
     }

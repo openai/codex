@@ -2535,10 +2535,14 @@ pub fn resolve_bootstrap_system_proxy_config(
         FeatureConfigSource::default(),
         FeatureOverrides::default(),
     );
+    let system_proxy_mode_requirement =
+        managed_features::system_proxy_mode_requirement(feature_requirements)?;
     let features =
         ManagedFeatures::from_configured(configured_features, feature_requirements.cloned())?;
     Ok(resolved_system_proxy_config(
-        cfg, &features, /*mode_requirement*/ None,
+        cfg,
+        &features,
+        system_proxy_mode_requirement,
     ))
 }
 
