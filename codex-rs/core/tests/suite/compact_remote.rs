@@ -30,9 +30,11 @@ use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::responses;
+use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_websocket_server;
+use core_test_support::responses::start_websocket_server_with_compact_response;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
@@ -3947,6 +3949,223 @@ async fn remote_mid_turn_compact_v2_round_trips_turn_state_over_http() -> Result
         Some("continuation-state")
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_mid_turn_compact_v2_round_trips_turn_state_over_websocket() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![vec![
+        vec![
+            responses::ev_response_created("warm-1"),
+            responses::ev_completed("warm-1"),
+        ],
+        vec![
+            json!({
+                "type": "codex.response.metadata",
+                "headers": {(TURN_STATE_HEADER): "sampling-state"},
+            }),
+            responses::ev_function_call("call-before-compact", DUMMY_FUNCTION_NAME, "{}"),
+            responses::ev_completed_with_tokens("r1", /*total_tokens*/ 500),
+        ],
+        vec![
+            json!({
+                "type": "codex.response.metadata",
+                "headers": {(TURN_STATE_HEADER): "compact-state"},
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "compaction",
+                    "encrypted_content": "V2_WS_COMPACT_SUMMARY",
+                }
+            }),
+            responses::ev_completed("r-compact"),
+        ],
+        vec![
+            json!({
+                "type": "codex.response.metadata",
+                "headers": {(TURN_STATE_HEADER): "continuation-state"},
+            }),
+            responses::ev_function_call("call-after-compact", DUMMY_FUNCTION_NAME, "{}"),
+            responses::ev_completed_with_tokens("r2", /*total_tokens*/ 80),
+        ],
+        vec![
+            responses::ev_assistant_message("m1", "FINAL_REPLY"),
+            responses::ev_completed_with_tokens("r3", /*total_tokens*/ 80),
+        ],
+    ]])
+    .await;
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::RemoteCompactionV2);
+            config.model_auto_compact_token_limit = Some(200);
+        });
+    let test = builder.build_with_websocket_server(&server).await?;
+
+    // Phase 1: startup prewarm stays empty, then WebSocket sampling mints state and schedules
+    // inline v2 compaction.
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "RUN_WITH_WS_MID_TURN_COMPACT_V2".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&test.codex).await;
+
+    let requests = server.single_connection();
+    assert_eq!(requests.len(), 5);
+    assert_eq!(requests[0].body_json()["generate"].as_bool(), Some(false));
+    // Phase 2: the v2 compact request replays sampling state and returns compact state.
+    assert!(
+        requests[2]
+            .body_json()
+            .to_string()
+            .contains("\"type\":\"compaction_trigger\"")
+    );
+    // Phase 3: both post-compact requests replay the latest metadata update.
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.body_json()["client_metadata"][TURN_STATE_HEADER].clone())
+            .collect::<Vec<_>>(),
+        vec![
+            json!(""),
+            json!(""),
+            json!("sampling-state"),
+            json!("compact-state"),
+            json!("continuation-state"),
+        ]
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_mid_turn_compact_v1_round_trips_turn_state_across_websocket_and_http() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server_with_compact_response(
+        vec![
+            WebSocketConnectionConfig {
+                requests: vec![vec![
+                    responses::ev_response_created("warm-1"),
+                    responses::ev_completed("warm-1"),
+                ]],
+                response_headers: Vec::new(),
+                accept_delay: None,
+                close_after_requests: true,
+            },
+            WebSocketConnectionConfig {
+                requests: vec![vec![
+                    json!({
+                        "type": "codex.response.metadata",
+                        "headers": {(TURN_STATE_HEADER): "sampling-state"},
+                    }),
+                    responses::ev_function_call("call-before-compact", DUMMY_FUNCTION_NAME, "{}"),
+                    responses::ev_completed_with_tokens("r1", /*total_tokens*/ 500),
+                ]],
+                response_headers: Vec::new(),
+                accept_delay: None,
+                close_after_requests: true,
+            },
+            WebSocketConnectionConfig {
+                requests: vec![
+                    vec![
+                        json!({
+                            "type": "codex.response.metadata",
+                            "headers": {(TURN_STATE_HEADER): "continuation-state"},
+                        }),
+                        responses::ev_function_call(
+                            "call-after-compact",
+                            DUMMY_FUNCTION_NAME,
+                            "{}",
+                        ),
+                        responses::ev_completed_with_tokens("r2", /*total_tokens*/ 80),
+                    ],
+                    vec![
+                        responses::ev_assistant_message("m1", "FINAL_REPLY"),
+                        responses::ev_completed_with_tokens("r3", /*total_tokens*/ 80),
+                    ],
+                ],
+                response_headers: Vec::new(),
+                accept_delay: None,
+                close_after_requests: false,
+            },
+        ],
+        json!({
+            "output": compacted_summary_only_output("V1_WS_COMPACT_SUMMARY"),
+        }),
+        /*turn_state*/ "compact-state",
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model_auto_compact_token_limit = Some(200);
+        });
+    let test = builder
+        .build_with_http_and_websocket_server(&server)
+        .await?;
+
+    // Phase 1: startup prewarm is isolated on its own connection, then WebSocket sampling mints
+    // state before mid-turn v1 compaction.
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "RUN_WITH_WS_MID_TURN_COMPACT_V1".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&test.codex).await;
+
+    // Phase 2: the HTTP compact request receives sampling state and returns compact state.
+    let compact_requests = server.compact_requests();
+    assert_eq!(compact_requests.len(), 1);
+    assert_eq!(compact_requests[0].path(), "/v1/responses/compact");
+    assert!(compact_requests[0].body_json()["input"].is_array());
+    assert_eq!(
+        compact_requests[0].header(TURN_STATE_HEADER).as_deref(),
+        Some("sampling-state")
+    );
+
+    // Phase 3: WebSocket continuation replays compact state and its next metadata update.
+    let requests = server
+        .connections()
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(requests[0].body_json()["generate"].as_bool(), Some(false));
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.body_json()["client_metadata"][TURN_STATE_HEADER].clone())
+            .collect::<Vec<_>>(),
+        vec![
+            json!(""),
+            json!(""),
+            json!("compact-state"),
+            json!("continuation-state")
+        ]
+    );
+
+    server.shutdown().await;
     Ok(())
 }
 

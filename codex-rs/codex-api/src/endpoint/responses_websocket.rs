@@ -215,6 +215,7 @@ impl ResponsesWebsocketConnection {
         &self,
         request: ResponsesWsRequest,
         connection_reused: bool,
+        turn_state: Option<Arc<StdMutex<String>>>,
     ) -> Result<ResponseStream, ApiError> {
         let (tx_event, rx_event) =
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
@@ -264,6 +265,7 @@ impl ResponsesWebsocketConnection {
                         idle_timeout,
                         telemetry,
                         connection_reused,
+                        turn_state.as_deref(),
                     )
                     .await
                 };
@@ -633,6 +635,7 @@ async fn run_websocket_response_stream(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     connection_reused: bool,
+    turn_state: Option<&StdMutex<String>>,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
     send_websocket_request(
@@ -684,6 +687,13 @@ async fn run_websocket_response_stream(
                         continue;
                     }
                 };
+                if let Some(response_turn_state) = event.turn_state()
+                    && let Some(turn_state) = turn_state
+                {
+                    *turn_state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = response_turn_state;
+                }
                 let model_verifications = event.model_verifications();
                 let turn_moderation_metadata = event.turn_moderation_metadata();
                 if event.kind() == "codex.rate_limits" {

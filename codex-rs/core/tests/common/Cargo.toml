@@ -39,7 +39,7 @@ regex-lite = { workspace = true }
 serde_json = { workspace = true }
 similar = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["net", "time"] }
+tokio = { workspace = true, features = ["io-util", "net", "time"] }
 tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }

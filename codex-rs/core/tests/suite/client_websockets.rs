@@ -65,6 +65,7 @@ const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 const USER_AGENT_HEADER: &str = "user-agent";
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 const X_CLIENT_REQUEST_ID_HEADER: &str = "x-client-request-id";
+const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 const WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY: &str =
     "ws_request_header_x_openai_internal_codex_responses_lite";
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
@@ -690,6 +691,126 @@ async fn responses_websocket_sends_responses_lite_metadata_per_request() {
                 "parallel_tool_calls": false,
             }),
         ]
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_turn_state_is_replaced_by_response_metadata() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![
+        vec![
+            json!({
+                "type": "codex.response.metadata",
+                "headers": {(X_CODEX_TURN_STATE_HEADER): "state-a"},
+            }),
+            ev_response_created("resp-a-1"),
+            ev_assistant_message("msg-a-1", "assistant a one"),
+            ev_completed("resp-a-1"),
+        ],
+        vec![
+            ev_response_created("resp-a-2"),
+            ev_assistant_message("msg-a-2", "assistant a two"),
+            ev_completed("resp-a-2"),
+        ],
+        vec![
+            json!({
+                "type": "codex.response.metadata",
+                "headers": {(X_CODEX_TURN_STATE_HEADER): "state-b"},
+            }),
+            ev_response_created("resp-b-1"),
+            ev_assistant_message("msg-b-1", "assistant b one"),
+            ev_completed("resp-b-1"),
+        ],
+        vec![ev_response_created("resp-b-2"), ev_completed("resp-b-2")],
+    ]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let model_a = harness.model_info.clone();
+    let mut model_b = harness.model_info.clone();
+    model_b.slug = "gpt-5.3-codex-other".to_string();
+    let mut session = harness.client.new_session();
+    let prompt_a_one = prompt_with_input(vec![message_item("model a one")]);
+    let prompt_a_two = prompt_with_input(vec![
+        message_item("model a one"),
+        assistant_message_item("msg-a-1", "assistant a one"),
+        message_item("model a two"),
+    ]);
+    let prompt_b_one = prompt_with_input(vec![
+        message_item("model a one"),
+        assistant_message_item("msg-a-1", "assistant a one"),
+        message_item("model a two"),
+        assistant_message_item("msg-a-2", "assistant a two"),
+        message_item("model b one"),
+    ]);
+    let prompt_b_two = prompt_with_input(vec![
+        message_item("model a one"),
+        assistant_message_item("msg-a-1", "assistant a one"),
+        message_item("model a two"),
+        assistant_message_item("msg-a-2", "assistant a two"),
+        message_item("model b one"),
+        assistant_message_item("msg-b-1", "assistant b one"),
+        message_item("model b two"),
+    ]);
+
+    // Phase 1: model A mints state and replays it with an incremental follow-up.
+    // Phase 2: model B receives that state but must start with a full create because the model
+    // changed; its response then replaces the state.
+    // Phase 3: model B replays its replacement with another incremental follow-up.
+    for (model_info, prompt, response_id) in [
+        (&model_a, &prompt_a_one, "resp-a-1"),
+        (&model_a, &prompt_a_two, "resp-a-2"),
+        (&model_b, &prompt_b_one, "resp-b-1"),
+        (&model_b, &prompt_b_two, "resp-b-2"),
+    ] {
+        stream_until_complete_with_model_info(
+            &mut session,
+            &harness,
+            prompt,
+            model_info,
+            response_id,
+        )
+        .await;
+    }
+
+    let requests = server.single_connection();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| {
+                let body = request.body_json();
+                json!({
+                    "model": body["model"],
+                    "turn_state": body["client_metadata"][X_CODEX_TURN_STATE_HEADER],
+                })
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            json!({"model": model_a.slug.as_str(), "turn_state": ""}),
+            json!({"model": model_a.slug.as_str(), "turn_state": "state-a"}),
+            json!({"model": model_b.slug.as_str(), "turn_state": "state-a"}),
+            json!({"model": model_b.slug.as_str(), "turn_state": "state-b"}),
+        ]
+    );
+    let model_a_follow_up = requests[1].body_json();
+    let model_switch = requests[2].body_json();
+    let model_b_follow_up = requests[3].body_json();
+    assert_eq!(
+        model_a_follow_up["previous_response_id"].as_str(),
+        Some("resp-a-1")
+    );
+    assert_eq!(model_switch.get("previous_response_id"), None);
+    assert_eq!(
+        model_switch["input"],
+        serde_json::to_value(&prompt_b_one.input).expect("serialize full model B input")
+    );
+    assert_eq!(
+        model_b_follow_up["previous_response_id"].as_str(),
+        Some("resp-b-1")
     );
 
     server.shutdown().await;

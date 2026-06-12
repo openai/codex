@@ -13,7 +13,10 @@ use codex_protocol::openai_models::ModelsResponse;
 use futures::SinkExt;
 use futures::StreamExt;
 use serde_json::Value;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
+use tokio::net::TcpStream;
 use tokio::sync::Notify;
 use tokio::sync::oneshot;
 use tokio_tungstenite::accept_hdr_async_with_config;
@@ -422,6 +425,30 @@ impl WebSocketRequest {
 }
 
 #[derive(Debug, Clone)]
+pub struct CompactHttpRequest {
+    path: String,
+    headers: Vec<(String, String)>,
+    body: Value,
+}
+
+impl CompactHttpRequest {
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub fn header(&self, name: &str) -> Option<String> {
+        self.headers
+            .iter()
+            .find(|(header, _)| header.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.clone())
+    }
+
+    pub fn body_json(&self) -> Value {
+        self.body.clone()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct WebSocketHandshake {
     uri: String,
     headers: Vec<(String, String)>,
@@ -460,6 +487,7 @@ pub struct WebSocketTestServer {
     uri: String,
     connections: Arc<Mutex<Vec<Vec<WebSocketRequest>>>>,
     handshakes: Arc<Mutex<Vec<WebSocketHandshake>>>,
+    compact_requests: Arc<Mutex<Vec<CompactHttpRequest>>>,
     request_log_updated: Arc<Notify>,
     shutdown: oneshot::Sender<()>,
     task: tokio::task::JoinHandle<()>,
@@ -468,6 +496,12 @@ pub struct WebSocketTestServer {
 impl WebSocketTestServer {
     pub fn uri(&self) -> &str {
         &self.uri
+    }
+
+    pub fn http_uri(&self) -> String {
+        // Model providers derive the WebSocket URL from this HTTP base and can also issue unary
+        // requests, such as v1 compact, against the same listener.
+        self.uri.replacen("ws://", "http://", /*count*/ 1)
     }
 
     pub fn connections(&self) -> Vec<Vec<WebSocketRequest>> {
@@ -504,6 +538,10 @@ impl WebSocketTestServer {
 
     pub fn handshakes(&self) -> Vec<WebSocketHandshake> {
         self.handshakes.lock().unwrap().clone()
+    }
+
+    pub fn compact_requests(&self) -> Vec<CompactHttpRequest> {
+        self.compact_requests.lock().unwrap().clone()
     }
 
     /// Waits until at least `expected` websocket handshakes have been observed or timeout elapses.
@@ -1211,6 +1249,25 @@ pub async fn start_websocket_server(connections: Vec<Vec<Vec<Value>>>) -> WebSoc
 pub async fn start_websocket_server_with_headers(
     connections: Vec<WebSocketConnectionConfig>,
 ) -> WebSocketTestServer {
+    start_websocket_server_inner(connections, /*compact_response*/ None).await
+}
+
+pub async fn start_websocket_server_with_compact_response(
+    connections: Vec<WebSocketConnectionConfig>,
+    compact_response: Value,
+    turn_state: &str,
+) -> WebSocketTestServer {
+    start_websocket_server_inner(
+        connections,
+        Some((compact_response, turn_state.to_string())),
+    )
+    .await
+}
+
+async fn start_websocket_server_inner(
+    connections: Vec<WebSocketConnectionConfig>,
+    compact_response: Option<(Value, String)>,
+) -> WebSocketTestServer {
     let start = std::time::Instant::now();
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -1219,11 +1276,15 @@ pub async fn start_websocket_server_with_headers(
     let uri = format!("ws://{addr}");
     let connections_log = Arc::new(Mutex::new(Vec::new()));
     let handshakes_log = Arc::new(Mutex::new(Vec::new()));
+    let compact_requests_log = Arc::new(Mutex::new(Vec::new()));
     let request_log_updated = Arc::new(Notify::new());
     let requests = Arc::clone(&connections_log);
     let handshakes = Arc::clone(&handshakes_log);
+    let compact_requests = Arc::clone(&compact_requests_log);
     let request_log = Arc::clone(&request_log_updated);
     let connections = Arc::new(Mutex::new(VecDeque::from(connections)));
+    let serve_http_requests = compact_response.is_some();
+    let compact_response = Arc::new(Mutex::new(compact_response));
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
     let task = tokio::spawn(async move {
@@ -1236,6 +1297,28 @@ pub async fn start_websocket_server_with_headers(
                 Ok(value) => value,
                 Err(_) => return,
             };
+
+            let mut request_prefix = [0_u8; 16];
+            let prefix_len = stream.peek(&mut request_prefix).await.unwrap_or_default();
+            // The hybrid test advertises an HTTP base URL, so normal startup model discovery must
+            // be answered without consuming one of the scripted WebSocket connections.
+            if serve_http_requests && request_prefix[..prefix_len].starts_with(b"GET /v1/models") {
+                serve_models_http_request(stream).await;
+                continue;
+            }
+            // WebSocket handshakes are GET requests; the only POST served by this helper is the
+            // unary v1 compact call between scripted WebSocket requests.
+            if request_prefix[..prefix_len].first() == Some(&b'P') {
+                let response = compact_response.lock().unwrap().take();
+                if let Some((body, turn_state)) = response
+                    && let Some(request) =
+                        serve_compact_http_request(stream, body, &turn_state).await
+                {
+                    compact_requests.lock().unwrap().push(request);
+                }
+                continue;
+            }
+
             let connection = {
                 let mut pending = connections.lock().unwrap();
                 pending.pop_front()
@@ -1377,10 +1460,110 @@ pub async fn start_websocket_server_with_headers(
         uri,
         connections: connections_log,
         handshakes: handshakes_log,
+        compact_requests: compact_requests_log,
         request_log_updated,
         shutdown: shutdown_tx,
         task,
     }
+}
+
+async fn serve_models_http_request(mut stream: TcpStream) {
+    let mut request = Vec::new();
+    while find_http_header_end(&request).is_none() {
+        let mut buffer = [0_u8; 4096];
+        let Ok(read) = stream.read(&mut buffer).await else {
+            return;
+        };
+        if read == 0 {
+            return;
+        }
+        request.extend_from_slice(&buffer[..read]);
+    }
+
+    let body = serde_json::to_vec(&ModelsResponse { models: Vec::new() })
+        .expect("serialize empty models response");
+    let response_head = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(response_head.as_bytes()).await;
+    let _ = stream.write_all(&body).await;
+}
+
+async fn serve_compact_http_request(
+    mut stream: TcpStream,
+    response_body: Value,
+    turn_state: &str,
+) -> Option<CompactHttpRequest> {
+    let mut bytes = Vec::new();
+    let (header_end, content_length) = loop {
+        let mut buffer = [0_u8; 4096];
+        let read = stream.read(&mut buffer).await.ok()?;
+        if read == 0 {
+            return None;
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+        if let Some(header_end) = find_http_header_end(&bytes) {
+            let content_length = parse_content_length(&bytes[..header_end])?;
+            if bytes.len() >= header_end + content_length {
+                break (header_end, content_length);
+            }
+        }
+    };
+
+    let request = parse_compact_http_request(&bytes, header_end, content_length)?;
+    let response_body = serde_json::to_vec(&response_body).ok()?;
+    let response_head = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nx-codex-turn-state: {turn_state}\r\nconnection: close\r\n\r\n",
+        response_body.len()
+    );
+    stream.write_all(response_head.as_bytes()).await.ok()?;
+    stream.write_all(&response_body).await.ok()?;
+    Some(request)
+}
+
+fn find_http_header_end(bytes: &[u8]) -> Option<usize> {
+    bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|position| position + 4)
+}
+
+fn parse_content_length(headers: &[u8]) -> Option<usize> {
+    let headers = std::str::from_utf8(headers).ok()?;
+    headers.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("content-length")
+            .then(|| value.trim().parse().ok())
+            .flatten()
+    })
+}
+
+fn parse_compact_http_request(
+    bytes: &[u8],
+    header_end: usize,
+    content_length: usize,
+) -> Option<CompactHttpRequest> {
+    let headers_text = std::str::from_utf8(&bytes[..header_end]).ok()?;
+    let mut lines = headers_text.lines();
+    let path = lines.next()?.split_whitespace().nth(1)?.to_string();
+    let headers = lines
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            Some((name.trim().to_string(), value.trim().to_string()))
+        })
+        .collect::<Vec<_>>();
+    let content_encoding = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-encoding"))
+        .map(|(_, value)| value.as_str());
+    let body_end = header_end + content_length;
+    let body = decode_body_bytes(&bytes[header_end..body_end], content_encoding);
+    Some(CompactHttpRequest {
+        path,
+        headers,
+        body: serde_json::from_slice(&body).ok()?,
+    })
 }
 
 fn parse_ws_request_body(message: Message) -> Option<Value> {

@@ -440,7 +440,23 @@ impl TestCodexBuilder {
         &mut self,
         server: &WebSocketTestServer,
     ) -> anyhow::Result<TestCodex> {
-        let base_url = format!("{}/v1", server.uri());
+        self.build_with_websocket_base_url(format!("{}/v1", server.uri()))
+            .await
+    }
+
+    /// Builds against a listener that accepts both WebSocket upgrades and unary HTTP requests.
+    pub async fn build_with_http_and_websocket_server(
+        &mut self,
+        server: &WebSocketTestServer,
+    ) -> anyhow::Result<TestCodex> {
+        self.build_with_websocket_base_url(format!("{}/v1", server.http_uri()))
+            .await
+    }
+
+    async fn build_with_websocket_base_url(
+        &mut self,
+        base_url: String,
+    ) -> anyhow::Result<TestCodex> {
         let home = match self.home.clone() {
             Some(home) => home,
             None => Arc::new(TempDir::new()?),

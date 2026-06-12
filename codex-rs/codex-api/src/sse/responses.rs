@@ -191,6 +191,16 @@ impl ResponsesStreamEvent {
         }
     }
 
+    pub(crate) fn turn_state(&self) -> Option<String> {
+        if self.kind() != "codex.response.metadata" {
+            return None;
+        }
+
+        self.headers
+            .as_ref()
+            .and_then(header_turn_state_value_from_json)
+    }
+
     pub(crate) fn model_verifications(&self) -> Option<Vec<ModelVerification>> {
         if self.kind() != "response.metadata" {
             return None;
@@ -220,6 +230,17 @@ fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
     headers.iter().find_map(|(name, value)| {
         if name.eq_ignore_ascii_case("openai-model") || name.eq_ignore_ascii_case("x-openai-model")
         {
+            json_value_as_string(value)
+        } else {
+            None
+        }
+    })
+}
+
+fn header_turn_state_value_from_json(value: &Value) -> Option<String> {
+    let headers = value.as_object()?;
+    headers.iter().find_map(|(name, value)| {
+        if name.eq_ignore_ascii_case(X_CODEX_TURN_STATE_HEADER) {
             json_value_as_string(value)
         } else {
             None
