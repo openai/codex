@@ -37,50 +37,53 @@ use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-const POST_TOOL_USE_HOOK_SCRIPT: &str = r#"import json
+fn write_post_tool_use_hook(home: &Path) -> Result<()> {
+    let script_path = home.join("post_tool_use_hook.py");
+    let log_path = home.join("post_tool_use_hook_log.jsonl");
+    let script = format!(
+        r#"import json
 from pathlib import Path
 import sys
 
 payload = json.load(sys.stdin)
 
-with Path("post_tool_use_hook_log.jsonl").open("a", encoding="utf-8") as handle:
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     handle.write(json.dumps(payload) + "\n")
 
-print(json.dumps({
-    "hookSpecificOutput": {
+print(json.dumps({{
+    "hookSpecificOutput": {{
         "hookEventName": "PostToolUse",
         "additionalContext": "observed apps file payload"
-    }
-}))
-"#;
-
-fn write_post_tool_use_hook(home: &Path) -> Result<()> {
+    }}
+}}))
+"#,
+        log_path = log_path.display(),
+    );
     let hooks = serde_json::json!({
         "hooks": {
             "PostToolUse": [{
                 "matcher": DOCUMENT_EXTRACT_HOOK_MATCHER,
                 "hooks": [{
                     "type": "command",
-                    "command": "python3 post_tool_use_hook.py",
+                    "command": format!("python3 {}", script_path.display()),
                     "statusMessage": "running apps file post tool use hook",
                 }]
             }]
         }
     });
 
+    fs::write(&script_path, script).context("write post tool use hook script")?;
     fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
     Ok(())
 }
 
-fn uploaded_file(server: &MockServer) -> Value {
-    json!({
-        "download_url": format!("{}/download/file_123", server.uri()),
-        "file_id": "file_123",
-        "mime_type": "text/plain",
-        "file_name": "report.txt",
-        "uri": "sediment://file_123",
-        "file_size_bytes": 11,
-    })
+fn read_post_tool_use_hook_inputs(home: &Path) -> Result<Vec<Value>> {
+    fs::read_to_string(home.join("post_tool_use_hook_log.jsonl"))
+        .context("read post tool use hook log")?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).context("parse post tool use hook input"))
+        .collect()
 }
 
 async fn mount_file_upload_mocks(server: &MockServer) {
@@ -190,7 +193,14 @@ async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() 
 
     assert_eq!(
         apps_tool_call.pointer("/params/arguments/file"),
-        Some(&uploaded_file(&server))
+        Some(&json!({
+            "download_url": format!("{}/download/file_123", server.uri()),
+            "file_id": "file_123",
+            "mime_type": "text/plain",
+            "file_name": "report.txt",
+            "uri": "sediment://file_123",
+            "file_size_bytes": 11,
+        }))
     );
     assert_eq!(
         apps_tool_call.pointer("/params/_meta/_codex_apps"),
@@ -218,39 +228,26 @@ async fn codex_apps_file_params_pass_uploaded_file_to_post_tool_use_hook() -> Re
                 panic!("failed to write apps file post tool use hook fixture: {error}");
             }
         })
-        .with_workspace_setup(|cwd, fs| async move {
-            let report_path = PathUri::from_abs_path(&cwd.join("report.txt"))?;
-            fs.write_file(&report_path, b"hello world".to_vec(), /*sandbox*/ None)
-                .await?;
-            let hook_path = PathUri::from_abs_path(&cwd.join("post_tool_use_hook.py"))?;
-            fs.write_file(
-                &hook_path,
-                POST_TOOL_USE_HOOK_SCRIPT.as_bytes().to_vec(),
-                /*sandbox*/ None,
-            )
-            .await?;
-            Ok(())
-        })
         .with_config(move |config| {
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
+    tokio::fs::write(test.cwd.path().join("report.txt"), b"hello world").await?;
     let _responses = run_extract_turn(&test, &server).await?;
 
-    let hook_log_path =
-        PathUri::from_abs_path(&test.config.cwd.join("post_tool_use_hook_log.jsonl"))?;
-    let hook_log = test
-        .fs()
-        .read_file_text(&hook_log_path, /*sandbox*/ None)
-        .await
-        .context("read post tool use hook log")?;
-    let hook_inputs = hook_log
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).context("parse post tool use hook input"))
-        .collect::<Result<Vec<Value>>>()?;
+    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
     assert_eq!(hook_inputs.len(), 1);
-    assert_eq!(hook_inputs[0]["tool_input"]["file"], uploaded_file(&server));
+    assert_eq!(
+        hook_inputs[0]["tool_input"]["file"],
+        json!({
+            "download_url": format!("{}/download/file_123", server.uri()),
+            "file_id": "file_123",
+            "mime_type": "text/plain",
+            "file_name": "report.txt",
+            "uri": "sediment://file_123",
+            "file_size_bytes": 11,
+        })
+    );
 
     server.verify().await;
     Ok(())
