@@ -365,6 +365,10 @@ where
     }
 }
 
+pub(crate) use crate::noise_relay::environment::HarnessKeyValidator;
+/// Runs the executor-side multiplexed relay with Noise-protected payloads.
+pub(crate) use crate::noise_relay::environment::run_multiplexed_environment;
+
 #[cfg(test)]
 mod tests {
     use std::pin::Pin;

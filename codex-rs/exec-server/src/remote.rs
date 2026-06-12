@@ -17,9 +17,9 @@ use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::NoiseChannelIdentity;
 use crate::NoiseChannelPublicKey;
-use crate::noise_relay::environment::HarnessKeyValidator;
-use crate::noise_relay::environment::run_multiplexed_environment;
 use crate::noise_relay::noise_relay_websocket_config;
+use crate::relay::HarnessKeyValidator;
+use crate::relay::run_multiplexed_environment;
 use crate::server::ConnectionProcessor;
 
 const ERROR_BODY_PREVIEW_BYTES: usize = 4096;
