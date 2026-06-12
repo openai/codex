@@ -18,6 +18,7 @@ async fn dismiss_version_creates_cache_file_when_missing() {
         .expect("dismiss version");
 
     let info = read_version_info(&version_file).expect("read version info");
+    assert_eq!(info.last_checked_at, DateTime::<Utc>::UNIX_EPOCH);
     assert_eq!(
         (
             info.latest_version.as_str(),

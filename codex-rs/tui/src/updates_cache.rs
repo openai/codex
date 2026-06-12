@@ -34,7 +34,7 @@ pub(crate) async fn dismiss_version(config: &Config, version: &str) -> anyhow::R
         Ok(info) => info,
         Err(_) => VersionInfo {
             latest_version: version.to_string(),
-            last_checked_at: Utc::now(),
+            last_checked_at: DateTime::<Utc>::UNIX_EPOCH,
             dismissed_version: None,
         },
     };
