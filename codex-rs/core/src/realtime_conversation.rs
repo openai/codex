@@ -657,7 +657,7 @@ async fn prepare_realtime_start(
             None
         };
     let version = params.version.unwrap_or(config.realtime.version);
-    // TODO(aibrahim-oai): Remove the realtimeapi/AVAS branch once WebRTC bidi always uses AVAS.
+    // TODO(pbakkum): Remove the realtimeapi/AVAS branch once WebRTC realtime sessions always use AVAS.
     let architecture = params.architecture.unwrap_or(config.realtime.architecture);
     validate_realtime_architecture(
         architecture,
