@@ -3134,11 +3134,13 @@ dependencies = [
  "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-image",
+ "codex-utils-path-uri",
  "http 1.4.0",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -3949,6 +3951,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-code-mode",
  "codex-features",
+ "codex-file-system",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
