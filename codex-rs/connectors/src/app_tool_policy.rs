@@ -48,7 +48,7 @@ impl<'a> AppToolPolicyEvaluator<'a> {
     }
 
     pub fn from_apps_config(apps_config: AppsConfigToml) -> Self {
-        Self::from_parts(Some(apps_config), None)
+        Self::from_parts(Some(apps_config), /*requirements_apps_config*/ None)
     }
 
     pub fn from_apps_config_and_requirements(
@@ -59,7 +59,7 @@ impl<'a> AppToolPolicyEvaluator<'a> {
     }
 
     pub fn from_requirements(requirements: &'a AppsRequirementsToml) -> Self {
-        Self::from_parts(None, Some(requirements))
+        Self::from_parts(/*apps_config*/ None, Some(requirements))
     }
 
     pub fn policy(&self, input: AppToolPolicyInput<'_>) -> AppToolPolicy {
