@@ -883,7 +883,7 @@ async fn image_generation_call_adds_history_cell() {
         "call-image-generation-failed",
         "failed",
         Some("A tiny blue square".into()),
-        None,
+        /*saved_path*/ None,
     );
 
     let cells = drain_insert_history(&mut rx);
