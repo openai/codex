@@ -586,7 +586,12 @@ pub(crate) async fn run_multiplexed_environment<S, V>(
                 // Reject duplicate or busy streams before paying for a hybrid
                 // handshake. Malformed attempts that reach cryptography are
                 // covered by the connection-wide failure budget below.
-                if streams.contains_key(&stream_id) || pending_handshakes.contains_key(&stream_id) {
+                if streams.contains_key(&stream_id) {
+                    send_reset(&physical_outgoing_tx, stream_id);
+                    continue;
+                }
+                // Removing pending state makes the in-flight validation result stale.
+                if pending_handshakes.remove(&stream_id).is_some() {
                     send_reset(&physical_outgoing_tx, stream_id);
                     continue;
                 }

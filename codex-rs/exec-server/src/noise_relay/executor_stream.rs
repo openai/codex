@@ -104,6 +104,8 @@ pub(crate) fn spawn_noise_virtual_stream(
     let (disconnected_tx, disconnected_rx) = watch::channel(false);
     let transport = Arc::new(Mutex::new(transport));
     let writer_transport = Arc::clone(&transport);
+    let processor_stream_id = stream_id.clone();
+    let processor_closed_stream_tx = closed_stream_tx.clone();
     let writer_stream_id = stream_id;
     let writer_task = tokio::spawn(async move {
         let mut next_seq = 0u32;
@@ -168,6 +170,12 @@ pub(crate) fn spawn_noise_virtual_stream(
     };
     tokio::spawn(async move {
         processor.run_connection(connection).await;
+        let _ = processor_closed_stream_tx
+            .send(ClosedNoiseVirtualStream {
+                stream_id: processor_stream_id,
+                instance_id,
+            })
+            .await;
     });
 
     NoiseVirtualStream {
@@ -179,3 +187,7 @@ pub(crate) fn spawn_noise_virtual_stream(
         instance_id,
     }
 }
+
+#[cfg(test)]
+#[path = "executor_stream_tests.rs"]
+mod tests;

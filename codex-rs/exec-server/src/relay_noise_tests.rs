@@ -109,6 +109,79 @@ async fn pending_harness_key_validation_does_not_block_new_handshakes() -> Resul
 }
 
 #[tokio::test]
+async fn duplicate_handshake_expires_pending_validation() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let websocket_url = format!("ws://{}", listener.local_addr()?);
+    let harness_connection = tokio::spawn(connect_async(websocket_url));
+    let (socket, _peer_addr) = listener.accept().await?;
+    let environment_websocket = accept_async(socket).await?;
+    let (mut harness_websocket, _response) = harness_connection.await??;
+
+    let environment_identity = NoiseChannelIdentity::generate()?;
+    let harness_identity = NoiseChannelIdentity::generate()?;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let release = Arc::new(Notify::new());
+    let environment_task = tokio::spawn(run_multiplexed_environment(
+        environment_websocket,
+        ConnectionProcessor::new(ExecServerRuntimePaths::new(
+            std::env::current_exe()?,
+            /*codex_linux_sandbox_exe*/ None,
+        )?),
+        ENVIRONMENT_ID.to_string(),
+        EXECUTOR_REGISTRATION_ID.to_string(),
+        environment_identity.clone(),
+        BlockingValidator {
+            calls: Arc::clone(&calls),
+            release: Arc::clone(&release),
+        },
+    ));
+
+    let stream_id = "stream-1";
+    let prologue = noise_channel_prologue(ENVIRONMENT_ID, EXECUTOR_REGISTRATION_ID, stream_id);
+    let (_handshake, request) = InitiatorHandshake::start(
+        &harness_identity,
+        &environment_identity.public_key(),
+        &prologue,
+        b"authorization",
+    )?;
+    let frame = RelayMessageFrame::handshake(stream_id.to_string(), request);
+    let encoded = encode_relay_message_frame(&frame);
+    harness_websocket
+        .send(Message::Binary(encoded.clone().into()))
+        .await?;
+    timeout(Duration::from_secs(1), async {
+        while calls.load(Ordering::SeqCst) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+
+    harness_websocket
+        .send(Message::Binary(encoded.into()))
+        .await?;
+    let Message::Binary(payload) = timeout(Duration::from_secs(1), harness_websocket.next())
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("environment closed before sending reset"))??
+    else {
+        anyhow::bail!("expected binary reset frame");
+    };
+    let reset = decode_relay_message_frame(payload.as_ref())?;
+    assert_eq!(reset.stream_id, stream_id);
+    assert_eq!(reset.validate()?, RelayFrameBodyKind::Reset);
+
+    release.notify_one();
+    assert!(
+        timeout(Duration::from_millis(100), harness_websocket.next())
+            .await
+            .is_err()
+    );
+
+    harness_websocket.close(None).await?;
+    timeout(Duration::from_secs(1), environment_task).await??;
+    Ok(())
+}
+
+#[tokio::test]
 async fn oversized_harness_authorization_is_rejected_before_validation() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let websocket_url = format!("ws://{}", listener.local_addr()?);
