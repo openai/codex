@@ -51,7 +51,6 @@ pub(crate) async fn load_project_instructions(
     environments: &ResolvedTurnEnvironments,
 ) -> Option<LoadedAgentsMd> {
     let mut loaded = LoadedAgentsMd::from_user_instructions(user_instructions);
-    loaded.cwd = Some(config.cwd.clone());
     let primary_environment = environments.primary();
     for turn_environment in &environments.turn_environments {
         // Preserve whether each source belongs to the primary even when the primary contributes
@@ -90,6 +89,16 @@ pub(crate) async fn load_project_instructions(
             contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
             provenance: InstructionProvenance::Internal,
         });
+    }
+
+    // Project entries already carry their creation-time environment cwd. Retain a separate
+    // fallback only for legacy provider/internal-only fragments, which have no project entry from
+    // which to recover the cwd.
+    if !loaded.is_empty()
+        && !loaded.uses_environment_labels()
+        && loaded.primary_project_cwd().is_none()
+    {
+        loaded.legacy_cwd_fallback = Some(config.cwd.clone());
     }
 
     (!loaded.is_empty()).then_some(loaded)
@@ -293,8 +302,8 @@ pub struct LoadedAgentsMd {
     /// Ordered instructions and their provenance.
     entries: Vec<InstructionEntry>,
 
-    /// Creation-time cwd used by the legacy contextual wrapper.
-    cwd: Option<AbsolutePathBuf>,
+    /// Creation-time cwd for legacy fragments that have no primary project entry.
+    legacy_cwd_fallback: Option<AbsolutePathBuf>,
 }
 
 impl LoadedAgentsMd {
@@ -309,7 +318,7 @@ impl LoadedAgentsMd {
                 source: path,
             }),
             entries: Vec::new(),
-            cwd: None,
+            legacy_cwd_fallback: None,
         }
     }
 
@@ -318,7 +327,7 @@ impl LoadedAgentsMd {
             user_instructions: user_instructions
                 .filter(|instructions| !instructions.text.trim().is_empty()),
             entries: Vec::new(),
-            cwd: None,
+            legacy_cwd_fallback: None,
         }
     }
 
@@ -337,7 +346,7 @@ impl LoadedAgentsMd {
                 contents,
                 provenance: InstructionProvenance::Internal,
             }],
-            cwd: None,
+            legacy_cwd_fallback: None,
         }
     }
 
@@ -437,11 +446,17 @@ impl LoadedAgentsMd {
         // The legacy wrapper attributes the complete fragment to the primary cwd. Once a
         // non-primary environment contributes, the body labels every environment itself, so the
         // outer cwd must be omitted to avoid falsely attributing secondary instructions to it.
+        // Prefer the cwd already frozen into the first primary project entry. The fallback is only
+        // populated for provider/internal-only legacy fragments that have no project provenance.
+        let directory = if self.uses_environment_labels() {
+            None
+        } else {
+            self.primary_project_cwd()
+                .or(self.legacy_cwd_fallback.as_ref())
+                .map(|cwd| cwd.to_string_lossy().into_owned())
+        };
         ContextUserInstructions {
-            directory: (!self.uses_environment_labels())
-                .then_some(self.cwd.as_ref())
-                .flatten()
-                .map(|cwd| cwd.to_string_lossy().into_owned()),
+            directory,
             text: self.text(),
         }
         .render()
@@ -474,6 +489,22 @@ impl LoadedAgentsMd {
                 }
             )
         })
+    }
+
+    fn primary_project_cwd(&self) -> Option<&AbsolutePathBuf> {
+        self.entries
+            .iter()
+            .find_map(|entry| match &entry.provenance {
+                InstructionProvenance::Project {
+                    cwd,
+                    is_primary: true,
+                    ..
+                } => Some(cwd),
+                InstructionProvenance::Project {
+                    is_primary: false, ..
+                }
+                | InstructionProvenance::Internal => None,
+            })
     }
 }
 
