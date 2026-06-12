@@ -4,6 +4,7 @@ use crate::exec::ExecExpiration;
 use crate::exec::cancel_when_either;
 use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::GuardianReviewMode;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
@@ -472,6 +473,7 @@ impl CoreShellActionProvider {
                             cwd: workdir.clone(),
                             additional_permissions,
                         },
+                        GuardianReviewMode::Agent,
                         /*retry_reason*/ None,
                     )
                     .await;

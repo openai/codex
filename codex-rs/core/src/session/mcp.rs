@@ -466,6 +466,7 @@ async fn review_guardian_mcp_elicitation(
         &turn_context,
         review_id.clone(),
         guardian_request,
+        crate::guardian::GuardianReviewMode::Agent,
         /*retry_reason*/ None,
     )
     .await;

@@ -9,6 +9,7 @@ use crate::config::edit::ConfigEditsBuilder;
 use crate::connectors;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
+use crate::guardian::GuardianReviewMode;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
@@ -1213,6 +1214,7 @@ async fn maybe_request_mcp_tool_approval(
             turn_context,
             review_id.clone(),
             build_guardian_mcp_tool_review_request(call_id, invocation, metadata),
+            GuardianReviewMode::Agent,
             /*retry_reason*/ None,
         )
         .await;

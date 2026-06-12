@@ -12,6 +12,7 @@ use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecCapturePolicy;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianNetworkAccessTrigger;
+use crate::guardian::GuardianReviewMode;
 use crate::guardian::review_approval_request;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
@@ -160,6 +161,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                         additional_permissions: req.additional_permissions.clone(),
                         justification: req.justification.clone(),
                     },
+                    GuardianReviewMode::Agent,
                     retry_reason,
                 )
                 .await;

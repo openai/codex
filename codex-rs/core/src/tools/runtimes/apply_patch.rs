@@ -5,6 +5,7 @@
 //! sandboxing enforced by the explicit filesystem sandbox context.
 use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::GuardianReviewMode;
 use crate::guardian::review_approval_request;
 use crate::session::turn_context::TurnEnvironment;
 use crate::tools::hook_names::HookToolName;
@@ -144,8 +145,15 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         Box::pin(async move {
             if let Some(review_id) = guardian_review_id {
                 let action = ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id);
-                return review_approval_request(session, turn, review_id, action, retry_reason)
-                    .await;
+                return review_approval_request(
+                    session,
+                    turn,
+                    review_id,
+                    action,
+                    GuardianReviewMode::Agent,
+                    retry_reason,
+                )
+                .await;
             }
             if req.permissions_preapproved && retry_reason.is_none() {
                 return ReviewDecision::Approved;

@@ -127,6 +127,9 @@ impl ChatWidget {
                 codex_app_server_protocol::AutoReviewDecisionSource::Agent => {
                     GuardianAssessmentDecisionSource::Agent
                 }
+                codex_app_server_protocol::AutoReviewDecisionSource::Deterministic => {
+                    GuardianAssessmentDecisionSource::Deterministic
+                }
             }),
             action: action.into(),
         });

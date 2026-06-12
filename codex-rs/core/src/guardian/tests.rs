@@ -42,6 +42,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GranularApprovalConfig;
+use codex_protocol::protocol::GuardianAssessmentDecisionSource;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
@@ -1120,6 +1121,51 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
     assert!(warnings.is_empty());
 }
 
+#[tokio::test]
+async fn deterministic_guardian_review_emits_terminal_assessment_without_model_review() {
+    let (session, turn, rx) = crate::session::tests::make_session_and_context_with_rx().await;
+
+    let decision = review_approval_request(
+        &session,
+        &turn,
+        "review-deterministic-guardian".to_string(),
+        GuardianApprovalRequest::ApplyPatch {
+            id: "patch-1".to_string(),
+            cwd: test_path_buf("/tmp").abs(),
+            files: vec![test_path_buf("/tmp/guardian.txt").abs()],
+            patch: "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+hello\n*** End Patch"
+                .to_string(),
+        },
+        GuardianReviewMode::Deterministic(GuardianAssessment {
+            risk_level: GuardianRiskLevel::Low,
+            user_authorization: GuardianUserAuthorization::High,
+            outcome: GuardianAssessmentOutcome::Allow,
+            rationale: "Exact deterministic policy allowed this action.".to_string(),
+            source: GuardianAssessmentDecisionSource::Deterministic,
+        }),
+        /*retry_reason*/ None,
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::Approved);
+
+    let mut assessments = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        if let EventMsg::GuardianAssessment(event) = event.msg {
+            assessments.push(event);
+        }
+    }
+
+    assert_eq!(assessments.len(), 2);
+    assert_eq!(assessments[0].status, GuardianAssessmentStatus::InProgress);
+    assert_eq!(assessments[0].decision_source, None);
+    assert_eq!(assessments[1].status, GuardianAssessmentStatus::Approved);
+    assert_eq!(
+        assessments[1].decision_source,
+        Some(GuardianAssessmentDecisionSource::Deterministic)
+    );
+}
+
 #[test]
 fn guardian_timeout_message_distinguishes_timeout_from_policy_denial() {
     let message = guardian_timeout_message();
@@ -1279,6 +1325,7 @@ fn parse_guardian_assessment_extracts_embedded_json() {
             user_authorization: GuardianUserAuthorization::Low,
             outcome: GuardianAssessmentOutcome::Allow,
             rationale: "ok".to_string(),
+            source: GuardianAssessmentDecisionSource::Agent,
         }
     );
 }
@@ -1295,6 +1342,7 @@ fn parse_guardian_assessment_treats_bare_allow_as_low_risk() {
             user_authorization: GuardianUserAuthorization::Unknown,
             outcome: GuardianAssessmentOutcome::Allow,
             rationale: "Auto-review returned a low-risk allow decision.".to_string(),
+            source: GuardianAssessmentDecisionSource::Agent,
         }
     );
 }
@@ -1311,6 +1359,7 @@ fn parse_guardian_assessment_treats_bare_deny_as_high_risk() {
             user_authorization: GuardianUserAuthorization::Unknown,
             outcome: GuardianAssessmentOutcome::Deny,
             rationale: "Auto-review returned a deny decision without a rationale.".to_string(),
+            source: GuardianAssessmentDecisionSource::Agent,
         }
     );
 }
@@ -2077,6 +2126,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
             additional_permissions: None,
             justification: Some("Need to push the reviewed docs fix.".to_string()),
         },
+        GuardianReviewMode::Agent,
         /*retry_reason*/ None,
     )
     .await;
@@ -2210,6 +2260,7 @@ async fn guardian_review_does_not_retry_missing_assessment_payload() -> anyhow::
         &turn,
         "review-missing-assessment".to_string(),
         guardian_shell_request("shell-missing-assessment"),
+        GuardianReviewMode::Agent,
         /*retry_reason*/ None,
     )
     .await;
@@ -2314,6 +2365,7 @@ async fn guardian_review_exhausts_three_failures_with_one_terminal_event() -> an
         &turn,
         "review-exhausted-retry".to_string(),
         guardian_shell_request("shell-exhausted-retry"),
+        GuardianReviewMode::Agent,
         /*retry_reason*/ None,
     )
     .await;
@@ -2365,6 +2417,7 @@ async fn guardian_review_does_not_retry_valid_denial() -> anyhow::Result<()> {
         &turn,
         "review-valid-denial".to_string(),
         guardian_shell_request("shell-valid-denial"),
+        GuardianReviewMode::Agent,
         /*retry_reason*/ None,
     )
     .await;
@@ -2468,6 +2521,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
                 &turn,
                 "review-shell-guardian-1".to_string(),
                 initial_request,
+                GuardianReviewMode::Agent,
                 /*retry_reason*/ None
             )
             .await,
@@ -2522,6 +2576,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
                 &turn_for_second,
                 "review-shell-guardian-2".to_string(),
                 second_request,
+                GuardianReviewMode::Agent,
                 Some("trunk follow-up".to_string()),
             )
             .await
@@ -2569,6 +2624,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
             &turn,
             "review-shell-guardian-3".to_string(),
             third_request,
+            GuardianReviewMode::Agent,
             Some("parallel follow-up".to_string()),
         )
         .await;

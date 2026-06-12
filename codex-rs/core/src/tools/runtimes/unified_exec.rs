@@ -9,6 +9,7 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianNetworkAccessTrigger;
+use crate::guardian::GuardianReviewMode;
 use crate::guardian::review_approval_request;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecServerEnvConfig;
@@ -173,6 +174,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                         justification: req.justification.clone(),
                         tty: req.tty,
                     },
+                    GuardianReviewMode::Agent,
                     retry_reason,
                 )
                 .await;

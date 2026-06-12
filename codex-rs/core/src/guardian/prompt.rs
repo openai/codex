@@ -619,6 +619,7 @@ pub(crate) fn parse_guardian_assessment(text: Option<&str>) -> anyhow::Result<Gu
             .unwrap_or(GuardianUserAuthorization::Unknown),
         outcome,
         rationale,
+        source: codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
     })
 }
 
