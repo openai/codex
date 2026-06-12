@@ -161,6 +161,7 @@ impl McpRequestProcessor {
             &name,
             &url,
             config.mcp_oauth_credentials_store_mode,
+            config.auth_keyring_backend_kind(),
             http_headers,
             env_http_headers,
             &resolved_scopes.scopes,

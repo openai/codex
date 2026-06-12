@@ -7106,9 +7106,12 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
 
     let mcp_oauth_credentials_store_mode =
         serde_json::to_value(OAuthCredentialsStoreMode::Auto).expect("serialize store mode");
+    let auth_keyring_backend_kind =
+        serde_json::to_value(AuthKeyringBackendKind::Secrets).expect("serialize keyring backend");
     let refresh_config = McpServerRefreshConfig {
         mcp_servers: json!({}),
         mcp_oauth_credentials_store_mode,
+        auth_keyring_backend_kind,
     };
     {
         let mut guard = session.pending_mcp_server_refresh_config.lock().await;

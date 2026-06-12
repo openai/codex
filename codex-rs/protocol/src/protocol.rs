@@ -181,6 +181,7 @@ pub struct McpServerRefreshConfig {
     pub mcp_servers: Value,
     /// OAuth credential store mode to use with this server snapshot.
     pub mcp_oauth_credentials_store_mode: Value,
+    pub auth_keyring_backend_kind: Value,
 }
 
 #[derive(Debug, Clone, PartialEq)]

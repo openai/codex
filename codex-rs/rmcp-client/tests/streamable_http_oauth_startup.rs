@@ -4,6 +4,7 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_rmcp_client::McpAuthStatus;
@@ -157,7 +158,12 @@ async fn persisted_credentials_auth_status_child() -> anyhow::Result<()> {
         token_response: WrappedOAuthTokenResponse(response),
         expires_at: Some(0),
     };
-    save_oauth_tokens(SERVER_NAME, &tokens, OAuthCredentialsStoreMode::File)?;
+    save_oauth_tokens(
+        SERVER_NAME,
+        &tokens,
+        OAuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
 
     let status = auth_status(UNREFRESHABLE_SERVER_URL).await?;
     assert_eq!(status, McpAuthStatus::NotLoggedIn);
@@ -178,7 +184,12 @@ async fn persisted_credentials_auth_status_child() -> anyhow::Result<()> {
         token_response: WrappedOAuthTokenResponse(response),
         expires_at: Some(now.saturating_add(/*rhs*/ 60_000)),
     };
-    save_oauth_tokens(SERVER_NAME, &tokens, OAuthCredentialsStoreMode::File)?;
+    save_oauth_tokens(
+        SERVER_NAME,
+        &tokens,
+        OAuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
 
     let status = auth_status(UNEXPIRED_SERVER_URL).await?;
     assert_eq!(status, McpAuthStatus::OAuth);
@@ -196,7 +207,12 @@ async fn persisted_credentials_auth_status_child() -> anyhow::Result<()> {
         token_response: WrappedOAuthTokenResponse(response),
         expires_at: Some(0),
     };
-    save_oauth_tokens(SERVER_NAME, &tokens, OAuthCredentialsStoreMode::File)?;
+    save_oauth_tokens(
+        SERVER_NAME,
+        &tokens,
+        OAuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
 
     let status = auth_status(REFRESHABLE_SERVER_URL).await?;
     assert_eq!(status, McpAuthStatus::OAuth);
@@ -211,6 +227,7 @@ async fn auth_status(server_url: &str) -> anyhow::Result<McpAuthStatus> {
         /*http_headers*/ None,
         /*env_http_headers*/ None,
         OAuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
     )
     .await
 }
@@ -236,7 +253,12 @@ async fn oauth_startup_child() -> anyhow::Result<()> {
         token_response: WrappedOAuthTokenResponse(response),
         expires_at: Some(0),
     };
-    save_oauth_tokens(SERVER_NAME, &tokens, OAuthCredentialsStoreMode::File)?;
+    save_oauth_tokens(
+        SERVER_NAME,
+        &tokens,
+        OAuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
 
     // This mirrors create_client's transport and initialization setup, except
     // it omits the direct bearer token. Supplying that token would bypass the
@@ -248,6 +270,7 @@ async fn oauth_startup_child() -> anyhow::Result<()> {
         /*http_headers*/ None,
         /*env_http_headers*/ None,
         OAuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
         Environment::default_for_tests().get_http_client(),
         /*auth_provider*/ None,
     )

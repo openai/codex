@@ -42,6 +42,7 @@ use anyhow::anyhow;
 use async_channel::Sender;
 use codex_config::Constrained;
 use codex_config::McpServerTransportConfig;
+use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
 use codex_protocol::mcp::CallToolResult;
@@ -119,6 +120,7 @@ impl McpConnectionManager {
     pub async fn new(
         mcp_servers: &HashMap<String, EffectiveMcpServer>,
         store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
         auth_entries: HashMap<String, McpAuthStatusEntry>,
         approval_policy: &Constrained<AskForApproval>,
         submit_id: String,
@@ -198,6 +200,7 @@ impl McpConnectionManager {
                 server_name.clone(),
                 server,
                 store_mode,
+                keyring_backend_kind,
                 cancel_token.clone(),
                 tx_event.clone(),
                 elicitation_requests.clone(),
