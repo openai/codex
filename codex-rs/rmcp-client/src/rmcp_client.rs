@@ -1199,12 +1199,59 @@ async fn create_oauth_transport_and_runtime(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
     use std::time::Duration;
 
     use pretty_assertions::assert_eq;
+    use rmcp::ServerHandler;
+    use rmcp::ServiceExt;
+    use rmcp::model::ClientCapabilities;
+    use rmcp::model::ClientResult;
+    use rmcp::model::ErrorCode;
+    use rmcp::model::Implementation;
+    use rmcp::model::ServerRequest;
+    use rmcp::service::NotificationContext;
+    use rmcp::service::RoleServer;
+    use rmcp::service::ServiceError;
+    use tokio::sync::oneshot;
     use tokio::time;
 
     use super::*;
+
+    struct OpenAiFormServer {
+        response: Mutex<Option<oneshot::Sender<Result<ClientResult, ServiceError>>>>,
+    }
+
+    impl ServerHandler for OpenAiFormServer {
+        async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
+            let response = self
+                .response
+                .lock()
+                .await
+                .take()
+                .expect("response sender should be available");
+            tokio::spawn(async move {
+                let result = context
+                    .peer
+                    .send_request(ServerRequest::CustomRequest(CustomRequest::new(
+                        "openai/form",
+                        Some(serde_json::json!({
+                            "message": "Choose a file",
+                            "requestedSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "path": { "type": "openai/file" }
+                                }
+                            }
+                        })),
+                    )))
+                    .await;
+                response
+                    .send(result)
+                    .expect("response receiver should be available");
+            });
+        }
+    }
 
     #[tokio::test]
     async fn active_time_timeout_pauses_while_elicitation_is_pending() {
@@ -1223,5 +1270,64 @@ mod tests {
             .await;
 
         assert_eq!(Ok("done"), result);
+    }
+
+    #[tokio::test]
+    async fn openai_form_is_rejected_when_not_advertised() {
+        let (server_transport, client_transport) = tokio::io::duplex(4096);
+        let (response_tx, response_rx) = oneshot::channel();
+        let server_task = tokio::spawn(async move {
+            let server = OpenAiFormServer {
+                response: Mutex::new(Some(response_tx)),
+            }
+            .serve(server_transport)
+            .await
+            .expect("server should initialize");
+            server.waiting().await.expect("server should shut down");
+        });
+
+        let elicitation_called = Arc::new(AtomicBool::new(false));
+        let callback_called = Arc::clone(&elicitation_called);
+        let client = time::timeout(
+            Duration::from_secs(5),
+            service::serve_client(
+                ElicitationClientService::new(
+                    InitializeRequestParams::new(
+                        ClientCapabilities::default(),
+                        Implementation::new("test-client", "1.0.0"),
+                    ),
+                    Box::new(move |_, _| {
+                        callback_called.store(true, Ordering::Relaxed);
+                        Box::pin(async { Err(anyhow!("unexpected elicitation")) })
+                    }),
+                    ElicitationPauseState::new(),
+                ),
+                client_transport,
+            ),
+        )
+        .await
+        .expect("client initialization should not time out")
+        .expect("client should initialize");
+
+        let error = time::timeout(Duration::from_secs(5), response_rx)
+            .await
+            .expect("server response should not time out")
+            .expect("server should send a response")
+            .expect_err("openai/form should be rejected");
+        let ServiceError::McpError(error) = error else {
+            panic!("expected MCP error, got {error:?}");
+        };
+        assert_eq!(ErrorCode::METHOD_NOT_FOUND, error.code);
+        assert_eq!("openai/form", error.message);
+        assert!(!elicitation_called.load(Ordering::Relaxed));
+
+        time::timeout(Duration::from_secs(5), client.cancel())
+            .await
+            .expect("client shutdown should not time out")
+            .expect("client should shut down");
+        time::timeout(Duration::from_secs(5), server_task)
+            .await
+            .expect("server shutdown should not time out")
+            .expect("server task should complete");
     }
 }

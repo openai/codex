@@ -67,17 +67,31 @@ impl InitializeRequestProcessor {
         // experimental API). Proposed direction is instance-global first-write-wins
         // with initialize-time mismatch rejection.
         let analytics_initialize_params = params.clone();
-        let (experimental_api_enabled, request_attestation, opt_out_notification_methods) =
-            match params.capabilities {
-                Some(capabilities) => (
-                    capabilities.experimental_api,
-                    capabilities.request_attestation,
-                    capabilities
-                        .opt_out_notification_methods
-                        .unwrap_or_default(),
-                ),
-                None => (false, false, Vec::new()),
-            };
+        let (
+            experimental_api_enabled,
+            request_attestation,
+            open_ai_form_elicitation_capability,
+            opt_out_notification_methods,
+        ) = match params.capabilities {
+            Some(capabilities) => (
+                capabilities.experimental_api,
+                capabilities.request_attestation,
+                if capabilities.mcp_server_open_ai_form_elicitation {
+                    codex_mcp::OpenAiFormElicitationCapability::Supported
+                } else {
+                    codex_mcp::OpenAiFormElicitationCapability::Unsupported
+                },
+                capabilities
+                    .opt_out_notification_methods
+                    .unwrap_or_default(),
+            ),
+            None => (
+                false,
+                false,
+                codex_mcp::OpenAiFormElicitationCapability::Unsupported,
+                Vec::new(),
+            ),
+        };
         let ClientInfo {
             name,
             title: _title,
@@ -101,6 +115,7 @@ impl InitializeRequestProcessor {
                 app_server_client_name: name.clone(),
                 client_version: version,
                 request_attestation,
+                open_ai_form_elicitation_capability,
             })
             .is_err()
         {

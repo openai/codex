@@ -39,6 +39,7 @@ struct OpenAiFormRequestParams {
 #[derive(Clone)]
 pub(crate) struct ElicitationClientService {
     handler: LoggingClientHandler,
+    supports_openai_form: bool,
     send_elicitation: Arc<SendElicitation>,
     pause_state: ElicitationPauseState,
 }
@@ -49,12 +50,18 @@ impl ElicitationClientService {
         send_elicitation: SendElicitation,
         pause_state: ElicitationPauseState,
     ) -> Self {
+        let supports_openai_form = client_info
+            .capabilities
+            .extensions
+            .as_ref()
+            .is_some_and(|extensions| extensions.contains_key(OPENAI_FORM_METHOD));
         let send_elicitation = Arc::new(send_elicitation);
         Self {
             handler: LoggingClientHandler::new(
                 client_info,
                 clone_send_elicitation(Arc::clone(&send_elicitation)),
             ),
+            supports_openai_form,
             send_elicitation,
             pause_state,
         }
@@ -93,7 +100,9 @@ impl Service<RoleClient> for ElicitationClientService {
                 let result = elicitation_response_result(response)?;
                 Ok(ClientResult::CustomResult(result))
             }
-            ServerRequest::CustomRequest(request) if request.method == OPENAI_FORM_METHOD => {
+            ServerRequest::CustomRequest(request)
+                if request.method == OPENAI_FORM_METHOD && self.supports_openai_form =>
+            {
                 let response = self
                     .create_elicitation(openai_form_elicitation(request)?, context)
                     .await?;

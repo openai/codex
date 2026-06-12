@@ -1602,6 +1602,7 @@ impl CodexClient {
                             .map(|method| (*method).to_string())
                             .collect(),
                     ),
+                    mcp_server_open_ai_form_elicitation: false,
                 }),
             },
         };

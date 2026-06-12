@@ -14,6 +14,8 @@ use axum::http::StatusCode;
 use axum::http::Uri;
 use axum::http::header::AUTHORIZATION;
 use axum::routing::get;
+use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::McpElicitationSchema;
@@ -120,7 +122,22 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
     )?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_capabilities(
+            ClientInfo {
+                name: "codex-app-server-tests".to_string(),
+                title: None,
+                version: "0.1.0".to_string(),
+            },
+            Some(InitializeCapabilities {
+                experimental_api: true,
+                mcp_server_open_ai_form_elicitation: true,
+                ..Default::default()
+            }),
+        ),
+    )
+    .await??;
 
     let thread_start_id = mcp
         .send_thread_start_request(ThreadStartParams {

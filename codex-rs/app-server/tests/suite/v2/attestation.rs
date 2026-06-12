@@ -90,6 +90,7 @@ async fn attestation_generate_round_trip_adds_header_to_responses_websocket_hand
                 experimental_api: true,
                 request_attestation: true,
                 opt_out_notification_methods: None,
+                mcp_server_open_ai_form_elicitation: false,
             }),
         ),
     )

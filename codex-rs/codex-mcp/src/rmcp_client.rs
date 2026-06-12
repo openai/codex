@@ -29,6 +29,7 @@ use crate::codex_apps::normalize_codex_apps_tool_title;
 use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
 use crate::elicitation::ElicitationRequestManager;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::mcp::OpenAiFormElicitationCapability;
 use crate::mcp::ToolPluginProvenance;
 use crate::runtime::McpRuntimeContext;
 use crate::runtime::emit_duration;
@@ -154,6 +155,7 @@ impl AsyncManagedClient {
         runtime_context: McpRuntimeContext,
         runtime_auth_provider: Option<SharedAuthProvider>,
         client_elicitation_capability: ElicitationCapability,
+        open_ai_form_elicitation_capability: OpenAiFormElicitationCapability,
     ) -> Self {
         let tool_filter = server
             .configured_config()
@@ -207,6 +209,7 @@ impl AsyncManagedClient {
                         elicitation_requests,
                         codex_apps_tools_cache_context,
                         client_elicitation_capability,
+                        open_ai_form_elicitation_capability,
                     },
                 )
                 .await
@@ -486,18 +489,12 @@ async fn start_server_task(
         elicitation_requests,
         codex_apps_tools_cache_context,
         client_elicitation_capability,
+        open_ai_form_elicitation_capability,
     } = params;
-    let mut capabilities = ClientCapabilities::default();
-    capabilities.elicitation = Some(client_elicitation_capability);
-    capabilities.experimental = Some(BTreeMap::from([(
-        OPENAI_FORM_CAPABILITY.to_string(),
-        JsonObject::new(),
-    )]));
-    let params = InitializeRequestParams::new(
-        capabilities,
-        Implementation::new("codex-mcp-client", env!("CARGO_PKG_VERSION")).with_title("Codex"),
-    )
-    .with_protocol_version(ProtocolVersion::V_2025_06_18);
+    let params = mcp_initialize_request_params(
+        client_elicitation_capability,
+        open_ai_form_elicitation_capability,
+    );
 
     let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
 
@@ -557,6 +554,31 @@ async fn start_server_task(
     Ok(managed)
 }
 
+fn mcp_initialize_request_params(
+    client_elicitation_capability: ElicitationCapability,
+    open_ai_form_elicitation_capability: OpenAiFormElicitationCapability,
+) -> InitializeRequestParams {
+    let mut capabilities = ClientCapabilities::default();
+    capabilities.elicitation = Some(client_elicitation_capability);
+    match open_ai_form_elicitation_capability {
+        OpenAiFormElicitationCapability::Unsupported => {}
+        OpenAiFormElicitationCapability::Supported => {
+            capabilities.extensions = Some(BTreeMap::from([(
+                OPENAI_FORM_CAPABILITY.to_string(),
+                JsonObject::from_iter([(
+                    "fieldTypes".to_string(),
+                    serde_json::json!(["openai/file"]),
+                )]),
+            )]));
+        }
+    }
+    InitializeRequestParams::new(
+        capabilities,
+        Implementation::new("codex-mcp-client", env!("CARGO_PKG_VERSION")).with_title("Codex"),
+    )
+    .with_protocol_version(ProtocolVersion::V_2025_06_18)
+}
+
 fn mcp_server_info_from_implementation(server_info: Implementation) -> McpServerInfo {
     McpServerInfo {
         name: server_info.name,
@@ -581,6 +603,7 @@ struct StartServerTaskParams {
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
     client_elicitation_capability: ElicitationCapability,
+    open_ai_form_elicitation_capability: OpenAiFormElicitationCapability,
 }
 
 async fn make_rmcp_client(
@@ -674,6 +697,30 @@ mod tests {
     use super::*;
     use rmcp::model::JsonObject;
     use rmcp::model::Meta;
+
+    #[test]
+    fn mcp_initialize_advertises_openai_form_only_when_supported() {
+        let unsupported = mcp_initialize_request_params(
+            ElicitationCapability::default(),
+            OpenAiFormElicitationCapability::Unsupported,
+        );
+        assert_eq!(unsupported.capabilities.extensions, None);
+
+        let supported = mcp_initialize_request_params(
+            ElicitationCapability::default(),
+            OpenAiFormElicitationCapability::Supported,
+        );
+        assert_eq!(
+            supported.capabilities.extensions,
+            Some(BTreeMap::from([(
+                OPENAI_FORM_CAPABILITY.to_string(),
+                JsonObject::from_iter([(
+                    "fieldTypes".to_string(),
+                    serde_json::json!(["openai/file"]),
+                )]),
+            )]))
+        );
+    }
 
     fn tool_with_connector_meta() -> RmcpTool {
         RmcpTool::new(

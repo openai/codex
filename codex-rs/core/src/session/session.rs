@@ -1110,6 +1110,12 @@ impl Session {
             } else {
                 ElicitationCapability::default()
             };
+            let open_ai_form_elicitation_capability = sess
+                .services
+                .thread_extension_data
+                .get::<codex_mcp::OpenAiFormElicitationCapability>()
+                .map(|capability| *capability.as_ref())
+                .unwrap_or_default();
             let mcp_startup_cancellation_token = {
                 let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
                 cancel_guard.cancel();
@@ -1144,6 +1150,7 @@ impl Session {
                 host_owned_codex_apps_enabled,
                 config.prefix_mcp_tool_names(),
                 client_elicitation_capability,
+                open_ai_form_elicitation_capability,
                 tool_plugin_provenance,
                 auth,
                 Some(sess.mcp_elicitation_reviewer()),

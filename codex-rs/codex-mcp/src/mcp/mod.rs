@@ -51,6 +51,13 @@ const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OpenAiFormElicitationCapability {
+    #[default]
+    Unsupported,
+    Supported,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum McpSnapshotDetail {
     #[default]
     Full,
@@ -305,6 +312,7 @@ pub async fn read_mcp_resource(
         host_owned_codex_apps_enabled,
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
+        OpenAiFormElicitationCapability::Unsupported,
         tool_plugin_provenance(config),
         auth,
         /*elicitation_reviewer*/ None,
@@ -379,6 +387,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         host_owned_codex_apps_enabled,
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
+        OpenAiFormElicitationCapability::Unsupported,
         tool_plugin_provenance,
         auth,
         /*elicitation_reviewer*/ None,
