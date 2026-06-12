@@ -280,7 +280,7 @@ impl ApprovalReviewContributor for RecordingApprovalContributor {
                     prompt: input.prompt.to_string(),
                     action: input.action.clone(),
                     reviewer: input.reviewer,
-                    approval_policy: input.approval_policy.clone(),
+                    approval_policy: *input.approval_policy,
                     retry_reason: input.retry_reason.map(str::to_string),
                     source: input.source,
                 });
