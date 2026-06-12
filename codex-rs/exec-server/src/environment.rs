@@ -697,8 +697,8 @@ mod tests {
         assert!(manager.default_environment().expect("default").is_remote());
     }
 
-    #[test]
-    fn environment_manager_upsert_preserves_environment_order() {
+    #[tokio::test]
+    async fn environment_manager_upsert_preserves_environment_order() {
         let manager = EnvironmentManager::default_for_tests();
         manager
             .upsert_environment("first".to_string(), "ws://127.0.0.1:8765".to_string())
