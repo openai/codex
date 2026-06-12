@@ -2808,6 +2808,7 @@ version = "0.0.0"
 dependencies = [
  "codex-utils-absolute-path",
  "security-framework 3.5.1",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
  "windows 0.58.0",

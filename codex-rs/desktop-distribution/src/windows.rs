@@ -554,14 +554,6 @@ fn verify_package(
     })
 }
 
-pub(crate) fn package_family_name(identity: &PlatformIdentity) -> &str {
-    &identity.package_family_name
-}
-
-pub(crate) fn package_full_name(identity: &PlatformIdentity) -> &str {
-    &identity.package_full_name
-}
-
 fn verify_direct_signing_identity(app_root: &Path) -> Result<(), DesktopDistributionError> {
     reject_link_or_reparse(app_root, "Windows package signing identity")?;
     let canonical_root =
