@@ -2239,6 +2239,7 @@ async fn run_eager_compaction_review(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_recovers_from_eager_compaction_failure() -> anyhow::Result<()> {
     const FIRST_REVIEW_TOTAL_TOKENS: i64 = 500_000;
+    const RECOVERED_COMPACTED_CONTEXT: &str = "RECOVERED_EAGER_GUARDIAN_CONTEXT";
     let (compaction_tx, compaction_rx) = tokio::sync::oneshot::channel();
     let failed_compaction_sse = |id: &str| {
         sse(vec![
@@ -2258,6 +2259,19 @@ async fn guardian_recovers_from_eager_compaction_failure() -> anyhow::Result<()>
         vec![StreamingSseChunk {
             gate: None,
             body: failed_compaction_sse("retry-failed"),
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": RECOVERED_COMPACTED_CONTEXT,
+                    },
+                }),
+                ev_completed("resp-eager-compact-recovered"),
+            ]),
         }],
         guardian_review_sse("2", ev_completed),
     ];
@@ -2285,6 +2299,27 @@ async fn guardian_recovers_from_eager_compaction_failure() -> anyhow::Result<()>
         metadata.guardian_session_kind,
         Some(GuardianReviewSessionKind::EphemeralForked)
     ));
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 5);
+    let recovery_compact_request = serde_json::from_slice::<serde_json::Value>(&requests[3])?;
+    assert!(
+        recovery_compact_request["input"]
+            .as_array()
+            .is_some_and(|input| input.iter().any(|item| {
+                item["role"] == "assistant"
+                    && item["content"].as_array().is_some_and(|content| {
+                        content.iter().any(|item| {
+                            item["text"].as_str() == Some(EAGER_COMPACTION_GUARDIAN_ASSESSMENT)
+                        })
+                    })
+            })),
+        "compaction failure fallback should retain the committed Guardian assessment"
+    );
+    let retry_request = serde_json::from_slice::<serde_json::Value>(&requests[4])?;
+    assert!(
+        last_user_message_text_from_body(&retry_request).contains(">>> TRANSCRIPT DELTA START\n"),
+        "compaction failure fallback should continue from the committed transcript cursor"
+    );
     Ok(())
 }
 

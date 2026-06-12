@@ -429,6 +429,7 @@ impl GuardianReviewSessionManager {
             }
         };
         if *eager_compaction_guard == GuardianEagerCompactionOutcome::DiscardSession {
+            let fork_snapshot = trunk.fork_snapshot().await;
             let review_session = self.remove_trunk_if_current(&trunk).await;
             drop(eager_compaction_guard);
             if let Some(review_session) = review_session {
@@ -438,7 +439,7 @@ impl GuardianReviewSessionManager {
                 params,
                 next_reuse_key,
                 deadline,
-                /*fork_snapshot*/ None,
+                fork_snapshot,
             ))
             .await;
         }
