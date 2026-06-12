@@ -14,5 +14,11 @@ doctest = false
 workspace = true
 
 [dependencies]
+codex-analytics = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-protocol = { workspace = true }
+codex-shell-command = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+codex-utils-output-truncation = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

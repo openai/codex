@@ -2596,6 +2596,7 @@ dependencies = [
  "codex-features",
  "codex-feedback",
  "codex-git-utils",
+ "codex-guardian",
  "codex-home",
  "codex-hooks",
  "codex-image-generation-extension",
@@ -3071,8 +3072,14 @@ dependencies = [
 name = "codex-guardian"
 version = "0.0.0"
 dependencies = [
+ "codex-analytics",
  "codex-extension-api",
  "codex-protocol",
+ "codex-shell-command",
+ "codex-utils-absolute-path",
+ "codex-utils-output-truncation",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

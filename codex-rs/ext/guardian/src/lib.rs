@@ -13,6 +13,18 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 
+mod approval_request;
+mod truncation;
+
+pub use approval_request::FormattedGuardianAction;
+pub use approval_request::format_guardian_action_pretty;
+pub use approval_request::guardian_approval_request_to_json;
+pub use approval_request::guardian_assessment_action;
+pub use approval_request::guardian_request_target_item_id;
+pub use approval_request::guardian_request_turn_id;
+pub use approval_request::guardian_reviewed_action;
+pub use truncation::guardian_truncate_text;
+
 /// Guardian extension dependencies supplied by the host at construction time.
 #[derive(Clone, Debug)]
 pub struct GuardianExtension<S> {

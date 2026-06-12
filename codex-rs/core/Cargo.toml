@@ -46,6 +46,7 @@ codex-models-manager = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-git-utils = { workspace = true }
+codex-guardian = { workspace = true }
 codex-hooks = { workspace = true }
 codex-install-context = { workspace = true }
 codex-network-proxy = { workspace = true }
