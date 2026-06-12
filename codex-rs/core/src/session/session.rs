@@ -1187,6 +1187,23 @@ impl Session {
                 let mut state = sess.state.lock().await;
                 state.queue_pending_session_start_source(session_start_source);
             }
+            if matches!(
+                session_configuration.approval_policy.value(),
+                AskForApproval::OnRequest | AskForApproval::Granular(_)
+            )
+                && session_configuration.approvals_reviewer == ApprovalsReviewer::AutoReview
+            {
+                let guardian_parent_turn = sess
+                    .new_startup_prewarm_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
+                    .await;
+                if let Err(err) = sess
+                    .guardian_review_session
+                    .initialize(Arc::clone(&sess), guardian_parent_turn)
+                    .await
+                {
+                    warn!("failed to initialize guardian review session: {err:#}");
+                }
+            }
 
             Ok(sess)
         }

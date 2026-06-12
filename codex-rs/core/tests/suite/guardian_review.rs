@@ -17,6 +17,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::local_selections;
@@ -29,6 +30,39 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 use tempfile::TempDir;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_session_prewarms_when_root_thread_starts() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![
+        vec![vec![ev_response_created("warm-1"), ev_completed("warm-1")]],
+        vec![vec![ev_response_created("warm-2"), ev_completed("warm-2")]],
+    ])
+    .await;
+    let mut builder = test_codex().with_config(|config| {
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    });
+
+    let test = builder.build_with_websocket_server(&server).await?;
+    let (first, second) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(server.wait_for_request(0, 0), server.wait_for_request(1, 0))
+    })
+    .await?;
+    let requests = [first.body_json(), second.body_json()];
+    let guardian_request = requests
+        .iter()
+        .find(|request| {
+            request["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
+        })
+        .expect("guardian startup prewarm request");
+    assert_eq!(guardian_request["generate"].as_bool(), Some(false));
+
+    test.codex.shutdown_and_wait().await?;
+    server.shutdown().await;
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_review_session_does_not_inherit_legacy_notify() -> Result<()> {
