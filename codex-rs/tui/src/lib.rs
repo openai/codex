@@ -207,6 +207,8 @@ mod update_prompt;
 #[cfg(any(not(debug_assertions), test))]
 mod update_versions;
 mod updates;
+#[cfg(any(not(debug_assertions), test))]
+mod updates_cache;
 mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;
