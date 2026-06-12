@@ -72,6 +72,17 @@ impl HookOutputSpiller {
         spilled
     }
 
+    pub(crate) async fn maybe_spill_optional_text(
+        &self,
+        thread_id: ThreadId,
+        text: Option<String>,
+    ) -> Option<String> {
+        match text {
+            Some(text) => Some(self.maybe_spill_text(thread_id, text).await),
+            None => None,
+        }
+    }
+
     pub(crate) async fn maybe_spill_prompt_fragments(
         &self,
         thread_id: ThreadId,
