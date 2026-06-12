@@ -16,6 +16,7 @@ pub use events::GuardianReviewAnalyticsResult;
 pub use events::GuardianReviewDecision;
 pub use events::GuardianReviewEventParams;
 pub use events::GuardianReviewFailureReason;
+pub use events::GuardianReviewSessionAnalyticsParams;
 pub use events::GuardianReviewSessionKind;
 pub use events::GuardianReviewTerminalStatus;
 pub use events::GuardianReviewTrackContext;
