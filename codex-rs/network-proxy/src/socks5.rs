@@ -2,6 +2,7 @@ use crate::config::NetworkMode;
 use crate::connect_policy::TargetCheckedTcpConnector;
 use crate::mitm;
 use crate::network_policy::BlockDecisionAuditEventArgs;
+use crate::network_policy::DeferredNetworkPolicyDecider;
 use crate::network_policy::NetworkDecision;
 use crate::network_policy::NetworkDecisionSource;
 use crate::network_policy::NetworkPolicyDecider;
@@ -17,6 +18,8 @@ use crate::reasons::REASON_MITM_REQUIRED;
 use crate::reasons::REASON_PROXY_DISABLED;
 use crate::responses::PolicyDecisionDetails;
 use crate::responses::blocked_message_with_policy;
+use crate::runtime::HostBlockDecision;
+use crate::runtime::HostBlockReason;
 use crate::state::BlockedRequest;
 use crate::state::BlockedRequestArgs;
 use crate::state::NetworkProxyState;
@@ -270,50 +273,10 @@ async fn handle_socks5_tcp(
         port,
         client_addr: client.clone(),
         method: None,
+        url: None,
         command: None,
         exec_policy_hint: None,
     });
-
-    match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
-        Ok(NetworkDecision::Deny {
-            reason,
-            source,
-            decision,
-        }) => {
-            let details = PolicyDecisionDetails {
-                decision,
-                reason: &reason,
-                source,
-                protocol: NetworkProtocol::Socks5Tcp,
-                host: &host,
-                port,
-            };
-            let _ = app_state
-                .record_blocked(BlockedRequest::new(BlockedRequestArgs {
-                    host: host.clone(),
-                    reason: reason.clone(),
-                    client: client.clone(),
-                    method: None,
-                    mode: None,
-                    protocol: "socks5".to_string(),
-                    decision: Some(details.decision.as_str().to_string()),
-                    source: Some(details.source.as_str().to_string()),
-                    port: Some(port),
-                }))
-                .await;
-            let client = client.as_deref().unwrap_or_default();
-            warn!("SOCKS blocked (client={client}, host={host}, reason={reason})");
-            return Err(policy_denied_error(&reason, &details).into());
-        }
-        Ok(NetworkDecision::Allow) => {
-            let client = client.as_deref().unwrap_or_default();
-            info!("SOCKS allowed (client={client}, host={host}, port={port})");
-        }
-        Err(err) => {
-            error!("failed to evaluate host: {err}");
-            return Err(io::Error::other("proxy error").into());
-        }
-    }
 
     let host_has_mitm_hooks = match app_state.host_has_mitm_hooks(&host).await {
         Ok(has_hooks) => has_hooks,
@@ -329,8 +292,67 @@ async fn handle_socks5_tcp(
             return Err(io::Error::other("proxy error").into());
         }
     };
-    let socks_needs_mitm =
-        socks5_tcp_target_is_https && (mode == NetworkMode::Limited || host_has_mitm_hooks);
+    let deferred_policy_decider = if socks5_tcp_target_is_https
+        && policy_decider.is_some()
+        && mitm_state.is_some()
+        && matches!(
+            app_state.host_blocked(&host, port).await?,
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
+        ) {
+        policy_decider.clone()
+    } else {
+        None
+    };
+    let socks_needs_mitm = socks5_tcp_target_is_https
+        && (mode == NetworkMode::Limited
+            || host_has_mitm_hooks
+            || deferred_policy_decider.is_some());
+
+    if deferred_policy_decider.is_some() {
+        let client = client.as_deref().unwrap_or_default();
+        info!("SOCKS deferring allowlist miss to MITM request (client={client}, host={host})");
+    } else {
+        match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
+            Ok(NetworkDecision::Deny {
+                reason,
+                source,
+                decision,
+            }) => {
+                let details = PolicyDecisionDetails {
+                    decision,
+                    reason: &reason,
+                    source,
+                    protocol: NetworkProtocol::Socks5Tcp,
+                    host: &host,
+                    port,
+                };
+                let _ = app_state
+                    .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                        host: host.clone(),
+                        reason: reason.clone(),
+                        client: client.clone(),
+                        method: None,
+                        mode: None,
+                        protocol: "socks5".to_string(),
+                        decision: Some(details.decision.as_str().to_string()),
+                        source: Some(details.source.as_str().to_string()),
+                        port: Some(port),
+                    }))
+                    .await;
+                let client = client.as_deref().unwrap_or_default();
+                warn!("SOCKS blocked (client={client}, host={host}, reason={reason})");
+                return Err(policy_denied_error(&reason, &details).into());
+            }
+            Ok(NetworkDecision::Allow) => {
+                let client = client.as_deref().unwrap_or_default();
+                info!("SOCKS allowed (client={client}, host={host}, port={port})");
+            }
+            Err(err) => {
+                error!("failed to evaluate host: {err}");
+                return Err(io::Error::other("proxy error").into());
+            }
+        }
+    }
     if (host_has_mitm_hooks && !socks5_tcp_target_is_https)
         || (socks_needs_mitm && mitm_state.is_none())
     {
@@ -374,13 +396,17 @@ async fn handle_socks5_tcp(
     if socks_needs_mitm && let Some(mitm_state) = mitm_state {
         let client = client.as_deref().unwrap_or_default();
         info!("SOCKS MITM enabled (client={client}, host={host}, port={port}, mode={mode:?})");
+        let mut extensions = Extensions::new();
+        if let Some(policy_decider) = deferred_policy_decider {
+            extensions.insert(DeferredNetworkPolicyDecider(policy_decider));
+        }
         return Ok(EstablishedClientConnection {
             input: req,
             conn: Socks5TcpConnection::Mitm {
                 target,
                 mode,
                 mitm: mitm_state,
-                extensions: Extensions::new(),
+                extensions,
             },
         });
     }
@@ -504,11 +530,18 @@ async fn proxy_socks5_tcp(
             .await
             .map_err(Into::into),
         Socks5TcpConnection::Mitm {
-            target, mode, mitm, ..
+            target,
+            mode,
+            mitm,
+            extensions,
         } => {
             source.extensions_mut().insert(ProxyTarget(target));
             source.extensions_mut().insert(mode);
             source.extensions_mut().insert(mitm);
+            if let Some(policy_decider) = extensions.get::<DeferredNetworkPolicyDecider>().cloned()
+            {
+                source.extensions_mut().insert(policy_decider);
+            }
             mitm::mitm_stream(source).await.map_err(Into::into)
         }
     }
@@ -626,6 +659,7 @@ async fn inspect_socks5_udp(
         port,
         client_addr: client.clone(),
         method: None,
+        url: None,
         command: None,
         exec_policy_hint: None,
     });

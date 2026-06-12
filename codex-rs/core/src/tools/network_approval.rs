@@ -1,4 +1,5 @@
 use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::GuardianAssessment;
 use crate::guardian::GuardianNetworkAccessTrigger;
 use crate::guardian::GuardianReviewMode;
 use crate::guardian::guardian_rejection_message;
@@ -11,6 +12,7 @@ use crate::network_policy_decision::denied_network_policy_message;
 use crate::session::session::Session;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::ToolError;
+use codex_backend_client::Client as BackendClient;
 use codex_hooks::PermissionRequestDecision;
 use codex_network_proxy::BlockedRequest;
 use codex_network_proxy::BlockedRequestObserver;
@@ -26,16 +28,22 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GuardianAssessmentDecisionSource;
+use codex_protocol::protocol::GuardianAssessmentOutcome;
+use codex_protocol::protocol::GuardianRiskLevel;
+use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::WarningEvent;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use uuid::Uuid;
@@ -124,6 +132,7 @@ struct HostApprovalKey {
     host: String,
     protocol: &'static str,
     port: u16,
+    url_fingerprint: Option<Uuid>,
 }
 
 impl HostApprovalKey {
@@ -132,7 +141,12 @@ impl HostApprovalKey {
             host: request.host.to_ascii_lowercase(),
             protocol: protocol_key_label(protocol),
             port: request.port,
+            url_fingerprint: request.url.as_deref().map(Self::url_fingerprint),
         }
+    }
+
+    fn url_fingerprint(url: &str) -> Uuid {
+        Uuid::new_v5(&Uuid::NAMESPACE_URL, url.as_bytes())
     }
 }
 
@@ -253,6 +267,8 @@ impl Default for NetworkApprovalService {
 }
 
 impl NetworkApprovalService {
+    const GUARDIAN_DETERMINISTIC_REVIEW_TIMEOUT: Duration = Duration::from_secs(2);
+
     /// Replace the target session's approval cache with the source session's
     /// currently approved hosts.
     pub(crate) async fn sync_session_approved_hosts_to(&self, other: &Self) {
@@ -385,7 +401,68 @@ impl NetworkApprovalService {
     }
 
     fn approval_id_for_key(key: &HostApprovalKey) -> String {
-        format!("network#{}#{}#{}", key.protocol, key.host, key.port)
+        match key.url_fingerprint {
+            Some(url_fingerprint) => format!(
+                "network#{}#{}#{}#{}",
+                key.protocol, key.host, key.port, url_fingerprint
+            ),
+            None => format!("network#{}#{}#{}", key.protocol, key.host, key.port),
+        }
+    }
+
+    async fn guardian_review_mode_for_network_access(
+        session: &Session,
+        turn_context: &crate::session::turn_context::TurnContext,
+        request: &NetworkPolicyRequest,
+    ) -> GuardianReviewMode {
+        let Some(url) = request.url.as_deref() else {
+            return GuardianReviewMode::Agent;
+        };
+        let Some(method) = request.method.as_deref() else {
+            return GuardianReviewMode::Agent;
+        };
+        let auth = session.services.auth_manager.auth().await;
+        let Some(auth) = auth.as_ref().filter(|auth| auth.uses_codex_backend()) else {
+            return GuardianReviewMode::Agent;
+        };
+        let client =
+            match BackendClient::from_auth(turn_context.config.chatgpt_base_url.clone(), auth) {
+                Ok(client) => client,
+                Err(err) => {
+                    warn!("failed to create deterministic Guardian review client: {err:#}");
+                    return GuardianReviewMode::Agent;
+                }
+            };
+        let response = match timeout(
+            Self::GUARDIAN_DETERMINISTIC_REVIEW_TIMEOUT,
+            client.deterministic_guardian_review_network_access(url, method),
+        )
+        .await
+        {
+            Ok(Ok(response)) => response,
+            Ok(Err(err)) => {
+                warn!("deterministic Guardian network review request failed: {err:#}");
+                return GuardianReviewMode::Agent;
+            }
+            Err(_) => {
+                warn!("deterministic Guardian network review request timed out");
+                return GuardianReviewMode::Agent;
+            }
+        };
+        if !response.safe {
+            return GuardianReviewMode::Agent;
+        }
+
+        GuardianReviewMode::Deterministic(GuardianAssessment {
+            risk_level: GuardianRiskLevel::Low,
+            user_authorization: GuardianUserAuthorization::High,
+            outcome: GuardianAssessmentOutcome::Allow,
+            rationale: response
+                .rationale
+                .filter(|rationale| !rationale.trim().is_empty())
+                .unwrap_or_else(|| "Trusted deterministic Guardian review approved.".to_string()),
+            source: GuardianAssessmentDecisionSource::Deterministic,
+        })
     }
 
     pub(crate) async fn handle_inline_policy_request(
@@ -397,6 +474,7 @@ impl NetworkApprovalService {
 
         let protocol = match request.protocol {
             NetworkProtocol::Http => NetworkApprovalProtocol::Http,
+            NetworkProtocol::Https => NetworkApprovalProtocol::Https,
             NetworkProtocol::HttpsConnect => NetworkApprovalProtocol::Https,
             NetworkProtocol::Socks5Tcp => NetworkApprovalProtocol::Socks5Tcp,
             NetworkProtocol::Socks5Udp => NetworkApprovalProtocol::Socks5Udp,
@@ -422,7 +500,12 @@ impl NetworkApprovalService {
             return pending.wait_for_decision().await.to_network_decision();
         }
 
-        let target = Self::format_network_target(key.protocol, request.host.as_str(), key.port);
+        let network_target =
+            Self::format_network_target(key.protocol, request.host.as_str(), key.port);
+        let target = request
+            .url
+            .clone()
+            .unwrap_or_else(|| network_target.clone());
         let policy_denial_message =
             format!("Network access to \"{target}\" was blocked by policy.");
         let prompt_reason = format!("{} is not in the allowed_domains", request.host);
@@ -462,14 +545,18 @@ impl NetworkApprovalService {
         };
         let guardian_approval_id = Self::approval_id_for_key(&key);
         let prompt_command = vec!["network-access".to_string(), target.clone()];
+        let hook_command = ["network-access".to_string(), network_target.clone()];
         let command = owner_call
             .as_ref()
-            .map_or_else(|| prompt_command.join(" "), |call| call.command.clone());
+            .map_or_else(|| hook_command.join(" "), |call| call.command.clone());
         if let Some(permission_request_decision) = run_permission_request_hooks(
             &session,
             &turn_context,
             &guardian_approval_id,
-            PermissionRequestPayload::bash(command, Some(format!("network-access {target}"))),
+            PermissionRequestPayload::bash(
+                command,
+                Some(format!("network-access {network_target}")),
+            ),
         )
         .await
         {
@@ -500,6 +587,9 @@ impl NetworkApprovalService {
         let use_guardian = routes_approval_to_guardian(&turn_context);
         let guardian_review_id = use_guardian.then(new_guardian_review_id);
         let approval_decision = if let Some(review_id) = guardian_review_id.clone() {
+            let guardian_review_mode =
+                Self::guardian_review_mode_for_network_access(&session, &turn_context, &request)
+                    .await;
             review_approval_request(
                 &session,
                 &turn_context,
@@ -515,7 +605,7 @@ impl NetworkApprovalService {
                     port: key.port,
                     trigger: owner_call.as_ref().map(|call| call.trigger.clone()),
                 },
-                GuardianReviewMode::Agent,
+                guardian_review_mode,
                 Some(policy_denial_message.clone()),
             )
             .await

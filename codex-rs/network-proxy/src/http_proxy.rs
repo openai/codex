@@ -2,6 +2,7 @@ use crate::config::NetworkMode;
 use crate::connect_policy::TargetCheckedTcpConnector;
 use crate::mitm;
 use crate::network_policy::BlockDecisionAuditEventArgs;
+use crate::network_policy::DeferredNetworkPolicyDecider;
 use crate::network_policy::NetworkDecision;
 use crate::network_policy::NetworkDecisionSource;
 use crate::network_policy::NetworkPolicyDecider;
@@ -23,6 +24,8 @@ use crate::responses::blocked_header_value;
 use crate::responses::blocked_message_with_policy;
 use crate::responses::blocked_text_response_with_policy;
 use crate::responses::json_response;
+use crate::runtime::HostBlockDecision;
+use crate::runtime::HostBlockReason;
 use crate::runtime::unix_socket_permissions_supported;
 use crate::state::BlockedRequest;
 use crate::state::BlockedRequestArgs;
@@ -202,50 +205,10 @@ async fn http_connect_accept(
         port: authority.port,
         client_addr: client.clone(),
         method: Some("CONNECT".to_string()),
+        url: None,
         command: None,
         exec_policy_hint: None,
     });
-
-    match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
-        Ok(NetworkDecision::Deny {
-            reason,
-            source,
-            decision,
-        }) => {
-            let details = PolicyDecisionDetails {
-                decision,
-                reason: &reason,
-                source,
-                protocol: NetworkProtocol::HttpsConnect,
-                host: &host,
-                port: authority.port,
-            };
-            let _ = app_state
-                .record_blocked(BlockedRequest::new(BlockedRequestArgs {
-                    host: host.clone(),
-                    reason: reason.clone(),
-                    client: client.clone(),
-                    method: Some("CONNECT".to_string()),
-                    mode: None,
-                    protocol: "http-connect".to_string(),
-                    decision: Some(details.decision.as_str().to_string()),
-                    source: Some(details.source.as_str().to_string()),
-                    port: Some(authority.port),
-                }))
-                .await;
-            let client = client.as_deref().unwrap_or_default();
-            warn!("CONNECT blocked (client={client}, host={host}, reason={reason})");
-            return Err(blocked_text_with_details(&reason, &details));
-        }
-        Ok(NetworkDecision::Allow) => {
-            let client = client.as_deref().unwrap_or_default();
-            info!("CONNECT allowed (client={client}, host={host})");
-        }
-        Err(err) => {
-            error!("failed to evaluate host for CONNECT {host}: {err}");
-            return Err(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
-        }
-    }
 
     let mode = app_state
         .network_mode()
@@ -266,7 +229,67 @@ async fn http_connect_accept(
             return Err(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
         }
     };
-    let connect_needs_mitm = mode == NetworkMode::Limited || host_has_mitm_hooks;
+    let deferred_policy_decider = if policy_decider.is_some()
+        && mitm_state.is_some()
+        && matches!(
+            app_state
+                .host_blocked(&host, authority.port)
+                .await
+                .map_err(|err| internal_error("failed to evaluate host for CONNECT", err))?,
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
+        ) {
+        policy_decider.clone()
+    } else {
+        None
+    };
+    let connect_needs_mitm =
+        mode == NetworkMode::Limited || host_has_mitm_hooks || deferred_policy_decider.is_some();
+
+    if deferred_policy_decider.is_some() {
+        let client = client.as_deref().unwrap_or_default();
+        info!("CONNECT deferring allowlist miss to MITM request (client={client}, host={host})");
+    } else {
+        match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
+            Ok(NetworkDecision::Deny {
+                reason,
+                source,
+                decision,
+            }) => {
+                let details = PolicyDecisionDetails {
+                    decision,
+                    reason: &reason,
+                    source,
+                    protocol: NetworkProtocol::HttpsConnect,
+                    host: &host,
+                    port: authority.port,
+                };
+                let _ = app_state
+                    .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                        host: host.clone(),
+                        reason: reason.clone(),
+                        client: client.clone(),
+                        method: Some("CONNECT".to_string()),
+                        mode: None,
+                        protocol: "http-connect".to_string(),
+                        decision: Some(details.decision.as_str().to_string()),
+                        source: Some(details.source.as_str().to_string()),
+                        port: Some(authority.port),
+                    }))
+                    .await;
+                let client = client.as_deref().unwrap_or_default();
+                warn!("CONNECT blocked (client={client}, host={host}, reason={reason})");
+                return Err(blocked_text_with_details(&reason, &details));
+            }
+            Ok(NetworkDecision::Allow) => {
+                let client = client.as_deref().unwrap_or_default();
+                info!("CONNECT allowed (client={client}, host={host})");
+            }
+            Err(err) => {
+                error!("failed to evaluate host for CONNECT {host}: {err}");
+                return Err(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
+            }
+        }
+    }
 
     if connect_needs_mitm && mitm_state.is_none() {
         // CONNECT needs MITM whenever HTTPS policy depends on inner-request inspection, either for
@@ -317,6 +340,10 @@ async fn http_connect_accept(
     req.extensions_mut().insert(mode);
     if connect_needs_mitm && let Some(mitm_state) = mitm_state {
         req.extensions_mut().insert(mitm_state);
+    }
+    if let Some(policy_decider) = deferred_policy_decider {
+        req.extensions_mut()
+            .insert(DeferredNetworkPolicyDecider(policy_decider));
     }
 
     Ok((
@@ -685,6 +712,7 @@ async fn http_plain_proxy(
         port,
         client_addr: client.clone(),
         method: Some(req.method().as_str().to_string()),
+        url: Some(req.uri().to_string()),
         command: None,
         exec_policy_hint: None,
     });

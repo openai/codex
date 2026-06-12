@@ -1,13 +1,26 @@
 use super::*;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::tests::make_session_and_context;
+use crate::test_support::auth_manager_from_auth;
+use codex_login::CodexAuth;
 use codex_network_proxy::BlockedRequestArgs;
+use codex_network_proxy::NetworkPolicyRequestArgs;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::GuardianAssessmentDecisionSource;
+use codex_protocol::protocol::GuardianAssessmentOutcome;
 use core_test_support::PathBufExt;
+use core_test_support::responses::start_mock_server;
 use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
+use wiremock::Mock;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::body_json;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 #[tokio::test]
 async fn pending_approvals_are_deduped_per_host_protocol_and_port() {
@@ -16,6 +29,7 @@ async fn pending_approvals_are_deduped_per_host_protocol_and_port() {
         host: "example.com".to_string(),
         protocol: "http",
         port: 443,
+        url_fingerprint: None,
     };
 
     let (first, first_is_owner) = service.get_or_create_pending_approval(key.clone()).await;
@@ -33,11 +47,13 @@ async fn pending_approvals_do_not_dedupe_across_ports() {
         host: "example.com".to_string(),
         protocol: "https",
         port: 443,
+        url_fingerprint: None,
     };
     let second_key = HostApprovalKey {
         host: "example.com".to_string(),
         protocol: "https",
         port: 8443,
+        url_fingerprint: None,
     };
 
     let (first, first_is_owner) = service.get_or_create_pending_approval(first_key).await;
@@ -58,16 +74,19 @@ async fn session_approved_hosts_preserve_protocol_and_port_scope() {
                 host: "example.com".to_string(),
                 protocol: "https",
                 port: 443,
+                url_fingerprint: None,
             },
             HostApprovalKey {
                 host: "example.com".to_string(),
                 protocol: "https",
                 port: 8443,
+                url_fingerprint: None,
             },
             HostApprovalKey {
                 host: "example.com".to_string(),
                 protocol: "http",
                 port: 80,
+                url_fingerprint: None,
             },
         ]);
     }
@@ -91,16 +110,19 @@ async fn session_approved_hosts_preserve_protocol_and_port_scope() {
                 host: "example.com".to_string(),
                 protocol: "http",
                 port: 80,
+                url_fingerprint: None,
             },
             HostApprovalKey {
                 host: "example.com".to_string(),
                 protocol: "https",
                 port: 443,
+                url_fingerprint: None,
             },
             HostApprovalKey {
                 host: "example.com".to_string(),
                 protocol: "https",
                 port: 8443,
+                url_fingerprint: None,
             },
         ]
     );
@@ -115,6 +137,7 @@ async fn sync_session_approved_hosts_to_replaces_existing_target_hosts() {
             host: "source.example.com".to_string(),
             protocol: "https",
             port: 443,
+            url_fingerprint: None,
         });
     }
 
@@ -125,6 +148,7 @@ async fn sync_session_approved_hosts_to_replaces_existing_target_hosts() {
             host: "stale.example.com".to_string(),
             protocol: "https",
             port: 8443,
+            url_fingerprint: None,
         });
     }
 
@@ -144,7 +168,90 @@ async fn sync_session_approved_hosts_to_replaces_existing_target_hosts() {
             host: "source.example.com".to_string(),
             protocol: "https",
             port: 443,
+            url_fingerprint: None,
         }]
+    );
+}
+
+#[tokio::test]
+async fn pending_approvals_do_not_dedupe_across_urls() {
+    let service = NetworkApprovalService::default();
+    let first_key = HostApprovalKey {
+        host: "example.com".to_string(),
+        protocol: "https",
+        port: 443,
+        url_fingerprint: Some(HostApprovalKey::url_fingerprint("https://example.com/safe")),
+    };
+    let second_key = HostApprovalKey {
+        host: "example.com".to_string(),
+        protocol: "https",
+        port: 443,
+        url_fingerprint: Some(HostApprovalKey::url_fingerprint(
+            "https://example.com/unsafe",
+        )),
+    };
+
+    let (first, first_is_owner) = service.get_or_create_pending_approval(first_key).await;
+    let (second, second_is_owner) = service.get_or_create_pending_approval(second_key).await;
+
+    assert!(first_is_owner);
+    assert!(second_is_owner);
+    assert!(!Arc::ptr_eq(&first, &second));
+}
+
+#[tokio::test]
+async fn deterministic_network_review_uses_safe_url_backend_result() {
+    let server = start_mock_server().await;
+    Mock::given(method("POST"))
+        .and(path("/api/codex/guardian/deterministic-review"))
+        .and(body_json(serde_json::json!({
+            "action": {
+                "type": "network_access",
+                "url": "https://example.com/from-index",
+                "method": "GET",
+            }
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "safe": true,
+            "rationale": "safe url",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    let auth_manager = auth_manager_from_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    session.services.auth_manager = Arc::clone(&auth_manager);
+    turn_context.auth_manager = Some(auth_manager);
+    let mut config = (*turn_context.config).clone();
+    config.chatgpt_base_url = server.uri();
+    turn_context.config = Arc::new(config);
+    let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
+        protocol: NetworkProtocol::Https,
+        host: "example.com".to_string(),
+        port: 443,
+        client_addr: None,
+        method: Some("GET".to_string()),
+        url: Some("https://example.com/from-index".to_string()),
+        command: None,
+        exec_policy_hint: None,
+    });
+
+    let review_mode = NetworkApprovalService::guardian_review_mode_for_network_access(
+        &session,
+        &turn_context,
+        &request,
+    )
+    .await;
+
+    let GuardianReviewMode::Deterministic(assessment) = review_mode else {
+        panic!("safe URL should use deterministic Guardian review");
+    };
+    assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
+    assert_eq!(assessment.rationale, "safe url");
+    assert_eq!(
+        assessment.source,
+        GuardianAssessmentDecisionSource::Deterministic
     );
 }
 

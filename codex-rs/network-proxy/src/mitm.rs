@@ -2,10 +2,19 @@ use crate::certs::ManagedMitmCa;
 use crate::config::NetworkMode;
 use crate::mitm_hook::HookEvaluation;
 use crate::mitm_hook::MitmHookActions;
+use crate::network_policy::DeferredNetworkPolicyDecider;
+use crate::network_policy::NetworkDecision;
+use crate::network_policy::NetworkPolicyDecider;
+use crate::network_policy::NetworkPolicyRequest;
+use crate::network_policy::NetworkPolicyRequestArgs;
+use crate::network_policy::NetworkProtocol;
+use crate::network_policy::evaluate_host_policy;
 use crate::policy::normalize_host;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
 use crate::reasons::REASON_MITM_HOOK_DENIED;
+use crate::responses::PolicyDecisionDetails;
 use crate::responses::blocked_text_response;
+use crate::responses::blocked_text_response_with_policy;
 use crate::responses::text_response;
 use crate::runtime::HostBlockDecision;
 use crate::runtime::HostBlockReason;
@@ -70,6 +79,7 @@ struct MitmPolicyContext {
     target_port: u16,
     mode: NetworkMode,
     app_state: Arc<NetworkProxyState>,
+    deferred_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 }
 
 #[derive(Clone)]
@@ -169,12 +179,17 @@ where
         .get::<NetworkMode>()
         .copied()
         .unwrap_or(NetworkMode::Full);
+    let deferred_policy_decider = stream
+        .extensions()
+        .get::<DeferredNetworkPolicyDecider>()
+        .map(|policy_decider| Arc::clone(&policy_decider.0));
     let request_ctx = Arc::new(MitmRequestContext {
         policy: MitmPolicyContext {
             target_host,
             target_port,
             mode,
             app_state,
+            deferred_policy_decider,
         },
         mitm,
     });
@@ -317,8 +332,9 @@ async fn evaluate_mitm_policy(
         }
     }
 
-    // CONNECT already handled allowlist/denylist + decider policy. Re-check local/private
-    // resolution here to defend against DNS rebinding between CONNECT and inner HTTPS requests.
+    // CONNECT already handled allowlist/denylist + decider policy unless an allowlist miss was
+    // intentionally deferred to the inner request. Re-check local/private resolution here to
+    // defend against DNS rebinding between CONNECT and inner HTTPS requests.
     if matches!(
         policy
             .app_state
@@ -346,6 +362,59 @@ async fn evaluate_mitm_policy(
             policy.target_host, policy.target_port
         );
         return Ok(MitmPolicyDecision::Block(blocked_text_response(reason)));
+    }
+
+    if let Some(policy_decider) = policy.deferred_policy_decider.as_ref() {
+        let authority = authority_header_value(&policy.target_host, policy.target_port);
+        let url = build_https_uri(&authority, &path_and_query(req.uri()))?.to_string();
+        let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
+            protocol: NetworkProtocol::Https,
+            host: policy.target_host.clone(),
+            port: policy.target_port,
+            client_addr: client.clone(),
+            method: Some(method.clone()),
+            url: Some(url),
+            command: None,
+            exec_policy_hint: None,
+        });
+        match evaluate_host_policy(&policy.app_state, Some(policy_decider), &request).await? {
+            NetworkDecision::Allow => {}
+            NetworkDecision::Deny {
+                reason,
+                source,
+                decision,
+            } => {
+                let details = PolicyDecisionDetails {
+                    decision,
+                    reason: &reason,
+                    source,
+                    protocol: NetworkProtocol::Https,
+                    host: &policy.target_host,
+                    port: policy.target_port,
+                };
+                let _ = policy
+                    .app_state
+                    .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                        host: policy.target_host.clone(),
+                        reason: reason.clone(),
+                        client: client.clone(),
+                        method: Some(method.clone()),
+                        mode: Some(policy.mode),
+                        protocol: "https".to_string(),
+                        decision: Some(details.decision.as_str().to_string()),
+                        source: Some(details.source.as_str().to_string()),
+                        port: Some(policy.target_port),
+                    }))
+                    .await;
+                warn!(
+                    "MITM blocked by deferred network policy (host={}, port={}, method={method}, path={log_path}, reason={reason})",
+                    policy.target_host, policy.target_port
+                );
+                return Ok(MitmPolicyDecision::Block(
+                    blocked_text_response_with_policy(&reason, &details),
+                ));
+            }
+        }
     }
 
     let hook_actions = match policy

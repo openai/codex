@@ -47,6 +47,7 @@ fn policy_ctx(
         target_port,
         mode,
         app_state,
+        deferred_policy_decider: None,
     }
 }
 
@@ -151,6 +152,51 @@ async fn mitm_policy_rechecks_local_private_target_after_connect() {
     assert_eq!(blocked[0].reason, REASON_NOT_ALLOWED_LOCAL);
     assert_eq!(blocked[0].host, "10.0.0.1");
     assert_eq!(blocked[0].port, Some(443));
+}
+
+#[tokio::test]
+async fn mitm_policy_defers_network_review_with_full_url() {
+    let app_state = Arc::new(network_proxy_state_for_policy(
+        NetworkProxySettings::default(),
+    ));
+    let captured_request = Arc::new(tokio::sync::Mutex::new(None));
+    let policy_decider = Arc::new({
+        let captured_request = Arc::clone(&captured_request);
+        move |request: NetworkPolicyRequest| {
+            let captured_request = Arc::clone(&captured_request);
+            async move {
+                *captured_request.lock().await = Some(request);
+                NetworkDecision::Allow
+            }
+        }
+    });
+    let mut ctx = policy_ctx(
+        app_state,
+        NetworkMode::Full,
+        "example.com",
+        /*target_port*/ 443,
+    );
+    ctx.deferred_policy_decider = Some(policy_decider);
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/search?q=openai")
+        .header(HOST, "example.com")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = mitm_blocking_response(&req, &ctx).await.unwrap();
+
+    assert!(response.is_none());
+    let captured_request = captured_request
+        .lock()
+        .await
+        .clone()
+        .expect("request should be captured");
+    assert_eq!(captured_request.protocol, NetworkProtocol::Https);
+    assert_eq!(
+        captured_request.url.as_deref(),
+        Some("https://example.com/search?q=openai")
+    );
 }
 
 #[tokio::test]
