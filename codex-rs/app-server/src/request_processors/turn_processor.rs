@@ -934,6 +934,7 @@ impl TurnRequestProcessor {
             request_id,
             thread.as_ref(),
             Op::RealtimeConversationStart(ConversationStartParams {
+                architecture: params.architecture,
                 model: params.model,
                 output_modality: params.output_modality,
                 prompt: params.prompt,

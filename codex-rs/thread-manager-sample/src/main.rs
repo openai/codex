@@ -258,6 +258,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         apps_mcp_product_sku: None,
         realtime_audio: RealtimeAudioConfig::default(),
         experimental_realtime_ws_base_url: None,
+        experimental_realtime_webrtc_call_base_url: None,
         experimental_realtime_ws_model: None,
         realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,

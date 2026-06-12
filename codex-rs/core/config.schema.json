@@ -2450,6 +2450,13 @@
       },
       "type": "object"
     },
+    "RealtimeConversationArchitecture": {
+      "enum": [
+        "realtimeapi",
+        "avas"
+      ],
+      "type": "string"
+    },
     "RealtimeConversationVersion": {
       "enum": [
         "v1",
@@ -2460,6 +2467,9 @@
     "RealtimeToml": {
       "additionalProperties": false,
       "properties": {
+        "architecture": {
+          "$ref": "#/definitions/RealtimeConversationArchitecture"
+        },
         "transport": {
           "$ref": "#/definitions/RealtimeTransport"
         },
@@ -4494,6 +4504,10 @@
     },
     "experimental_realtime_start_instructions": {
       "description": "Experimental / do not use. Replaces the built-in realtime start instructions inserted into developer messages when realtime becomes active.",
+      "type": "string"
+    },
+    "experimental_realtime_webrtc_call_base_url": {
+      "description": "Experimental / do not use. Overrides only the WebRTC realtime call creation base URL. This is separate from `experimental_realtime_ws_base_url` because WebRTC call creation is HTTP, while sideband control is websocket.",
       "type": "string"
     },
     "experimental_realtime_ws_backend_prompt": {

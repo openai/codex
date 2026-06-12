@@ -372,6 +372,10 @@ pub struct ConfigToml {
     /// `/v1/realtime`
     /// connection) without changing normal provider HTTP requests.
     pub experimental_realtime_ws_base_url: Option<String>,
+    /// Experimental / do not use. Overrides only the WebRTC realtime call
+    /// creation base URL. This is separate from `experimental_realtime_ws_base_url`
+    /// because WebRTC call creation is HTTP, while sideband control is websocket.
+    pub experimental_realtime_webrtc_call_base_url: Option<String>,
     /// Experimental / do not use. Selects the realtime websocket model/snapshot
     /// used for the `Op::RealtimeConversation` connection.
     pub experimental_realtime_ws_model: Option<String>,
@@ -583,12 +587,14 @@ pub enum RealtimeTransport {
     Websocket,
 }
 
+pub use codex_protocol::protocol::RealtimeConversationArchitecture as RealtimeArchitecture;
 pub use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
 pub use codex_protocol::protocol::RealtimeVoice;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeConfig {
+    pub architecture: RealtimeArchitecture,
     pub version: RealtimeWsVersion,
     #[serde(rename = "type")]
     pub session_type: RealtimeWsMode,
@@ -599,6 +605,7 @@ pub struct RealtimeConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeToml {
+    pub architecture: Option<RealtimeArchitecture>,
     pub version: Option<RealtimeWsVersion>,
     #[serde(rename = "type")]
     pub session_type: Option<RealtimeWsMode>,

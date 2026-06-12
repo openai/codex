@@ -945,6 +945,9 @@ pub struct Config {
     /// `/v1/realtime`
     /// connection) without changing normal provider HTTP requests.
     pub experimental_realtime_ws_base_url: Option<String>,
+    /// Experimental / do not use. Overrides only the WebRTC realtime call
+    /// creation base URL.
+    pub experimental_realtime_webrtc_call_base_url: Option<String>,
     /// Experimental / do not use. Selects the realtime websocket model/snapshot
     /// used for the `Op::RealtimeConversation` connection.
     pub experimental_realtime_ws_model: Option<String>,
@@ -3549,12 +3552,15 @@ impl Config {
                     speaker: audio.speaker,
                 }),
             experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
+            experimental_realtime_webrtc_call_base_url: cfg
+                .experimental_realtime_webrtc_call_base_url,
             experimental_realtime_ws_model: cfg.experimental_realtime_ws_model,
             realtime: cfg
                 .realtime
                 .map_or_else(RealtimeConfig::default, |realtime| {
                     let defaults = RealtimeConfig::default();
                     RealtimeConfig {
+                        architecture: realtime.architecture.unwrap_or(defaults.architecture),
                         version: realtime.version.unwrap_or(defaults.version),
                         session_type: realtime.session_type.unwrap_or(defaults.session_type),
                         transport: realtime.transport.unwrap_or(defaults.transport),

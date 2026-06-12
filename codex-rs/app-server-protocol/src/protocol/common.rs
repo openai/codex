@@ -1647,6 +1647,7 @@ mod tests {
     use codex_protocol::account::PlanType;
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
     use codex_protocol::parse_command::ParsedCommand;
+    use codex_protocol::protocol::RealtimeConversationArchitecture;
     use codex_protocol::protocol::RealtimeConversationVersion;
     use codex_protocol::protocol::RealtimeOutputModality;
     use codex_protocol::protocol::RealtimeVoice;
@@ -3012,6 +3013,7 @@ mod tests {
         let request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
+                architecture: Some(RealtimeConversationArchitecture::Avas),
                 thread_id: "thr_123".to_string(),
                 model: Some("realtime-treatment-model".to_string()),
                 output_modality: RealtimeOutputModality::Audio,
@@ -3027,6 +3029,7 @@ mod tests {
                 "method": "thread/realtime/start",
                 "id": 9,
                 "params": {
+                    "architecture": "avas",
                     "threadId": "thr_123",
                     "model": "realtime-treatment-model",
                     "outputModality": "audio",
@@ -3047,6 +3050,7 @@ mod tests {
         let default_prompt_request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
+                architecture: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -3062,6 +3066,7 @@ mod tests {
                 "method": "thread/realtime/start",
                 "id": 9,
                 "params": {
+                    "architecture": null,
                     "threadId": "thr_123",
                     "model": null,
                     "outputModality": "audio",
@@ -3077,6 +3082,7 @@ mod tests {
         let null_prompt_request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
+                architecture: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -3092,6 +3098,7 @@ mod tests {
                 "method": "thread/realtime/start",
                 "id": 9,
                 "params": {
+                    "architecture": null,
                     "threadId": "thr_123",
                     "model": null,
                     "outputModality": "audio",
@@ -3250,6 +3257,7 @@ mod tests {
         let request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(1),
             params: v2::ThreadRealtimeStartParams {
+                architecture: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
