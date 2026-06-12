@@ -22,6 +22,7 @@ use serde_json::Value;
 
 pub(crate) const SKILL_SEARCH_TOOL_NAME: &str = "skill_search";
 const DEFAULT_SKILL_SEARCH_LIMIT: usize = 8;
+const MAX_SKILL_SEARCH_LIMIT: usize = 16;
 
 #[derive(Clone, Debug)]
 struct SkillSearchEntry {
@@ -115,7 +116,7 @@ impl ToolExecutor<ToolCall> for SkillSearchTool {
                     (
                         "limit".to_string(),
                         JsonSchema::number(Some(format!(
-                            "Maximum number of skills to return (defaults to {DEFAULT_SKILL_SEARCH_LIMIT})."
+                            "Maximum number of skills to return (defaults to {DEFAULT_SKILL_SEARCH_LIMIT} and is capped at {MAX_SKILL_SEARCH_LIMIT})."
                         ))),
                     ),
                     (
@@ -143,12 +144,13 @@ impl ToolExecutor<ToolCall> for SkillSearchTool {
                     "query must not be empty".to_string(),
                 ));
             }
-            let limit = args.limit.unwrap_or(DEFAULT_SKILL_SEARCH_LIMIT);
-            if limit == 0 {
+            let requested_limit = args.limit.unwrap_or(DEFAULT_SKILL_SEARCH_LIMIT);
+            if requested_limit == 0 {
                 return Err(FunctionCallError::RespondToModel(
                     "limit must be greater than zero".to_string(),
                 ));
             }
+            let limit = requested_limit.min(MAX_SKILL_SEARCH_LIMIT);
 
             Ok(Box::new(PlainTextToolOutput {
                 text: self.search(query, limit),
@@ -290,6 +292,27 @@ mod tests {
         )]);
 
         assert_eq!(output_text(&tool, json!({ "query": "quantum" })).await, "");
+    }
+
+    #[tokio::test]
+    async fn search_defaults_to_eight_and_caps_requested_limit_at_sixteen() {
+        let skills = (0..20)
+            .map(|index| {
+                skill(
+                    &format!("common-{index}"),
+                    "Common workflow",
+                    &format!("/tmp/common-{index}/SKILL.md"),
+                )
+            })
+            .collect();
+        let tool = SkillSearchTool::new(skills);
+
+        let default_output = output_text(&tool, json!({ "query": "common workflow" })).await;
+        let capped_output =
+            output_text(&tool, json!({ "query": "common workflow", "limit": 100 })).await;
+
+        assert_eq!(default_output.lines().count(), DEFAULT_SKILL_SEARCH_LIMIT);
+        assert_eq!(capped_output.lines().count(), MAX_SKILL_SEARCH_LIMIT);
     }
 
     #[tokio::test]
