@@ -735,9 +735,14 @@ async fn conversation_webrtc_start_uses_avas_architecture_query() -> Result<()> 
     })
     .await;
     assert_eq!(session_updated, "sess_webrtc");
+    let handshake = realtime_server.single_handshake();
     assert_eq!(
-        realtime_server.single_handshake().uri(),
+        handshake.uri(),
         "/v1/realtime?intent=quicksilver&call_id=rtc_avas_test"
+    );
+    assert_eq!(
+        handshake.header("authorization").as_deref(),
+        Some("Bearer dummy")
     );
 
     test.codex.submit(Op::RealtimeConversationClose).await?;
