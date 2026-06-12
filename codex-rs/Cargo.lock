@@ -2863,6 +2863,7 @@ dependencies = [
  "ctor 0.6.3",
  "futures",
  "http 1.4.0",
+ "indexmap 2.14.0",
  "pretty_assertions",
  "prost 0.14.3",
  "reqwest 0.12.28",

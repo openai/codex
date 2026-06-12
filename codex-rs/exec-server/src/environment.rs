@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
 
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use indexmap::IndexMap;
 
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
@@ -46,7 +46,7 @@ pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 #[derive(Debug)]
 pub struct EnvironmentManager {
     default_environment: Option<String>,
-    environments: RwLock<HashMap<String, Arc<Environment>>>,
+    environments: RwLock<IndexMap<String, Arc<Environment>>>,
     local_environment: Option<Arc<Environment>>,
     local_runtime_paths: Option<ExecServerRuntimePaths>,
 }
@@ -59,7 +59,7 @@ impl EnvironmentManager {
     pub fn default_for_tests() -> Self {
         Self {
             default_environment: Some(LOCAL_ENVIRONMENT_ID.to_string()),
-            environments: RwLock::new(HashMap::from([(
+            environments: RwLock::new(IndexMap::from([(
                 LOCAL_ENVIRONMENT_ID.to_string(),
                 Arc::new(Environment::default_for_tests()),
             )])),
@@ -72,7 +72,7 @@ impl EnvironmentManager {
     pub fn without_environments() -> Self {
         Self {
             default_environment: None,
-            environments: RwLock::new(HashMap::new()),
+            environments: RwLock::new(IndexMap::new()),
             local_environment: None,
             local_runtime_paths: None,
         }
@@ -144,7 +144,7 @@ impl EnvironmentManager {
             include_local,
         } = snapshot;
         let mut environment_map =
-            HashMap::with_capacity(environments.len() + usize::from(include_local));
+            IndexMap::with_capacity(environments.len() + usize::from(include_local));
         let local_environment = if include_local {
             let local_runtime_paths = local_runtime_paths.clone().ok_or_else(|| {
                 ExecServerError::Protocol(
@@ -661,11 +661,23 @@ mod tests {
     #[tokio::test]
     async fn environment_manager_uses_explicit_provider_default() {
         let snapshot = EnvironmentProviderSnapshot {
-            environments: vec![(
-                "devbox".to_string(),
-                Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
-                    .expect("remote environment"),
-            )],
+            environments: vec![
+                (
+                    "staging".to_string(),
+                    Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
+                        .expect("remote environment"),
+                ),
+                (
+                    "devbox".to_string(),
+                    Environment::create_for_tests(Some("ws://127.0.0.1:8766".to_string()))
+                        .expect("remote environment"),
+                ),
+                (
+                    "production".to_string(),
+                    Environment::create_for_tests(Some("ws://127.0.0.1:8767".to_string()))
+                        .expect("remote environment"),
+                ),
+            ],
             default: EnvironmentDefault::EnvironmentId("devbox".to_string()),
             include_local: true,
         };
@@ -675,9 +687,37 @@ mod tests {
         assert_eq!(manager.default_environment_id(), Some("devbox"));
         assert_eq!(
             manager.default_environment_ids(),
-            vec!["devbox".to_string(), LOCAL_ENVIRONMENT_ID.to_string()]
+            vec![
+                "devbox".to_string(),
+                LOCAL_ENVIRONMENT_ID.to_string(),
+                "staging".to_string(),
+                "production".to_string(),
+            ]
         );
         assert!(manager.default_environment().expect("default").is_remote());
+    }
+
+    #[test]
+    fn environment_manager_upsert_preserves_environment_order() {
+        let manager = EnvironmentManager::default_for_tests();
+        manager
+            .upsert_environment("first".to_string(), "ws://127.0.0.1:8765".to_string())
+            .expect("first environment");
+        manager
+            .upsert_environment("second".to_string(), "ws://127.0.0.1:8766".to_string())
+            .expect("second environment");
+        manager
+            .upsert_environment("first".to_string(), "ws://127.0.0.1:8767".to_string())
+            .expect("replacement environment");
+
+        assert_eq!(
+            manager.default_environment_ids(),
+            vec![
+                LOCAL_ENVIRONMENT_ID.to_string(),
+                "first".to_string(),
+                "second".to_string(),
+            ]
+        );
     }
 
     #[tokio::test]
