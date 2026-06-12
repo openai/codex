@@ -200,7 +200,7 @@ async fn thread_start_rejects_hidden_dynamic_tools_without_namespace() -> Result
 }
 
 #[tokio::test]
-async fn thread_start_rejects_mixed_dynamic_tool_formats() -> Result<()> {
+async fn thread_start_rejects_invalid_dynamic_tool_inputs() -> Result<()> {
     let server = MockServer::start().await;
 
     let codex_home = TempDir::new()?;
@@ -259,6 +259,39 @@ async fn thread_start_rejects_mixed_dynamic_tool_formats() -> Result<()> {
                 "tools": []
             }]),
             "must contain at least one tool",
+        ),
+        (
+            json!([
+                {
+                    "type": "namespace",
+                    "name": "duplicate_namespace",
+                    "description": "First namespace",
+                    "tools": [{
+                        "type": "function",
+                        "name": "first_tool",
+                        "description": "First tool",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {}
+                        }
+                    }]
+                },
+                {
+                    "type": "namespace",
+                    "name": "duplicate_namespace",
+                    "description": "Second namespace",
+                    "tools": [{
+                        "type": "function",
+                        "name": "second_tool",
+                        "description": "Second tool",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {}
+                        }
+                    }]
+                }
+            ]),
+            "duplicate dynamic tool namespace",
         ),
     ] {
         let thread_req = mcp
