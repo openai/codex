@@ -25,7 +25,8 @@ const BAD_PATH_URI_PREFIX: &str = "file:///%00/bad/path/";
 /// Only the `file:` scheme is currently accepted. Construction validates the
 /// URL, and the URI cannot be mutated after construction. [`Self::basename`],
 /// [`Self::parent`], and [`Self::join`] operate on URI path segments without
-/// interpreting them using the operating system running Codex.
+/// interpreting them using the operating system running Codex. Fallback URIs
+/// created by [`Self::from_abs_path`] are opaque to these lexical operations.
 ///
 /// `file:` paths retain their URI spelling so they can be parsed independently
 /// of the current host. In particular, `/C:/src` remains ambiguous between a
@@ -116,20 +117,26 @@ impl PathUri {
         self.0.path()
     }
 
-    /// Returns the decoded final URI path segment, or `None` for the URI root.
+    /// Returns the decoded final URI path segment, or `None` for the URI root
+    /// or an opaque fallback URI created by [`Self::from_abs_path`].
     ///
     /// If the segment contains non-UTF-8 encoded bytes, its percent-encoded
     /// spelling is returned instead.
     pub fn basename(&self) -> Option<String> {
+        if decode_bad_path_uri(&self.0).is_some() {
+            return None;
+        }
+
         self.0
             .path_segments()?
             .rfind(|segment| !segment.is_empty())
             .map(decode_uri_path)
     }
 
-    /// Returns the parent URI, or `None` for the URI root.
+    /// Returns the parent URI, or `None` for the URI root or an opaque fallback
+    /// URI created by [`Self::from_abs_path`].
     pub fn parent(&self) -> Option<Self> {
-        if self.encoded_path() == "/" {
+        if self.encoded_path() == "/" || decode_bad_path_uri(&self.0).is_some() {
             return None;
         }
 
@@ -150,6 +157,8 @@ impl PathUri {
     /// without escaping the URI root. Literal `%`, `?`, and `#` characters are
     /// percent-encoded as filename text. Paths containing a null character are
     /// rejected because they cannot be safely converted to native paths.
+    /// Opaque fallback URIs created by [`Self::from_abs_path`] reject non-empty
+    /// joins.
     pub fn join(&self, path: &str) -> Result<Self, PathUriParseError> {
         if path.starts_with('/') {
             return Err(PathUriParseError::JoinPathMustBeRelative(path.to_string()));
@@ -159,6 +168,9 @@ impl PathUri {
         }
         if path.is_empty() {
             return Ok(self.clone());
+        }
+        if decode_bad_path_uri(&self.0).is_some() {
+            return Err(PathUriParseError::InvalidFileUriPath);
         }
 
         let mut url = self.0.clone();

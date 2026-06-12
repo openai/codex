@@ -177,6 +177,20 @@ fn structurally_valid_bad_path_uri_with_invalid_native_payload_fails_conversion(
 }
 
 #[test]
+fn bad_path_uris_are_opaque_to_lexical_operations() {
+    let uri = PathUri::parse("file:///%00/bad/path/YQ")
+        .expect("canonical base64 fallback URI should parse");
+
+    assert_eq!(uri.basename(), None);
+    assert_eq!(uri.parent(), None);
+    assert_eq!(uri.join(""), Ok(uri.clone()));
+    assert_eq!(
+        uri.join("child"),
+        Err(PathUriParseError::InvalidFileUriPath)
+    );
+}
+
+#[test]
 fn file_uri_parses_a_posix_path_on_any_host() {
     let uri = PathUri::parse("file:///home/alice/src/main.rs")
         .expect("POSIX file URI should parse on every host");
