@@ -69,7 +69,7 @@ pub(crate) trait HarnessKeyValidator: Send + Sync {
         executor_registration_id = %executor_registration_id,
     )
 )]
-pub(crate) async fn run_noise_multiplexed_environment<S, V>(
+pub(crate) async fn run_multiplexed_environment<S, V>(
     stream: WebSocketStream<S>,
     processor: ConnectionProcessor,
     environment_id: String,

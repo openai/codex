@@ -17,7 +17,7 @@ use tokio_tungstenite::tungstenite::Message;
 use super::HarnessKeyValidator;
 use super::MAX_FAILED_NOISE_HANDSHAKES;
 use super::MAX_HARNESS_KEY_AUTHORIZATION_BYTES;
-use super::run_noise_multiplexed_environment;
+use super::run_multiplexed_environment;
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::noise_channel::InitiatorHandshake;
@@ -67,7 +67,7 @@ async fn pending_harness_key_validation_does_not_block_new_handshakes() -> Resul
     let environment_identity = NoiseChannelIdentity::generate()?;
     let harness_identity = NoiseChannelIdentity::generate()?;
     let calls = Arc::new(AtomicUsize::new(0));
-    let environment_task = tokio::spawn(run_noise_multiplexed_environment(
+    let environment_task = tokio::spawn(run_multiplexed_environment(
         environment_websocket,
         ConnectionProcessor::new(ExecServerRuntimePaths::new(
             std::env::current_exe()?,
@@ -120,7 +120,7 @@ async fn oversized_harness_authorization_is_rejected_before_validation() -> Resu
     let environment_identity = NoiseChannelIdentity::generate()?;
     let harness_identity = NoiseChannelIdentity::generate()?;
     let calls = Arc::new(AtomicUsize::new(0));
-    let environment_task = tokio::spawn(run_noise_multiplexed_environment(
+    let environment_task = tokio::spawn(run_multiplexed_environment(
         environment_websocket,
         ConnectionProcessor::new(ExecServerRuntimePaths::new(
             std::env::current_exe()?,
@@ -175,7 +175,7 @@ async fn repeated_malformed_handshakes_close_the_physical_relay() -> Result<()> 
 
     let environment_identity = NoiseChannelIdentity::generate()?;
     let harness_identity = NoiseChannelIdentity::generate()?;
-    let environment_task = tokio::spawn(run_noise_multiplexed_environment(
+    let environment_task = tokio::spawn(run_multiplexed_environment(
         environment_websocket,
         ConnectionProcessor::new(ExecServerRuntimePaths::new(
             std::env::current_exe()?,

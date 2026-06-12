@@ -18,7 +18,7 @@ use crate::ExecServerRuntimePaths;
 use crate::NoiseChannelIdentity;
 use crate::NoiseChannelPublicKey;
 use crate::noise_relay::environment::HarnessKeyValidator;
-use crate::noise_relay::environment::run_noise_multiplexed_environment;
+use crate::noise_relay::environment::run_multiplexed_environment;
 use crate::noise_relay::noise_relay_websocket_config;
 use crate::server::ConnectionProcessor;
 
@@ -287,7 +287,7 @@ pub async fn run_remote_environment(
                     noise_outcome = "ok",
                     "Noise executor connected to rendezvous"
                 );
-                run_noise_multiplexed_environment(
+                run_multiplexed_environment(
                     websocket,
                     processor.clone(),
                     response.environment_id,
