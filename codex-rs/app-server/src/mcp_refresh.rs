@@ -158,14 +158,13 @@ mod tests {
             let thread = thread_manager.get_thread(thread_id).await?;
             let thread_config = thread.config().await;
             if thread_config.cwd.ends_with("good") {
-                good_thread = Some((thread, thread_config));
+                good_thread = Some(thread);
                 break;
             }
         }
-        let (thread, thread_config) = good_thread.expect("good test thread should exist");
+        let thread = good_thread.expect("good test thread should exist");
 
-        let refresh_config =
-            build_refresh_config(&thread_manager, &config_manager, thread_config).await?;
+        let refresh_config = build_refresh_config(thread.as_ref(), &config_manager).await?;
         let backend = serde_json::from_value::<AuthKeyringBackendKind>(
             refresh_config.auth_keyring_backend_kind,
         )?;
