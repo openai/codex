@@ -16,13 +16,15 @@ use serde::Deserialize;
 use serde::Serialize;
 use sha2::Sha256;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::fs;
 
 const CLOUD_CONFIG_BUNDLE_CACHE_VERSION: u32 = 1;
 pub(super) const CLOUD_CONFIG_BUNDLE_CACHE_FILENAME: &str = "cloud-config-bundle-cache.json";
-const CLOUD_CONFIG_BUNDLE_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+pub(super) const CLOUD_CONFIG_BUNDLE_CACHE_LOCK_FILENAME: &str = "cloud-config-bundle-cache.lock";
+pub(super) const CLOUD_CONFIG_BUNDLE_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const CLOUD_CONFIG_BUNDLE_CACHE_WRITE_HMAC_KEY: &[u8] =
     b"codex-cloud-config-bundle-cache-v1-6160ae70-bcfd-4ca8-a99b-40f73b3b072e";
 const CLOUD_CONFIG_BUNDLE_CACHE_READ_HMAC_KEYS: &[&[u8]] =
@@ -35,6 +37,11 @@ pub(super) struct CloudConfigBundleCache {
     path: AbsolutePathBuf,
 }
 
+pub(super) enum CacheLockAttempt {
+    Acquired(std::fs::File),
+    Contended,
+}
+
 impl CloudConfigBundleCache {
     pub(super) fn new(codex_home: AbsolutePathBuf) -> Self {
         Self {
@@ -44,6 +51,36 @@ impl CloudConfigBundleCache {
 
     pub(super) fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(super) async fn try_acquire_lock(&self) -> std::io::Result<CacheLockAttempt> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        let lock_path = self
+            .path
+            .as_path()
+            .parent()
+            .map(|parent| parent.join(CLOUD_CONFIG_BUNDLE_CACHE_LOCK_FILENAME))
+            .unwrap_or_else(|| PathBuf::from(CLOUD_CONFIG_BUNDLE_CACHE_LOCK_FILENAME));
+        // The file intentionally persists between owners. Lock ownership is
+        // attached to this handle and is released when the handle is dropped.
+        let lock_file = tokio::task::spawn_blocking(move || {
+            std::fs::File::options()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(lock_path)
+        })
+        .await
+        .map_err(|err| std::io::Error::other(format!("cache lock task failed: {err}")))??;
+
+        match lock_file.try_lock() {
+            Ok(()) => Ok(CacheLockAttempt::Acquired(lock_file)),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(CacheLockAttempt::Contended),
+            Err(std::fs::TryLockError::Error(err)) => Err(err),
+        }
     }
 
     pub(super) async fn load(
@@ -99,7 +136,13 @@ impl CloudConfigBundleCache {
             return Err(CacheLoadStatus::CacheIdentityMismatch);
         }
 
-        if cache_file.signed_payload.expires_at <= Utc::now() {
+        let now = Utc::now();
+        let cache_age = now
+            .signed_duration_since(cache_file.signed_payload.cached_at)
+            .to_std();
+        if cache_file.signed_payload.expires_at <= now
+            || !matches!(cache_age, Ok(cache_age) if cache_age < CLOUD_CONFIG_BUNDLE_CACHE_TTL)
+        {
             return Err(CacheLoadStatus::CacheExpired);
         }
 
