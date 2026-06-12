@@ -593,13 +593,7 @@ impl MessageProcessor {
             Arc::clone(&self.outgoing),
             request_context.clone(),
             async {
-                let codex_request = if request_method.starts_with("remoteControl/") {
-                    self.remote_control_processor
-                        .ensure_remote_control_allowed_before_deserialization()
-                        .and_then(|()| deserialize_client_request(&request))
-                } else {
-                    deserialize_client_request(&request)
-                };
+                let codex_request = deserialize_client_request(&request);
                 let result = match codex_request {
                     Ok(codex_request) => {
                         // Websocket callers finalize outbound readiness in lib.rs after mirroring

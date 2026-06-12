@@ -29,17 +29,6 @@ impl RemoteControlRequestProcessor {
         }
     }
 
-    pub(crate) fn ensure_remote_control_allowed_before_deserialization(
-        &self,
-    ) -> Result<(), JSONRPCErrorError> {
-        let Some(handle) = self.remote_control_handle.as_ref() else {
-            return Ok(());
-        };
-        handle
-            .ensure_remote_control_allowed()
-            .map_err(|err| invalid_request(err.to_string()))
-    }
-
     pub(crate) async fn enable(
         &self,
         ephemeral: bool,
@@ -99,8 +88,8 @@ impl RemoteControlRequestProcessor {
         &self,
         params: RemoteControlPairingStatusParams,
     ) -> Result<RemoteControlPairingStatusResponse, JSONRPCErrorError> {
-        let handle = self.handle()?;
         validate_pairing_status_params(&params)?;
+        let handle = self.handle()?;
         handle
             .pairing_status(params)
             .await

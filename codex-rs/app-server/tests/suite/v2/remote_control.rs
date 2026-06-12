@@ -114,7 +114,7 @@ async fn managed_requirements_reject_all_remote_control_rpcs() -> Result<()> {
         })
         .await?,
         mcp.send_remote_control_pairing_status_request(RemoteControlPairingStatusParams {
-            pairing_code: None,
+            pairing_code: Some("pairing-code".to_string()),
             manual_pairing_code: None,
         })
         .await?,
@@ -135,14 +135,6 @@ async fn managed_requirements_reject_all_remote_control_rpcs() -> Result<()> {
     for request_id in request_ids {
         assert_remote_control_disabled_by_requirements(&mut mcp, request_id).await?;
     }
-
-    let malformed_request_id = mcp
-        .send_raw_remote_control_request(
-            "remoteControl/client/revoke",
-            Some(serde_json::json!({"environmentId": "environment-id"})),
-        )
-        .await?;
-    assert_remote_control_disabled_by_requirements(&mut mcp, malformed_request_id).await?;
 
     Ok(())
 }
