@@ -1,9 +1,8 @@
-//! Best-effort OAuth token revocation for managed auth cleanup.
+//! Best-effort OAuth token revocation used during logout.
 //!
-//! Managed ChatGPT auth stores OAuth tokens locally. Cleanup attempts to revoke
-//! the refresh token, falling back to the access token when no refresh token is
-//! available, and callers still complete their primary work if the revoke request
-//! fails.
+//! Managed ChatGPT auth stores OAuth tokens locally. Logout attempts to revoke the
+//! refresh token, falling back to the access token when no refresh token is
+//! available, and callers still remove local auth if the revoke request fails.
 
 use serde::Serialize;
 use std::time::Duration;
@@ -52,7 +51,7 @@ struct RevokeTokenRequest<'a> {
     client_id: Option<&'static str>,
 }
 
-pub(crate) async fn revoke_auth_tokens(
+pub(super) async fn revoke_auth_tokens(
     auth_dot_json: Option<&AuthDotJson>,
 ) -> Result<(), std::io::Error> {
     let Some((token, kind)) = auth_dot_json.and_then(revocable_token) else {
@@ -62,23 +61,6 @@ pub(crate) async fn revoke_auth_tokens(
     let client = create_client();
     let endpoint = revoke_token_endpoint();
     revoke_oauth_token(&client, endpoint.as_str(), token, kind, REVOKE_HTTP_TIMEOUT).await
-}
-
-pub(crate) fn should_revoke_auth_tokens(
-    auth_dot_json: Option<&AuthDotJson>,
-    replacement_auth: &AuthDotJson,
-) -> bool {
-    let Some((token, kind)) = auth_dot_json.and_then(revocable_token) else {
-        return false;
-    };
-    let Some(replacement_tokens) = managed_chatgpt_tokens(replacement_auth) else {
-        return true;
-    };
-
-    match kind {
-        RevokeTokenKind::Access => replacement_tokens.access_token != token,
-        RevokeTokenKind::Refresh => replacement_tokens.refresh_token != token,
-    }
 }
 
 fn revocable_token(auth_dot_json: &AuthDotJson) -> Option<(&str, RevokeTokenKind)> {
