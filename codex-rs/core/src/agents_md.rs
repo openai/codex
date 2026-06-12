@@ -59,16 +59,11 @@ pub(crate) async fn load_project_instructions(
         let is_primary =
             primary_environment.is_some_and(|primary| std::ptr::eq(primary, turn_environment));
         let filesystem = turn_environment.environment.get_filesystem();
-        let cwd = if is_primary {
-            config.cwd.clone()
-        } else {
-            turn_environment.cwd.clone()
-        };
         match read_agents_md(
             config,
             filesystem.as_ref(),
             &turn_environment.environment_id,
-            &cwd,
+            &turn_environment.cwd,
             is_primary,
         )
         .await
