@@ -4,6 +4,7 @@
 use anyhow::Result;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -87,6 +88,12 @@ async fn submit_user_turn(test: &TestCodex, cwd: AbsolutePathBuf, prompt: &str) 
     })
     .await;
     Ok(())
+}
+
+fn test_codex_with_skill_search() -> core_test_support::test_codex::TestCodexBuilder {
+    let mut extensions = ExtensionRegistryBuilder::new();
+    codex_skill_search_extension::install(&mut extensions);
+    test_codex().with_extensions(Arc::new(extensions.build()))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -194,8 +201,7 @@ async fn skill_search_tool_is_visible_and_returns_matching_repo_skill() -> Resul
 
     let server = start_mock_server().await;
     let search_call_id = "skill-search-call";
-    let mut builder = test_codex()
-        .with_skill_search_extension()
+    let mut builder = test_codex_with_skill_search()
         .with_config(|config| {
             config
                 .features
@@ -271,9 +277,8 @@ async fn disabled_skill_search_keeps_static_instructions_and_hides_tool() -> Res
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_skill_search_extension()
-        .with_workspace_setup(move |cwd, fs| async move {
+    let mut builder =
+        test_codex_with_skill_search().with_workspace_setup(move |cwd, fs| async move {
             write_repo_skill(
                 cwd,
                 fs,
@@ -321,8 +326,7 @@ async fn skill_search_excludes_skills_that_disallow_implicit_invocation() -> Res
 
     let server = start_mock_server().await;
     let search_call_id = "disallowed-skill-search-call";
-    let mut builder = test_codex()
-        .with_skill_search_extension()
+    let mut builder = test_codex_with_skill_search()
         .with_config(|config| {
             config
                 .features
@@ -336,6 +340,14 @@ async fn skill_search_excludes_skills_that_disallow_implicit_invocation() -> Res
                 "private-demo",
                 "Find private demo workflows",
                 "Use this skill only when explicitly invoked.",
+            )
+            .await?;
+            write_repo_skill(
+                cwd.clone(),
+                Arc::clone(&fs),
+                "public-demo",
+                "Find private demo workflows",
+                "Use this skill for public demo workflows.",
             )
             .await?;
             let metadata_dir = cwd
@@ -388,10 +400,11 @@ async fn skill_search_excludes_skills_that_disallow_implicit_invocation() -> Res
     )
     .await?;
 
-    assert_eq!(
-        mock.function_call_output_text(search_call_id).as_deref(),
-        Some("")
-    );
+    let output = mock
+        .function_call_output_text(search_call_id)
+        .expect("skill_search should return output");
+    assert!(output.contains("public-demo"));
+    assert!(!output.contains("private-demo"));
     Ok(())
 }
 
@@ -402,8 +415,7 @@ async fn skill_search_uses_host_loaded_skills_from_each_turn() -> Result<()> {
     let server = start_mock_server().await;
     let first_call_id = "first-turn-skill-search-call";
     let second_call_id = "second-turn-skill-search-call";
-    let mut builder = test_codex()
-        .with_skill_search_extension()
+    let mut builder = test_codex_with_skill_search()
         .with_config(|config| {
             config
                 .features

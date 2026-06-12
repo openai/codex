@@ -164,6 +164,7 @@ mod tests {
         let registry = builder.build();
         let session_store = ExtensionData::new("session");
         let thread_store = ExtensionData::new("11111111-1111-4111-8111-111111111111");
+        let turn_store = ExtensionData::new("turn");
         thread_store.insert(WebSearchExtensionConfig {
             available: true,
             provider: ModelProviderInfo::create_openai_provider(/*base_url*/ None),
@@ -173,7 +174,7 @@ mod tests {
         let tool_names = registry
             .tool_contributors()
             .iter()
-            .flat_map(|contributor| contributor.tools(&session_store, &thread_store))
+            .flat_map(|contributor| contributor.tools(&session_store, &thread_store, &turn_store))
             .map(|tool| (tool.tool_name(), tool.supports_parallel_tool_calls()))
             .collect::<Vec<_>>();
 

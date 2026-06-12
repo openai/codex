@@ -81,7 +81,11 @@ fn tools_are_not_contributed_when_dedicated_tools_disabled() {
 
     assert!(
         extension
-            .tools(&ExtensionData::new("session"), &thread_store)
+            .tools(
+                &ExtensionData::new("session"),
+                &thread_store,
+                &ExtensionData::new("turn"),
+            )
             .is_empty()
     );
 }
@@ -90,6 +94,7 @@ fn tools_are_not_contributed_when_dedicated_tools_disabled() {
 fn tools_are_contributed_when_enabled_with_dedicated_tools() {
     let extension = MemoriesExtension::default();
     let thread_store = ExtensionData::new("thread");
+    let turn_store = ExtensionData::new("turn");
     thread_store.insert(MemoriesExtensionConfig {
         enabled: true,
         dedicated_tools: true,
@@ -97,11 +102,7 @@ fn tools_are_contributed_when_enabled_with_dedicated_tools() {
     });
 
     let tool_names = extension
-        .tools(
-            &ExtensionData::new("session"),
-            &thread_store,
-            &ExtensionData::new("turn"),
-        )
+        .tools(&ExtensionData::new("session"), &thread_store, &turn_store)
         .into_iter()
         .map(|tool| tool.tool_name())
         .collect::<Vec<_>>();
@@ -123,6 +124,7 @@ fn install_registers_dedicated_tool_contributor() {
     crate::install(&mut builder, /*metrics_client*/ None);
     let registry = builder.build();
     let thread_store = ExtensionData::new("thread");
+    let turn_store = ExtensionData::new("turn");
     thread_store.insert(MemoriesExtensionConfig {
         enabled: true,
         dedicated_tools: true,
@@ -132,7 +134,9 @@ fn install_registers_dedicated_tool_contributor() {
     let tool_names = registry
         .tool_contributors()
         .iter()
-        .flat_map(|contributor| contributor.tools(&ExtensionData::new("session"), &thread_store))
+        .flat_map(|contributor| {
+            contributor.tools(&ExtensionData::new("session"), &thread_store, &turn_store)
+        })
         .map(|tool| tool.tool_name())
         .collect::<Vec<_>>();
 

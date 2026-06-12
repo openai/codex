@@ -1139,7 +1139,9 @@ async fn installed_tools_with_start(
     registry
         .tool_contributors()
         .iter()
-        .flat_map(|contributor| contributor.tools(&session_store, &thread_store))
+        .flat_map(|contributor| {
+            contributor.tools(&session_store, &thread_store, &ExtensionData::new("turn-1"))
+        })
         .collect()
 }
 
@@ -1197,10 +1199,13 @@ impl GoalExtensionHarness {
     }
 
     fn tools(&self) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
+        let turn_store = ExtensionData::new("turn-1");
         self.registry
             .tool_contributors()
             .iter()
-            .flat_map(|contributor| contributor.tools(&self.session_store, &self.thread_store))
+            .flat_map(|contributor| {
+                contributor.tools(&self.session_store, &self.thread_store, &turn_store)
+            })
             .collect()
     }
 
