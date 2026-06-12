@@ -238,6 +238,7 @@ async fn spawn_process_with_stdin_mode(
     });
 
     let handle = ProcessHandle::new(
+        Some(pid),
         writer_tx,
         Box::new(PipeChildTerminator {
             #[cfg(windows)]

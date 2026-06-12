@@ -2758,6 +2758,15 @@
         "experimental_request_user_input": {
           "$ref": "#/definitions/ExperimentalRequestUserInput"
         },
+        "unified_exec": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/UnifiedExecToml"
+            }
+          ],
+          "default": null,
+          "description": "Runtime settings for the model-facing unified exec tools."
+        },
         "web_search": {
           "allOf": [
             {
@@ -4236,6 +4245,16 @@
             }
           ],
           "description": "Text object: word."
+        }
+      },
+      "type": "object"
+    },
+    "UnifiedExecToml": {
+      "additionalProperties": false,
+      "properties": {
+        "log_macos_seatbelt_denials": {
+          "description": "On macOS, append seatbelt sandbox denials to sandboxed command output.",
+          "type": "boolean"
         }
       },
       "type": "object"

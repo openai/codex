@@ -54,6 +54,8 @@ use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::protocol::ExecCommandSource;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::seatbelt_denials::DenialLogger;
 use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
@@ -970,6 +972,7 @@ impl UnifiedExecProcessManager {
                 spawned.map_err(|err| UnifiedExecError::create_process(err.to_string()))?,
                 request.sandbox,
                 spawn_lifecycle,
+                /*denial_logger*/ None,
             )
             .await;
         }
@@ -989,6 +992,13 @@ impl UnifiedExecProcessManager {
             return UnifiedExecProcess::from_exec_server_started(started, request.sandbox).await;
         }
 
+        let mut denial_logger = if request.log_macos_seatbelt_denials
+            && request.sandbox == SandboxType::MacosSeatbelt
+        {
+            DenialLogger::new_bounded().await
+        } else {
+            None
+        };
         let (program, args) = request
             .command
             .split_first()
@@ -1017,8 +1027,12 @@ impl UnifiedExecProcessManager {
         };
         let spawned =
             spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+        if let Some(logger) = denial_logger.as_mut() {
+            logger.on_child_pid(spawned.session.child_pid());
+        }
         spawn_lifecycle.after_spawn();
-        UnifiedExecProcess::from_spawned(spawned, request.sandbox, spawn_lifecycle).await
+        UnifiedExecProcess::from_spawned(spawned, request.sandbox, spawn_lifecycle, denial_logger)
+            .await
     }
 
     pub(super) async fn open_session_with_sandbox(

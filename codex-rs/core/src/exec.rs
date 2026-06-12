@@ -43,6 +43,8 @@ use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
+use codex_sandboxing::seatbelt_denials::DenialLogger;
+use codex_sandboxing::seatbelt_denials::format_sandbox_denials;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use codex_utils_pty::process_group::kill_child_process_group;
@@ -459,6 +461,7 @@ pub(crate) async fn execute_exec_request(
         file_system_sandbox_policy: _,
         network_sandbox_policy,
         windows_sandbox_filesystem_overrides,
+        log_macos_seatbelt_denials,
         arg0,
     } = exec_request;
 
@@ -480,6 +483,7 @@ pub(crate) async fn execute_exec_request(
     let raw_output_result = get_raw_output_result(
         params,
         network_sandbox_policy,
+        log_macos_seatbelt_denials,
         stdout_stream,
         after_spawn,
         sandbox,
@@ -497,6 +501,7 @@ pub(crate) async fn execute_exec_request(
 async fn get_raw_output_result(
     params: ExecParams,
     network_sandbox_policy: NetworkSandboxPolicy,
+    log_macos_seatbelt_denials: bool,
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
     #[cfg_attr(not(windows), allow(unused_variables))] sandbox: SandboxType,
@@ -520,7 +525,15 @@ async fn get_raw_output_result(
         .await;
     }
 
-    exec(params, network_sandbox_policy, stdout_stream, after_spawn).await
+    exec(
+        params,
+        sandbox,
+        network_sandbox_policy,
+        log_macos_seatbelt_denials,
+        stdout_stream,
+        after_spawn,
+    )
+    .await
 }
 
 #[cfg(target_os = "windows")]
@@ -945,7 +958,9 @@ fn aggregate_output(
 /// wrapper args, as appropriate.
 async fn exec(
     params: ExecParams,
+    sandbox: SandboxType,
     network_sandbox_policy: NetworkSandboxPolicy,
+    log_macos_seatbelt_denials: bool,
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<RawExecToolCallOutput> {
@@ -977,6 +992,11 @@ async fn exec(
         ))
     })?;
     let arg0_ref = arg0.as_deref();
+    let mut denial_logger = if log_macos_seatbelt_denials && sandbox == SandboxType::MacosSeatbelt {
+        DenialLogger::new_bounded().await
+    } else {
+        None
+    };
     let child = spawn_child_async(SpawnChildRequest {
         program: PathBuf::from(program),
         args: args.into(),
@@ -991,10 +1011,39 @@ async fn exec(
         env,
     })
     .await?;
+    if let Some(logger) = denial_logger.as_mut() {
+        logger.on_child_pid(child.id());
+    }
     if let Some(after_spawn) = after_spawn {
         after_spawn();
     }
-    consume_output(child, expiration, capture_policy, stdout_stream).await
+    let mut raw_output = consume_output(child, expiration, capture_policy, stdout_stream).await?;
+    if let Some(logger) = denial_logger
+        && let Some(bytes) = format_sandbox_denials(&logger.finish().await)
+    {
+        if let Some(max_bytes) = capture_policy.retained_bytes_cap() {
+            raw_output
+                .stderr
+                .text
+                .truncate(max_bytes.saturating_sub(bytes.len()));
+        }
+        raw_output.stderr.text.extend_from_slice(&bytes);
+        raw_output.aggregated_output = aggregate_output(
+            &raw_output.stdout,
+            &raw_output.stderr,
+            capture_policy.retained_bytes_cap(),
+        );
+        if let Some(max_bytes) = capture_policy.retained_bytes_cap()
+            && !raw_output.aggregated_output.text.ends_with(&bytes)
+        {
+            raw_output
+                .aggregated_output
+                .text
+                .truncate(max_bytes.saturating_sub(bytes.len()));
+            raw_output.aggregated_output.text.extend_from_slice(&bytes);
+        }
+    }
+    Ok(raw_output)
 }
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]

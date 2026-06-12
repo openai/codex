@@ -2,6 +2,8 @@ use core_test_support::test_codex::local_selections;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
+#[cfg(target_os = "macos")]
+use std::sync::Arc;
 use std::sync::OnceLock;
 
 use anyhow::Context;
@@ -45,6 +47,8 @@ use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
+#[cfg(target_os = "macos")]
+use tempfile::TempDir;
 use tokio::time::Duration;
 
 const UNIFIED_EXEC_LAGGED_OUTPUT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -724,9 +728,10 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
     let test = builder.build_with_remote_env(&server).await?;
 
     let call_id = "uexec-full-lifecycle";
-    // This timing force the long-standing PTY
+    // The shell exits after entering the background watcher, but its descendant
+    // keeps the PTY output descriptors open.
     let args = json!({
-        "cmd": "sleep 0.5; printf 'HELLO-FULL-LIFECYCLE'",
+        "cmd": "sleep 0.5; (sleep 5) & printf 'HELLO-FULL-LIFECYCLE'",
         "yield_time_ms": 1000,
     });
 
@@ -756,7 +761,10 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
     let mut task_completed = false;
 
     loop {
-        let msg = wait_for_event(&test.codex, |_| true).await;
+        let msg = tokio::time::timeout(Duration::from_secs(2), test.codex.next_event())
+            .await
+            .context("unified exec waited for a descendant holding the output descriptors")??
+            .msg;
         match msg {
             EventMsg::ExecCommandBegin(ev) if ev.call_id == call_id => begin_event = Some(ev),
             EventMsg::ExecCommandEnd(ev) if ev.call_id == call_id => {
@@ -765,13 +773,13 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
                     "expected a single ExecCommandEnd event for this call id"
                 );
                 end_event = Some(ev);
-                if task_completed && end_event.is_some() {
+                if task_completed {
                     break;
                 }
             }
             EventMsg::TurnComplete(_) => {
                 task_completed = true;
-                if task_completed && end_event.is_some() {
+                if end_event.is_some() {
                     break;
                 }
             }
@@ -3282,6 +3290,125 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
         Some(0),
         "python should exit cleanly after exit()"
     );
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[allow(clippy::expect_used)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_delivers_background_macos_seatbelt_denials_once() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    fs::write(
+        home.path().join("config.toml"),
+        "[tools.unified_exec]\nlog_macos_seatbelt_denials = true\n",
+    )?;
+    let mut builder = test_codex().with_home(home).with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(&server).await?;
+    assert!(test.config.unified_exec_log_macos_seatbelt_denials);
+
+    let denied_path = test.workspace_path("uexec_background_denied_touch.txt");
+    let exec_call_id = "uexec-background-seatbelt-start";
+    let exec_args = serde_json::json!({
+        "cmd": format!("sleep 0.5; /usr/bin/touch {}", denied_path.display()),
+        "yield_time_ms": 50,
+    });
+    let poll_call_id = "uexec-background-seatbelt-poll";
+    let poll_args = serde_json::json!({
+        "chars": "",
+        "session_id": 1000,
+        "yield_time_ms": 1_500,
+    });
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                exec_call_id,
+                "exec_command",
+                &serde_json::to_string(&exec_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_function_call(
+                poll_call_id,
+                "write_stdin",
+                &serde_json::to_string(&poll_args)?,
+            ),
+            ev_completed("resp-2"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-3"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    submit_unified_exec_turn(
+        &test,
+        "write under read-only seatbelt after yielding",
+        PermissionProfile::read_only(),
+    )
+    .await?;
+    let (end_event, turn_completed) =
+        wait_for_unified_exec_end(&test, exec_call_id, &request_log).await;
+    if !turn_completed {
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+    }
+
+    let bodies = request_log
+        .requests()
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+    let outputs = collect_tool_outputs(&bodies)?;
+    let initial_output = outputs
+        .get(exec_call_id)
+        .context("missing initial exec_command output")?;
+    assert_eq!(initial_output.process_id.as_deref(), Some("1000"));
+    assert!(!initial_output.output.contains("=== Sandbox denials ==="));
+
+    let poll_output = outputs
+        .get(poll_call_id)
+        .context("missing write_stdin output")?;
+    assert_eq!(
+        poll_output
+            .output
+            .matches("=== Sandbox denials ===")
+            .count(),
+        1
+    );
+    assert_eq!(
+        end_event
+            .aggregated_output
+            .matches("=== Sandbox denials ===")
+            .count(),
+        1
+    );
+    let canonical_denied_path = denied_path
+        .parent()
+        .context("denied path parent")?
+        .canonicalize()?
+        .join(denied_path.file_name().context("denied path file name")?);
+    let expected_denial = format!("file-write-create {}", canonical_denied_path.display());
+    assert!(poll_output.output.contains(&expected_denial));
+    assert!(end_event.aggregated_output.contains(&expected_denial));
+    assert!(!denied_path.exists());
 
     Ok(())
 }

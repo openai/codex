@@ -622,6 +622,10 @@ pub struct ToolsToml {
     )]
     pub web_search: Option<WebSearchToolConfig>,
     pub experimental_request_user_input: Option<ExperimentalRequestUserInput>,
+
+    /// Runtime settings for the model-facing unified exec tools.
+    #[serde(default)]
+    pub unified_exec: Option<UnifiedExecToml>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
@@ -629,6 +633,13 @@ pub struct ToolsToml {
 pub struct ExperimentalRequestUserInput {
     #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct UnifiedExecToml {
+    /// On macOS, append seatbelt sandbox denials to sandboxed command output.
+    pub log_macos_seatbelt_denials: Option<bool>,
 }
 
 #[derive(Deserialize)]

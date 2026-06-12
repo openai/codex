@@ -331,6 +331,8 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             let mut exec_env = attempt
                 .env_for(command, options, managed_network)
                 .map_err(|err| ToolError::Codex(err.into()))?;
+            exec_env.log_macos_seatbelt_denials =
+                ctx.turn.config.unified_exec_log_macos_seatbelt_denials;
             exec_env.exec_server_env_config = req.exec_server_env_config.clone();
             match zsh_fork_backend::maybe_prepare_unified_exec(
                 req,
@@ -382,6 +384,8 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         let mut exec_env = attempt
             .env_for(command, options, managed_network)
             .map_err(|err| ToolError::Codex(err.into()))?;
+        exec_env.log_macos_seatbelt_denials =
+            ctx.turn.config.unified_exec_log_macos_seatbelt_denials;
         exec_env.exec_server_env_config = req.exec_server_env_config.clone();
         self.manager
             .open_session_with_exec_env(

@@ -6,7 +6,6 @@ use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::broadcast;
-use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
@@ -22,6 +21,8 @@ use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_sandboxing::SandboxType;
+use codex_sandboxing::seatbelt_denials::DenialLogger;
+use codex_sandboxing::seatbelt_denials::format_sandbox_denials;
 use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::ProcessSignal as PtyProcessSignal;
@@ -32,7 +33,8 @@ use super::UnifiedExecError;
 use super::head_tail_buffer::HeadTailBuffer;
 use super::process_state::ProcessState;
 
-const EARLY_EXIT_GRACE_PERIOD: Duration = Duration::from_millis(150);
+const EARLY_EXIT_GRACE_PERIOD: Duration = Duration::from_millis(250);
+const LOCAL_OUTPUT_DRAIN_GRACE_PERIOD: Duration = Duration::from_millis(25);
 pub(crate) trait SpawnLifecycle: std::fmt::Debug + Send + Sync {
     /// Returns file descriptors that must stay open across the child `exec()`.
     ///
@@ -62,6 +64,26 @@ pub(crate) struct OutputHandles {
     pub(crate) output_closed: Arc<AtomicBool>,
     pub(crate) output_closed_notify: Arc<Notify>,
     pub(crate) cancellation_token: CancellationToken,
+}
+
+async fn append_seatbelt_denials(
+    logger: Option<DenialLogger>,
+    buffer: &OutputBuffer,
+    output_notify: &Arc<Notify>,
+    output_tx: &broadcast::Sender<Vec<u8>>,
+) {
+    let Some(logger) = logger else {
+        return;
+    };
+    let Some(bytes) = format_sandbox_denials(&logger.finish().await) else {
+        return;
+    };
+
+    let mut guard = buffer.lock().await;
+    guard.push_chunk(bytes.clone());
+    drop(guard);
+    let _ = output_tx.send(bytes);
+    output_notify.notify_waiters();
 }
 
 /// Transport-specific process handle used by unified exec.
@@ -316,59 +338,64 @@ impl UnifiedExecProcess {
         spawned: SpawnedPty,
         sandbox_type: SandboxType,
         spawn_lifecycle: SpawnLifecycleHandle,
+        denial_logger: Option<DenialLogger>,
     ) -> Result<Self, UnifiedExecError> {
         let SpawnedPty {
             session: process_handle,
             stdout_rx,
             stderr_rx,
-            mut exit_rx,
+            exit_rx,
         } = spawned;
         let output_rx = codex_utils_pty::combine_output_receivers(stdout_rx, stderr_rx);
-        let mut managed = Self::new(
+        let managed = Self::new(
             ProcessHandle::Local(Box::new(process_handle)),
             sandbox_type,
             Some(spawn_lifecycle),
         );
-        managed.output_task = Some(Self::spawn_local_output_task(
+        let mut output_task = Self::spawn_local_output_task(
             output_rx,
             Arc::clone(&managed.output_buffer),
             Arc::clone(&managed.output_notify),
-            Arc::clone(&managed.output_closed),
-            Arc::clone(&managed.output_closed_notify),
             managed.output_tx.clone(),
-        ));
-
-        match exit_rx.try_recv() {
-            Ok(exit_code) => {
-                managed.signal_exit(Some(exit_code));
-                managed.check_for_sandbox_denial().await?;
-                return Ok(managed);
-            }
-            Err(TryRecvError::Closed) => {
-                managed.signal_exit(/*exit_code*/ None);
-                managed.check_for_sandbox_denial().await?;
-                return Ok(managed);
-            }
-            Err(TryRecvError::Empty) => {}
-        }
-
-        if let Ok(exit_result) = tokio::time::timeout(EARLY_EXIT_GRACE_PERIOD, &mut exit_rx).await {
-            managed.signal_exit(exit_result.ok());
-            managed.check_for_sandbox_denial().await?;
-            return Ok(managed);
-        }
+        );
 
         tokio::spawn({
             let state_tx = managed.state_tx.clone();
             let cancellation_token = managed.cancellation_token.clone();
+            let output_buffer = Arc::clone(&managed.output_buffer);
+            let output_notify = Arc::clone(&managed.output_notify);
+            let output_tx = managed.output_tx.clone();
+            let output_closed = Arc::clone(&managed.output_closed);
+            let output_closed_notify = Arc::clone(&managed.output_closed_notify);
             async move {
                 let exit_code = exit_rx.await.ok();
                 let state = state_tx.borrow().clone();
                 let _ = state_tx.send_replace(state.exited(exit_code));
+
+                if tokio::time::timeout(LOCAL_OUTPUT_DRAIN_GRACE_PERIOD, &mut output_task)
+                    .await
+                    .is_err()
+                {
+                    output_task.abort();
+                    let _ = output_task.await;
+                }
+                append_seatbelt_denials(denial_logger, &output_buffer, &output_notify, &output_tx)
+                    .await;
+                output_closed.store(true, Ordering::Release);
+                output_closed_notify.notify_waiters();
                 cancellation_token.cancel();
             }
         });
 
+        if tokio::time::timeout(
+            EARLY_EXIT_GRACE_PERIOD,
+            managed.cancellation_token.cancelled(),
+        )
+        .await
+        .is_ok()
+        {
+            managed.check_for_sandbox_denial().await?;
+        }
         Ok(managed)
     }
 
@@ -500,8 +527,6 @@ impl UnifiedExecProcess {
         mut receiver: tokio::sync::broadcast::Receiver<Vec<u8>>,
         buffer: OutputBuffer,
         output_notify: Arc<Notify>,
-        output_closed: Arc<AtomicBool>,
-        output_closed_notify: Arc<Notify>,
         output_tx: broadcast::Sender<Vec<u8>>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
@@ -515,11 +540,7 @@ impl UnifiedExecProcess {
                         output_notify.notify_waiters();
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        output_closed.store(true, Ordering::Release);
-                        output_closed_notify.notify_waiters();
-                        break;
-                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 };
             }
         })

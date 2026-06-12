@@ -108,6 +108,7 @@ fn exec_server_params_use_env_policy_overlay_contract() {
         file_system_sandbox_policy,
         network_sandbox_policy,
         windows_sandbox_filesystem_overrides: None,
+        log_macos_seatbelt_denials: false,
         arg0: None,
     };
 

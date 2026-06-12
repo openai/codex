@@ -279,7 +279,9 @@ async fn exec_full_buffer_capture_ignores_expiration() -> Result<()> {
             justification: None,
             arg0: None,
         },
+        SandboxType::None,
         NetworkSandboxPolicy::Enabled,
+        /*log_macos_seatbelt_denials*/ false,
         /*stdout_stream*/ None,
         /*after_spawn*/ None,
     )
@@ -315,7 +317,9 @@ async fn exec_full_buffer_capture_keeps_io_drain_timeout_when_descendant_holds_p
                 justification: None,
                 arg0: None,
             },
+            SandboxType::None,
             NetworkSandboxPolicy::Enabled,
+            /*log_macos_seatbelt_denials*/ false,
             /*stdout_stream*/ None,
             /*after_spawn*/ None,
         ),
@@ -1061,7 +1065,9 @@ async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()>
 
     let output = exec(
         params,
+        SandboxType::None,
         NetworkSandboxPolicy::Restricted,
+        /*log_macos_seatbelt_denials*/ false,
         /*stdout_stream*/ None,
         /*after_spawn*/ None,
     )

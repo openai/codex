@@ -194,6 +194,7 @@ pub(crate) async fn execute_user_shell_command(
         file_system_sandbox_policy: permission_profile.file_system_sandbox_policy(),
         network_sandbox_policy: permission_profile.network_sandbox_policy(),
         windows_sandbox_filesystem_overrides: None,
+        log_macos_seatbelt_denials: false,
         arg0: None,
     };
 

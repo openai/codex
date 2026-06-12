@@ -57,6 +57,7 @@ pub struct ExecRequest {
     pub file_system_sandbox_policy: FileSystemSandboxPolicy,
     pub network_sandbox_policy: NetworkSandboxPolicy,
     pub(crate) windows_sandbox_filesystem_overrides: Option<WindowsSandboxFilesystemOverrides>,
+    pub(crate) log_macos_seatbelt_denials: bool,
     pub arg0: Option<String>,
 }
 
@@ -96,6 +97,7 @@ impl ExecRequest {
             file_system_sandbox_policy,
             network_sandbox_policy,
             windows_sandbox_filesystem_overrides: None,
+            log_macos_seatbelt_denials: false,
             arg0,
         }
     }
@@ -150,6 +152,7 @@ impl ExecRequest {
             file_system_sandbox_policy,
             network_sandbox_policy,
             windows_sandbox_filesystem_overrides: None,
+            log_macos_seatbelt_denials: false,
             arg0,
         }
     }
