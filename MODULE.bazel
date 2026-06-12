@@ -212,18 +212,6 @@ crate.from_cargo(
     use_experimental_platforms = True,
 )
 
-# BLAKE3 normally builds hand-written assembly on x86_64. In the Windows GNU
-# cross configuration, that archive is produced by the build script but is not
-# propagated to the Rust link action. Prefer BLAKE3's equivalent Rust
-# intrinsics implementation for the affected targets so every Rust crate that
-# transitively uses BLAKE3 remains buildable under Windows linting.
-crate.annotation(
-    crate = "blake3",
-    crate_features_select = {
-        "x86_64-pc-windows-gnullvm": ["prefer_intrinsics"],
-    },
-)
-
 bazel_dep(name = "zstd", version = "1.5.7")
 
 crate.annotation(

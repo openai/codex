@@ -343,18 +343,6 @@ where
     }
 }
 
-/// Runs the backwards-compatible, cleartext multiplexed relay protocol.
-///
-/// The physical websocket carries protobuf [`RelayMessageFrame`] values. Each
-/// frame's `stream_id` selects an independent logical JSON-RPC connection, so a
-/// single registered exec-server can serve multiple orchestrator sessions.
-/// This runner intentionally preserves the protocol used before Noise relay
-/// support was introduced. Callers must select the separate secure runner when
-/// Noise protection was explicitly negotiated during registration.
-///
-/// Relay framing is not an authentication boundary. Every frame is validated
-/// before its routing metadata or payload is used, and malformed frames are
-/// dropped without affecting the other virtual streams on the connection.
 pub(crate) async fn run_multiplexed_environment<S>(
     stream: WebSocketStream<S>,
     processor: ConnectionProcessor,
@@ -367,9 +355,6 @@ pub(crate) async fn run_multiplexed_environment<S>(
 
     let mut streams: HashMap<String, VirtualStream> = HashMap::new();
     loop {
-        // Serialize all logical-stream writes through this task so only one
-        // owner writes to the physical websocket. Reads remain in the same
-        // select loop, which also keeps disconnect handling deterministic.
         let frame = tokio::select! {
             maybe_encoded = physical_outgoing_rx.recv() => {
                 let Some(encoded) = maybe_encoded else {
@@ -422,10 +407,6 @@ pub(crate) async fn run_multiplexed_environment<S>(
                     }
                 };
 
-                // A logical connection is created lazily on its first data
-                // frame. The connection processor owns the JSON-RPC lifecycle;
-                // this task only translates between relay and connection
-                // events.
                 let stream = streams.entry(stream_id.clone()).or_insert_with(|| {
                     spawn_virtual_stream(
                         stream_id.clone(),
@@ -447,9 +428,6 @@ pub(crate) async fn run_multiplexed_environment<S>(
                     stream.disconnect(frame.into_reset_reason()).await;
                 }
             }
-            // These control frames are meaningful to other relay protocol
-            // variants. The legacy protocol has no resume or handshake state,
-            // so ignoring them preserves its existing wire behavior.
             RelayFrameBodyKind::Ack
             | RelayFrameBodyKind::Resume
             | RelayFrameBodyKind::Heartbeat
@@ -457,24 +435,18 @@ pub(crate) async fn run_multiplexed_environment<S>(
         }
     }
 
-    // A physical disconnect ends every virtual connection. Notify each
-    // processor explicitly so requests do not remain live after the relay
-    // websocket has disappeared.
     for (_stream_id, stream) in streams {
         stream.disconnect(/*reason*/ None).await;
     }
     drop(physical_outgoing_tx);
 }
 
-/// The exec-server-facing half of one logical connection on the shared relay.
 struct VirtualStream {
     incoming_tx: mpsc::Sender<JsonRpcConnectionEvent>,
     disconnected_tx: watch::Sender<bool>,
 }
 
 impl VirtualStream {
-    /// Marks the logical connection disconnected and supplies the peer's reset
-    /// reason, when one was provided.
     async fn disconnect(self, reason: Option<String>) {
         let _ = self.disconnected_tx.send(true);
         let _ = self
@@ -484,8 +456,6 @@ impl VirtualStream {
     }
 }
 
-/// Creates a logical JSON-RPC connection and forwards its outgoing messages
-/// back to the physical relay writer as legacy cleartext data frames.
 fn spawn_virtual_stream(
     stream_id: String,
     processor: ConnectionProcessor,

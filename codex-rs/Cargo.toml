@@ -267,7 +267,6 @@ async-io = "2.6.0"
 async-stream = "0.3.6"
 aws-config = "1"
 aws-credential-types = "1"
-aws-lc-rs = { version = "=1.16.2", default-features = false, features = ["non-fips"] }
 aws-sigv4 = "1"
 aws-types = "1"
 axum = { version = "0.8", default-features = false }

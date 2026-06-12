@@ -108,7 +108,7 @@ impl ExecServerClient {
     /// Connect to one exec-server through an authenticated rendezvous stream.
     /// The executor key is pinned before JSON-RPC starts; the websocket carries
     /// only ciphertext after that.
-    pub async fn connect_noise_rendezvous(
+    pub(crate) async fn connect_noise_rendezvous(
         args: NoiseRendezvousConnectArgs,
     ) -> Result<Self, ExecServerError> {
         ensure_rustls_crypto_provider();
@@ -129,14 +129,11 @@ impl ExecServerClient {
             executor_public_key,
             harness_key_authorization,
         } = bundle;
-        let diagnostic_url = url::Url::parse(&websocket_url).map_or_else(
-            |_| "<redacted websocket url>".to_string(),
-            |mut url| {
-                url.set_query(None);
-                url.set_fragment(None);
-                url.to_string()
-            },
-        );
+        let diagnostic_url = websocket_url
+            .split(['?', '#'])
+            .next()
+            .unwrap_or(websocket_url.as_str())
+            .to_string();
         let (stream, _) = timeout(
             connect_timeout,
             connect_async_with_config(
