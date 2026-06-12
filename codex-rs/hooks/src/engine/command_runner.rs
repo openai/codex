@@ -625,8 +625,10 @@ mod tests {
 
     #[cfg(not(windows))]
     use super::COMPUTER_USE_EXECUTABLE;
+    #[cfg(not(target_os = "macos"))]
     use super::CommandShell;
     use super::ConfiguredHandler;
+    #[cfg(not(target_os = "macos"))]
     use super::build_command;
     use super::failed_run;
     use super::run_with_internal_timeout;

@@ -508,7 +508,7 @@ fn supervise_running_process(
 }
 
 fn wait_for_exit(pid: libc::pid_t) -> Result<Option<i32>, String> {
-    exit_code(waitpid(pid, 0)?)
+    exit_code(waitpid(pid, /*options*/ 0)?)
 }
 
 fn exit_code(status: libc::c_int) -> Result<Option<i32>, String> {
@@ -554,7 +554,7 @@ fn waitpid(pid: libc::pid_t, options: libc::c_int) -> Result<libc::c_int, String
 
 fn kill_and_reap(pid: libc::pid_t) {
     let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
-    let _ = waitpid(pid, 0);
+    let _ = waitpid(pid, /*options*/ 0);
 }
 
 fn check_spawn_call(result: libc::c_int, action: &str) -> Result<(), String> {

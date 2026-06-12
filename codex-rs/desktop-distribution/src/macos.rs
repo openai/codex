@@ -49,7 +49,7 @@ pub(crate) fn verify_hint(hint: &Path) -> Result<PlatformDistribution, DesktopDi
             stage: "app hint",
             message: "hint is not enclosed by a macOS application bundle".to_string(),
         })?;
-    let identity = verify_app(&app_root, None)?;
+    let identity = verify_app(&app_root, /*expected_identifier*/ None)?;
     Ok(distribution(app_root, identity))
 }
 
@@ -60,7 +60,7 @@ pub(crate) fn discover() -> Result<PlatformDistribution, DesktopDistributionErro
             continue;
         }
         found_candidate = true;
-        if let Ok(identity) = verify_app(&candidate, None) {
+        if let Ok(identity) = verify_app(&candidate, /*expected_identifier*/ None) {
             return Ok(distribution(candidate, identity));
         }
     }
@@ -86,7 +86,7 @@ pub(crate) fn current_process_distribution()
     if !app_claims_codex_identity(&app_root)? {
         return Ok(None);
     }
-    let identity = verify_app(&app_root, None)?;
+    let identity = verify_app(&app_root, /*expected_identifier*/ None)?;
     Ok(Some(distribution(app_root, identity)))
 }
 
