@@ -70,6 +70,7 @@ fn filter_codex_apps_mcp_tools(
         .iter()
         .map(|connector| connector.id.as_str())
         .collect();
+    let app_tool_policy = connectors::AppToolPolicyEvaluator::new(config);
 
     mcp_tools
         .iter()
@@ -83,7 +84,7 @@ fn filter_codex_apps_mcp_tools(
             let Some(connector_id) = tool.connector_id.as_deref() else {
                 return false;
             };
-            allowed.contains(connector_id) && connectors::codex_app_tool_is_enabled(config, tool)
+            allowed.contains(connector_id) && app_tool_policy.tool_is_enabled(tool)
         })
         .cloned()
         .collect()

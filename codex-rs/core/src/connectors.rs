@@ -553,6 +553,60 @@ pub fn with_app_plugin_sources(
     connectors
 }
 
+pub(crate) struct AppToolPolicyEvaluator<'a> {
+    config: &'a Config,
+    apps_config: Option<AppsConfigToml>,
+}
+
+impl<'a> AppToolPolicyEvaluator<'a> {
+    pub(crate) fn new(config: &'a Config) -> Self {
+        Self {
+            config,
+            apps_config: read_apps_config(config),
+        }
+    }
+
+    fn policy(
+        &self,
+        connector_id: Option<&str>,
+        tool_name: &str,
+        tool_title: Option<&str>,
+        annotations: Option<&ToolAnnotations>,
+    ) -> AppToolPolicy {
+        let managed_approval = managed_app_tool_approval(
+            self.config
+                .config_layer_stack
+                .requirements_toml()
+                .apps
+                .as_ref(),
+            connector_id,
+            tool_name,
+        );
+        app_tool_policy_from_apps_config(
+            self.apps_config.as_ref(),
+            connector_id,
+            tool_name,
+            tool_title,
+            annotations,
+            managed_approval,
+        )
+    }
+
+    pub(crate) fn tool_is_enabled(&self, tool_info: &ToolInfo) -> bool {
+        if tool_info.server_name != CODEX_APPS_MCP_SERVER_NAME {
+            return true;
+        }
+
+        self.policy(
+            tool_info.connector_id.as_deref(),
+            &tool_info.tool.name,
+            tool_info.tool.title.as_deref(),
+            tool_info.tool.annotations.as_ref(),
+        )
+        .enabled
+    }
+}
+
 pub(crate) fn app_tool_policy(
     config: &Config,
     connector_id: Option<&str>,
@@ -560,35 +614,7 @@ pub(crate) fn app_tool_policy(
     tool_title: Option<&str>,
     annotations: Option<&ToolAnnotations>,
 ) -> AppToolPolicy {
-    let apps_config = read_apps_config(config);
-    let managed_approval = managed_app_tool_approval(
-        config.config_layer_stack.requirements_toml().apps.as_ref(),
-        connector_id,
-        tool_name,
-    );
-    app_tool_policy_from_apps_config(
-        apps_config.as_ref(),
-        connector_id,
-        tool_name,
-        tool_title,
-        annotations,
-        managed_approval,
-    )
-}
-
-pub(crate) fn codex_app_tool_is_enabled(config: &Config, tool_info: &ToolInfo) -> bool {
-    if tool_info.server_name != CODEX_APPS_MCP_SERVER_NAME {
-        return true;
-    }
-
-    app_tool_policy(
-        config,
-        tool_info.connector_id.as_deref(),
-        &tool_info.tool.name,
-        tool_info.tool.title.as_deref(),
-        tool_info.tool.annotations.as_ref(),
-    )
-    .enabled
+    AppToolPolicyEvaluator::new(config).policy(connector_id, tool_name, tool_title, annotations)
 }
 
 pub(crate) fn mcp_approvals_reviewer(
