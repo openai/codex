@@ -29,7 +29,6 @@ pub(crate) struct TranscriptReflowState {
     last_reflow_width: Option<u16>,
     pending_reflow_width: Option<u16>,
     pending_until: Option<Instant>,
-    history_cell_refresh_requested: bool,
     ran_during_stream: bool,
     resize_requested_during_stream: bool,
 }
@@ -37,9 +36,9 @@ pub(crate) struct TranscriptReflowState {
 impl TranscriptReflowState {
     /// Reset all width, pending deadline, and stream repair state.
     ///
-    /// Call this when resize reflow is disabled or when the app discards the transcript state that
-    /// pending reflow work would have rebuilt. Leaving stale deadlines behind would make a later
-    /// draw attempt to rebuild history from unrelated cells.
+    /// Call this when the app discards the transcript state that pending reflow work would have
+    /// rebuilt. Leaving stale deadlines behind would make a later draw attempt to rebuild history
+    /// from unrelated cells.
     pub(crate) fn clear(&mut self) {
         *self = Self::default();
     }
@@ -94,12 +93,6 @@ impl TranscriptReflowState {
         self.pending_until = Some(Instant::now());
     }
 
-    /// Schedule an immediate rebuild because an existing history cell changed its rendered output.
-    pub(crate) fn schedule_history_cell_refresh(&mut self) {
-        self.history_cell_refresh_requested = true;
-        self.schedule_immediate();
-    }
-
     #[cfg(test)]
     pub(crate) fn set_due_for_test(&mut self) {
         self.pending_until = Some(Instant::now() - Duration::from_millis(1));
@@ -117,14 +110,9 @@ impl TranscriptReflowState {
         self.pending_until.is_some()
     }
 
-    pub(crate) fn history_cell_refresh_requested(&self) -> bool {
-        self.history_cell_refresh_requested
-    }
-
     pub(crate) fn clear_pending_reflow(&mut self) {
         self.pending_until = None;
         self.pending_reflow_width = None;
-        self.history_cell_refresh_requested = false;
     }
 
     /// Remember the terminal width that actually rebuilt transcript scrollback.
@@ -272,17 +260,6 @@ mod tests {
         state.clear_pending_reflow();
 
         assert!(state.reflow_needed_for_width(/*width*/ 100));
-    }
-
-    #[test]
-    fn clear_pending_reflow_clears_history_cell_refresh_request() {
-        let mut state = TranscriptReflowState::default();
-        state.schedule_history_cell_refresh();
-
-        assert!(state.history_cell_refresh_requested());
-        state.clear_pending_reflow();
-
-        assert!(!state.history_cell_refresh_requested());
     }
 
     #[test]
