@@ -706,6 +706,10 @@ pub struct TestCodex {
 }
 
 impl TestCodex {
+    pub fn install_hooks_for_test(&self, hooks: codex_hooks::Hooks) {
+        codex_core::test_support::install_hooks_for_tests(self.codex.as_ref(), hooks);
+    }
+
     pub fn cwd_path(&self) -> &Path {
         self.cwd.path()
     }
