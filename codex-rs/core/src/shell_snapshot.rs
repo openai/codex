@@ -76,6 +76,10 @@ impl ShellSnapshot {
             .map(|snapshot| snapshot.path.clone())
     }
 
+    pub(crate) fn is_ready(&self) -> bool {
+        self.location_rx.borrow().is_some()
+    }
+
     fn spawn_snapshot_task(
         codex_home: AbsolutePathBuf,
         session_id: ThreadId,
