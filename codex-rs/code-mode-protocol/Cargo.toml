@@ -1,0 +1,24 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-code-mode-protocol"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_code_mode_protocol"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-protocol = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "sync"] }
+tokio-util = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

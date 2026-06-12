@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -9,6 +8,7 @@ use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
+use crate::ExecutorFileSystemFuture;
 use crate::FileMetadata;
 use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
@@ -50,26 +50,26 @@ impl SandboxedFileSystem {
     }
 }
 
-#[async_trait]
-impl ExecutorFileSystem for SandboxedFileSystem {
+impl SandboxedFileSystem {
     async fn canonicalize(
         &self,
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<PathUri> {
         let sandbox = require_platform_sandbox(sandbox)?;
+        validate_native_path(path)?;
         let response = self
             .run_sandboxed(
                 sandbox,
                 FsHelperRequest::Canonicalize(FsCanonicalizeParams {
-                    path: path.to_abs_path()?,
+                    path: path.clone(),
                     sandbox: None,
                 }),
             )
             .await?
             .expect_canonicalize()
             .map_err(map_sandbox_error)?;
-        PathUri::from_abs_path(&response.path)
+        Ok(response.path)
     }
 
     async fn read_file(
@@ -78,11 +78,12 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
         let sandbox = require_platform_sandbox(sandbox)?;
+        validate_native_path(path)?;
         let response = self
             .run_sandboxed(
                 sandbox,
                 FsHelperRequest::ReadFile(FsReadFileParams {
-                    path: path.to_abs_path()?,
+                    path: path.clone(),
                     sandbox: None,
                 }),
             )
@@ -104,10 +105,11 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         let sandbox = require_platform_sandbox(sandbox)?;
+        validate_native_path(path)?;
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::WriteFile(FsWriteFileParams {
-                path: path.to_abs_path()?,
+                path: path.clone(),
                 data_base64: STANDARD.encode(contents),
                 sandbox: None,
             }),
@@ -125,10 +127,11 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         let sandbox = require_platform_sandbox(sandbox)?;
+        validate_native_path(path)?;
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::CreateDirectory(FsCreateDirectoryParams {
-                path: path.to_abs_path()?,
+                path: path.clone(),
                 recursive: Some(options.recursive),
                 sandbox: None,
             }),
@@ -145,11 +148,12 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
         let sandbox = require_platform_sandbox(sandbox)?;
+        validate_native_path(path)?;
         let response = self
             .run_sandboxed(
                 sandbox,
                 FsHelperRequest::GetMetadata(FsGetMetadataParams {
-                    path: path.to_abs_path()?,
+                    path: path.clone(),
                     sandbox: None,
                 }),
             )
@@ -171,11 +175,12 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         let sandbox = require_platform_sandbox(sandbox)?;
+        validate_native_path(path)?;
         let response = self
             .run_sandboxed(
                 sandbox,
                 FsHelperRequest::ReadDirectory(FsReadDirectoryParams {
-                    path: path.to_abs_path()?,
+                    path: path.clone(),
                     sandbox: None,
                 }),
             )
@@ -200,10 +205,11 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         let sandbox = require_platform_sandbox(sandbox)?;
+        validate_native_path(path)?;
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::Remove(FsRemoveParams {
-                path: path.to_abs_path()?,
+                path: path.clone(),
                 recursive: Some(remove_options.recursive),
                 force: Some(remove_options.force),
                 sandbox: None,
@@ -223,11 +229,13 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         let sandbox = require_platform_sandbox(sandbox)?;
+        validate_native_path(source_path)?;
+        validate_native_path(destination_path)?;
         self.run_sandboxed(
             sandbox,
             FsHelperRequest::Copy(FsCopyParams {
-                source_path: source_path.to_abs_path()?,
-                destination_path: destination_path.to_abs_path()?,
+                source_path: source_path.clone(),
+                destination_path: destination_path.clone(),
                 recursive: options.recursive,
                 sandbox: None,
             }),
@@ -237,6 +245,96 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         .map_err(map_sandbox_error)?;
         Ok(())
     }
+}
+
+impl ExecutorFileSystem for SandboxedFileSystem {
+    fn canonicalize<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, PathUri> {
+        Box::pin(SandboxedFileSystem::canonicalize(self, path, sandbox))
+    }
+
+    fn read_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
+        Box::pin(SandboxedFileSystem::read_file(self, path, sandbox))
+    }
+
+    fn write_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(SandboxedFileSystem::write_file(
+            self, path, contents, sandbox,
+        ))
+    }
+
+    fn create_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: CreateDirectoryOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(SandboxedFileSystem::create_directory(
+            self, path, options, sandbox,
+        ))
+    }
+
+    fn get_metadata<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
+        Box::pin(SandboxedFileSystem::get_metadata(self, path, sandbox))
+    }
+
+    fn read_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
+        Box::pin(SandboxedFileSystem::read_directory(self, path, sandbox))
+    }
+
+    fn remove<'a>(
+        &'a self,
+        path: &'a PathUri,
+        remove_options: RemoveOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(SandboxedFileSystem::remove(
+            self,
+            path,
+            remove_options,
+            sandbox,
+        ))
+    }
+
+    fn copy<'a>(
+        &'a self,
+        source_path: &'a PathUri,
+        destination_path: &'a PathUri,
+        options: CopyOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        Box::pin(SandboxedFileSystem::copy(
+            self,
+            source_path,
+            destination_path,
+            options,
+            sandbox,
+        ))
+    }
+}
+
+fn validate_native_path(path: &PathUri) -> FileSystemResult<()> {
+    path.to_abs_path().map(drop)
 }
 
 fn require_platform_sandbox(

@@ -853,6 +853,16 @@
     },
     "AppsDefaultConfig": {
       "properties": {
+        "approvals_reviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "destructive_enabled": {
           "default": true,
           "type": "boolean"
@@ -10538,6 +10548,22 @@
         "errored"
       ],
       "type": "string"
+    },
+    "RemoteControlDisableParams": {
+      "properties": {
+        "ephemeral": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "RemoteControlEnableParams": {
+      "properties": {
+        "ephemeral": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
     },
     "RemoteControlStatusChangedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",

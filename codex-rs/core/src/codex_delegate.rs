@@ -655,6 +655,7 @@ async fn handle_request_user_input(
 
     let args = RequestUserInputArgs {
         questions: event.questions,
+        auto_resolution_ms: event.auto_resolution_ms,
     };
     let response_fut =
         parent_session.request_user_input(parent_ctx, parent_ctx.sub_id.clone(), args);

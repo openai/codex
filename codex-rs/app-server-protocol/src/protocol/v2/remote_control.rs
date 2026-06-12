@@ -3,6 +3,26 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteControlEnableParams {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ephemeral: bool,
+}
+
+pub type NullableRemoteControlEnableParams = Option<RemoteControlEnableParams>;
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteControlDisableParams {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ephemeral: bool,
+}
+
+pub type NullableRemoteControlDisableParams = Option<RemoteControlDisableParams>;
+
 /// Current remote-control connection status and remote identity exposed to clients.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

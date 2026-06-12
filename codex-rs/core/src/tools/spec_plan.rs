@@ -643,9 +643,12 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     planned_tools.add(PlanHandler);
 
     if turn_context.config.experimental_request_user_input_enabled {
-        planned_tools.add(RequestUserInputHandler {
-            available_modes: request_user_input_available_modes(features),
-        });
+        planned_tools.add_with_exposure(
+            RequestUserInputHandler {
+                available_modes: request_user_input_available_modes(features),
+            },
+            ToolExposure::DirectModelOnly,
+        );
     }
 
     if features.enabled(Feature::RequestPermissionsTool) {
@@ -654,7 +657,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
 
     if features.enabled(Feature::TokenBudget) {
         planned_tools.add_with_exposure(NewContextWindowHandler, ToolExposure::DirectModelOnly);
-        planned_tools.add_with_exposure(GetContextRemainingHandler, ToolExposure::DirectModelOnly);
+        planned_tools.add(GetContextRemainingHandler);
     }
 
     if tool_suggest_enabled(turn_context)

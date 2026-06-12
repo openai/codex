@@ -210,8 +210,8 @@ Example with notification opt-out:
 - `plugin/skill/read` — read remote plugin skill markdown on demand by `remoteMarketplaceName`, `remotePluginId`, and `skillName`. This lets clients preview uninstalled remote plugin skills without downloading the plugin bundle.
 - `skills/changed` — notification emitted when watched local skill files change.
 - `app/list` — list available apps.
-- `remoteControl/enable` — experimental; enable remote control for the current app-server process and return the current remote-control status snapshot. The caller is responsible for persisting the desired setting outside app-server.
-- `remoteControl/disable` — experimental; disable remote control for the current app-server process and return the current remote-control status snapshot. This does not revoke already enrolled controller devices.
+- `remoteControl/enable` — experimental; enable remote control for the current app-server process and return the current remote-control status snapshot. By default, any missing enrollment is completed before the response and the preference is persisted for the current app-server client scope. Pass `ephemeral: true` to enable remote control only for the current process without changing the persisted preference.
+- `remoteControl/disable` — experimental; disable remote control for the current app-server process and return the current remote-control status snapshot. By default, the disabled preference is persisted for the current app-server client scope. Pass `ephemeral: true` to disable only for the current process without changing the persisted preference. This does not revoke already enrolled controller devices.
 - `remoteControl/status/read` — experimental; read the current remote-control status snapshot. `status` is one of `disabled`, `connecting`, `connected`, or `errored`; `serverName` is the local machine name used by this app-server process; `environmentId` is a string when the app-server has a current enrollment and `null` when that enrollment is cleared, invalidated, or remote control is disabled.
 - `remoteControl/pairing/start` — experimental; start a short-lived remote-control pairing artifact for the current app-server process. Pass `manualCode: true` to also request a manual pairing code. Returns `pairingCode`, `manualPairingCode`, `environmentId`, and Unix-seconds `expiresAt`; app-server intentionally does not expose the backend `serverId`.
 - `remoteControl/pairing/status` — experimental; poll whether a remote-control `pairingCode` or `manualPairingCode` has been claimed. Pass exactly one of the two fields. Returns `claimed`.
@@ -1775,13 +1775,18 @@ The server also emits `app/list/updated` notifications whenever either source (a
 ```
 
 Connected apps may override the thread's approval reviewer in `config.toml`.
-When omitted, the app inherits the top-level `approvals_reviewer` value:
+Use `apps._default.approvals_reviewer` to set the reviewer for all apps, and a
+per-app value to override that default. When both are omitted, the app inherits
+the top-level `approvals_reviewer` value:
 
 ```toml
 approvals_reviewer = "auto_review"
 
-[apps.demo-app]
+[apps._default]
 approvals_reviewer = "user"
+
+[apps.demo-app]
+approvals_reviewer = "auto_review"
 ```
 
 Setting the app value to `"user"` routes its approval prompts to the user

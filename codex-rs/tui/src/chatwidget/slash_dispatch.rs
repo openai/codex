@@ -5,7 +5,6 @@
 //! dispatch step and records the staged entry once the command has been handled, so
 //! slash-command recall follows the same submitted-input rule as ordinary text.
 
-use super::goal_validation::GoalObjectiveValidationSource;
 use super::*;
 use crate::app_event::ThreadGoalSetMode;
 use crate::bottom_pane::prompt_args::parse_slash_name;
@@ -570,12 +569,6 @@ impl ChatWidget {
             return;
         }
 
-        if cmd == SlashCommand::Goal
-            && !self.goal_objective_with_pending_pastes_is_allowed(&args, &text_elements)
-        {
-            return;
-        }
-
         let Some((prepared_args, prepared_elements)) =
             self.prepare_live_inline_args(args, text_elements)
         else {
@@ -605,6 +598,12 @@ impl ChatWidget {
             self.bottom_pane
                 .prepare_inline_args_submission(/*record_history*/ false)
         }
+    }
+
+    fn clear_live_goal_submission(&mut self) {
+        self.bottom_pane
+            .set_composer_text(String::new(), Vec::new(), Vec::new());
+        self.bottom_pane.drain_pending_submission_state();
     }
 
     fn prepared_inline_user_message(
@@ -714,6 +713,9 @@ impl ChatWidget {
             }
             SlashCommand::Goal if !trimmed.is_empty() => {
                 if !self.config.features.enabled(Feature::Goals) {
+                    if source == SlashCommandDispatchSource::Live {
+                        self.clear_live_goal_submission();
+                    }
                     return;
                 }
                 enum GoalControlCommand {
@@ -727,7 +729,7 @@ impl ChatWidget {
                             thread_id: self.thread_id,
                         });
                         if source == SlashCommandDispatchSource::Live {
-                            self.bottom_pane.drain_pending_submission_state();
+                            self.clear_live_goal_submission();
                         }
                         return;
                     }
@@ -743,6 +745,9 @@ impl ChatWidget {
                                 "The session must start before you can change a goal.".to_string(),
                             ),
                         );
+                        if source == SlashCommandDispatchSource::Live {
+                            self.clear_live_goal_submission();
+                        }
                         return;
                     };
                     match command {
@@ -757,29 +762,11 @@ impl ChatWidget {
                     }
                     self.append_message_history_entry(format!("/goal {trimmed}"));
                     if source == SlashCommandDispatchSource::Live {
-                        self.bottom_pane.drain_pending_submission_state();
+                        self.clear_live_goal_submission();
                     }
                     return;
                 }
                 let objective = args.trim();
-                if objective.is_empty() {
-                    self.add_error_message("Goal objective must not be empty.".to_string());
-                    self.add_info_message(
-                        GOAL_USAGE.to_string(),
-                        Some(GOAL_USAGE_HINT.to_string()),
-                    );
-                    if source == SlashCommandDispatchSource::Live {
-                        self.bottom_pane.drain_pending_submission_state();
-                    }
-                    return;
-                }
-                let validation_source = match source {
-                    SlashCommandDispatchSource::Live => GoalObjectiveValidationSource::Live,
-                    SlashCommandDispatchSource::Queued => GoalObjectiveValidationSource::Queued,
-                };
-                if !self.goal_objective_is_allowed(objective, validation_source) {
-                    return;
-                }
                 let Some(thread_id) = self.thread_id else {
                     if source == SlashCommandDispatchSource::Live {
                         self.queue_user_message_with_options(
@@ -792,7 +779,7 @@ impl ChatWidget {
                             },
                             QueuedInputAction::ParseSlash,
                         );
-                        self.bottom_pane.drain_pending_submission_state();
+                        self.clear_live_goal_submission();
                     } else {
                         self.add_info_message(
                             GOAL_USAGE.to_string(),
@@ -808,7 +795,7 @@ impl ChatWidget {
                 });
                 self.append_message_history_entry(format!("/goal {trimmed}"));
                 if source == SlashCommandDispatchSource::Live {
-                    self.bottom_pane.drain_pending_submission_state();
+                    self.clear_live_goal_submission();
                 }
             }
             SlashCommand::Side | SlashCommand::Btw if !trimmed.is_empty() => {
@@ -945,11 +932,6 @@ impl ChatWidget {
             rest_offset + leading_trimmed,
             &text_elements,
         );
-        if cmd == SlashCommand::Goal
-            && !self.goal_objective_is_allowed(trimmed_rest, GoalObjectiveValidationSource::Queued)
-        {
-            return QueueDrain::Continue;
-        }
         self.dispatch_prepared_command_with_args(
             cmd,
             PreparedSlashCommandArgs {

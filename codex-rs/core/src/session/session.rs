@@ -444,6 +444,7 @@ async fn warm_plugins_and_skills_for_session_init(
         environment_manager.as_ref(),
         &environments,
     )
+    .await
     .ok()
     .and_then(|resolved| resolved.primary_filesystem());
     let plugins_input = config.plugins_config_input();
@@ -515,6 +516,11 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => resumed_history.conversation_id,
         };
+        let mcp_thread_init = thread_extension_init.clone();
+        let thread_extension_data = codex_extension_api::ExtensionData::new_with_init(
+            thread_id.to_string(),
+            thread_extension_init,
+        );
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
         // - initialize thread persistence with new or resumed session info
@@ -526,53 +532,47 @@ impl Session {
             } else {
                 let live_thread = match &initial_history {
                     InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
-                        LiveThread::create(
-                            Arc::clone(&thread_store),
-                            CreateThreadParams {
-                                thread_id,
-                                extra_config: config.extra_config.clone(),
-                                forked_from_id,
-                                parent_thread_id,
-                                source: session_source,
-                                thread_source: session_configuration.thread_source.clone(),
-                                base_instructions: BaseInstructions {
-                                    text: session_configuration.base_instructions.clone(),
-                                },
-                                dynamic_tools: session_configuration.dynamic_tools.clone(),
-                                multi_agent_version: initial_multi_agent_version,
-                                metadata: ThreadPersistenceMetadata {
-                                    cwd: Some(config.cwd.to_path_buf()),
-                                    model_provider: config.model_provider_id.clone(),
-                                    memory_mode: if config.memories.generate_memories {
-                                        ThreadMemoryMode::Enabled
-                                    } else {
-                                        ThreadMemoryMode::Disabled
-                                    },
+                        let params = CreateThreadParams {
+                            thread_id,
+                            extra_config: config.extra_config.clone(),
+                            forked_from_id,
+                            parent_thread_id,
+                            source: session_source,
+                            thread_source: session_configuration.thread_source.clone(),
+                            base_instructions: BaseInstructions {
+                                text: session_configuration.base_instructions.clone(),
+                            },
+                            dynamic_tools: session_configuration.dynamic_tools.clone(),
+                            multi_agent_version: initial_multi_agent_version,
+                            metadata: ThreadPersistenceMetadata {
+                                cwd: Some(config.cwd.to_path_buf()),
+                                model_provider: config.model_provider_id.clone(),
+                                memory_mode: if config.memories.generate_memories {
+                                    ThreadMemoryMode::Enabled
+                                } else {
+                                    ThreadMemoryMode::Disabled
                                 },
                             },
-                        )
-                        .await?
+                        };
+                        LiveThread::create(Arc::clone(&thread_store), params).await?
                     }
                     InitialHistory::Resumed(resumed_history) => {
-                        LiveThread::resume(
-                            Arc::clone(&thread_store),
-                            ResumeThreadParams {
-                                thread_id: resumed_history.conversation_id,
-                                rollout_path: resumed_history.rollout_path.clone(),
-                                history: Some(resumed_history.history.clone()),
-                                include_archived: true,
-                                metadata: ThreadPersistenceMetadata {
-                                    cwd: Some(config.cwd.to_path_buf()),
-                                    model_provider: config.model_provider_id.clone(),
-                                    memory_mode: if config.memories.generate_memories {
-                                        ThreadMemoryMode::Enabled
-                                    } else {
-                                        ThreadMemoryMode::Disabled
-                                    },
+                        let params = ResumeThreadParams {
+                            thread_id: resumed_history.conversation_id,
+                            rollout_path: resumed_history.rollout_path.clone(),
+                            history: Some(resumed_history.history.clone()),
+                            include_archived: true,
+                            metadata: ThreadPersistenceMetadata {
+                                cwd: Some(config.cwd.to_path_buf()),
+                                model_provider: config.model_provider_id.clone(),
+                                memory_mode: if config.memories.generate_memories {
+                                    ThreadMemoryMode::Enabled
+                                } else {
+                                    ThreadMemoryMode::Disabled
                                 },
                             },
-                        )
-                        .await?
+                        };
+                        LiveThread::resume(Arc::clone(&thread_store), params).await?
                     }
                 };
                 Ok(Some(live_thread))
@@ -603,9 +603,12 @@ impl Session {
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
+        let mcp_thread_init_for_startup = &mcp_thread_init;
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
-            let mcp_config = mcp_manager_for_mcp.runtime_config(&config_for_mcp).await;
+            let mcp_config = mcp_manager_for_mcp
+                .runtime_config_for_thread(&config_for_mcp, mcp_thread_init_for_startup)
+                .await;
             let mcp_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
             let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
             let auth_statuses = compute_auth_statuses(
@@ -960,10 +963,6 @@ impl Session {
             session_extension_data.insert(McpResourceClient::new(Arc::clone(
                 &mcp_connection_manager,
             )));
-            let thread_extension_data = codex_extension_api::ExtensionData::new_with_init(
-                thread_id.to_string(),
-                thread_extension_init,
-            );
             for contributor in extensions.thread_lifecycle_contributors() {
                 contributor.on_thread_start(codex_extension_api::ThreadStartInput {
                     config: config.as_ref(),
@@ -1010,6 +1009,7 @@ impl Session {
                 // TODO(jif): extract session to share between sub-agents
                 session_extension_data,
                 thread_extension_data,
+                mcp_thread_init,
                 agent_control,
                 network_proxy: arc_swap::ArcSwapOption::from(network_proxy.map(Arc::new)),
                 network_proxy_audit_metadata,
@@ -1123,6 +1123,7 @@ impl Session {
                 sess.services.environment_manager.as_ref(),
                 session_configuration.environment_selections(),
             )
+            .await
             .map_err(|err| {
                 CodexErr::InvalidRequest(err.to_string().replace(
                     "unknown turn environment id",
