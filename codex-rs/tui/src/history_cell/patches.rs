@@ -73,15 +73,17 @@ pub(crate) fn new_view_image_tool_call(path: AbsolutePathBuf, cwd: &Path) -> Pla
 
 pub(crate) fn new_image_generation_call(
     call_id: String,
+    status: &str,
     revised_prompt: Option<String>,
     saved_path: Option<AbsolutePathBuf>,
 ) -> PlainHistoryCell {
-    let detail = revised_prompt.unwrap_or_else(|| call_id.clone());
-
-    let mut lines: Vec<Line<'static>> = vec![
-        vec!["• ".dim(), "Generated Image:".bold()].into(),
-        vec!["  └ ".dim(), detail.dim()].into(),
-    ];
+    let detail = revised_prompt.unwrap_or(call_id);
+    let heading = if status == "failed" {
+        vec!["✗ ".red().bold(), "Image generation failed".bold()].into()
+    } else {
+        vec!["• ".dim(), "Generated Image:".bold()].into()
+    };
+    let mut lines: Vec<Line<'static>> = vec![heading, vec!["  └ ".dim(), detail.dim()].into()];
     if let Some(saved_path) = saved_path {
         let saved_path = Url::from_file_path(saved_path.as_path())
             .map(|url| url.to_string())

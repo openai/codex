@@ -864,6 +864,7 @@ async fn image_generation_call_adds_history_cell() {
     handle_image_generation_end(
         &mut chat,
         "call-image-generation",
+        "completed",
         Some("A tiny blue square".into()),
         Some(test_path_buf("/tmp/ig-1.png").abs()),
     );
@@ -876,6 +877,21 @@ async fn image_generation_call_adds_history_cell() {
     let combined =
         lines_to_single_string(&cells[0]).replace(&platform_file_url, "file:///tmp/ig-1.png");
     assert_chatwidget_snapshot!("image_generation_call_history_snapshot", combined);
+
+    handle_image_generation_end(
+        &mut chat,
+        "call-image-generation-failed",
+        "failed",
+        Some("A tiny blue square".into()),
+        /*saved_path*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected a single failure history cell");
+    assert_chatwidget_snapshot!(
+        "failed_image_generation_call_history_snapshot",
+        lines_to_single_string(&cells[0])
+    );
 }
 
 #[tokio::test]
