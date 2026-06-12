@@ -241,15 +241,29 @@ impl ThrottledWatchReceiver {
     /// Receives the next event, enforcing the configured minimum delay after
     /// the previous emission.
     pub async fn recv(&mut self) -> Option<FileWatcherEvent> {
-        if let Some(next_allowed) = self.next_allowed {
-            sleep_until(next_allowed).await;
-        }
+        self.recv_filtered(|_| true).await
+    }
 
-        let event = self.rx.recv().await;
-        if event.is_some() {
+    /// Returns the next event with at least one path accepted by `keep_path`.
+    ///
+    /// Fully filtered events do not advance the throttle window.
+    pub async fn recv_filtered(
+        &mut self,
+        mut keep_path: impl FnMut(&Path) -> bool,
+    ) -> Option<FileWatcherEvent> {
+        loop {
+            if let Some(next_allowed) = self.next_allowed {
+                sleep_until(next_allowed).await;
+            }
+
+            let mut event = self.rx.recv().await?;
+            event.paths.retain(|path| keep_path(path.as_path()));
+            if event.paths.is_empty() {
+                continue;
+            }
             self.next_allowed = Some(Instant::now() + self.interval);
+            return Some(event);
         }
-        event
     }
 }
 

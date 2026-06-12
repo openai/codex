@@ -87,6 +87,44 @@ async fn throttled_receiver_flushes_pending_on_shutdown() {
 }
 
 #[tokio::test]
+async fn throttled_receiver_filters_paths_before_emitting() {
+    let (tx, rx) = watch_channel();
+    let mut throttled = ThrottledWatchReceiver::new(rx, TEST_THROTTLE_INTERVAL);
+
+    tx.add_changed_paths(&[path("ignored"), path("kept")]).await;
+    drop(tx);
+
+    let event = timeout(
+        Duration::from_secs(1),
+        throttled.recv_filtered(|path| path != Path::new("ignored")),
+    )
+    .await
+    .expect("filtered emit timeout");
+    assert_eq!(
+        event,
+        Some(FileWatcherEvent {
+            paths: vec![path("kept")],
+        })
+    );
+    assert_eq!(throttled.next_allowed.is_some(), true);
+}
+
+#[tokio::test]
+async fn throttled_receiver_does_not_throttle_fully_filtered_batch() {
+    let (tx, rx) = watch_channel();
+    let mut throttled = ThrottledWatchReceiver::new(rx, TEST_THROTTLE_INTERVAL);
+
+    tx.add_changed_paths(&[path("ignored")]).await;
+    drop(tx);
+
+    let event = timeout(Duration::from_secs(1), throttled.recv_filtered(|_| false))
+        .await
+        .expect("filtered close timeout");
+    assert_eq!(event, None);
+    assert_eq!(throttled.next_allowed, None);
+}
+
+#[tokio::test]
 async fn debounced_receiver_coalesces_each_event_batch() {
     let (tx, rx) = watch_channel();
     let mut debounced = DebouncedWatchReceiver::new(rx, TEST_THROTTLE_INTERVAL);

@@ -801,6 +801,7 @@ pub struct Notice {
 pub use crate::skills_config::BundledSkillsConfig;
 pub use crate::skills_config::SkillConfig;
 pub use crate::skills_config::SkillsConfig;
+pub use crate::skills_config::SkillsWatchConfig;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]

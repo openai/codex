@@ -361,7 +361,11 @@ impl MessageProcessor {
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());
-        let skills_watcher = SkillsWatcher::new(thread_manager.skills_manager(), outgoing.clone());
+        let skills_watcher = SkillsWatcher::new(
+            thread_manager.skills_manager(),
+            outgoing.clone(),
+            config.skill_watch_ignore_path_components.clone(),
+        );
 
         let pending_thread_unloads = Arc::new(Mutex::new(HashSet::new()));
         let thread_watch_manager =

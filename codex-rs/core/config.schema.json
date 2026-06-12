@@ -2689,6 +2689,29 @@
         "include_instructions": {
           "description": "Whether turns receive the automatic skills instructions block.",
           "type": "boolean"
+        },
+        "watch": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SkillsWatchConfig"
+            }
+          ],
+          "description": "Filesystem watch settings used for skills cache invalidation."
+        }
+      },
+      "type": "object"
+    },
+    "SkillsWatchConfig": {
+      "additionalProperties": false,
+      "description": "Filesystem watch settings for skill roots.",
+      "properties": {
+        "ignore_path_components": {
+          "description": "Exact path components whose filesystem events should be ignored.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
         }
       },
       "type": "object"

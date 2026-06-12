@@ -325,10 +325,90 @@ enabled = false
         cfg.skills,
         Some(SkillsConfig {
             bundled: Some(BundledSkillsConfig { enabled: false }),
+            watch: None,
             include_instructions: Some(false),
             config: Vec::new(),
         })
     );
+}
+
+#[test]
+fn parses_skills_watch_ignore_path_components() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[skills.watch]
+ignore_path_components = [".watch-metadata", ".cache", ".watch-metadata"]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.skills
+            .expect("skills config")
+            .watch
+            .expect("skills watch config")
+            .ignore_path_components,
+        BTreeSet::from([".cache".to_string(), ".watch-metadata".to_string()])
+    );
+}
+
+#[test]
+fn rejects_invalid_skills_watch_ignore_path_components() {
+    for component in ["", ".", "..", "directory/name", r"directory\name"] {
+        let input = format!(
+            r#"
+[skills.watch]
+ignore_path_components = [{component:?}]
+"#
+        );
+
+        let error = toml::from_str::<ConfigToml>(&input)
+            .expect_err("invalid path component should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("must be a single non-empty path component"),
+            "unexpected error for {component:?}: {error}"
+        );
+    }
+}
+
+#[test]
+fn rejects_nul_skills_watch_ignore_path_component() {
+    let error = serde_json::from_value::<codex_config::types::SkillsWatchConfig>(
+        serde_json::json!({ "ignore_path_components": ["\0"] }),
+    )
+    .expect_err("NUL path component should be rejected");
+
+    assert!(
+        error
+            .to_string()
+            .contains("must be a single non-empty path component"),
+        "unexpected error: {error}"
+    );
+}
+
+#[tokio::test]
+async fn loads_skills_watch_ignore_path_components_into_effective_config() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[skills.watch]
+ignore_path_components = [".watch-metadata", ".cache"]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir()?.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.skill_watch_ignore_path_components,
+        BTreeSet::from([".cache".to_string(), ".watch-metadata".to_string()])
+    );
+    Ok(())
 }
 
 #[test]

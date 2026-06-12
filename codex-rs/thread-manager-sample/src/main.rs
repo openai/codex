@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::io::Read;
@@ -196,6 +197,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         include_apps_instructions: false,
         include_collaboration_mode_instructions: false,
         include_skill_instructions: false,
+        skill_watch_ignore_path_components: BTreeSet::new(),
         include_environment_context: false,
         compact_prompt: None,
         notify: None,

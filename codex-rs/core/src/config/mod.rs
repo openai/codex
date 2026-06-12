@@ -112,6 +112,7 @@ use rmcp::model::UrlElicitationCapability;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::ErrorKind;
@@ -676,6 +677,9 @@ pub struct Config {
 
     /// Whether to inject the `<skills_instructions>` developer block.
     pub include_skill_instructions: bool,
+
+    /// Path components whose filesystem events do not invalidate the skills cache.
+    pub skill_watch_ignore_path_components: BTreeSet<String>,
 
     /// Whether to inject the `<environment_context>` user block.
     pub include_environment_context: bool,
@@ -3253,6 +3257,12 @@ impl Config {
             .as_ref()
             .and_then(|skills| skills.include_instructions)
             .unwrap_or(true);
+        let skill_watch_ignore_path_components = cfg
+            .skills
+            .as_ref()
+            .and_then(|skills| skills.watch.as_ref())
+            .map(|watch| watch.ignore_path_components.clone())
+            .unwrap_or_default();
         let include_environment_context = cfg.include_environment_context.unwrap_or(true);
         let guardian_policy_config =
             guardian_policy_config_from_requirements(config_layer_stack.requirements_toml())
@@ -3459,6 +3469,7 @@ impl Config {
             include_apps_instructions,
             include_collaboration_mode_instructions,
             include_skill_instructions,
+            skill_watch_ignore_path_components,
             include_environment_context,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.

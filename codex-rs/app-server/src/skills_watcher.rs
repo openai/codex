@@ -1,3 +1,7 @@
+use std::collections::BTreeSet;
+use std::ffi::OsString;
+use std::path::Component;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -26,6 +30,12 @@ const WATCHER_THROTTLE_INTERVAL: Duration = Duration::from_secs(10);
 #[cfg(test)]
 const WATCHER_THROTTLE_INTERVAL: Duration = Duration::from_millis(50);
 
+fn has_ignored_component(path: &Path, ignored_components: &BTreeSet<OsString>) -> bool {
+    path.components().any(|component| {
+        matches!(component, Component::Normal(name) if ignored_components.contains(name))
+    })
+}
+
 pub(crate) struct SkillsWatcher {
     subscriber: FileWatcherSubscriber,
     runtime_extra_roots_registration: Mutex<WatchRegistration>,
@@ -37,7 +47,13 @@ impl SkillsWatcher {
     pub(crate) fn new(
         skills_manager: Arc<SkillsManager>,
         outgoing: Arc<OutgoingMessageSender>,
+        configured_ignore_path_components: BTreeSet<String>,
     ) -> Arc<Self> {
+        let mut ignored_path_components = configured_ignore_path_components
+            .into_iter()
+            .map(OsString::from)
+            .collect::<BTreeSet<_>>();
+        ignored_path_components.insert(OsString::from(".git"));
         let file_watcher = match FileWatcher::new() {
             Ok(file_watcher) => Arc::new(file_watcher),
             Err(err) => {
@@ -48,7 +64,13 @@ impl SkillsWatcher {
         let (subscriber, rx) = file_watcher.add_subscriber();
         let shutdown_token = CancellationToken::new();
         let shutdown_drop_guard = shutdown_token.clone().drop_guard();
-        Self::spawn_event_loop(rx, skills_manager, outgoing, shutdown_token.child_token());
+        Self::spawn_event_loop(
+            rx,
+            skills_manager,
+            outgoing,
+            ignored_path_components,
+            shutdown_token.child_token(),
+        );
         Arc::new(Self {
             subscriber,
             runtime_extra_roots_registration: Mutex::new(WatchRegistration::default()),
@@ -126,6 +148,7 @@ impl SkillsWatcher {
         rx: Receiver,
         skills_manager: Arc<SkillsManager>,
         outgoing: Arc<OutgoingMessageSender>,
+        ignored_path_components: BTreeSet<OsString>,
         shutdown_token: CancellationToken,
     ) {
         let mut rx = ThrottledWatchReceiver::new(rx, WATCHER_THROTTLE_INTERVAL);
@@ -137,7 +160,9 @@ impl SkillsWatcher {
             loop {
                 let event = tokio::select! {
                     _ = shutdown_token.cancelled() => break,
-                    event = rx.recv() => event,
+                    event = rx.recv_filtered(|path| {
+                        !has_ignored_component(path, &ignored_path_components)
+                    }) => event,
                 };
                 if event.is_none() {
                     break;
@@ -152,3 +177,7 @@ impl SkillsWatcher {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "skills_watcher_tests.rs"]
+mod tests;
