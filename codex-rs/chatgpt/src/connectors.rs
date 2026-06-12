@@ -68,7 +68,7 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
 }
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
-    list_all_connectors_with_options(config, /*force_refetch*/ false).await
+    list_all_connectors_with_options(config, /*force_refetch*/ false, &[]).await
 }
 
 pub async fn list_cached_all_connectors(
@@ -86,13 +86,6 @@ pub async fn list_cached_all_connectors(
 }
 
 pub async fn list_all_connectors_with_options(
-    config: &Config,
-    force_refetch: bool,
-) -> anyhow::Result<Vec<AppInfo>> {
-    list_all_connectors_with_options_and_plugin_apps(config, force_refetch, &[]).await
-}
-
-pub async fn list_all_connectors_with_options_and_plugin_apps(
     config: &Config,
     force_refetch: bool,
     plugin_apps: &[AppConnectorId],

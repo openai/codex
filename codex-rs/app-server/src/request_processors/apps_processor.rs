@@ -211,7 +211,7 @@ impl AppsRequestProcessor {
         let all_config = config.clone();
         let all_plugin_apps = plugin_apps.clone();
         tokio::spawn(async move {
-            let result = connectors::list_all_connectors_with_options_and_plugin_apps(
+            let result = connectors::list_all_connectors_with_options(
                 &all_config,
                 force_refetch,
                 &all_plugin_apps,

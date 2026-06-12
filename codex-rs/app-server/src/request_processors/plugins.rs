@@ -1630,7 +1630,7 @@ impl PluginRequestProcessor {
 
         let environment_manager = self.thread_manager.environment_manager();
         let (all_connectors_result, accessible_connectors_result) = tokio::join!(
-            connectors::list_all_connectors_with_options(config, /*force_refetch*/ false),
+            connectors::list_all_connectors_with_options(config, /*force_refetch*/ false, &[]),
             connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
                 config,
                 /*force_refetch*/ true,
@@ -1910,16 +1910,21 @@ async fn load_plugin_app_summaries(
         return Vec::new();
     }
 
-    let connectors =
-        match connectors::list_all_connectors_with_options(config, /*force_refetch*/ false).await {
-            Ok(connectors) => connectors,
-            Err(err) => {
-                warn!("failed to load app metadata for plugin/read: {err:#}");
-                connectors::list_cached_all_connectors(config, &[])
-                    .await
-                    .unwrap_or_default()
-            }
-        };
+    let connectors = match connectors::list_all_connectors_with_options(
+        config,
+        /*force_refetch*/ false,
+        &[],
+    )
+    .await
+    {
+        Ok(connectors) => connectors,
+        Err(err) => {
+            warn!("failed to load app metadata for plugin/read: {err:#}");
+            connectors::list_cached_all_connectors(config, &[])
+                .await
+                .unwrap_or_default()
+        }
+    };
 
     let plugin_connectors = connectors::connectors_for_plugin_apps(connectors, plugin_apps);
 
