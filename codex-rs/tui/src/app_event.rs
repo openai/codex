@@ -10,6 +10,7 @@
 
 use std::path::PathBuf;
 
+use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppInfo;
@@ -192,6 +193,15 @@ pub(crate) enum AppEvent {
     /// Forward a command to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(AppCommand),
+
+    /// Completion of a background steer for a long-lived interactive-agent turn.
+    InteractiveAgentSteerCompleted {
+        thread_id: ThreadId,
+        attempted_turn_id: String,
+        op: AppCommand,
+        retried_after_turn_mismatch: bool,
+        result: Result<(), TypedRequestError>,
+    },
 
     /// Approve one retry of a recent auto-review denial selected in the TUI.
     ApproveRecentAutoReviewDenial {

@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+• Sleeping (0s • esc to interrupt)
+
+
+› Ask Codex to do anything
+
+  gpt-5.5 default · /tmp/project

@@ -592,24 +592,29 @@ impl AppServerSession {
         self.turn_interrupt(thread_id, String::new()).await
     }
 
-    pub(crate) async fn turn_steer(
+    pub(crate) fn turn_steer(
         &mut self,
         thread_id: ThreadId,
         turn_id: String,
         items: Vec<UserInput>,
-    ) -> std::result::Result<TurnSteerResponse, TypedRequestError> {
+    ) -> impl std::future::Future<Output = std::result::Result<TurnSteerResponse, TypedRequestError>>
+    + Send
+    + 'static {
         let request_id = self.next_request_id();
-        self.client
-            .request_typed(ClientRequest::TurnSteer {
-                request_id,
-                params: TurnSteerParams {
-                    thread_id: thread_id.to_string(),
-                    input: items,
-                    responsesapi_client_metadata: None,
-                    expected_turn_id: turn_id,
-                },
-            })
-            .await
+        let request_handle = self.client.request_handle();
+        async move {
+            request_handle
+                .request_typed(ClientRequest::TurnSteer {
+                    request_id,
+                    params: TurnSteerParams {
+                        thread_id: thread_id.to_string(),
+                        input: items,
+                        responsesapi_client_metadata: None,
+                        expected_turn_id: turn_id,
+                    },
+                })
+                .await
+        }
     }
 
     pub(crate) async fn thread_set_name(

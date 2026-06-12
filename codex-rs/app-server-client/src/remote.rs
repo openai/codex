@@ -802,10 +802,45 @@ async fn initialize_remote_connection(
     Ok(pending_events)
 }
 
-fn app_server_event_from_notification(notification: JSONRPCNotification) -> Option<AppServerEvent> {
+fn app_server_event_from_notification(
+    mut notification: JSONRPCNotification,
+) -> Option<AppServerEvent> {
+    normalize_interactive_agent_clock_wait(&mut notification);
     match ServerNotification::try_from(notification) {
         Ok(notification) => Some(AppServerEvent::ServerNotification(notification)),
         Err(_) => None,
+    }
+}
+
+fn normalize_interactive_agent_clock_wait(notification: &mut JSONRPCNotification) {
+    if !matches!(
+        notification.method.as_str(),
+        "item/started" | "item/completed"
+    ) {
+        return;
+    }
+    let Some(item) = notification
+        .params
+        .as_mut()
+        .and_then(|params| params.get_mut("item"))
+    else {
+        return;
+    };
+    let is_clock_wait = item.get("type").and_then(serde_json::Value::as_str)
+        == Some("commandExecution")
+        && item
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|command| command.starts_with("[cot]"))
+        && item
+            .get("aggregatedOutput")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|output| output.contains("Recipient: clock.wait"));
+    if is_clock_wait && item.get("cwd").and_then(serde_json::Value::as_str) == Some("") {
+        let Ok(cwd) = std::env::current_dir() else {
+            return;
+        };
+        item["cwd"] = serde_json::Value::String(cwd.to_string_lossy().into_owned());
     }
 }
 
@@ -867,6 +902,43 @@ async fn write_jsonrpc_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_decodes_interactive_agent_clock_wait_with_empty_cwd() {
+        let expected_cwd = std::env::current_dir().expect("current directory should be available");
+        let notification = JSONRPCNotification {
+            method: "item/completed".to_string(),
+            params: Some(serde_json::json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "item": {
+                    "type": "commandExecution",
+                    "id": "wait-1",
+                    "command": "[cot] {\"seconds\": 30}",
+                    "cwd": "",
+                    "processId": null,
+                    "source": "agent",
+                    "status": "completed",
+                    "commandActions": [],
+                    "aggregatedOutput": "Channel: analysis\nRecipient: clock.wait",
+                    "exitCode": 0,
+                    "durationMs": null
+                }
+            })),
+        };
+
+        let Some(AppServerEvent::ServerNotification(ServerNotification::ItemCompleted(
+            notification,
+        ))) = app_server_event_from_notification(notification)
+        else {
+            panic!("clock.wait notification should decode");
+        };
+        let codex_app_server_protocol::ThreadItem::CommandExecution { cwd, .. } = notification.item
+        else {
+            panic!("clock.wait should remain a command execution item");
+        };
+        assert_eq!(cwd.as_path(), expected_cwd.as_path());
+    }
 
     #[tokio::test]
     async fn shutdown_tolerates_worker_exit_after_command_is_queued() {

@@ -373,6 +373,8 @@ const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it l
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_STATUS_LINE_ITEMS: [&str; 2] = ["model-with-reasoning", "current-dir"];
+const INTERACTIVE_AGENT_COT_COMMAND_PREFIX: &str = "[cot]";
+const CLOCK_WAIT_RECIPIENT_OUTPUT: &str = "Recipient: clock.wait";
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -427,6 +429,19 @@ fn is_unified_exec_source(source: ExecCommandSource) -> bool {
     matches!(
         source,
         ExecCommandSource::UnifiedExecStartup | ExecCommandSource::UnifiedExecInteraction
+    )
+}
+
+fn is_interactive_agent_clock_wait(item: &ThreadItem) -> bool {
+    matches!(
+        item,
+        ThreadItem::CommandExecution {
+            command,
+            status: codex_app_server_protocol::CommandExecutionStatus::Completed,
+            aggregated_output: Some(output),
+            ..
+        } if command.starts_with(INTERACTIVE_AGENT_COT_COMMAND_PREFIX)
+            && output.contains(CLOCK_WAIT_RECIPIENT_OUTPUT)
     )
 }
 
@@ -1012,6 +1027,8 @@ pub(crate) struct ChatWidget {
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_display: Option<UserMessageDisplay>,
     last_non_retry_error: Option<(String, String)>,
+    interactive_agents_ui: bool,
+    interactive_agent_started_message_ids: HashSet<String>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1997,6 +2014,11 @@ impl ChatWidget {
         display: SessionConfiguredDisplay,
         fork_parent_title: Option<String>,
     ) {
+        self.interactive_agents_ui = matches!(
+            session.model_provider_id.as_str(),
+            "berry_agent" | "beary_agent" | "ia"
+        );
+        self.interactive_agent_started_message_ids.clear();
         self.last_agent_markdown = None;
         self.agent_turn_markdowns.clear();
         self.visible_user_turn_count = 0;
@@ -3640,6 +3662,10 @@ impl ChatWidget {
     }
 
     fn on_command_execution_started(&mut self, item: ThreadItem) {
+        if is_interactive_agent_clock_wait(&item) {
+            self.on_interactive_agent_clock_wait();
+            return;
+        }
         let ThreadItem::CommandExecution {
             id,
             command,
@@ -3788,6 +3814,10 @@ impl ChatWidget {
     }
 
     fn on_command_execution_completed(&mut self, item: ThreadItem) {
+        if is_interactive_agent_clock_wait(&item) {
+            self.on_interactive_agent_clock_wait();
+            return;
+        }
         let ThreadItem::CommandExecution {
             id,
             process_id,
@@ -3816,6 +3846,24 @@ impl ChatWidget {
             |q| q.push_item_completed(item),
             |s| s.handle_command_execution_completed_now(item2),
         );
+    }
+
+    fn on_interactive_agent_clock_wait(&mut self) {
+        self.flush_answer_stream_with_separator();
+        self.pending_status_indicator_restore = false;
+        self.bottom_pane.ensure_status_indicator();
+        self.terminal_title_status_kind = TerminalTitleStatusKind::Sleeping;
+        self.set_status_header(String::from("Sleeping"));
+        self.request_redraw();
+    }
+
+    fn on_interactive_agent_activity(&mut self) {
+        if self.terminal_title_status_kind != TerminalTitleStatusKind::Sleeping {
+            return;
+        }
+        self.terminal_title_status_kind = TerminalTitleStatusKind::Working;
+        self.set_status_header(String::from("Working"));
+        self.request_redraw();
     }
 
     fn track_unified_exec_process_begin(
@@ -4980,6 +5028,8 @@ impl ChatWidget {
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_display: None,
             last_non_retry_error: None,
+            interactive_agents_ui: false,
+            interactive_agent_started_message_ids: HashSet::new(),
         };
 
         widget.prefetch_rate_limits();
@@ -5818,6 +5868,7 @@ impl ChatWidget {
         if !self.submit_op(op.clone()) {
             return (false, None);
         }
+        self.on_interactive_agent_activity();
         if render_in_history {
             self.user_turn_pending_start = true;
         }
@@ -6187,7 +6238,7 @@ impl ChatWidget {
                 self.handle_turn_completed_notification(notification, replay_kind);
             }
             ServerNotification::ItemStarted(notification) => {
-                self.handle_item_started_notification(notification, replay_kind.is_some());
+                self.handle_item_started_notification(notification, replay_kind);
             }
             ServerNotification::ItemCompleted(notification) => {
                 self.handle_item_completed_notification(notification, replay_kind);
@@ -6415,9 +6466,25 @@ impl ChatWidget {
     fn handle_item_started_notification(
         &mut self,
         notification: ItemStartedNotification,
-        from_replay: bool,
+        replay_kind: Option<ReplayKind>,
     ) {
-        match notification.item {
+        let item = notification.item;
+        if !is_interactive_agent_clock_wait(&item) {
+            self.on_interactive_agent_activity();
+        }
+        if self.interactive_agents_ui
+            && let ThreadItem::AgentMessage { id, .. } = &item
+        {
+            self.interactive_agent_started_message_ids
+                .insert(id.clone());
+            self.handle_thread_item(
+                item,
+                notification.turn_id,
+                replay_kind.map_or(ThreadItemRenderSource::Live, ThreadItemRenderSource::Replay),
+            );
+            return;
+        }
+        match item {
             item @ ThreadItem::CommandExecution { .. } => self.on_command_execution_started(item),
             ThreadItem::FileChange { id: _, changes, .. } => {
                 self.on_patch_apply_begin(file_update_changes_to_display(changes));
@@ -6451,7 +6518,7 @@ impl ChatWidget {
                 agents_states,
             }),
             ThreadItem::EnteredReviewMode { review, .. } => {
-                if !from_replay {
+                if replay_kind.is_none() {
                     self.enter_review_mode_with_hint(review, /*from_replay*/ false);
                 }
             }
@@ -6464,8 +6531,18 @@ impl ChatWidget {
         notification: ItemCompletedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
+        let item = notification.item;
+        if !is_interactive_agent_clock_wait(&item) {
+            self.on_interactive_agent_activity();
+        }
+        if self.interactive_agents_ui
+            && let ThreadItem::AgentMessage { id, .. } = &item
+            && self.interactive_agent_started_message_ids.remove(id)
+        {
+            return;
+        }
         self.handle_thread_item(
-            notification.item,
+            item,
             notification.turn_id,
             replay_kind.map_or(ThreadItemRenderSource::Live, ThreadItemRenderSource::Replay),
         );
@@ -9225,6 +9302,10 @@ impl ChatWidget {
 
     pub(crate) fn runtime_model_provider_base_url(&self) -> Option<&str> {
         self.runtime_model_provider_base_url.as_deref()
+    }
+
+    pub(crate) fn uses_interactive_agents_ui(&self) -> bool {
+        self.interactive_agents_ui
     }
 
     #[cfg_attr(not(test), allow(dead_code))]

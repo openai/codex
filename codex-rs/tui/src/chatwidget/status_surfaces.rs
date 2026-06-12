@@ -34,6 +34,7 @@ const TERMINAL_TITLE_ACTION_REQUIRED_PREFIX_HIDDEN: &str = "[ . ] Action Require
 pub(super) enum TerminalTitleStatusKind {
     Working,
     WaitingForBackgroundTerminal,
+    Sleeping,
     #[default]
     Thinking,
 }
@@ -704,11 +705,15 @@ impl ChatWidget {
             {
                 "Ready".to_string()
             }
+            TerminalTitleStatusKind::Sleeping if !self.bottom_pane.is_task_running() => {
+                "Ready".to_string()
+            }
             TerminalTitleStatusKind::Thinking if !self.bottom_pane.is_task_running() => {
                 "Ready".to_string()
             }
             TerminalTitleStatusKind::Working => "Working".to_string(),
             TerminalTitleStatusKind::WaitingForBackgroundTerminal => "Waiting".to_string(),
+            TerminalTitleStatusKind::Sleeping => "Sleeping".to_string(),
             TerminalTitleStatusKind::Thinking => "Thinking".to_string(),
         }
     }

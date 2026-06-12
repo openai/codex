@@ -319,6 +319,23 @@ impl App {
             AppEvent::CodexOp(op) => {
                 self.submit_active_thread_op(app_server, op).await?;
             }
+            AppEvent::InteractiveAgentSteerCompleted {
+                thread_id,
+                attempted_turn_id,
+                op,
+                retried_after_turn_mismatch,
+                result,
+            } => {
+                self.handle_interactive_agent_steer_completed(
+                    app_server,
+                    thread_id,
+                    attempted_turn_id,
+                    op,
+                    retried_after_turn_mismatch,
+                    result,
+                )
+                .await?;
+            }
             AppEvent::ApproveRecentAutoReviewDenial { thread_id, id } => {
                 self.chat_widget
                     .approve_recent_auto_review_denial(thread_id, id);

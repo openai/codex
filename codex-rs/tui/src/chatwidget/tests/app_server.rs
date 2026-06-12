@@ -171,6 +171,142 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
 }
 
 #[tokio::test]
+async fn interactive_agent_renders_message_on_started_and_deduplicates_completed() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.interactive_agents_ui = true;
+    let message = AppServerThreadItem::AgentMessage {
+        id: "msg-1".to_string(),
+        text: "The response arrived before the steer acknowledgement.".to_string(),
+        phase: Some(MessagePhase::FinalAnswer),
+        memory_citation: None,
+    };
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: message.clone(),
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    assert!(
+        lines_to_single_string(&cells[0])
+            .contains("The response arrived before the steer acknowledgement.")
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: message,
+        }),
+        /*replay_kind*/ None,
+    );
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
+async fn live_app_server_clock_wait_sleeps_without_completing_active_turn() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+                started_at: Some(0),
+                completed_at: None,
+                duration_ms: None,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let clock_wait = AppServerThreadItem::CommandExecution {
+        id: "wait-1".to_string(),
+        command: r#"[cot] {"seconds": 30}"#.to_string(),
+        cwd: test_path_buf("/tmp").abs(),
+        process_id: None,
+        source: AppServerCommandExecutionSource::Agent,
+        status: AppServerCommandExecutionStatus::Completed,
+        command_actions: Vec::new(),
+        aggregated_output: Some(
+            "Channel: analysis\nRecipient: clock.wait\nStream channel: debug".to_string(),
+        ),
+        exit_code: Some(0),
+        duration_ms: None,
+    };
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: clock_wait.clone(),
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: clock_wait.clone(),
+        }),
+        /*replay_kind*/ None,
+    );
+
+    assert!(chat.agent_turn_running);
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert_chatwidget_snapshot!(
+        "live_app_server_clock_wait_sleeping_status",
+        render_bottom_popup(&chat, 80)
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::AgentMessage {
+                id: "msg-resumed".to_string(),
+                text: "Resuming after timed wait".to_string(),
+                phase: Some(MessagePhase::Commentary),
+                memory_citation: None,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+    assert_eq!(chat.current_status.header, "Working");
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: clock_wait,
+        }),
+        /*replay_kind*/ None,
+    );
+    assert_eq!(chat.current_status.header, "Sleeping");
+
+    chat.bottom_pane.set_composer_text(
+        "continue with this new information".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(matches!(next_submit_op(&mut op_rx), Op::UserTurn { .. }));
+    assert_eq!(chat.pending_steers.len(), 1);
+    assert_eq!(chat.current_status.header, "Working");
+}
+
+#[tokio::test]
 async fn live_app_server_turn_started_sets_feedback_turn_id() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

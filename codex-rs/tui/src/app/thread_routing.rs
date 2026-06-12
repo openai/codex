@@ -519,6 +519,16 @@ impl App {
             } => {
                 let mut should_start_turn = true;
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
+                    if self.chat_widget.uses_interactive_agents_ui() {
+                        self.spawn_interactive_agent_steer(
+                            app_server,
+                            thread_id,
+                            turn_id,
+                            op.clone(),
+                            /*retried_after_turn_mismatch*/ false,
+                        );
+                        return Ok(true);
+                    }
                     let mut steer_turn_id = turn_id;
                     let mut retried_after_turn_mismatch = false;
                     loop {
@@ -693,6 +703,80 @@ impl App {
                 Ok(true)
             }
             _ => Ok(false),
+        }
+    }
+
+    fn spawn_interactive_agent_steer(
+        &self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+        attempted_turn_id: String,
+        op: AppCommand,
+        retried_after_turn_mismatch: bool,
+    ) {
+        let AppCommand::UserTurn { items, .. } = &op else {
+            unreachable!("interactive-agent steering requires a user turn");
+        };
+        let steer = app_server.turn_steer(thread_id, attempted_turn_id.clone(), items.clone());
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            app_event_tx.send(AppEvent::InteractiveAgentSteerCompleted {
+                thread_id,
+                attempted_turn_id,
+                op,
+                retried_after_turn_mismatch,
+                result: steer.await.map(|_| ()),
+            });
+        });
+    }
+
+    pub(super) async fn handle_interactive_agent_steer_completed(
+        &mut self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+        attempted_turn_id: String,
+        op: AppCommand,
+        retried_after_turn_mismatch: bool,
+        result: std::result::Result<(), TypedRequestError>,
+    ) -> Result<()> {
+        let Err(error) = result else {
+            return Ok(());
+        };
+        if let Some(turn_error) = active_turn_not_steerable_turn_error(&error) {
+            if !self.chat_widget.enqueue_rejected_steer() {
+                self.chat_widget.add_error_message(turn_error.message);
+            }
+            return Ok(());
+        }
+        match active_turn_steer_race(&error) {
+            Some(ActiveTurnSteerRace::Missing) => {
+                if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+                    channel.store.lock().await.clear_active_turn_id();
+                }
+                self.submit_thread_op(app_server, thread_id, op).await
+            }
+            Some(ActiveTurnSteerRace::ExpectedTurnMismatch { actual_turn_id })
+                if !retried_after_turn_mismatch && actual_turn_id != attempted_turn_id =>
+            {
+                if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+                    channel.store.lock().await.active_turn_id = Some(actual_turn_id.clone());
+                }
+                self.spawn_interactive_agent_steer(
+                    app_server,
+                    thread_id,
+                    actual_turn_id,
+                    op,
+                    /*retried_after_turn_mismatch*/ true,
+                );
+                Ok(())
+            }
+            Some(ActiveTurnSteerRace::ExpectedTurnMismatch { actual_turn_id }) => {
+                if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+                    channel.store.lock().await.active_turn_id = Some(actual_turn_id);
+                }
+                Err(error.into())
+            }
+            None => Err(error.into()),
         }
     }
 
