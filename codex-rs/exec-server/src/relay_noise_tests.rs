@@ -283,3 +283,52 @@ async fn repeated_malformed_handshakes_close_the_physical_relay() -> Result<()> 
     timeout(Duration::from_secs(1), environment_task).await??;
     Ok(())
 }
+
+#[tokio::test]
+async fn repeated_early_data_during_validation_closes_the_physical_relay() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let websocket_url = format!("ws://{}", listener.local_addr()?);
+    let harness_connection = tokio::spawn(connect_async(websocket_url));
+    let (socket, _peer_addr) = listener.accept().await?;
+    let environment_websocket = accept_async(socket).await?;
+    let (mut harness_websocket, _response) = harness_connection.await??;
+
+    let environment_identity = NoiseChannelIdentity::generate()?;
+    let harness_identity = NoiseChannelIdentity::generate()?;
+    let environment_task = tokio::spawn(run_multiplexed_environment(
+        environment_websocket,
+        ConnectionProcessor::new(ExecServerRuntimePaths::new(
+            std::env::current_exe()?,
+            /*codex_linux_sandbox_exe*/ None,
+        )?),
+        ENVIRONMENT_ID.to_string(),
+        EXECUTOR_REGISTRATION_ID.to_string(),
+        environment_identity.clone(),
+        BlockingValidator {
+            calls: Arc::new(AtomicUsize::new(0)),
+            release: Arc::new(Notify::new()),
+        },
+    ));
+
+    for attempt in 0..MAX_FAILED_NOISE_HANDSHAKES {
+        let stream_id = format!("early-data-{attempt}");
+        let prologue = noise_channel_prologue(ENVIRONMENT_ID, EXECUTOR_REGISTRATION_ID, &stream_id);
+        let (_handshake, request) = InitiatorHandshake::start(
+            &harness_identity,
+            &environment_identity.public_key(),
+            &prologue,
+            b"authorization",
+        )?;
+        for frame in [
+            RelayMessageFrame::handshake(stream_id.clone(), request),
+            RelayMessageFrame::data(stream_id, /*seq*/ 0, vec![0]),
+        ] {
+            harness_websocket
+                .send(Message::Binary(encode_relay_message_frame(&frame).into()))
+                .await?;
+        }
+    }
+
+    timeout(Duration::from_secs(1), environment_task).await??;
+    Ok(())
+}

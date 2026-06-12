@@ -690,8 +690,15 @@ pub(crate) async fn run_multiplexed_environment<S, V>(
             RelayFrameBodyKind::Data => {
                 // Removing pending state also makes any in-flight validation stale.
                 let Some(stream) = streams.get_mut(&stream_id) else {
-                    pending_handshakes.remove(&stream_id);
+                    let canceled_pending_handshake =
+                        pending_handshakes.remove(&stream_id).is_some();
                     send_reset(&physical_outgoing_tx, stream_id);
+                    if canceled_pending_handshake
+                        && failed_handshake_budget_exhausted(&mut failed_handshakes)
+                    {
+                        warn!("closing Noise relay after repeated handshake failures");
+                        break;
+                    }
                     continue;
                 };
                 let data = match frame.into_data() {
