@@ -123,29 +123,6 @@ async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() 
         .mount(&server)
         .await;
 
-    let call_id = "extract-call-1";
-    let mock = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                ev_function_call_with_namespace(
-                    call_id,
-                    DOCUMENT_EXTRACT_NAMESPACE,
-                    DOCUMENT_EXTRACT_TOOL,
-                    &json!({"file": "report.txt"}).to_string(),
-                ),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-2"),
-                ev_assistant_message("msg-1", "done"),
-                ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
-
     let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone())
         .with_pre_build_hook(move |home| {
             write_post_tool_use_hook(home)
@@ -161,6 +138,29 @@ async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() 
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
+    let call_id = "extract-call-1";
+    let report_path = test.cwd.path().join("report.txt");
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call_with_namespace(
+                    call_id,
+                    DOCUMENT_EXTRACT_NAMESPACE,
+                    DOCUMENT_EXTRACT_TOOL,
+                    &json!({"file": report_path}).to_string(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
 
     test.submit_turn_with_approval_and_permission_profile(
         "Extract the report text with the app tool.",
@@ -181,7 +181,7 @@ async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() 
         extract_tool.pointer("/parameters/properties/file"),
         Some(&json!({
             "type": "string",
-            "description": "Document file payload. This parameter expects a file path in the primary environment. Relative paths are resolved against its working directory."
+            "description": "Document file payload. This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
         }))
     );
 

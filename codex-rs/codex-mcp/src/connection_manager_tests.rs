@@ -179,12 +179,12 @@ fn tool_with_model_visible_input_schema_masks_file_params() {
             "properties": {
                 "file": {
                     "type": "string",
-                    "description": "Original file payload. This parameter expects a file path in the primary environment. Relative paths are resolved against its working directory."
+                    "description": "Original file payload. This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
                 },
                 "files": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "This parameter expects a file path in the primary environment. Relative paths are resolved against its working directory."
+                    "description": "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
                 }
             }
         })
