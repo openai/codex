@@ -1421,6 +1421,7 @@ pub(super) fn plugins_test_detail(
         marketplace_name: "ChatGPT Marketplace".to_string(),
         marketplace_path: Some(plugins_test_absolute_path("marketplaces/chatgpt")),
         summary,
+        share_url: None,
         description: description.map(str::to_string),
         skills: skills
             .iter()
