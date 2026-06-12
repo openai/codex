@@ -90,12 +90,8 @@ pub(crate) fn verify_hint(hint: &Path) -> Result<PlatformDistribution, DesktopDi
 
 pub(crate) fn discover() -> Result<PlatformDistribution, DesktopDistributionError> {
     run_in_mta(|| {
-        for expected in EXPECTED_PACKAGES {
-            if let Some(distribution) = verified_packages(*expected)?.into_iter().next() {
-                return Ok(distribution);
-            }
-        }
-        Err(DesktopDistributionError::NotFound)
+        first_available_or_first_error(EXPECTED_PACKAGES.iter().copied().map(verified_packages))?
+            .ok_or(DesktopDistributionError::NotFound)
     })
 }
 
@@ -209,10 +205,54 @@ pub(crate) fn reverify(
 fn verified_packages(
     expected: ExpectedPackage,
 ) -> Result<Vec<PlatformDistribution>, DesktopDistributionError> {
-    queried_packages(expected)?
-        .iter()
-        .map(|package| verify_package(package, expected))
-        .collect()
+    collect_verified_or_first_error(
+        queried_packages(expected)?
+            .iter()
+            .map(|package| verify_package(package, expected)),
+    )
+}
+
+fn collect_verified_or_first_error<T, E>(
+    candidates: impl IntoIterator<Item = Result<T, E>>,
+) -> Result<Vec<T>, E> {
+    let mut verified = Vec::new();
+    let mut first_error = None;
+    for candidate in candidates {
+        match candidate {
+            Ok(value) => verified.push(value),
+            Err(error) => {
+                first_error.get_or_insert(error);
+            }
+        }
+    }
+    if verified.is_empty()
+        && let Some(error) = first_error
+    {
+        return Err(error);
+    }
+    Ok(verified)
+}
+
+fn first_available_or_first_error<T, E>(
+    candidate_groups: impl IntoIterator<Item = Result<Vec<T>, E>>,
+) -> Result<Option<T>, E> {
+    let mut first_error = None;
+    for group in candidate_groups {
+        match group {
+            Ok(candidates) => {
+                if let Some(candidate) = candidates.into_iter().next() {
+                    return Ok(Some(candidate));
+                }
+            }
+            Err(error) => {
+                first_error.get_or_insert(error);
+            }
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(None),
+    }
 }
 
 fn queried_packages(expected: ExpectedPackage) -> Result<Vec<Package>, DesktopDistributionError> {
@@ -248,19 +288,50 @@ fn queried_packages(expected: ExpectedPackage) -> Result<Vec<Package>, DesktopDi
 fn verified_distribution_containing_path(
     canonical_path: &Path,
 ) -> Result<Option<PlatformDistribution>, DesktopDistributionError> {
-    for expected in EXPECTED_PACKAGES {
-        for package in queried_packages(*expected)? {
-            let app_root = installed_location_path(&package)?;
-            let canonical_root = std::fs::canonicalize(&app_root).map_err(|source| {
+    let candidate_groups = EXPECTED_PACKAGES.iter().copied().map(|expected| {
+        queried_packages(expected).map(|packages| {
+            packages
+                .into_iter()
+                .map(move |package| (package, expected))
+                .collect()
+        })
+    });
+    first_verified_containing_path(
+        canonical_path,
+        candidate_groups,
+        |(package, _expected)| {
+            let app_root = installed_location_path(package)?;
+            std::fs::canonicalize(&app_root).map_err(|source| {
                 DesktopDistributionError::Filesystem {
                     stage: "Windows installed location",
                     source,
                 }
-            })?;
-            if !canonical_path.starts_with(&canonical_root) {
+            })
+        },
+        |(package, expected)| verify_package(package, *expected),
+    )
+}
+
+fn first_verified_containing_path<C, D, E>(
+    canonical_path: &Path,
+    candidate_groups: impl IntoIterator<Item = Result<Vec<C>, E>>,
+    mut canonical_root: impl FnMut(&C) -> Result<PathBuf, E>,
+    mut verify: impl FnMut(&C) -> Result<D, E>,
+) -> Result<Option<D>, E> {
+    for group in candidate_groups {
+        let Ok(candidates) = group else {
+            // PackageManager can retain stale registrations. Until containment is established,
+            // an error is not evidence about the target path and must not hide later channels.
+            continue;
+        };
+        for candidate in candidates {
+            let Ok(root) = canonical_root(&candidate) else {
                 continue;
+            };
+            if canonical_path.starts_with(root) {
+                // Once a package contains the target, its verification failure is authoritative.
+                return verify(&candidate).map(Some);
             }
-            return Ok(Some(verify_package(&package, *expected)?));
         }
     }
     Ok(None)
@@ -420,3 +491,7 @@ fn windows_error(
         message: error.to_string(),
     }
 }
+
+#[cfg(test)]
+#[path = "windows_tests.rs"]
+mod tests;

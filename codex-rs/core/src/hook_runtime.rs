@@ -636,21 +636,31 @@ pub(crate) async fn emit_hook_completed_events(
         emit_hook_completed_metrics(turn_context, &completed);
         track_hook_completed_analytics(sess, turn_context, &completed);
         if completed.run.source == HookSource::AppBundledInternal {
-            if completed.run.status != HookRunStatus::Completed {
+            if let Some(diagnostic_code) =
+                app_bundled_internal_runtime_diagnostic(completed.run.status)
+            {
                 let error_details = app_bundled_internal_error_details(&completed.run);
                 warn!(
-                    diagnostic_code = "app_bundled_internal_hook_runtime_failed",
+                    diagnostic_code,
                     hook_event = ?completed.run.event_name,
                     status = ?completed.run.status,
                     source_path = %completed.run.source_path.display(),
                     error_details = ?error_details,
-                    "app-bundled internal hook did not complete successfully"
+                    "app-bundled internal hook ended in an invalid runtime state"
                 );
             }
             continue;
         }
         sess.send_event(turn_context, EventMsg::HookCompleted(completed))
             .await;
+    }
+}
+
+fn app_bundled_internal_runtime_diagnostic(status: HookRunStatus) -> Option<&'static str> {
+    match status {
+        HookRunStatus::Failed => Some("app_bundled_internal_hook_runtime_failed"),
+        HookRunStatus::Running => Some("app_bundled_internal_hook_runtime_incomplete"),
+        HookRunStatus::Completed | HookRunStatus::Blocked | HookRunStatus::Stopped => None,
     }
 }
 
@@ -808,6 +818,7 @@ mod tests {
 
     use super::additional_context_messages;
     use super::app_bundled_internal_error_details;
+    use super::app_bundled_internal_runtime_diagnostic;
     use super::emit_hook_completed_events;
     use super::emit_hook_started_events;
     use super::hook_run_analytics_payload;
@@ -931,6 +942,26 @@ mod tests {
         assert_eq!(
             app_bundled_internal_error_details(&run),
             vec!["signature verification failed"]
+        );
+    }
+
+    #[test]
+    fn app_bundled_internal_diagnostics_accept_stop_control_flow() {
+        assert_eq!(
+            app_bundled_internal_runtime_diagnostic(HookRunStatus::Blocked),
+            None
+        );
+        assert_eq!(
+            app_bundled_internal_runtime_diagnostic(HookRunStatus::Stopped),
+            None
+        );
+        assert_eq!(
+            app_bundled_internal_runtime_diagnostic(HookRunStatus::Failed),
+            Some("app_bundled_internal_hook_runtime_failed")
+        );
+        assert_eq!(
+            app_bundled_internal_runtime_diagnostic(HookRunStatus::Running),
+            Some("app_bundled_internal_hook_runtime_incomplete")
         );
     }
 

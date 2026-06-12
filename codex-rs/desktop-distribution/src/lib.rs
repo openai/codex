@@ -150,10 +150,19 @@ pub fn discover_installed_distribution()
 
 pub fn locate_current_or_installed_distribution()
 -> Result<VerifiedDesktopDistribution, DesktopDistributionError> {
-    if let Some(distribution) = platform::current_process_distribution()? {
-        return VerifiedDesktopDistribution::from_platform(distribution);
+    let distribution =
+        current_or_installed(platform::current_process_distribution, platform::discover)?;
+    VerifiedDesktopDistribution::from_platform(distribution)
+}
+
+fn current_or_installed<T, E>(
+    current: impl FnOnce() -> Result<Option<T>, E>,
+    installed: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    match current()? {
+        Some(distribution) => Ok(distribution),
+        None => installed(),
     }
-    discover_installed_distribution()
 }
 
 #[derive(Clone, Copy)]

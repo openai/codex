@@ -6,6 +6,25 @@ use super::DesktopDistributionError;
 use super::ResourceKind;
 use super::canonical_absolute;
 use super::contained_existing_path;
+use super::current_or_installed;
+
+#[test]
+fn locator_discovers_an_install_when_current_process_is_unrelated() {
+    let located: Result<&str, &str> =
+        current_or_installed(|| Ok(None), || Ok("authenticated installed distribution"));
+
+    assert_eq!(located, Ok("authenticated installed distribution"));
+}
+
+#[test]
+fn locator_does_not_fallback_after_current_distribution_failure() {
+    let located: Result<&str, &str> = current_or_installed(
+        || Err("current distribution failed authentication"),
+        || panic!("authentication failures must not fall back"),
+    );
+
+    assert_eq!(located, Err("current distribution failed authentication"));
+}
 
 #[test]
 fn contained_resources_reject_parent_traversal() {
