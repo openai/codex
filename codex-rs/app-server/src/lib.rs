@@ -673,6 +673,28 @@ pub async fn run_main_with_transport_options(
             None => error!("{}", warning.summary),
         }
     }
+    let remote_control_policy = if config
+        .config_layer_stack
+        .requirements()
+        .allow_remote_control
+        .as_ref()
+        .is_some_and(|requirement| !requirement.value)
+    {
+        RemoteControlPolicy::DisabledByRequirements
+    } else {
+        RemoteControlPolicy::Allowed
+    };
+    let remote_control_startup_mode = runtime_options.remote_control_startup_mode;
+    let remote_control_explicitly_requested =
+        remote_control_startup_mode == RemoteControlStartupMode::EnabledEphemeral;
+    if remote_control_explicitly_requested
+        && remote_control_policy == RemoteControlPolicy::DisabledByRequirements
+    {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "remote control is disabled by managed requirements",
+        ));
+    }
     let installation_id = resolve_installation_id(&config.codex_home).await?;
     let transport_shutdown_token = CancellationToken::new();
     let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
@@ -720,29 +742,11 @@ pub async fn run_main_with_transport_options(
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
 
-    let remote_control_policy = if config
-        .config_layer_stack
-        .requirements()
-        .allow_remote_control
-        .as_ref()
-        .is_some_and(|requirement| !requirement.value)
-    {
-        RemoteControlPolicy::DisabledByRequirements
-    } else {
-        RemoteControlPolicy::Allowed
-    };
-    let remote_control_startup_mode = runtime_options.remote_control_startup_mode;
-    let remote_control_explicitly_requested =
-        remote_control_startup_mode == RemoteControlStartupMode::EnabledEphemeral;
     let remote_control_enabled = remote_control_policy == RemoteControlPolicy::Allowed
         && remote_control_explicitly_requested
         && state_db.is_some();
-    if remote_control_explicitly_requested {
-        if remote_control_policy == RemoteControlPolicy::DisabledByRequirements {
-            error!("remote control disabled by managed requirements");
-        } else if state_db.is_none() {
-            error!("remote control disabled because sqlite state db is unavailable");
-        }
+    if remote_control_explicitly_requested && state_db.is_none() {
+        error!("remote control disabled because sqlite state db is unavailable");
     }
     let no_local_transport = transport_accept_handles.is_empty();
     if no_local_transport
