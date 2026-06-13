@@ -13,6 +13,7 @@ _WINE_RUNTIME_BINARIES = {
 def wine_rust_test(
         name,
         windows_binaries,
+        host_binaries = {},
         data = [],
         target_compatible_with = [],
         **kwargs):
@@ -22,7 +23,8 @@ def wine_rust_test(
     every Rust dependency receives the repository's Windows linker flags while
     the test stays on x86-64 Linux. Its environment-variable contract is:
 
-    * Each entry contributes `CARGO_BIN_EXE_<binary_name>` for its executable.
+    * Each `host_binaries` and `windows_binaries` entry contributes
+      `CARGO_BIN_EXE_<binary_name>` for its executable.
     * `CARGO_BIN_EXE_wine` and `CARGO_BIN_EXE_wineserver` identify Wine tools.
     * `CARGO_BIN_EXE_wine-runtime-marker` identifies a file whose parent is the
       Wine DLL directory to use as `WINEDLLPATH`.
@@ -34,14 +36,20 @@ def wine_rust_test(
     Args:
       name: Name of the generated Linux `rust_test`.
       windows_binaries: Map from `CARGO_BIN_EXE_*` suffixes to Windows targets.
+      host_binaries: Map from `CARGO_BIN_EXE_*` suffixes to Linux host targets.
       data: Additional runtime data for the Linux test.
       target_compatible_with: Additional compatibility constraints.
       **kwargs: Remaining attributes forwarded to `rust_test`.
     """
     binaries = dict(_WINE_RUNTIME_BINARIES)
+    for binary_name in sorted(host_binaries.keys()):
+        if binary_name in binaries:
+            fail("host test binary name collides with Wine runtime: {}".format(binary_name))
+        binaries[binary_name] = host_binaries[binary_name]
+
     for index, binary_name in enumerate(sorted(windows_binaries.keys())):
         if binary_name in binaries:
-            fail("Windows test binary name collides with Wine runtime: {}".format(binary_name))
+            fail("Windows test binary name collides with existing binary: {}".format(binary_name))
         transitioned_binary = name + "-windows-binary-" + str(index)
         foreign_platform_binary(
             name = transitioned_binary,

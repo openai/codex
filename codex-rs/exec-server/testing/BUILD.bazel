@@ -1,0 +1,16 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+rust_binary(
+    name = "windows-exec-server",
+    testonly = True,
+    srcs = ["windows_exec_server.rs"],
+    crate_name = "windows_exec_server",
+    crate_root = "windows_exec_server.rs",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:windows"],
+    visibility = ["//codex-rs/core/tests/remote_env_windows:__pkg__"],
+    deps = [
+        "//codex-rs/exec-server",
+        "@crates//:tokio",
+    ],
+)
