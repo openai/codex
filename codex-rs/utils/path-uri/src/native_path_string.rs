@@ -56,6 +56,12 @@ pub struct NativePathString(String);
 
 impl NativePathString {
     /// Renders a path URI using the requested native path convention.
+    ///
+    /// Rendering fails when the URI shape does not match the convention, such
+    /// as a POSIX path rendered as Windows or a UNC path rendered as POSIX. It
+    /// also fails when an opaque fallback does not encode an absolute path for
+    /// the convention, when a URI segment is not valid UTF-8, or when a segment
+    /// contains a percent-encoded separator that would change path structure.
     pub fn from_path_uri(
         path: &PathUri,
         convention: PathConvention,
@@ -63,11 +69,11 @@ impl NativePathString {
         if let Some(path_bytes) = path.opaque_fallback_bytes() {
             return render_opaque_fallback(path, &path_bytes, convention).map(Self);
         }
-        let value = match convention {
-            PathConvention::Posix => render_posix_path(path)?,
-            PathConvention::Windows => render_windows_path(path)?,
-        };
-        Ok(Self(value))
+        match convention {
+            PathConvention::Posix => render_posix_path(path),
+            PathConvention::Windows => render_windows_path(path),
+        }
+        .map(Self)
     }
 
     pub fn as_str(&self) -> &str {
