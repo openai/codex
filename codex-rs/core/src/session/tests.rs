@@ -7336,6 +7336,101 @@ async fn windows_environment_context_persists_native_identity_without_redundant_
 }
 
 #[tokio::test]
+async fn mixed_posix_and_windows_environment_context_persists_native_identity() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let environment = Arc::clone(
+        &turn_context
+            .environments
+            .turn_environments
+            .first()
+            .expect("primary environment")
+            .environment,
+    );
+    let posix_cwd = PathUri::parse("file:///workspace/linux").expect("POSIX cwd URI");
+    let windows_cwd = PathUri::parse("file:///C:/workspace/windows").expect("Windows cwd URI");
+    turn_context.environments.turn_environments = vec![
+        TurnEnvironment::new_with_uri(
+            "linux".to_string(),
+            Arc::clone(&environment),
+            posix_cwd.clone(),
+            PathConvention::Posix,
+            crate::shell::Shell {
+                shell_type: crate::shell::ShellType::Bash,
+                shell_path: PathBuf::from("/bin/bash"),
+                shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+            },
+        )
+        .expect("POSIX environment"),
+        TurnEnvironment::new_with_uri(
+            "windows".to_string(),
+            environment,
+            windows_cwd.clone(),
+            PathConvention::Windows,
+            crate::shell::Shell {
+                shell_type: crate::shell::ShellType::PowerShell,
+                shell_path: PathBuf::from(r"C:\Program Files\PowerShell\7\pwsh.exe"),
+                shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+            },
+        )
+        .expect("Windows environment"),
+    ];
+
+    let rendered = crate::context::EnvironmentContext::from_turn_context(
+        &turn_context,
+        session.user_shell().as_ref(),
+    )
+    .render();
+    assert!(
+        rendered.contains(
+            "<environment id=\"linux\">\n      <cwd>/workspace/linux</cwd>\n      <shell>bash</shell>"
+        ),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "<environment id=\"windows\">\n      <cwd>C:\\workspace\\windows</cwd>\n      <shell>powershell</shell>"
+        ),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("/C:/workspace/windows"), "{rendered}");
+
+    let persisted = turn_context.to_turn_context_item();
+    assert_eq!(
+        persisted.environments,
+        Some(vec![
+            TurnContextEnvironment {
+                environment_id: "linux".to_string(),
+                cwd: posix_cwd,
+                path_convention: PathConvention::Posix,
+                shell: "bash".to_string(),
+            },
+            TurnContextEnvironment {
+                environment_id: "windows".to_string(),
+                cwd: windows_cwd,
+                path_convention: PathConvention::Windows,
+                shell: "powershell".to_string(),
+            },
+        ])
+    );
+    let reconstructed = crate::context::EnvironmentContext::from_turn_context_item(
+        &persisted,
+        "fallback-shell".to_string(),
+    )
+    .render();
+    assert_eq!(reconstructed, rendered);
+    assert!(!reconstructed.contains("fallback-shell"), "{reconstructed}");
+
+    let update_items = session
+        .build_settings_update_items(Some(&persisted), &turn_context)
+        .await;
+    assert!(
+        user_input_texts(&update_items)
+            .iter()
+            .all(|text| !text.contains("<environment_context>"))
+    );
+}
+
+#[tokio::test]
 async fn build_settings_update_items_emits_environment_item_for_time_changes() {
     let (session, previous_context) = make_session_and_context().await;
     let previous_context = Arc::new(previous_context);
