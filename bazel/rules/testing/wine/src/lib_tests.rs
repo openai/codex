@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::future::Future;
+use std::fs;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::path::PathBuf;
@@ -9,12 +10,38 @@ use anyhow::Result;
 use anyhow::anyhow;
 use futures::FutureExt;
 use pretty_assertions::assert_eq;
+use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command as TokioCommand;
 
 use super::WineTestCommand;
 use super::WineTestProcess;
+use super::install_powershell_runtime;
+
+#[test]
+fn powershell_runtime_is_materialized_at_the_windows_fallback_path() -> Result<()> {
+    let prefix = TempDir::new()?;
+    let runtime = TempDir::new()?;
+    fs::create_dir(runtime.path().join("Modules"))?;
+    fs::write(runtime.path().join("pwsh.exe"), b"pwsh")?;
+    fs::write(runtime.path().join("Modules").join("marker.txt"), b"module")?;
+
+    install_powershell_runtime(prefix.path(), runtime.path())?;
+
+    let installed = prefix
+        .path()
+        .join("drive_c")
+        .join("Program Files")
+        .join("PowerShell")
+        .join("7");
+    assert_eq!(fs::read(installed.join("pwsh.exe"))?, b"pwsh");
+    assert_eq!(
+        fs::read(installed.join("Modules").join("marker.txt"))?,
+        b"module"
+    );
+    Ok(())
+}
 
 async fn waiting_smoke_process() -> Result<WineTestProcess> {
     let executable = codex_utils_cargo_bin::cargo_bin("wine-smoke")?;

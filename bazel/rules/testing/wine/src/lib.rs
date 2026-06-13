@@ -2,6 +2,7 @@
 compile_error!("wine_test_support can only run on Linux");
 
 use std::ffi::OsString;
+use std::fs;
 use std::future::Future;
 use std::io::Write;
 use std::path::Path;
@@ -16,6 +17,10 @@ use tempfile::TempDir;
 use tokio::process::Child;
 use tokio::process::ChildStdout;
 use tokio::process::Command as TokioCommand;
+use tokio::time::timeout;
+
+const ASYNC_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const BLOCKING_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Builds a command that runs a Windows executable in an isolated Wine prefix.
 pub struct WineTestCommand {
@@ -42,6 +47,7 @@ struct WineProcesses {
 
 struct WineRuntimePaths {
     dll_path: PathBuf,
+    powershell_runtime: Option<PathBuf>,
     wine: PathBuf,
     wineserver: PathBuf,
 }
@@ -74,6 +80,9 @@ impl WineTestCommand {
     pub fn spawn(self) -> Result<WineTestProcess> {
         let runtime = WineRuntimePaths::from_runfiles()?;
         let prefix = TempDir::new().context("create isolated Wine prefix")?;
+        if let Some(powershell_runtime) = runtime.powershell_runtime.as_deref() {
+            install_powershell_runtime(prefix.path(), powershell_runtime)?;
+        }
         let mut command = StdCommand::new(&runtime.wine);
         configure_wine_environment(&mut command, &runtime, prefix.path());
         command
@@ -164,8 +173,20 @@ impl WineRuntimePaths {
             .context("locate Wine runtime directory")?
             .to_path_buf();
         let wineserver = codex_utils_cargo_bin::cargo_bin("wineserver")?;
+        let powershell_runtime = if std::env::var_os("CARGO_BIN_EXE_pwsh-runtime-marker").is_some() {
+            let marker = codex_utils_cargo_bin::cargo_bin("pwsh-runtime-marker")?;
+            Some(
+                marker
+                    .parent()
+                    .context("locate PowerShell runtime directory")?
+                    .to_path_buf(),
+            )
+        } else {
+            None
+        };
         Ok(Self {
             dll_path,
+            powershell_runtime,
             wine,
             wineserver,
         })
@@ -185,10 +206,8 @@ impl WineProcesses {
             Err(error) => (Err(error).context("check Windows process status"), false),
         };
         let wait_result = self
-            .child
-            .wait()
+            .wait_for_child()
             .await
-            .context("wait for Windows process running under Wine")
             .and_then(|status| {
                 anyhow::ensure!(
                     !check_exit_status || status.success(),
@@ -196,20 +215,30 @@ impl WineProcesses {
                 );
                 Ok(())
             });
-        let wineserver_result = async {
+        let wineserver_result = timeout(ASYNC_SHUTDOWN_TIMEOUT, async {
             let mut command = TokioCommand::from(self.stop_wineserver_command());
             let status = command.status().await.context("stop isolated wineserver")?;
             anyhow::ensure!(status.success(), "wineserver exited with {status}");
             Ok(())
-        }
-        .await;
+        })
+        .await
+        .context("stop isolated wineserver timed out")
+        .and_then(std::convert::identity);
 
-        // Every cleanup action has been attempted, so an individual error
-        // should not cause the blocking fallback to repeat them.
-        self.cleanup_complete = true;
-        kill_result?;
-        wait_result?;
-        wineserver_result
+        let result = kill_result.and(wait_result).and(wineserver_result);
+        if result.is_ok() {
+            self.cleanup_complete = true;
+        } else {
+            self.shutdown_blocking();
+        }
+        result
+    }
+
+    async fn wait_for_child(&mut self) -> Result<std::process::ExitStatus> {
+        timeout(ASYNC_SHUTDOWN_TIMEOUT, self.child.wait())
+            .await
+            .context("wait for Windows process running under Wine timed out")?
+            .context("wait for Windows process running under Wine")
     }
 
     fn stop_wineserver_command(&self) -> StdCommand {
@@ -234,6 +263,7 @@ impl WineProcesses {
         }
 
         log_panic_cleanup(format_args!("Wine panic cleanup waiting for its child"));
+        let deadline = std::time::Instant::now() + BLOCKING_SHUTDOWN_TIMEOUT;
         loop {
             match self.child.try_wait() {
                 Ok(Some(status)) => {
@@ -242,7 +272,15 @@ impl WineProcesses {
                     ));
                     break;
                 }
-                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Ok(None) => {
+                    log_panic_cleanup(format_args!(
+                        "Wine panic cleanup timed out waiting for its child"
+                    ));
+                    break;
+                }
                 Err(error) => {
                     log_panic_cleanup(format_args!(
                         "Wine panic cleanup could not wait for its child: {error}"
@@ -253,7 +291,7 @@ impl WineProcesses {
         }
 
         log_panic_cleanup(format_args!("Wine panic cleanup stopping its wineserver"));
-        match self.stop_wineserver_command().status() {
+        match self.kill_wineserver_command().status() {
             Ok(status) => log_panic_cleanup(format_args!(
                 "Wine panic cleanup wineserver exited with {status}"
             )),
@@ -263,6 +301,16 @@ impl WineProcesses {
         }
         self.cleanup_complete = true;
         log_panic_cleanup(format_args!("Wine panic cleanup complete"));
+    }
+
+    fn kill_wineserver_command(&self) -> StdCommand {
+        let mut command = StdCommand::new(&self.runtime.wineserver);
+        configure_wine_environment(&mut command, &self.runtime, self.prefix.path());
+        command
+            .arg("-k")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command
     }
 }
 
@@ -296,6 +344,66 @@ fn configure_wine_environment(command: &mut StdCommand, runtime: &WineRuntimePat
         .env("LC_CTYPE", "C.UTF-8")
         .env("TEMP", r"C:\windows\temp")
         .env("TMP", r"C:\windows\temp");
+}
+
+/// Installs the opt-in pinned PowerShell runtime into a Wine prefix.
+///
+/// The calling `wine_rust_test` target must set `include_powershell = True`;
+/// otherwise the runtime marker is absent.
+pub fn install_pinned_powershell_runtime(prefix: &Path) -> Result<()> {
+    let marker = codex_utils_cargo_bin::cargo_bin("pwsh-runtime-marker")?;
+    let runtime = marker
+        .parent()
+        .context("locate PowerShell runtime directory")?;
+    install_powershell_runtime(prefix, runtime)
+}
+
+fn install_powershell_runtime(prefix: &Path, runtime: &Path) -> Result<()> {
+    let powershell_parent = prefix
+        .join("drive_c")
+        .join("Program Files")
+        .join("PowerShell");
+    fs::create_dir_all(&powershell_parent).context("create PowerShell installation parent")?;
+    let destination = powershell_parent.join("7");
+    materialize_runtime_directory(runtime, &destination)
+}
+
+fn materialize_runtime_directory(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir_all(destination).with_context(|| {
+        format!(
+            "create PowerShell runtime directory {}",
+            destination.display()
+        )
+    })?;
+    for entry in fs::read_dir(source)
+        .with_context(|| format!("read PowerShell runtime directory {}", source.display()))?
+    {
+        let entry = entry.context("read PowerShell runtime entry")?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("inspect PowerShell runtime entry {}", source_path.display()))?;
+        if file_type.is_dir() {
+            materialize_runtime_directory(&source_path, &destination_path)?;
+        } else if file_type.is_file() {
+            if fs::hard_link(&source_path, &destination_path).is_err() {
+                fs::copy(&source_path, &destination_path).with_context(|| {
+                    format!(
+                        "copy PowerShell runtime file {} to {}",
+                        source_path.display(),
+                        destination_path.display()
+                    )
+                })?;
+            }
+        } else {
+            anyhow::bail!(
+                "unsupported PowerShell runtime entry type at {}",
+                source_path.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
