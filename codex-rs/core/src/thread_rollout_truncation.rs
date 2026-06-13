@@ -174,6 +174,8 @@ enum RolloutMaterialization {
     CompleteHistory,
 }
 
+const MAX_MODEL_REPLAY_REFERENCE_DEPTH: usize = 8;
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum RolloutReferenceIdentity {
     Segment(codex_protocol::SegmentId),
@@ -237,10 +239,12 @@ async fn materialize_rollout_items(
     enum Work {
         Items {
             rollout_items: Vec<RolloutItem>,
+            reference_depth: usize,
             remaining_segment_depth: Option<usize>,
         },
         Item {
             item: Box<RolloutItem>,
+            reference_depth: usize,
             remaining_segment_depth: Option<usize>,
         },
         TruncateSuffix {
@@ -254,23 +258,27 @@ async fn materialize_rollout_items(
     let mut active_references = HashSet::new();
     let mut work = vec![Work::Items {
         rollout_items: rollout_items.to_vec(),
+        reference_depth: 0,
         remaining_segment_depth: None,
     }];
     while let Some(next) = work.pop() {
         match next {
             Work::Items {
                 rollout_items,
+                reference_depth,
                 remaining_segment_depth,
             } => {
                 for item in rollout_items.into_iter().rev() {
                     work.push(Work::Item {
                         item: Box::new(item),
+                        reference_depth,
                         remaining_segment_depth,
                     });
                 }
             }
             Work::Item {
                 item,
+                reference_depth,
                 remaining_segment_depth,
             } => {
                 let reference = match *item {
@@ -280,6 +288,12 @@ async fn materialize_rollout_items(
                         continue;
                     }
                 };
+                if matches!(materialization, RolloutMaterialization::ModelReplay)
+                    && reference_depth >= MAX_MODEL_REPLAY_REFERENCE_DEPTH
+                {
+                    warn!("rollout reference materialization reached hard model-replay depth cap");
+                    continue;
+                }
                 let has_prefix_truncation = reference.nth_user_message.is_some();
                 let next_remaining_segment_depth = match materialization {
                     RolloutMaterialization::CompleteHistory => None,
@@ -358,6 +372,7 @@ async fn materialize_rollout_items(
                         }
                         work.push(Work::Items {
                             rollout_items: reference_items,
+                            reference_depth: reference_depth.saturating_add(1),
                             remaining_segment_depth: next_remaining_segment_depth,
                         });
                     }

@@ -21,6 +21,7 @@ use crate::tasks::CompactTask;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
 use crate::tasks::execute_user_shell_command;
+use crate::thread_rollout_truncation::materialize_rollout_items_for_complete_history;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -515,10 +516,31 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         }
     };
 
+    let materialized_history = match materialize_rollout_items_for_complete_history(
+        turn_context.config.codex_home.as_path(),
+        &stored_history.items,
+    )
+    .await
+    {
+        Ok(history) => history,
+        Err(err) => {
+            sess.send_event_raw(Event {
+                id: turn_context.sub_id.clone(),
+                msg: EventMsg::Error(ErrorEvent {
+                    message: format!(
+                        "failed to materialize thread history for rollback replay: {err}"
+                    ),
+                    codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+                }),
+            })
+            .await;
+            return;
+        }
+    };
+
     let rollback_event = ThreadRolledBackEvent { num_turns };
     let rollback_msg = EventMsg::ThreadRolledBack(rollback_event.clone());
-    let replay_items = stored_history
-        .items
+    let replay_items = materialized_history
         .into_iter()
         .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
         .collect::<Vec<_>>();

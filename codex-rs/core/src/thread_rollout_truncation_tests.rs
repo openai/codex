@@ -594,6 +594,51 @@ async fn outer_reference_depth_bounds_descendant_references() {
 }
 
 #[tokio::test]
+async fn model_replay_clamps_serialized_reference_depth() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let thread_id = ThreadId::new();
+    let mut previous_segment = None;
+    let mut newest_items = Vec::new();
+
+    for index in 0..=MAX_MODEL_REPLAY_REFERENCE_DEPTH + 1 {
+        let segment_id = SegmentId::new();
+        let path = temp.path().join(format!("segment-{index}.jsonl"));
+        let mut items = vec![session_meta_item(thread_id, segment_id)];
+        if let Some((previous_path, previous_segment_id)) = previous_segment {
+            items.push(RolloutItem::RolloutReference(RolloutReferenceItem {
+                rollout_path: previous_path,
+                thread_id: Some(thread_id),
+                rollout_timestamp: None,
+                segment_id: Some(previous_segment_id),
+                max_depth: usize::MAX,
+                nth_user_message: None,
+                compacted_replacement_history_filter_texts: None,
+            }));
+        }
+        items.push(RolloutItem::ResponseItem(user_msg(&format!(
+            "segment {index}"
+        ))));
+        write_rollout(&path, &items).await;
+        previous_segment = Some((path, segment_id));
+        newest_items = items;
+    }
+
+    let model_history =
+        materialize_rollout_items_for_model_replay(temp.path(), &newest_items).await;
+    let model_json = serde_json::to_string(&model_history).expect("serialize model history");
+    assert!(!model_json.contains("\"text\":\"segment 0\""));
+    assert!(model_json.contains("\"text\":\"segment 1\""));
+
+    let complete_history =
+        materialize_rollout_items_for_complete_history(temp.path(), &newest_items)
+            .await
+            .expect("materialize complete history");
+    let complete_json =
+        serde_json::to_string(&complete_history).expect("serialize complete history");
+    assert!(complete_json.contains("\"text\":\"segment 0\""));
+}
+
+#[tokio::test]
 async fn complete_history_reports_unresolvable_references() {
     let temp = tempfile::tempdir().expect("tempdir");
     let missing_path = temp.path().join("missing.jsonl");

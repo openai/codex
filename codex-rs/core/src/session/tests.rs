@@ -32,6 +32,7 @@ use codex_models_manager::model_info;
 use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 use codex_models_manager::test_support::get_model_offline_for_tests;
 use codex_protocol::AgentPath;
+use codex_protocol::SegmentId;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
@@ -120,6 +121,8 @@ use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::RolloutReferenceItem;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SkillScope;
@@ -2797,6 +2800,85 @@ async fn thread_rollback_drops_last_turn_from_history() {
             if rollback.num_turns == 1
         )
     }));
+}
+
+#[tokio::test]
+async fn thread_rollback_materializes_referenced_predecessor_history() {
+    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    let rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut sess).expect("session should not have additional references"),
+    )
+    .await;
+    let predecessor_segment_id = SegmentId::new();
+    let predecessor_path = rollout_path.with_file_name("rollback-predecessor.jsonl");
+    let turn_1 = vec![
+        user_message("turn 1 user"),
+        assistant_message("turn 1 assistant"),
+    ];
+    let predecessor_items = [
+        RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                id: sess.thread_id,
+                segment_id: Some(predecessor_segment_id),
+                timestamp: "2026-06-13T00:00:00.000Z".to_string(),
+                cwd: tc.config.cwd.to_path_buf(),
+                originator: "test".to_string(),
+                cli_version: "0.0.0".to_string(),
+                ..SessionMeta::default()
+            },
+            git: None,
+        }),
+        RolloutItem::ResponseItem(turn_1[0].clone()),
+        RolloutItem::ResponseItem(turn_1[1].clone()),
+    ];
+    let predecessor_jsonl = predecessor_items
+        .into_iter()
+        .map(|item| {
+            serde_json::to_string(&RolloutLine {
+                timestamp: "2026-06-13T00:00:00.000Z".to_string(),
+                item,
+            })
+            .expect("serialize predecessor rollout line")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    tokio::fs::write(&predecessor_path, predecessor_jsonl)
+        .await
+        .expect("write predecessor rollout");
+
+    let turn_2 = vec![
+        user_message("turn 2 user"),
+        assistant_message("turn 2 assistant"),
+    ];
+    sess.persist_rollout_items(&[
+        RolloutItem::RolloutReference(RolloutReferenceItem {
+            rollout_path: predecessor_path,
+            thread_id: Some(sess.thread_id),
+            rollout_timestamp: None,
+            segment_id: Some(predecessor_segment_id),
+            max_depth: 2,
+            nth_user_message: None,
+            compacted_replacement_history_filter_texts: None,
+        }),
+        RolloutItem::ResponseItem(turn_2[0].clone()),
+        RolloutItem::ResponseItem(turn_2[1].clone()),
+    ])
+    .await;
+    sess.flush_rollout()
+        .await
+        .expect("flush referenced history");
+    sess.replace_history(
+        turn_1.iter().chain(&turn_2).cloned().collect(),
+        Some(tc.to_turn_context_item()),
+    )
+    .await;
+
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
+
+    let rollback_event = wait_for_thread_rolled_back(&rx).await;
+    assert_eq!(rollback_event.num_turns, 1);
+    assert_eq!(sess.clone_history().await.raw_items(), turn_1);
 }
 
 #[tokio::test]
