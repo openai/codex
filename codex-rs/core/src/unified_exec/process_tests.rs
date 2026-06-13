@@ -2,11 +2,13 @@ use super::process::NoopSpawnLifecycle;
 use super::process::SpawnLifecycle;
 use super::process::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecError;
+use codex_exec_server::ExecOutputStream;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEventReceiver;
 use codex_exec_server::ExecProcessFuture;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::ProcessId;
+use codex_exec_server::ProcessOutputChunk;
 use codex_exec_server::ProcessSignal;
 use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
@@ -260,9 +262,11 @@ async fn noop_spawn_lifecycle_preserves_process_behavior() {
 
 #[tokio::test]
 async fn remote_terminate_confirmed_updates_state_on_success_only() {
-    let process = remote_process(
+    let (failed_state, lifecycle) = recording_lifecycle();
+    let process = remote_process_with_lifecycle(
         WriteStatus::Accepted,
         Some("terminate unavailable".to_string()),
+        lifecycle,
     )
     .await;
 
@@ -273,8 +277,15 @@ async fn remote_terminate_confirmed_updates_state_on_success_only() {
 
     assert!(matches!(err, UnifiedExecError::ProcessFailed { .. }));
     assert!(!process.has_exited());
+    assert!(!failed_state.cancelled.load(Ordering::SeqCst));
 
-    let process = remote_process(WriteStatus::Accepted, /*terminate_error*/ None).await;
+    let (succeeded_state, lifecycle) = recording_lifecycle();
+    let process = remote_process_with_lifecycle(
+        WriteStatus::Accepted,
+        /*terminate_error*/ None,
+        lifecycle,
+    )
+    .await;
 
     process
         .terminate_confirmed()
@@ -282,6 +293,46 @@ async fn remote_terminate_confirmed_updates_state_on_success_only() {
         .expect("terminate should succeed");
 
     assert!(process.has_exited());
+    assert!(succeeded_state.cancelled.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn sandbox_denied_early_exit_finishes_failed() {
+    let (state, lifecycle) = recording_lifecycle();
+    let (wake_tx, _wake_rx) = watch::channel(0);
+    let started = StartedExecProcess {
+        process: Arc::new(MockExecProcess {
+            process_id: "test-process".to_string().into(),
+            write_response: WriteResponse {
+                status: WriteStatus::Accepted,
+            },
+            read_responses: Mutex::new(VecDeque::from([ReadResponse {
+                chunks: vec![ProcessOutputChunk {
+                    seq: 1,
+                    stream: ExecOutputStream::Stderr,
+                    chunk: b"Operation not permitted".to_vec().into(),
+                }],
+                next_seq: 2,
+                exited: true,
+                exit_code: Some(1),
+                closed: true,
+                failure: None,
+            }])),
+            terminate_error: None,
+            wake_tx,
+        }),
+    };
+
+    let err =
+        UnifiedExecProcess::from_exec_server_started(started, SandboxType::LinuxSeccomp, lifecycle)
+            .await
+            .expect_err("sandbox denial should fail startup");
+
+    assert!(matches!(err, UnifiedExecError::SandboxDenied { .. }));
+    assert_eq!(
+        *state.finishes.lock().expect("finish state"),
+        vec![(Some(1), true)]
+    );
 }
 
 #[tokio::test]

@@ -251,6 +251,7 @@ impl UnifiedExecProcess {
                     .map_err(|err| UnifiedExecError::process_failed(err.to_string()))?;
             }
         }
+        self.notify_lifecycle_cancelled();
         self.signal_exit(self.exit_code());
         self.finish_termination();
         Ok(())
@@ -332,6 +333,8 @@ impl UnifiedExecProcess {
             } else {
                 snippet
             };
+            let state = self.state_rx.borrow().clone();
+            let _ = self.state_tx.send_replace(state.failed(message.clone()));
             return Err(UnifiedExecError::sandbox_denied(message, exec_output));
         }
         Ok(())

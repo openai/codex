@@ -857,7 +857,7 @@ async fn remote_interrupt_failure_does_not_mark_lifecycle_cancelled() -> anyhow:
             process: Arc::clone(&process),
             call_id: "call".to_string(),
             process_id,
-            cwd,
+            cwd: cwd.into(),
             initial_exec_command_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hook_command: "sleep 60".to_string(),
             tty: false,
