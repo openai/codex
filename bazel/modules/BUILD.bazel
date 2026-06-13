@@ -1,3 +1,1 @@
-exports_files([
-    "wine.MODULE.bazel",
-])
+exports_files(["wine.MODULE.bazel"])

@@ -1,4 +1,5 @@
-# Exec-server test fixtures
+# Windows exec-server fixture
 
-This package contains the minimal Windows exec-server binary used by the
-cross-platform tests in `//codex-rs/core/tests/remote_env_windows`.
+This directory contains the small Windows exec-server binary used by
+foreign-OS tests. It links only `codex-exec-server` because the full Codex
+Windows graph does not yet cross-build with Bazel.

@@ -1,23 +1,40 @@
 use std::any::Any;
+use std::collections::HashMap;
 use std::future::Future;
 use std::fs;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_utils_pty::SpawnedProcess;
+use codex_utils_pty::TerminalSize;
 use futures::FutureExt;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command as TokioCommand;
+use tokio::time::timeout;
 
 use super::WineTestCommand;
 use super::WineTestProcess;
+use super::WineRuntimePaths;
 use super::install_powershell_runtime;
+
+const POWERSHELL_SMOKE_MARKER: &str = "WINE_PWSH_SMOKE";
+const POWERSHELL_SMOKE_SCRIPT: &str = concat!(
+    "$ErrorActionPreference = 'Stop'; ",
+    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); ",
+    "$separatorCode = [int]([System.IO.Path]::DirectorySeparatorChar); ",
+    "Write-Output ('WINE_PWSH_SMOKE|' + ",
+    "$PSVersionTable.PSVersion.ToString() + '|' + ",
+    "$PSVersionTable.PSEdition + '|' + ",
+    "$IsWindows.ToString().ToLowerInvariant() + '|' + $separatorCode)",
+);
 
 #[test]
 fn powershell_runtime_is_materialized_at_the_windows_fallback_path() -> Result<()> {
@@ -40,6 +57,109 @@ fn powershell_runtime_is_materialized_at_the_windows_fallback_path() -> Result<(
         fs::read(installed.join("Modules").join("marker.txt"))?,
         b"module"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn pinned_powershell_runs_under_wine() -> Result<()> {
+    let runtime = WineRuntimePaths::from_runfiles()?;
+    let prefix = TempDir::new()?;
+    install_powershell_runtime(prefix.path(), &runtime.powershell_runtime)?;
+    let mut env = std::env::vars().collect::<HashMap<_, _>>();
+    env.remove("DISPLAY");
+    env.extend([
+        ("HOME".to_string(), prefix.path().to_string_lossy().into_owned()),
+        (
+            "XDG_RUNTIME_DIR".to_string(),
+            prefix.path().to_string_lossy().into_owned(),
+        ),
+        ("WINEARCH".to_string(), "win64".to_string()),
+        (
+            "WINEPREFIX".to_string(),
+            prefix.path().to_string_lossy().into_owned(),
+        ),
+        (
+            "WINEDLLPATH".to_string(),
+            runtime.dll_path.to_string_lossy().into_owned(),
+        ),
+        (
+            "WINESERVER".to_string(),
+            runtime.wineserver.to_string_lossy().into_owned(),
+        ),
+        ("WINEDEBUG".to_string(), "-all".to_string()),
+        (
+            "WINEDLLOVERRIDES".to_string(),
+            "mscoree,mshtml,winegstreamer=".to_string(),
+        ),
+        ("LANG".to_string(), "C.UTF-8".to_string()),
+        ("LC_ALL".to_string(), "C.UTF-8".to_string()),
+        ("LC_CTYPE".to_string(), "C.UTF-8".to_string()),
+        ("TEMP".to_string(), r"C:\windows\temp".to_string()),
+        ("TMP".to_string(), r"C:\windows\temp".to_string()),
+    ]);
+    let wine = runtime.wine.to_string_lossy().into_owned();
+    let args = [
+        r"C:\Program Files\PowerShell\7\pwsh.exe".to_string(),
+        "-NoLogo".to_string(),
+        "-NoProfile".to_string(),
+        "-NonInteractive".to_string(),
+        "-Command".to_string(),
+        POWERSHELL_SMOKE_SCRIPT.to_string(),
+    ];
+    let SpawnedProcess {
+        session: process,
+        mut stdout_rx,
+        mut stderr_rx,
+        exit_rx,
+    } = codex_utils_pty::spawn_pty_process(
+        &wine,
+        &args,
+        prefix.path(),
+        &env,
+        /*arg0*/ &None,
+        TerminalSize::default(),
+    )
+    .await?;
+    let stderr_task = tokio::spawn(async move { while stderr_rx.recv().await.is_some() {} });
+    let output = timeout(Duration::from_secs(30), async {
+        let mut output = Vec::new();
+        while let Some(chunk) = stdout_rx.recv().await {
+            output.extend(chunk);
+        }
+        Ok::<_, anyhow::Error>(output)
+    })
+    .await
+    .context("PowerShell smoke test timed out")??;
+    let exit_code = exit_rx.await.context("wait for PowerShell")?;
+    drop(process);
+    stderr_task.abort();
+    let _status = TokioCommand::new(&runtime.wineserver)
+        .args(["-k", "-w"])
+        .env("HOME", prefix.path())
+        .env("WINEPREFIX", prefix.path())
+        .env("XDG_RUNTIME_DIR", prefix.path())
+        .status()
+        .await?;
+    anyhow::ensure!(exit_code == 0, "PowerShell exited with {exit_code}");
+    let output = String::from_utf8(output)?;
+    let marker_start = output
+        .find(POWERSHELL_SMOKE_MARKER)
+        .with_context(|| format!("PowerShell smoke marker was missing from {output:?}"))?;
+    let smoke = output[marker_start..]
+        .lines()
+        .next()
+        .context("PowerShell smoke marker line was incomplete")?
+        .trim_end_matches('\r');
+    let fields = smoke.split('|').collect::<Vec<_>>();
+    assert_eq!(fields.len(), 5, "unexpected PowerShell smoke output: {smoke}");
+    assert_eq!(fields[0], POWERSHELL_SMOKE_MARKER);
+    assert_eq!(
+        fields[1].split('.').next(),
+        Some("7"),
+        "expected PowerShell 7.x, got {}",
+        fields[1],
+    );
+    assert_eq!(&fields[2..], &["Core", "true", "92"]);
     Ok(())
 }
 
