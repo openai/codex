@@ -315,15 +315,20 @@ fn renders_native_paths_from_shared_cases() {
                 })
             }
         };
+        let actual = ApiPathString::from_path_uri(&path, case.convention);
 
-        assert_eq!(
-            ApiPathString::from_path_uri(&path, case.convention),
-            expected,
-            "rendering {case:?}"
-        );
+        assert_eq!(actual, expected, "rendering {case:?}");
+        if let Ok(rendered) = &actual {
+            assert_eq!(
+                rendered.infer_absolute_path_convention(),
+                Some(case.convention),
+                "inferring {case:?}"
+            );
+        }
 
         if let RenderExpectation::RoundTrip(rendered) = case.expected {
-            let api_path = ApiPathString(rendered.to_string());
+            let api_path = serde_json::from_value::<ApiPathString>(serde_json::json!(rendered))
+                .expect("native path should deserialize from API text");
             let reparsed = api_path
                 .to_path_uri(case.convention)
                 .expect("native path should parse using its convention");
@@ -338,14 +343,44 @@ fn renders_native_paths_from_shared_cases() {
 }
 
 #[test]
-fn rejects_relative_api_paths() {
+fn relative_api_path_serializes_and_deserializes_unchanged() {
+    for raw_path in [".", "subdir", "subdir/file.rs"] {
+        let path = serde_json::from_value::<ApiPathString>(serde_json::json!(raw_path))
+            .expect("relative API path should deserialize");
+
+        assert_eq!(
+            serde_json::to_value(path).expect("relative API path should serialize"),
+            serde_json::json!(raw_path)
+        );
+    }
+}
+
+#[test]
+fn relative_api_path_is_invalid_when_converted_to_a_path_uri() {
+    let raw_path = "subdir";
+    let path = serde_json::from_value::<ApiPathString>(serde_json::json!(raw_path))
+        .expect("relative API path should deserialize");
+
+    assert_eq!(path.infer_absolute_path_convention(), None);
+    assert_eq!(
+        path.to_path_uri(PathConvention::Posix),
+        Err(ApiPathStringError::InvalidNativePath {
+            path: raw_path.to_string(),
+            convention: PathConvention::Posix,
+        })
+    );
+}
+
+#[test]
+fn other_non_absolute_api_paths_cannot_be_converted_to_path_uris() {
     for (raw_path, convention) in [
-        ("workspace/file.rs", PathConvention::Posix),
         (r"workspace\file.rs", PathConvention::Windows),
         (r"C:file.rs", PathConvention::Windows),
     ] {
-        let path = ApiPathString(raw_path.to_string());
+        let path = serde_json::from_value::<ApiPathString>(serde_json::json!(raw_path))
+            .expect("API path should deserialize without validation");
 
+        assert_eq!(path.infer_absolute_path_convention(), None);
         assert_eq!(
             path.to_path_uri(convention),
             Err(ApiPathStringError::InvalidNativePath {
@@ -353,6 +388,49 @@ fn rejects_relative_api_paths() {
                 convention,
             })
         );
+    }
+}
+
+#[test]
+fn infers_absolute_path_conventions_from_api_text() {
+    for (raw_path, expected) in [
+        (r"C:\workspace\file.rs", Some(PathConvention::Windows)),
+        ("c:/workspace/file.rs", Some(PathConvention::Windows)),
+        (r"\\server\share\file.rs", Some(PathConvention::Windows)),
+        (r"\\?\C:\workspace\file.rs", Some(PathConvention::Windows)),
+        (r"\\.\COM1", Some(PathConvention::Windows)),
+        ("/workspace/file.rs", Some(PathConvention::Posix)),
+        ("/C:/workspace/file.rs", Some(PathConvention::Posix)),
+        ("//server/share/file.rs", Some(PathConvention::Posix)),
+        ("", None),
+        (".", None),
+        ("subdir/file.rs", None),
+        (r"subdir\file.rs", None),
+        (r"C:file.rs", None),
+        (r"\rooted-without-drive", None),
+    ] {
+        let path = serde_json::from_value::<ApiPathString>(serde_json::json!(raw_path))
+            .expect("API path should deserialize without validation");
+
+        assert_eq!(
+            path.infer_absolute_path_convention(),
+            expected,
+            "inferring {raw_path:?}"
+        );
+    }
+}
+
+#[test]
+fn foreign_absolute_syntax_deserializes_without_host_interpretation() {
+    for (raw_path, convention) in [
+        (r"C:\workspace\file.rs", PathConvention::Windows),
+        ("/workspace/file.rs", PathConvention::Posix),
+    ] {
+        let path = serde_json::from_value::<ApiPathString>(serde_json::json!(raw_path))
+            .expect("foreign API path should deserialize");
+
+        assert_eq!(path.as_str(), raw_path);
+        assert_eq!(path.infer_absolute_path_convention(), Some(convention));
     }
 }
 
