@@ -185,6 +185,54 @@ async fn process_spawn_failure_releases_process_handle() -> Result<()> {
 }
 
 #[tokio::test]
+async fn process_handle_can_be_reused_after_process_exit() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let (_server, mut mcp) = initialized_mcp(codex_home.path()).await?;
+
+    let process_handle = "reusable-after-exit-1".to_string();
+    for output in ["first-out", "second-out"] {
+        let command = if cfg!(windows) {
+            vec![
+                "powershell.exe".to_string(),
+                "-NoProfile".to_string(),
+                "-NonInteractive".to_string(),
+                "-Command".to_string(),
+                format!("[Console]::Out.Write('{output}')"),
+            ]
+        } else {
+            vec![
+                "sh".to_string(),
+                "-lc".to_string(),
+                format!("printf {output}"),
+            ]
+        };
+        let request_id = mcp
+            .send_process_spawn_request(process_spawn_params(
+                process_handle.clone(),
+                codex_home.path(),
+                command,
+            )?)
+            .await?;
+        let response = mcp
+            .read_stream_until_response_message(RequestId::Integer(request_id))
+            .await?;
+        assert_eq!(response.result, serde_json::json!({}));
+        assert_eq!(
+            read_process_exited(&mut mcp).await?,
+            ProcessExitedNotification {
+                process_handle: process_handle.clone(),
+                exit_code: 0,
+                stdout: output.to_string(),
+                stdout_cap_reached: false,
+                stderr: String::new(),
+                stderr_cap_reached: false,
+            }
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn process_spawn_returns_error_when_local_environment_is_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
