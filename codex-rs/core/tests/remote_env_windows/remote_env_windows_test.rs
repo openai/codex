@@ -21,6 +21,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
+use codex_utils_path_uri::PathUri;
 use serde_json::json;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
@@ -90,7 +91,7 @@ async fn windows_exec_server_rejects_non_native_cwd_uri() -> Result<()> {
                 test.config.cwd.clone(),
                 vec![TurnEnvironmentSelection {
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                    cwd: test.config.cwd.clone(),
+                    cwd: PathUri::from_abs_path(&test.config.cwd),
                 }],
             );
 

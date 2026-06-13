@@ -4705,7 +4705,7 @@ async fn cwd_update_rewrites_sticky_environment_cwd() {
     assert_eq!(state.session_configuration.cwd(), &updated_cwd);
     assert_eq!(
         state.session_configuration.environment_selections()[0].cwd,
-        updated_cwd
+        codex_utils_path_uri::PathUri::from_abs_path(&updated_cwd)
     );
     assert_ne!(environment_cwd, updated_cwd);
 }

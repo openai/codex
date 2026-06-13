@@ -79,7 +79,7 @@ impl TurnEnvironment {
     pub(crate) fn selection(&self) -> TurnEnvironmentSelection {
         TurnEnvironmentSelection {
             environment_id: self.environment_id.clone(),
-            cwd: self.cwd.clone(),
+            cwd: self.cwd_uri.clone(),
         }
     }
 }

@@ -1292,7 +1292,7 @@ impl ThreadRequestProcessor {
                 .into_iter()
                 .map(|environment| TurnEnvironmentSelection {
                     environment_id: environment.environment_id,
-                    cwd: environment.cwd,
+                    cwd: codex_utils_path_uri::PathUri::from_abs_path(&environment.cwd),
                 })
                 .collect::<Vec<_>>()
         });

@@ -3583,6 +3583,7 @@ dependencies = [
  "codex-network-proxy",
  "codex-utils-absolute-path",
  "codex-utils-image",
+ "codex-utils-path-uri",
  "codex-utils-string",
  "encoding_rs",
  "globset",
