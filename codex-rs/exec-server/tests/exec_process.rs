@@ -98,9 +98,13 @@ async fn assert_exec_process_rejects_non_native_cwd_without_reserving_process_id
     let context = create_process_context(use_remote).await?;
     let process_id = ProcessId::from("proc-non-native-cwd");
     let cwd = PathUri::parse("file://server/share/checkout")?;
-    let source = cwd
-        .to_abs_path()
-        .expect_err("UNC cwd should not be native on Unix");
+    let source = match cwd.to_abs_path() {
+        Ok(path) => anyhow::bail!(
+            "UNC cwd should not be native on Unix: {}",
+            path.as_path().display()
+        ),
+        Err(source) => source,
+    };
     let error = match context
         .backend
         .start(ExecParams {
