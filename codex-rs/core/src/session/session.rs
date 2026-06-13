@@ -500,6 +500,17 @@ impl Session {
             session_configuration.collaboration_mode.model(),
             session_configuration.provider
         );
+        let persisted_fork_history = match &initial_history {
+            InitialHistory::Forked(items)
+                if items
+                    .iter()
+                    .any(|item| matches!(item, RolloutItem::RolloutReference(_))) =>
+            {
+                Some(items.clone())
+            }
+            InitialHistory::Forked(_) => None,
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Resumed(_) => None,
+        };
         let initial_history = materialize_initial_history_for_model_replay(
             config.codex_home.as_path(),
             initial_history,
@@ -1186,7 +1197,11 @@ impl Session {
             };
 
             // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
-            Box::pin(sess.record_initial_history(initial_history)).await;
+            Box::pin(sess.record_initial_history_with_persisted_fork_history(
+                initial_history,
+                persisted_fork_history,
+            ))
+            .await;
             {
                 let mut state = sess.state.lock().await;
                 state.queue_pending_session_start_source(session_start_source);

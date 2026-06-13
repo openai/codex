@@ -1552,6 +1552,10 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
     config.cwd = config.codex_home.abs();
+    config
+        .features
+        .enable(Feature::SessionSegmentation)
+        .expect("enable session segmentation");
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
 
     let auth_manager =
@@ -1591,6 +1595,11 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         .await
         .expect("read source rollout history");
     assert!(snapshot_turn_state(&source_history).ends_mid_turn);
+    source
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown source thread");
     manager.remove_thread(&source.thread_id).await;
 
     let forked = manager
@@ -1612,8 +1621,20 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         .expect("read forked rollout history");
     assert!(!snapshot_turn_state(&history).ends_mid_turn);
 
-    let forked_rollout_items: Vec<_> = history
-        .get_rollout_items()
+    let forked_raw_items = history.get_rollout_items();
+    assert!(
+        forked_raw_items
+            .iter()
+            .any(|item| matches!(item, RolloutItem::RolloutReference(_))),
+        "segmented fork should persist an immutable rollout reference"
+    );
+    let forked_rollout_items: Vec<_> =
+        crate::thread_rollout_truncation::materialize_rollout_items_for_complete_history(
+            config.codex_home.as_path(),
+            &forked_raw_items,
+        )
+        .await
+        .expect("materialize forked history")
         .into_iter()
         .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
         .collect();
@@ -1632,6 +1653,11 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         1,
     );
 
+    forked
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown forked thread");
     manager.remove_thread(&forked.thread_id).await;
     let reforked = manager
         .fork_thread(
@@ -1650,8 +1676,20 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let reforked_history = RolloutRecorder::get_rollout_history(&reforked_path)
         .await
         .expect("read re-forked rollout history");
-    let reforked_rollout_items: Vec<_> = reforked_history
-        .get_rollout_items()
+    let reforked_raw_items = reforked_history.get_rollout_items();
+    assert!(
+        reforked_raw_items
+            .iter()
+            .any(|item| matches!(item, RolloutItem::RolloutReference(_))),
+        "segmented re-fork should persist an immutable rollout reference"
+    );
+    let reforked_rollout_items: Vec<_> =
+        crate::thread_rollout_truncation::materialize_rollout_items_for_complete_history(
+            config.codex_home.as_path(),
+            &reforked_raw_items,
+        )
+        .await
+        .expect("materialize re-forked history")
         .into_iter()
         .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
         .collect();

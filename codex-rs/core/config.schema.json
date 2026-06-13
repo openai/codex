@@ -602,6 +602,9 @@
             "secret_auth_storage": {
               "type": "boolean"
             },
+            "session_segmentation": {
+              "type": "boolean"
+            },
             "shell_snapshot": {
               "type": "boolean"
             },
@@ -4755,6 +4758,9 @@
           "type": "boolean"
         },
         "secret_auth_storage": {
+          "type": "boolean"
+        },
+        "session_segmentation": {
           "type": "boolean"
         },
         "shell_snapshot": {

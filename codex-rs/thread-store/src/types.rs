@@ -112,6 +112,15 @@ pub struct AppendThreadItemsParams {
     pub items: Vec<RolloutItem>,
 }
 
+/// Parameters for replacing a live local rollout segment without changing the thread id.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RotateThreadSegmentParams {
+    /// Items written immediately after the new segment metadata.
+    pub initial_items: Vec<RolloutItem>,
+    /// Maximum number of rollout-reference segments materialized through the new segment.
+    pub previous_segment_reference_depth: usize,
+}
+
 /// Parameters for loading persisted history for resume, fork, rollback, and memory jobs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoadThreadHistoryParams {

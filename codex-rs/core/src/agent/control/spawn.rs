@@ -1,5 +1,6 @@
 use super::residency::is_v2_resident_session_source;
 use super::*;
+use codex_features::Feature;
 
 const AGENT_NAMES: &str = include_str!("../agent_names.txt");
 
@@ -411,28 +412,56 @@ impl AgentControl {
 
         let parent_thread_id = *parent_thread_id;
         let parent_thread = state.get_thread(parent_thread_id).await.ok();
-        if let Some(parent_thread) = parent_thread.as_ref() {
+        let sealed_reference = if matches!(fork_mode, SpawnAgentForkMode::FullHistory)
+            && config.features.enabled(Feature::SessionSegmentation)
+            && let Some(parent_thread) = parent_thread.as_ref()
+        {
+            match parent_thread.seal_rollout_segment_for_reference().await {
+                Ok(reference) => reference,
+                Err(err) => {
+                    warn!(
+                        "failed to seal parent rollout segment for full-history fork; copying history instead: {err}"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        if sealed_reference.is_none()
+            && let Some(parent_thread) = parent_thread.as_ref()
+        {
             // `record_conversation_items` only queues persistence writes asynchronously.
-            // Flush before snapshotting store history for a fork.
+            // Flush before snapshotting store history for a copied-history fork.
             parent_thread.ensure_rollout_materialized().await;
             parent_thread.flush_rollout().await?;
         }
 
-        let parent_history = state
-            .read_stored_thread(ReadThreadParams {
-                thread_id: parent_thread_id,
-                include_archived: true,
-                include_history: true,
-            })
-            .await?
-            .history
-            .ok_or_else(|| {
-                CodexErr::Fatal(format!(
-                    "parent thread history unavailable for fork: {parent_thread_id}"
-                ))
-            })?;
-
-        let mut forked_rollout_items = parent_history.items;
+        let mut forked_rollout_items = if let Some(reference) = sealed_reference {
+            // A full-history fork intentionally preserves the parent's exact model prefix,
+            // including reasoning and tool items that copied-history forks sanitize. Rotation
+            // makes that prefix immutable before this reference is persisted.
+            vec![RolloutItem::RolloutReference(reference)]
+        } else {
+            let parent_history = state
+                .read_stored_thread(ReadThreadParams {
+                    thread_id: parent_thread_id,
+                    include_archived: true,
+                    include_history: true,
+                })
+                .await?
+                .history
+                .ok_or_else(|| {
+                    CodexErr::Fatal(format!(
+                        "parent thread history unavailable for fork: {parent_thread_id}"
+                    ))
+                })?;
+            crate::thread_rollout_truncation::materialize_rollout_items_for_model_replay(
+                &config.codex_home,
+                &parent_history.items,
+            )
+            .await
+        };
         if let SpawnAgentForkMode::LastNTurns(last_n_turns) = fork_mode {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
@@ -469,6 +498,12 @@ impl AgentControl {
                 Vec::new()
             };
         let preserve_reference_context_item = matches!(fork_mode, SpawnAgentForkMode::FullHistory);
+        for item in &mut forked_rollout_items {
+            if let RolloutItem::RolloutReference(reference) = item {
+                reference.compacted_replacement_history_filter_texts =
+                    Some(multi_agent_v2_usage_hint_texts_to_filter.clone());
+            }
+        }
         forked_rollout_items.retain(|item| {
             keep_forked_rollout_item(item, preserve_reference_context_item)
                 && !matches!(

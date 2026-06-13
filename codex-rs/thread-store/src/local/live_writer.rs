@@ -1,4 +1,6 @@
+use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadMemoryMode;
@@ -8,6 +10,7 @@ use codex_rollout::RolloutRecorderParams;
 use codex_rollout::persisted_rollout_items;
 use tracing::warn;
 
+use super::LiveRecorderHandle;
 use super::LocalThreadStore;
 use super::create_thread;
 use crate::AppendThreadItemsParams;
@@ -82,7 +85,9 @@ pub(super) async fn append_items(
     if canonical_items.is_empty() {
         return Ok(());
     }
-    let recorder = store.live_recorder(params.thread_id).await?;
+    let handle = store.live_recorder_handle(params.thread_id).await?;
+    let state = Arc::clone(&handle).lock_owned().await;
+    let recorder = live_recorder(&state.recorder, params.thread_id)?;
     recorder
         .record_canonical_items(canonical_items.as_slice())
         .await
@@ -96,36 +101,47 @@ pub(super) async fn persist_thread(
     store: &LocalThreadStore,
     thread_id: ThreadId,
 ) -> ThreadStoreResult<()> {
-    store
-        .live_recorder(thread_id)
-        .await?
-        .persist()
-        .await
-        .map_err(thread_store_io_error)?;
-    sync_materialized_rollout_path(store, thread_id).await
+    let handle = store.live_recorder_handle(thread_id).await?;
+    let rollout_path = {
+        let state = Arc::clone(&handle).lock_owned().await;
+        let recorder = live_recorder(&state.recorder, thread_id)?;
+        recorder.persist().await.map_err(thread_store_io_error)?;
+        recorder.rollout_path().to_path_buf()
+    };
+    sync_materialized_rollout_path(store, thread_id, rollout_path.as_path()).await
 }
 
 pub(super) async fn flush_thread(
     store: &LocalThreadStore,
     thread_id: ThreadId,
 ) -> ThreadStoreResult<()> {
-    store
-        .live_recorder(thread_id)
-        .await?
-        .flush()
-        .await
-        .map_err(thread_store_io_error)?;
-    sync_materialized_rollout_path(store, thread_id).await
+    let handle = store.live_recorder_handle(thread_id).await?;
+    let rollout_path = {
+        let state = Arc::clone(&handle).lock_owned().await;
+        let recorder = live_recorder(&state.recorder, thread_id)?;
+        recorder.flush().await.map_err(thread_store_io_error)?;
+        recorder.rollout_path().to_path_buf()
+    };
+    sync_materialized_rollout_path(store, thread_id, rollout_path.as_path()).await
 }
 
 pub(super) async fn shutdown_thread(
     store: &LocalThreadStore,
     thread_id: ThreadId,
 ) -> ThreadStoreResult<()> {
-    let recorder = store.live_recorder(thread_id).await?;
-    recorder.shutdown().await.map_err(thread_store_io_error)?;
-    sync_materialized_rollout_path(store, thread_id).await?;
-    store.live_recorders.lock().await.remove(&thread_id);
+    let handle = store.live_recorder_handle(thread_id).await?;
+    let rollout_path = {
+        let mut state = Arc::clone(&handle).lock_owned().await;
+        let recorder = state
+            .recorder
+            .take()
+            .ok_or(ThreadStoreError::ThreadNotFound { thread_id })?;
+        let rollout_path = recorder.rollout_path().to_path_buf();
+        recorder.shutdown().await.map_err(thread_store_io_error)?;
+        rollout_path
+    };
+    sync_materialized_rollout_path(store, thread_id, rollout_path.as_path()).await?;
+    remove_live_recorder_handle(store, thread_id, &handle).await;
     Ok(())
 }
 
@@ -133,35 +149,76 @@ pub(super) async fn discard_thread(
     store: &LocalThreadStore,
     thread_id: ThreadId,
 ) -> ThreadStoreResult<()> {
-    store
-        .live_recorders
-        .lock()
-        .await
-        .remove(&thread_id)
-        .map(|_| ())
-        .ok_or(ThreadStoreError::ThreadNotFound { thread_id })
+    let handle = store.live_recorder_handle(thread_id).await?;
+    {
+        let mut state = handle.lock().await;
+        state.recorder.take();
+    }
+    remove_live_recorder_handle(store, thread_id, &handle).await;
+    Ok(())
+}
+
+pub(super) async fn close_thread_for_delete(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+) -> ThreadStoreResult<()> {
+    let Some(handle) = store.live_recorders.lock().await.get(&thread_id).cloned() else {
+        return Ok(());
+    };
+    let recorder = handle.lock().await.recorder.take();
+    if let Some(recorder) = recorder {
+        recorder.shutdown().await.map_err(thread_store_io_error)?;
+    }
+    remove_live_recorder_handle(store, thread_id, &handle).await;
+    Ok(())
 }
 
 pub(super) async fn rollout_path(
     store: &LocalThreadStore,
     thread_id: ThreadId,
 ) -> ThreadStoreResult<PathBuf> {
-    Ok(store
-        .live_recorders
-        .lock()
-        .await
-        .get(&thread_id)
-        .ok_or(ThreadStoreError::ThreadNotFound { thread_id })?
+    let handle = store.live_recorder_handle(thread_id).await?;
+    let state = handle.lock().await;
+    Ok(live_recorder(&state.recorder, thread_id)?
         .rollout_path()
         .to_path_buf())
 }
 
-async fn sync_materialized_rollout_path(
+pub(super) fn live_recorder(
+    recorder: &Option<RolloutRecorder>,
+    thread_id: ThreadId,
+) -> ThreadStoreResult<&RolloutRecorder> {
+    recorder
+        .as_ref()
+        .ok_or(ThreadStoreError::ThreadNotFound { thread_id })
+}
+
+pub(super) fn thread_store_io_error(err: std::io::Error) -> ThreadStoreError {
+    ThreadStoreError::Internal {
+        message: err.to_string(),
+    }
+}
+
+pub(super) async fn remove_live_recorder_handle(
     store: &LocalThreadStore,
     thread_id: ThreadId,
+    handle: &LiveRecorderHandle,
+) {
+    let mut live_recorders = store.live_recorders.lock().await;
+    if live_recorders
+        .get(&thread_id)
+        .is_some_and(|current| Arc::ptr_eq(current, handle))
+    {
+        live_recorders.remove(&thread_id);
+    }
+}
+
+pub(super) async fn sync_materialized_rollout_path(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+    rollout_path: &Path,
 ) -> ThreadStoreResult<()> {
-    let rollout_path = rollout_path(store, thread_id).await?;
-    if codex_rollout::existing_rollout_path(rollout_path.as_path())
+    if codex_rollout::existing_rollout_path(rollout_path)
         .await
         .is_none()
     {
@@ -182,7 +239,7 @@ async fn sync_materialized_rollout_path(
             return Ok(());
         };
         if metadata.rollout_path != rollout_path {
-            metadata.rollout_path = rollout_path;
+            metadata.rollout_path = rollout_path.to_path_buf();
             state_db
                 .upsert_thread(&metadata)
                 .await
@@ -197,10 +254,4 @@ async fn sync_materialized_rollout_path(
         warn!("failed to sync materialized rollout path for thread {thread_id}: {err}");
     }
     Ok(())
-}
-
-fn thread_store_io_error(err: std::io::Error) -> ThreadStoreError {
-    ThreadStoreError::Internal {
-        message: err.to_string(),
-    }
 }

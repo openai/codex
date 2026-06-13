@@ -6,6 +6,8 @@ mod list_threads;
 mod live_writer;
 mod read_thread;
 mod search_threads;
+mod segment_gc;
+mod segment_writer;
 mod unarchive_thread;
 mod update_thread_metadata;
 
@@ -30,6 +32,7 @@ use crate::LoadThreadHistoryParams;
 use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
+use crate::RotateThreadSegmentParams;
 use crate::SearchThreadsParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
@@ -57,8 +60,25 @@ use crate::UpdateThreadMetadataParams;
 #[derive(Clone)]
 pub struct LocalThreadStore {
     pub(super) config: LocalThreadStoreConfig,
-    live_recorders: Arc<Mutex<HashMap<ThreadId, RolloutRecorder>>>,
+    live_recorders: Arc<Mutex<HashMap<ThreadId, LiveRecorderHandle>>>,
+    segment_storage_lock: Arc<Mutex<()>>,
+    #[cfg(test)]
+    rotation_test_hook: Arc<Mutex<Option<RotationTestHook>>>,
     state_db: Option<StateDbHandle>,
+}
+
+pub(super) type LiveRecorderHandle = Arc<Mutex<LiveRecorderState>>;
+
+pub(super) struct LiveRecorderState {
+    pub(super) recorder: Option<RolloutRecorder>,
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+pub(super) struct RotationTestHook {
+    pub(super) reached: Arc<tokio::sync::Barrier>,
+    pub(super) release: Arc<tokio::sync::Barrier>,
+    pub(super) fail_before_install: bool,
 }
 
 /// Process-scoped configuration for local thread storage.
@@ -97,6 +117,9 @@ impl LocalThreadStore {
         Self {
             config,
             live_recorders: Arc::new(Mutex::new(HashMap::new())),
+            segment_storage_lock: Arc::new(Mutex::new(())),
+            #[cfg(test)]
+            rotation_test_hook: Arc::new(Mutex::new(None)),
             state_db,
         }
     }
@@ -127,10 +150,41 @@ impl LocalThreadStore {
         live_writer::rollout_path(self, thread_id).await
     }
 
-    pub(super) async fn live_recorder(
+    /// Replace a running local thread's canonical rollout with a successor segment.
+    pub async fn rotate_thread_segment(
         &self,
         thread_id: ThreadId,
-    ) -> ThreadStoreResult<RolloutRecorder> {
+        params: RotateThreadSegmentParams,
+    ) -> ThreadStoreResult<codex_protocol::protocol::RolloutReferenceItem> {
+        segment_writer::rotate_thread_segment(self, thread_id, params).await
+    }
+
+    /// Seal a running local thread at a non-consuming snapshot boundary.
+    pub async fn seal_live_thread_segment(
+        &self,
+        thread_id: ThreadId,
+        params: RotateThreadSegmentParams,
+    ) -> ThreadStoreResult<codex_protocol::protocol::RolloutReferenceItem> {
+        segment_writer::seal_live_thread_segment(self, thread_id, params).await
+    }
+
+    /// Seal the current local segment and return an immutable reference to it.
+    ///
+    /// If the thread is not running, `rollout_path` is opened only for this transaction and the
+    /// successor writer is closed before this method returns.
+    pub async fn seal_thread_segment(
+        &self,
+        thread_id: ThreadId,
+        rollout_path: PathBuf,
+        params: RotateThreadSegmentParams,
+    ) -> ThreadStoreResult<codex_protocol::protocol::RolloutReferenceItem> {
+        segment_writer::seal_thread_segment(self, thread_id, rollout_path, params).await
+    }
+
+    pub(super) async fn live_recorder_handle(
+        &self,
+        thread_id: ThreadId,
+    ) -> ThreadStoreResult<LiveRecorderHandle> {
         self.live_recorders
             .lock()
             .await
@@ -161,7 +215,9 @@ impl LocalThreadStore {
                 message: format!("thread {} already has a live local writer", entry.key()),
             }),
             Entry::Vacant(entry) => {
-                entry.insert(recorder);
+                entry.insert(Arc::new(Mutex::new(LiveRecorderState {
+                    recorder: Some(recorder),
+                })));
                 Ok(())
             }
         }

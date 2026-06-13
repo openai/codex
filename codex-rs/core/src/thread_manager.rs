@@ -39,6 +39,7 @@ use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::protocol::DEFAULT_ROLLOUT_REFERENCE_DEPTH;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
@@ -61,6 +62,7 @@ use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
 use codex_thread_store::ReadThreadByRolloutPathParams;
 use codex_thread_store::ReadThreadParams;
+use codex_thread_store::RotateThreadSegmentParams;
 use codex_thread_store::StoredThread;
 use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadStore;
@@ -673,19 +675,16 @@ impl ThreadManager {
         let inherited_multi_agent_version = fork_source
             .multi_agent_version()
             .unwrap_or(MultiAgentVersion::V1);
-        let history = truncation::materialize_initial_history_for_model_replay(
-            options.config.codex_home.as_path(),
-            history,
-        )
-        .await;
-        options.initial_history = fork_history_from_snapshot(
+        options.initial_history = Box::pin(self.prepare_fork_history(
             ForkSnapshot::Interrupted,
+            &options.config,
             history,
             InterruptedTurnHistoryMarker::from_config_and_version(
                 &options.config,
                 inherited_multi_agent_version,
             ),
-        );
+        ))
+        .await;
         self.start_thread_with_options_and_fork_source(options, Some(forked_from_thread_id))
             .await
     }
@@ -951,12 +950,9 @@ impl ThreadManager {
             .await;
         let interrupted_marker =
             InterruptedTurnHistoryMarker::from_config_and_version(&config, multi_agent_version);
-        let history = truncation::materialize_initial_history_for_model_replay(
-            config.codex_home.as_path(),
-            history,
-        )
-        .await;
-        let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
+        let history =
+            Box::pin(self.prepare_fork_history(snapshot, &config, history, interrupted_marker))
+                .await;
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
@@ -977,6 +973,114 @@ impl ThreadManager {
             /*user_shell_override*/ None,
         ))
         .await
+    }
+
+    async fn prepare_fork_history(
+        &self,
+        snapshot: ForkSnapshot,
+        config: &Config,
+        history: InitialHistory,
+        interrupted_marker: InterruptedTurnHistoryMarker,
+    ) -> InitialHistory {
+        let reference_history = self
+            .rollout_reference_history_for_snapshot(snapshot, config, &history, interrupted_marker)
+            .await;
+        match reference_history {
+            Some(history) => history,
+            None => {
+                let history = truncation::materialize_initial_history_for_model_replay(
+                    config.codex_home.as_path(),
+                    history,
+                )
+                .await;
+                fork_history_from_snapshot(snapshot, history, interrupted_marker)
+            }
+        }
+    }
+
+    async fn rollout_reference_history_for_snapshot(
+        &self,
+        snapshot: ForkSnapshot,
+        config: &Config,
+        history: &InitialHistory,
+        interrupted_marker: InterruptedTurnHistoryMarker,
+    ) -> Option<InitialHistory> {
+        if !config.features.enabled(Feature::SessionSegmentation) {
+            return None;
+        }
+        let InitialHistory::Resumed(resumed) = history else {
+            return None;
+        };
+        let rollout_path = resumed.rollout_path.clone()?;
+        let local_store = self
+            .state
+            .thread_store
+            .as_any()
+            .downcast_ref::<LocalThreadStore>()?;
+        let mut reference = match local_store
+            .seal_thread_segment(
+                resumed.conversation_id,
+                rollout_path,
+                RotateThreadSegmentParams {
+                    initial_items: Vec::new(),
+                    previous_segment_reference_depth: DEFAULT_ROLLOUT_REFERENCE_DEPTH,
+                },
+            )
+            .await
+        {
+            Ok(reference) => reference,
+            Err(err) => {
+                warn!("failed to seal rollout segment for fork; copying history instead: {err}");
+                return None;
+            }
+        };
+
+        let materialized =
+            match crate::thread_rollout_truncation::materialize_rollout_items_for_complete_history(
+                config.codex_home.as_path(),
+                &[RolloutItem::RolloutReference(reference.clone())],
+            )
+            .await
+            {
+                Ok(materialized) => materialized,
+                Err(err) => {
+                    warn!(
+                        "failed to inspect immutable rollout snapshot for fork; copying history instead: {err}"
+                    );
+                    return None;
+                }
+            };
+        let materialized_history = InitialHistory::Forked(materialized);
+        let snapshot_state = snapshot_turn_state(&materialized_history);
+        reference.nth_user_message = match snapshot {
+            ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
+                let user_message_count =
+                    crate::thread_rollout_truncation::user_message_positions_in_rollout(
+                        &materialized_history.get_rollout_items(),
+                    )
+                    .len();
+                if snapshot_state.ends_mid_turn && nth_user_message >= user_message_count {
+                    return None;
+                }
+                Some(if nth_user_message < user_message_count {
+                    nth_user_message
+                } else {
+                    usize::MAX
+                })
+            }
+            ForkSnapshot::Interrupted => Some(usize::MAX),
+        };
+
+        let reference_history =
+            InitialHistory::Forked(vec![RolloutItem::RolloutReference(reference)]);
+        if snapshot == ForkSnapshot::Interrupted && snapshot_state.ends_mid_turn {
+            return Some(append_interrupted_boundary(
+                reference_history,
+                snapshot_state.active_turn_id,
+                interrupted_marker,
+            ));
+        }
+        Some(reference_history)
     }
 
     pub(crate) fn agent_control(&self) -> AgentControl {

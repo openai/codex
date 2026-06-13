@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use chrono::SecondsFormat;
+use codex_protocol::SegmentId;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::BaseInstructions;
@@ -90,6 +91,18 @@ pub enum RolloutRecorderParams {
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
         multi_agent_version: Option<MultiAgentVersion>,
+    },
+    CreateAtPath {
+        path: PathBuf,
+        conversation_id: ThreadId,
+        forked_from_id: Option<ThreadId>,
+        parent_thread_id: Option<ThreadId>,
+        source: SessionSource,
+        thread_source: Option<ThreadSource>,
+        base_instructions: BaseInstructions,
+        dynamic_tools: Vec<DynamicToolSpec>,
+        multi_agent_version: Option<MultiAgentVersion>,
+        session_timestamp: Option<String>,
     },
     Resume {
         path: PathBuf,
@@ -715,42 +728,54 @@ impl RolloutRecorder {
             } => {
                 let log_file_info = precompute_log_file_info(config, conversation_id)?;
                 let path = log_file_info.path.clone();
-                let session_id = log_file_info.conversation_id;
-                let started_at = log_file_info.timestamp;
-
-                let timestamp_format: &[FormatItem] = format_description!(
-                    "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
-                );
-                let timestamp = started_at
-                    .to_offset(time::UtcOffset::UTC)
-                    .format(timestamp_format)
-                    .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
-
-                let session_meta = SessionMeta {
-                    id: session_id,
-                    segment_id: None,
-                    forked_from_id,
-                    parent_thread_id,
-                    timestamp,
-                    cwd: config.cwd().to_path_buf(),
-                    originator: originator().value,
-                    cli_version: env!("CARGO_PKG_VERSION").to_string(),
-                    agent_nickname: source.get_nickname(),
-                    agent_role: source.get_agent_role(),
-                    agent_path: source.get_agent_path().map(Into::into),
-                    source,
-                    thread_source,
-                    model_provider: Some(config.model_provider_id().to_string()),
-                    base_instructions: Some(base_instructions),
-                    dynamic_tools: if dynamic_tools.is_empty() {
-                        None
-                    } else {
-                        Some(dynamic_tools)
+                let session_meta = create_session_meta(
+                    config,
+                    &log_file_info,
+                    SessionMetaParams {
+                        forked_from_id,
+                        parent_thread_id,
+                        source,
+                        thread_source,
+                        base_instructions,
+                        dynamic_tools,
+                        multi_agent_version,
+                        timestamp_override: None,
                     },
-                    memory_mode: (!config.generate_memories()).then_some("disabled".to_string()),
-                    multi_agent_version,
-                };
+                )?;
 
+                (None, Some(log_file_info), path, Some(session_meta))
+            }
+            RolloutRecorderParams::CreateAtPath {
+                path,
+                conversation_id,
+                forked_from_id,
+                parent_thread_id,
+                source,
+                thread_source,
+                base_instructions,
+                dynamic_tools,
+                multi_agent_version,
+                session_timestamp,
+            } => {
+                let log_file_info = LogFileInfo {
+                    path: path.clone(),
+                    conversation_id,
+                    timestamp: OffsetDateTime::now_utc(),
+                };
+                let session_meta = create_session_meta(
+                    config,
+                    &log_file_info,
+                    SessionMetaParams {
+                        forked_from_id,
+                        parent_thread_id,
+                        source,
+                        thread_source,
+                        base_instructions,
+                        dynamic_tools,
+                        multi_agent_version,
+                        timestamp_override: session_timestamp,
+                    },
+                )?;
                 (None, Some(log_file_info), path, Some(session_meta))
             }
             RolloutRecorderParams::Resume { path } => {
@@ -1453,6 +1478,17 @@ struct LogFileInfo {
     timestamp: OffsetDateTime,
 }
 
+struct SessionMetaParams {
+    forked_from_id: Option<ThreadId>,
+    parent_thread_id: Option<ThreadId>,
+    source: SessionSource,
+    thread_source: Option<ThreadSource>,
+    base_instructions: BaseInstructions,
+    dynamic_tools: Vec<DynamicToolSpec>,
+    multi_agent_version: Option<MultiAgentVersion>,
+    timestamp_override: Option<String>,
+}
+
 fn precompute_log_file_info(
     config: &impl RolloutConfigView,
     conversation_id: ThreadId,
@@ -1475,7 +1511,6 @@ fn precompute_log_file_info(
         .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
 
     let filename = format!("rollout-{date_str}-{conversation_id}.jsonl");
-
     let path = dir.join(filename);
 
     Ok(LogFileInfo {
@@ -1498,6 +1533,58 @@ fn open_log_file(path: &Path) -> std::io::Result<File> {
         .append(true)
         .create(true)
         .open(path)
+}
+
+fn create_session_meta(
+    config: &impl RolloutConfigView,
+    log_file_info: &LogFileInfo,
+    params: SessionMetaParams,
+) -> std::io::Result<SessionMeta> {
+    let SessionMetaParams {
+        forked_from_id,
+        parent_thread_id,
+        source,
+        thread_source,
+        base_instructions,
+        dynamic_tools,
+        multi_agent_version,
+        timestamp_override,
+    } = params;
+    let timestamp_format: &[FormatItem] =
+        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
+    let timestamp = match timestamp_override {
+        Some(timestamp) => timestamp,
+        None => log_file_info
+            .timestamp
+            .to_offset(time::UtcOffset::UTC)
+            .format(timestamp_format)
+            .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?,
+    };
+
+    Ok(SessionMeta {
+        id: log_file_info.conversation_id,
+        segment_id: Some(SegmentId::new()),
+        forked_from_id,
+        parent_thread_id,
+        timestamp,
+        cwd: config.cwd().to_path_buf(),
+        originator: originator().value,
+        cli_version: env!("CARGO_PKG_VERSION").to_string(),
+        agent_nickname: source.get_nickname(),
+        agent_role: source.get_agent_role(),
+        agent_path: source.get_agent_path().map(Into::into),
+        source,
+        thread_source,
+        model_provider: Some(config.model_provider_id().to_string()),
+        base_instructions: Some(base_instructions),
+        dynamic_tools: if dynamic_tools.is_empty() {
+            None
+        } else {
+            Some(dynamic_tools)
+        },
+        memory_mode: (!config.generate_memories()).then_some("disabled".to_string()),
+        multi_agent_version,
+    })
 }
 
 /// Mutable state owned by the background rollout writer.

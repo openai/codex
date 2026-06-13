@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutReferenceItem;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::persisted_rollout_items;
 use tokio::sync::Mutex;
@@ -14,6 +15,7 @@ use crate::LoadThreadHistoryParams;
 use crate::LocalThreadStore;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
+use crate::RotateThreadSegmentParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadMetadataPatch;
@@ -166,6 +168,42 @@ impl LiveThread {
                 .mark_pending_update_applied(&update);
         }
         Ok(())
+    }
+
+    /// Replace the current local rollout with a successor segment.
+    pub async fn rotate_local_segment(
+        &self,
+        params: RotateThreadSegmentParams,
+    ) -> ThreadStoreResult<Option<RolloutReferenceItem>> {
+        let Some(local_store) = self
+            .thread_store
+            .as_any()
+            .downcast_ref::<LocalThreadStore>()
+        else {
+            return Ok(None);
+        };
+        local_store
+            .rotate_thread_segment(self.thread_id, params)
+            .await
+            .map(Some)
+    }
+
+    /// Seal the current local segment for a fork without consuming model-replay segment depth.
+    pub async fn seal_local_segment(
+        &self,
+        params: RotateThreadSegmentParams,
+    ) -> ThreadStoreResult<Option<RolloutReferenceItem>> {
+        let Some(local_store) = self
+            .thread_store
+            .as_any()
+            .downcast_ref::<LocalThreadStore>()
+        else {
+            return Ok(None);
+        };
+        local_store
+            .seal_live_thread_segment(self.thread_id, params)
+            .await
+            .map(Some)
     }
 
     pub async fn persist(&self) -> ThreadStoreResult<()> {

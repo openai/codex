@@ -356,6 +356,23 @@ fn telepathy_is_legacy_alias_for_chronicle() {
 }
 
 #[test]
+fn session_segmentation_is_experimental_and_disabled_by_default() {
+    assert_eq!(
+        Feature::SessionSegmentation.stage(),
+        Stage::Experimental {
+            name: "Session segmentation",
+            menu_description: "Split long-lived sessions into linked rollout segments after compaction.",
+            announcement: "",
+        }
+    );
+    assert!(!Feature::SessionSegmentation.default_enabled());
+    assert_eq!(
+        feature_for_key("session_segmentation"),
+        Some(Feature::SessionSegmentation)
+    );
+}
+
+#[test]
 fn collab_is_legacy_alias_for_multi_agent() {
     assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
     assert_eq!(feature_for_key("collab"), Some(Feature::Collab));

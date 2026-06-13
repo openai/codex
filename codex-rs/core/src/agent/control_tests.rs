@@ -9,6 +9,7 @@ use crate::config::ConfigBuilder;
 use crate::context::ContextualUserFragment;
 use crate::context::SubagentNotification;
 use crate::init_state_db;
+use crate::rollout::RolloutRecorder;
 use assert_matches::assert_matches;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -18,9 +19,13 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
+use codex_protocol::protocol::DEFAULT_ROLLOUT_REFERENCE_DEPTH;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::RolloutReferenceItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
@@ -166,6 +171,36 @@ fn history_contains_text(history_items: &[ResponseItem], needle: &str) -> bool {
             ContentItem::InputImage { .. } => false,
         })
     })
+}
+
+fn write_rollout_items(path: &std::path::Path, items: impl IntoIterator<Item = RolloutItem>) {
+    let timestamp = "2026-06-10T00:00:00Z";
+    let mut jsonl = serde_json::json!({
+        "timestamp": timestamp,
+        "type": "session_meta",
+        "payload": {
+            "id": ThreadId::default(),
+            "timestamp": timestamp,
+            "cwd": path.parent().expect("rollout parent"),
+            "originator": "test",
+            "cli_version": "test",
+            "source": "exec"
+        }
+    })
+    .to_string();
+    jsonl.push('\n');
+    for item in items {
+        jsonl.push_str(
+            serde_json::to_string(&RolloutLine {
+                timestamp: timestamp.to_string(),
+                item,
+            })
+            .expect("serialize rollout")
+            .as_str(),
+        );
+        jsonl.push('\n');
+    }
+    std::fs::write(path, jsonl).expect("write rollout");
 }
 
 fn history_contains_assistant_inter_agent_communication(
@@ -815,7 +850,7 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
 }
 
 #[tokio::test]
-async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
+async fn spawn_agent_full_history_fork_preserves_parent_items() {
     let harness = AgentControlHarness::new().await;
     let mut parent_config = harness.config.clone();
     let _ = parent_config.features.enable(Feature::MultiAgentV2);
@@ -825,6 +860,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         Some("Parent subagent guidance.".to_string());
     let mut child_config = harness.config.clone();
     let _ = child_config.features.enable(Feature::MultiAgentV2);
+    let _ = child_config.features.enable(Feature::SessionSegmentation);
     child_config.multi_agent_v2.root_agent_usage_hint_text =
         Some("Child root guidance.".to_string());
     child_config.multi_agent_v2.subagent_usage_hint_text =
@@ -932,6 +968,23 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .await
         .expect("child thread should be registered");
     assert_ne!(child_thread_id, parent_thread_id);
+    let child_rollout_path = child_thread
+        .rollout_path()
+        .expect("child rollout path should be present");
+    let child_rollout = RolloutRecorder::get_rollout_history(&child_rollout_path)
+        .await
+        .expect("child rollout should be readable");
+    assert!(
+        child_rollout
+            .get_rollout_items()
+            .iter()
+            .any(|item| matches!(
+                item,
+                RolloutItem::RolloutReference(reference)
+                    if reference.nth_user_message.is_some()
+            )),
+        "full-history forks should store a compact RolloutReference so fork rollout files do not copy parent rollout history"
+    );
     let history = child_thread.codex.session.clone_history().await;
     let expected_history = [
         ResponseItem::Message {
@@ -942,7 +995,33 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             }],
             phase: None,
         },
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Parent root guidance.".to_string(),
+            }],
+            phase: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Parent subagent guidance.".to_string(),
+            }],
+            phase: None,
+        },
+        assistant_message("parent commentary", Some(MessagePhase::Commentary)),
         assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
+        assistant_message("parent unknown phase", /*phase*/ None),
+        ResponseItem::Reasoning {
+            id: String::new(),
+            summary: Vec::new(),
+            content: None,
+            encrypted_content: None,
+        },
+        trigger_message.to_response_input_item().into(),
+        spawn_agent_call(&parent_spawn_call_id),
         ResponseItem::Message {
             id: None,
             role: "developer".to_string(),
@@ -955,7 +1034,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     assert_eq!(
         history.raw_items(),
         &expected_history,
-        "full-history forked child history should replace parent usage hints with the child subagent hint while filtering non-final assistant/tool chatter"
+        "full-history forked child history should preserve the parent transcript up to the fork point before appending child context"
     );
     assert_eq!(
         serde_json::to_value(child_thread.codex.session.reference_context_item().await)
@@ -1355,6 +1434,116 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
             .await
             .is_none(),
         "last-N forked child should rebuild context after truncating the cached prefix"
+    );
+
+    let _ = harness
+        .control
+        .shutdown_live_agent(child_thread_id)
+        .await
+        .expect("child shutdown should submit");
+    let _ = parent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("parent shutdown should submit");
+}
+
+#[tokio::test]
+async fn spawn_agent_fork_last_n_turns_materializes_referenced_segments() {
+    Box::pin(spawn_agent_fork_last_n_turns_materializes_referenced_segments_impl()).await;
+}
+
+async fn spawn_agent_fork_last_n_turns_materializes_referenced_segments_impl() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let referenced_path = harness.config.codex_home.join("referenced-parent.jsonl");
+    write_rollout_items(
+        referenced_path.as_path(),
+        [
+            RolloutItem::ResponseItem(ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "previous segment task".to_string(),
+                }],
+                phase: None,
+            }),
+            RolloutItem::ResponseItem(assistant_message(
+                "previous segment answer",
+                Some(MessagePhase::FinalAnswer),
+            )),
+        ],
+    );
+    parent_thread
+        .codex
+        .session
+        .persist_rollout_items(&[RolloutItem::RolloutReference(RolloutReferenceItem {
+            rollout_path: referenced_path.to_path_buf(),
+            thread_id: None,
+            rollout_timestamp: None,
+            segment_id: None,
+            max_depth: DEFAULT_ROLLOUT_REFERENCE_DEPTH,
+            nth_user_message: None,
+            compacted_replacement_history_filter_texts: None,
+        })])
+        .await;
+    parent_thread
+        .inject_user_message_without_turn("current segment task".to_string())
+        .await;
+    let spawn_turn_context = parent_thread.codex.session.new_default_turn().await;
+    let parent_spawn_call_id = "spawn-call-last-n-referenced".to_string();
+    parent_thread
+        .codex
+        .session
+        .record_conversation_items(
+            spawn_turn_context.as_ref(),
+            &[spawn_agent_call(&parent_spawn_call_id)],
+        )
+        .await;
+    parent_thread
+        .codex
+        .session
+        .ensure_rollout_materialized()
+        .await;
+    parent_thread
+        .codex
+        .session
+        .flush_rollout()
+        .await
+        .expect("parent rollout should flush");
+
+    let child_thread_id = Box::pin(harness.control.spawn_agent_with_metadata(
+        harness.config.clone(),
+        text_input("child task"),
+        Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        })),
+        SpawnAgentOptions {
+            fork_parent_spawn_call_id: Some(parent_spawn_call_id),
+            fork_mode: Some(SpawnAgentForkMode::LastNTurns(2)),
+            ..Default::default()
+        },
+    ))
+    .await
+    .expect("forked spawn should materialize referenced parent turns")
+    .thread_id;
+
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+    let history = child_thread.codex.session.clone_history().await;
+    assert!(
+        history_contains_text(history.raw_items(), "previous segment task"),
+        "last-N fork should include turns from referenced segments"
+    );
+    assert!(
+        history_contains_text(history.raw_items(), "current segment task"),
+        "last-N fork should include turns from the current segment"
     );
 
     let _ = harness

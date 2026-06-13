@@ -190,6 +190,19 @@ async fn resume_materializes_references_before_session_configured() -> Result<()
     let predecessor_path = rollout_path.with_file_name("predecessor.jsonl");
     let persisted = std::fs::read_to_string(&rollout_path)?;
     let session_meta_line = persisted.lines().next().expect("session meta line");
+    let mut successor_session_meta = serde_json::from_str::<RolloutLine>(session_meta_line)?;
+    let predecessor_segment_id = match &mut successor_session_meta.item {
+        RolloutItem::SessionMeta(session_meta) => {
+            let predecessor_segment_id = session_meta
+                .meta
+                .segment_id
+                .expect("new rollout has segment id");
+            session_meta.meta.segment_id = Some(codex_protocol::SegmentId::new());
+            predecessor_segment_id
+        }
+        item => panic!("expected session meta, got {item:?}"),
+    };
+    let successor_session_meta_line = serde_json::to_string(&successor_session_meta)?;
     std::fs::rename(&rollout_path, &predecessor_path)?;
     let reference_line = serde_json::to_string(&RolloutLine {
         timestamp: "2026-06-12T00:00:00Z".to_string(),
@@ -197,7 +210,7 @@ async fn resume_materializes_references_before_session_configured() -> Result<()
             rollout_path: predecessor_path,
             thread_id: Some(thread_id),
             rollout_timestamp: None,
-            segment_id: None,
+            segment_id: Some(predecessor_segment_id),
             max_depth: 1,
             nth_user_message: None,
             compacted_replacement_history_filter_texts: None,
@@ -205,7 +218,7 @@ async fn resume_materializes_references_before_session_configured() -> Result<()
     })?;
     std::fs::write(
         &rollout_path,
-        format!("{session_meta_line}\n{reference_line}\n"),
+        format!("{successor_session_meta_line}\n{reference_line}\n"),
     )?;
 
     let resumed = resume_until_initial_messages(

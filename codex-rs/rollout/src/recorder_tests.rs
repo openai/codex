@@ -426,6 +426,20 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
         text.contains("\"type\":\"session_meta\""),
         "expected session metadata in rollout"
     );
+    let (items, _, _) = RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    let segment_id = items.iter().find_map(|item| match item {
+        RolloutItem::SessionMeta(meta) => meta.meta.segment_id,
+        RolloutItem::InterAgentCommunication(_)
+        | RolloutItem::RolloutReference(_)
+        | RolloutItem::ResponseItem(_)
+        | RolloutItem::Compacted(_)
+        | RolloutItem::TurnContext(_)
+        | RolloutItem::EventMsg(_) => None,
+    });
+    assert!(
+        segment_id.is_some(),
+        "new rollout metadata should include a segment_id for durable references"
+    );
     let buffered_idx = text
         .find("buffered-event")
         .expect("buffered event in rollout");

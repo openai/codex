@@ -25,6 +25,8 @@ pub(super) async fn delete_thread(
     params: DeleteThreadParams,
 ) -> ThreadStoreResult<()> {
     let thread_id = params.thread_id;
+    super::live_writer::close_thread_for_delete(store, thread_id).await?;
+    let _segment_storage_guard = store.segment_storage_lock.clone().lock_owned().await;
     let thread_id_str = thread_id.to_string();
     let state_db_ctx = store.state_db().await;
     let mut rollout_paths = Vec::new();
@@ -66,6 +68,15 @@ pub(super) async fn delete_thread(
     }
 
     let found_rollout_path = !rollout_paths.is_empty();
+    let found_segment_tree = store
+        .config
+        .codex_home
+        .join(codex_rollout::ROTATED_ROLLOUT_SEGMENTS_SUBDIR)
+        .join(thread_id.to_string())
+        .try_exists()
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!("failed to inspect rollout segments for thread {thread_id}: {err}"),
+        })?;
     for rollout_path in rollout_paths {
         delete_rollout_file(store, rollout_path.as_path(), thread_id)?;
     }
@@ -75,11 +86,17 @@ pub(super) async fn delete_thread(
             message: format!("failed to delete thread name index entries for {thread_id}: {err}"),
         })?;
 
-    if !found_rollout_path {
+    if !found_rollout_path && !found_segment_tree {
         return Err(ThreadStoreError::ThreadNotFound { thread_id });
     }
 
-    store.live_recorders.lock().await.remove(&thread_id);
+    super::segment_gc::collect_unreferenced_segments(store.config.codex_home.as_path())
+        .await
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!(
+                "failed to collect rollout segments after deleting {thread_id}: {err}"
+            ),
+        })?;
 
     Ok(())
 }

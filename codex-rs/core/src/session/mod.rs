@@ -106,6 +106,7 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AdditionalContextEntry;
+use codex_protocol::protocol::DEFAULT_ROLLOUT_REFERENCE_DEPTH;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -115,6 +116,7 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutReferenceItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
@@ -145,8 +147,10 @@ use codex_thread_store::LiveThreadInitGuard;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ResumeThreadParams;
+use codex_thread_store::RotateThreadSegmentParams;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
+use codex_thread_store::ThreadStoreResult;
 use codex_utils_output_truncation::TruncationPolicy;
 use futures::future::BoxFuture;
 use futures::future::Shared;
@@ -1219,7 +1223,20 @@ impl Session {
         state.clear_connector_selection();
     }
 
+    #[cfg(test)]
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
+        self.record_initial_history_with_persisted_fork_history(
+            conversation_history,
+            /*persisted_fork_history*/ None,
+        )
+        .await;
+    }
+
+    async fn record_initial_history_with_persisted_fork_history(
+        &self,
+        conversation_history: InitialHistory,
+        persisted_fork_history: Option<Vec<RolloutItem>>,
+    ) {
         let is_subagent = {
             let state = self.state.lock().await;
             state
@@ -1280,6 +1297,8 @@ impl Session {
                 }
             }
             InitialHistory::Forked(rollout_items) => {
+                let rollout_items_to_persist =
+                    persisted_fork_history.unwrap_or_else(|| rollout_items.clone());
                 let turn_context = self.new_default_turn().await;
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
@@ -1292,8 +1311,8 @@ impl Session {
                 }
 
                 // If persisting, persist all rollout items as-is (the store filters).
-                if !rollout_items.is_empty() {
-                    self.persist_rollout_items(&rollout_items).await;
+                if !rollout_items_to_persist.is_empty() {
+                    self.persist_rollout_items(&rollout_items_to_persist).await;
                 }
 
                 // Forked threads should remain file-backed immediately after startup.
@@ -2760,16 +2779,63 @@ impl Session {
             state.replace_history(items, reference_context_item.clone());
         }
 
-        self.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
+        self.persist_compaction_checkpoint(compacted_item, reference_context_item)
             .await;
-        if let Some(turn_context_item) = reference_context_item {
-            self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item)])
-                .await;
-        }
         {
             let mut state = self.state.lock().await;
             state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
         }
+    }
+
+    async fn persist_compaction_checkpoint(
+        &self,
+        compacted_item: CompactedItem,
+        turn_context_item: Option<TurnContextItem>,
+    ) {
+        let mut rollout_items = vec![RolloutItem::Compacted(compacted_item)];
+        if let Some(turn_context_item) = turn_context_item {
+            rollout_items.push(RolloutItem::TurnContext(turn_context_item));
+        }
+        if !self.features.enabled(Feature::SessionSegmentation) {
+            self.persist_rollout_items(&rollout_items).await;
+            return;
+        }
+        match self.rotate_rollout_segment(rollout_items.clone()).await {
+            Ok(Some(_reference)) => {}
+            Ok(None) => self.persist_rollout_items(&rollout_items).await,
+            Err(err) => {
+                warn!("failed to rotate rollout segment after compaction: {err:#}");
+                self.persist_rollout_items(&rollout_items).await;
+            }
+        }
+    }
+
+    pub(crate) async fn seal_rollout_segment_for_reference(
+        &self,
+    ) -> ThreadStoreResult<Option<RolloutReferenceItem>> {
+        let Some(live_thread) = self.live_thread() else {
+            return Ok(None);
+        };
+        live_thread
+            .seal_local_segment(RotateThreadSegmentParams {
+                initial_items: Vec::new(),
+                previous_segment_reference_depth: DEFAULT_ROLLOUT_REFERENCE_DEPTH,
+            })
+            .await
+    }
+
+    async fn rotate_rollout_segment(
+        &self,
+        initial_items: Vec<RolloutItem>,
+    ) -> ThreadStoreResult<Option<RolloutReferenceItem>> {
+        let Some(live_thread) = self.live_thread() else {
+            return Ok(None);
+        };
+        let params = RotateThreadSegmentParams {
+            initial_items,
+            previous_segment_reference_depth: DEFAULT_ROLLOUT_REFERENCE_DEPTH,
+        };
+        live_thread.rotate_local_segment(params).await
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
@@ -3113,14 +3179,14 @@ impl Session {
             let mut state = self.state.lock().await;
             state.replace_history(replacement_history.clone(), Some(turn_context_item.clone()));
         };
-        self.persist_rollout_items(&[
-            RolloutItem::Compacted(CompactedItem {
+        self.persist_compaction_checkpoint(
+            CompactedItem {
                 message: String::new(),
                 replacement_history: Some(replacement_history),
                 window_id: Some(window_id),
-            }),
-            RolloutItem::TurnContext(turn_context_item),
-        ])
+            },
+            Some(turn_context_item),
+        )
         .await;
         {
             let mut state = self.state.lock().await;

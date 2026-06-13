@@ -1,6 +1,8 @@
 use codex_core::ForkSnapshot;
 use codex_core::NewThread;
+use codex_core::materialize_rollout_items_for_model_replay;
 use codex_core::parse_turn_item;
+use codex_features::Feature;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
@@ -40,7 +42,12 @@ async fn fork_thread_twice_drops_to_first_message() {
         .mount(&server)
         .await;
 
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::SessionSegmentation)
+            .expect("enable session segmentation");
+    });
     let test = builder.build(&server).await.expect("create conversation");
     let codex = test.codex.clone();
     let thread_manager = test.thread_manager.clone();
@@ -111,13 +118,29 @@ async fn fork_thread_twice_drops_to_first_message() {
     let fork1_path = codex_fork1.rollout_path().expect("rollout path");
 
     // GetHistory on fork1 flushed; the file is ready.
-    let fork1_items = read_rollout_items(&fork1_path);
+    let fork1_raw_items = read_rollout_items(&fork1_path);
+    assert!(
+        fork1_raw_items.iter().any(|item| matches!(
+            item,
+            RolloutItem::RolloutReference(reference)
+                if reference.nth_user_message.is_some()
+        )),
+        "forked rollout should keep a compact RolloutReference instead of copying parent history"
+    );
+    let fork1_items = materialize_rollout_items_for_model_replay(
+        test.config.codex_home.as_path(),
+        &fork1_raw_items,
+    )
+    .await;
+    let fork1_items = without_session_meta(fork1_items);
     pretty_assertions::assert_eq!(
         serde_json::to_value(&fork1_items).unwrap(),
         serde_json::to_value(&expected_after_first).unwrap()
     );
 
-    // Fork again with n=0 → drops the (new) last user message, leaving only the first.
+    // Fork again with n=0. The first fork's raw rollout only contains a
+    // RolloutReference, but truncation still applies to the materialized history
+    // referenced by that item.
     let NewThread {
         thread: codex_fork2,
         ..
@@ -134,14 +157,27 @@ async fn fork_thread_twice_drops_to_first_message() {
 
     let fork2_path = codex_fork2.rollout_path().expect("rollout path");
     // GetHistory on fork2 flushed; the file is ready.
-    let fork1_items = read_rollout_items(&fork1_path);
     let fork1_user_inputs = find_user_input_positions(&fork1_items);
-    let cut_last_on_fork1 = fork1_user_inputs
-        .get(fork1_user_inputs.len().saturating_sub(1))
+    let cut2 = fork1_user_inputs
+        .first()
         .copied()
-        .unwrap_or(0);
-    let expected_after_second: Vec<RolloutItem> = fork1_items[..cut_last_on_fork1].to_vec();
-    let fork2_items = read_rollout_items(&fork2_path);
+        .unwrap_or(fork1_items.len());
+    let expected_after_second = fork1_items[..cut2].to_vec();
+    let fork2_raw_items = read_rollout_items(&fork2_path);
+    assert!(
+        fork2_raw_items.iter().any(|item| matches!(
+            item,
+            RolloutItem::RolloutReference(reference)
+                if reference.nth_user_message.is_some()
+        )),
+        "re-forked rollout should keep a compact RolloutReference instead of copying parent history"
+    );
+    let fork2_items = materialize_rollout_items_for_model_replay(
+        test.config.codex_home.as_path(),
+        &fork2_raw_items,
+    )
+    .await;
+    let fork2_items = without_session_meta(fork2_items);
     pretty_assertions::assert_eq!(
         serde_json::to_value(&fork2_items).unwrap(),
         serde_json::to_value(&expected_after_second).unwrap()
@@ -245,4 +281,11 @@ fn read_rollout_items(path: &std::path::Path) -> Vec<RolloutItem> {
         }
     }
     items
+}
+
+fn without_session_meta(items: Vec<RolloutItem>) -> Vec<RolloutItem> {
+    items
+        .into_iter()
+        .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
+        .collect()
 }

@@ -24,6 +24,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutReferenceItem;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
@@ -235,6 +236,15 @@ impl CodexThread {
     #[doc(hidden)]
     pub async fn flush_rollout(&self) -> std::io::Result<()> {
         self.codex.session.flush_rollout().await
+    }
+
+    pub(crate) async fn seal_rollout_segment_for_reference(
+        &self,
+    ) -> ThreadStoreResult<Option<RolloutReferenceItem>> {
+        self.codex
+            .session
+            .seal_rollout_segment_for_reference()
+            .await
     }
 
     pub async fn submit_with_trace(
