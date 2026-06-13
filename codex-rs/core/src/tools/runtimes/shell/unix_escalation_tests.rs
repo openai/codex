@@ -46,6 +46,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 
 fn host_absolute_path(segments: &[&str]) -> String {
     let mut path = if cfg!(windows) {
@@ -274,12 +275,38 @@ fn map_exec_result_preserves_stdout_and_stderr() {
             duration: Duration::from_millis(1),
             timed_out: false,
         },
+        &CancellationToken::new(),
     )
     .unwrap();
 
     assert_eq!(out.stdout.text, "out");
     assert_eq!(out.stderr.text, "err");
     assert_eq!(out.aggregated_output.text, "outerr");
+}
+
+#[test]
+fn map_exec_result_maps_user_cancelled_exit_to_rejected_by_user() {
+    let user_cancellation_token = CancellationToken::new();
+    user_cancellation_token.cancel();
+
+    let result = map_exec_result(
+        SandboxType::None,
+        ExecResult {
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: String::new(),
+            output: String::new(),
+            duration: Duration::from_millis(1),
+            timed_out: false,
+        },
+        &user_cancellation_token,
+    );
+
+    assert!(matches!(
+        result,
+        Err(crate::tools::sandboxing::ToolError::Rejected(message))
+            if message == "rejected by user"
+    ));
 }
 
 #[test]
@@ -372,6 +399,7 @@ async fn unsandboxed_intercepted_exec_strips_managed_network_env() -> anyhow::Re
         windows_sandbox_workspace_roots: vec![workdir.clone()],
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
+        plugin_script: None,
     };
     let mut env = HashMap::new();
     env.insert(PROXY_ACTIVE_ENV_KEY.to_string(), "1".to_string());

@@ -739,7 +739,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     Ok(())
 }
 
-async fn create_zsh_test_mcp_process(
+pub(super) async fn create_zsh_test_mcp_process(
     codex_home: &Path,
     zdotdir: &Path,
     zsh_path: &Path,
@@ -840,7 +840,7 @@ stream_max_retries = 0
     )
 }
 
-fn find_test_zsh_path() -> Result<Option<std::path::PathBuf>> {
+pub(super) fn find_test_zsh_path() -> Result<Option<std::path::PathBuf>> {
     let repo_root = codex_utils_cargo_bin::repo_root()?;
     let dotslash_zsh = repo_root.join("codex-rs/app-server/tests/suite/zsh");
     if !dotslash_zsh.is_file() {
@@ -860,7 +860,7 @@ fn find_test_zsh_path() -> Result<Option<std::path::PathBuf>> {
     Ok(None)
 }
 
-fn supports_exec_wrapper_intercept(zsh_path: &Path) -> bool {
+pub(super) fn supports_exec_wrapper_intercept(zsh_path: &Path) -> bool {
     let status = std::process::Command::new(zsh_path)
         .arg("-fc")
         .arg("/usr/bin/true")
