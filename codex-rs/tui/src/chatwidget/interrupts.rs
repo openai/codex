@@ -176,7 +176,9 @@ mod tests {
         ThreadItem::CommandExecution {
             id: call_id.to_string(),
             command: "true".to_string(),
-            cwd: AbsolutePathBuf::current_dir().expect("current dir"),
+            cwd: codex_app_server_protocol::native_command_cwd(
+                &AbsolutePathBuf::current_dir().expect("current dir"),
+            ),
             process_id: None,
             source: CommandExecutionSource::Agent,
             status: CommandExecutionStatus::InProgress,

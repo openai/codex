@@ -31,6 +31,7 @@ use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SubAgentActivityKind as CoreSubAgentActivityKind;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::ApiPathString;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -255,7 +256,7 @@ pub enum ThreadItem {
         /// The command to be executed.
         command: String,
         /// The command's working directory.
-        cwd: AbsolutePathBuf,
+        cwd: ApiPathString,
         /// Identifier for the underlying PTY process (when available).
         process_id: Option<String>,
         #[serde(default)]

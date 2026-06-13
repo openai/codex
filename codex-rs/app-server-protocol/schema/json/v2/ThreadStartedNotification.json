@@ -8,6 +8,9 @@
     "AgentPath": {
       "type": "string"
     },
+    "ApiPathString": {
+      "type": "string"
+    },
     "ByteRange": {
       "properties": {
         "end": {
@@ -1130,7 +1133,7 @@
             "cwd": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/AbsolutePathBuf"
+                  "$ref": "#/definitions/ApiPathString"
                 }
               ],
               "description": "The command's working directory."

@@ -4,6 +4,8 @@ use crate::protocol::item_builders::build_file_change_approval_request_item;
 use crate::protocol::item_builders::build_file_change_begin_item;
 use crate::protocol::item_builders::build_file_change_end_item;
 use crate::protocol::item_builders::build_item_from_guardian_event;
+#[cfg(test)]
+use crate::protocol::item_builders::native_command_cwd;
 use crate::protocol::v2::CollabAgentState;
 use crate::protocol::v2::CollabAgentTool;
 use crate::protocol::v2::CollabAgentToolCallStatus;
@@ -2062,7 +2064,7 @@ mod tests {
             ThreadItem::CommandExecution {
                 id: "exec-1".into(),
                 command: "echo 'hello world'".into(),
-                cwd: test_path_buf("/tmp").abs(),
+                cwd: native_command_cwd(&test_path_buf("/tmp").abs()),
                 process_id: Some("pid-1".into()),
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Completed,
@@ -2293,7 +2295,7 @@ mod tests {
             ThreadItem::CommandExecution {
                 id: "exec-declined".into(),
                 command: "ls".into(),
-                cwd: test_path_buf("/tmp").abs(),
+                cwd: native_command_cwd(&test_path_buf("/tmp").abs()),
                 process_id: Some("pid-2".into()),
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Declined,
@@ -2391,7 +2393,7 @@ mod tests {
             ThreadItem::CommandExecution {
                 id: "guardian-exec".into(),
                 command: "rm -rf /tmp/guardian".into(),
-                cwd: test_path_buf("/tmp").abs(),
+                cwd: native_command_cwd(&test_path_buf("/tmp").abs()),
                 process_id: None,
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Declined,
@@ -2457,7 +2459,7 @@ mod tests {
             ThreadItem::CommandExecution {
                 id: "guardian-execve".into(),
                 command: "/bin/rm -f /tmp/file.sqlite".into(),
-                cwd: test_path_buf("/tmp").abs(),
+                cwd: native_command_cwd(&test_path_buf("/tmp").abs()),
                 process_id: None,
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::InProgress,
@@ -2555,7 +2557,7 @@ mod tests {
             ThreadItem::CommandExecution {
                 id: "exec-late".into(),
                 command: "echo done".into(),
-                cwd: test_path_buf("/tmp").abs(),
+                cwd: native_command_cwd(&test_path_buf("/tmp").abs()),
                 process_id: Some("pid-42".into()),
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Completed,

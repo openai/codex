@@ -34,8 +34,17 @@ use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_shell_command::parse_command::parse_command;
 use codex_shell_command::parse_command::shlex_join;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+pub fn native_command_cwd(cwd: &AbsolutePathBuf) -> ApiPathString {
+    ApiPathString::from_path_uri(&PathUri::from_abs_path(cwd), PathConvention::native())
+        .unwrap_or_else(|_| ApiPathString::new(cwd.to_string_lossy().into_owned()))
+}
 
 pub fn build_file_change_approval_request_item(
     payload: &ApplyPatchApprovalRequestEvent,
@@ -69,7 +78,7 @@ pub fn build_command_execution_approval_request_item(
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: payload.cwd.clone(),
+        cwd: native_command_cwd(&payload.cwd),
         process_id: None,
         source: CommandExecutionSource::Agent,
         status: CommandExecutionStatus::InProgress,
@@ -89,7 +98,7 @@ pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> Th
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: payload.cwd.clone(),
+        cwd: native_command_cwd(&payload.cwd),
         process_id: payload.process_id.clone(),
         source: payload.source.into(),
         status: CommandExecutionStatus::InProgress,
@@ -116,7 +125,7 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: payload.cwd.clone(),
+        cwd: native_command_cwd(&payload.cwd),
         process_id: payload.process_id.clone(),
         source: payload.source.into(),
         status: (&payload.status).into(),
@@ -150,7 +159,7 @@ pub fn build_item_from_guardian_event(
             Some(ThreadItem::CommandExecution {
                 id: id.clone(),
                 command,
-                cwd: cwd.clone(),
+                cwd: native_command_cwd(cwd),
                 process_id: None,
                 source: CommandExecutionSource::Agent,
                 status,
@@ -186,7 +195,7 @@ pub fn build_item_from_guardian_event(
             Some(ThreadItem::CommandExecution {
                 id: id.clone(),
                 command,
-                cwd: cwd.clone(),
+                cwd: native_command_cwd(cwd),
                 process_id: None,
                 source: CommandExecutionSource::Agent,
                 status,

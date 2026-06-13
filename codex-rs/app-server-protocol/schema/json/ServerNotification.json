@@ -164,6 +164,9 @@
     "AgentPath": {
       "type": "string"
     },
+    "ApiPathString": {
+      "type": "string"
+    },
     "AppBranding": {
       "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
       "properties": {
@@ -3823,7 +3826,7 @@
             "cwd": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/AbsolutePathBuf"
+                  "$ref": "#/definitions/ApiPathString"
                 }
               ],
               "description": "The command's working directory."

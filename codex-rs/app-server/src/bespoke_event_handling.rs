@@ -84,6 +84,7 @@ use codex_app_server_protocol::WarningNotification;
 use codex_app_server_protocol::build_item_from_guardian_event;
 use codex_app_server_protocol::guardian_auto_approval_review_notification;
 use codex_app_server_protocol::item_event_to_server_notification;
+use codex_app_server_protocol::native_command_cwd;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::review_format::format_review_findings_block;
@@ -113,6 +114,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestU
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::shlex_join;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::ApiPathString;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -129,7 +131,7 @@ enum CommandExecutionApprovalPresentation {
 #[derive(Debug, PartialEq)]
 struct CommandExecutionCompletionItem {
     command: String,
-    cwd: AbsolutePathBuf,
+    cwd: ApiPathString,
     command_actions: Vec<V2ParsedCommand>,
 }
 
@@ -566,6 +568,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .cloned()
                 .map(|parsed| V2ParsedCommand::from_core_with_cwd(parsed, &cwd))
                 .collect::<Vec<_>>();
+            let approval_cwd = cwd.clone();
             let presentation = if let Some(network_approval_context) =
                 network_approval_context.map(V2NetworkApprovalContext::from)
             {
@@ -574,7 +577,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let command_string = shlex_join(&command);
                 let completion_item = CommandExecutionCompletionItem {
                     command: command_string,
-                    cwd: cwd.clone(),
+                    cwd: native_command_cwd(&cwd),
                     command_actions: command_actions.clone(),
                 };
                 CommandExecutionApprovalPresentation::Command(completion_item)
@@ -587,7 +590,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     CommandExecutionApprovalPresentation::Command(completion_item) => (
                         None,
                         Some(completion_item.command.clone()),
-                        Some(completion_item.cwd.clone()),
+                        Some(approval_cwd),
                         Some(completion_item.command_actions.clone()),
                         Some(completion_item),
                     ),
@@ -1351,7 +1354,7 @@ async fn start_command_execution_item(
     turn_id: String,
     item_id: String,
     command: String,
-    cwd: AbsolutePathBuf,
+    cwd: ApiPathString,
     command_actions: Vec<V2ParsedCommand>,
     source: CommandExecutionSource,
     outgoing: &ThreadScopedOutgoingMessageSender,
@@ -1395,7 +1398,7 @@ async fn complete_command_execution_item(
     turn_id: String,
     item_id: String,
     command: String,
-    cwd: AbsolutePathBuf,
+    cwd: ApiPathString,
     process_id: Option<String>,
     source: CommandExecutionSource,
     command_actions: Vec<V2ParsedCommand>,
@@ -2275,7 +2278,7 @@ mod tests {
     fn command_execution_completion_item(command: &str) -> CommandExecutionCompletionItem {
         CommandExecutionCompletionItem {
             command: command.to_string(),
-            cwd: test_path_buf("/tmp").abs(),
+            cwd: native_command_cwd(&test_path_buf("/tmp").abs()),
             command_actions: vec![V2ParsedCommand::Unknown {
                 command: command.to_string(),
             }],

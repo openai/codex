@@ -358,7 +358,7 @@ async fn exec_end_without_begin_uses_event_command() {
         AppServerThreadItem::CommandExecution {
             id: "call-orphan".to_string(),
             command: codex_shell_command::parse_command::shlex_join(&command),
-            cwd,
+            cwd: codex_app_server_protocol::native_command_cwd(&cwd),
             process_id: None,
             source: ExecCommandSource::Agent,
             status: AppServerCommandExecutionStatus::Completed,

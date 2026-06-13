@@ -2436,7 +2436,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     else {
         unreachable!("loop ensures we break on command execution items");
     };
-    assert_eq!(cwd.as_path(), second_cwd.as_path());
+    assert_eq!(cwd.as_str(), second_cwd.to_string_lossy());
     let expected_command = format_with_current_shell_display("echo second turn");
     assert_eq!(command, expected_command);
     assert_eq!(status, CommandExecutionStatus::InProgress);

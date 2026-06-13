@@ -14624,7 +14624,7 @@
             "cwd": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/AbsolutePathBuf"
+                  "$ref": "#/definitions/ApiPathString"
                 }
               ],
               "description": "The command's working directory."

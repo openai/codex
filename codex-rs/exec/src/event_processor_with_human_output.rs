@@ -71,7 +71,7 @@ impl EventProcessorWithHumanOutput {
                     "{}\n{} in {}",
                     "exec".style(self.italic).style(self.magenta),
                     command.style(self.bold),
-                    cwd.display()
+                    cwd
                 );
             }
             ThreadItem::McpToolCall { server, tool, .. } => {
