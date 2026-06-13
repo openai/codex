@@ -48,8 +48,8 @@ impl fmt::Display for PathConvention {
 /// the operating system running this process. The inner string is private so
 /// path-producing code must render through [`Self::from_path_uri`] rather than
 /// accidentally applying the current host's path rules. Opaque fallback paths
-/// recoverable on the current host are converted to UTF-8 lossily at this API
-/// boundary because the value is serialized as a JSON string.
+/// are decoded using the supplied convention and converted to UTF-8 lossily at
+/// this API boundary because the value is serialized as a JSON string.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, TS)]
 #[ts(type = "string")]
 pub struct NativePathString(String);
@@ -60,8 +60,8 @@ impl NativePathString {
         path: &PathUri,
         convention: PathConvention,
     ) -> Result<Self, NativePathStringError> {
-        if path.is_opaque_fallback() {
-            return render_opaque_fallback(path, convention).map(Self);
+        if let Some(path_bytes) = path.opaque_fallback_bytes() {
+            return render_opaque_fallback(path, &path_bytes, convention).map(Self);
         }
         let value = match convention {
             PathConvention::Posix => render_posix_path(path)?,
@@ -81,16 +81,50 @@ impl NativePathString {
 
 fn render_opaque_fallback(
     path: &PathUri,
+    path_bytes: &[u8],
     convention: PathConvention,
 ) -> Result<String, NativePathStringError> {
-    if convention != PathConvention::native() {
-        return Err(incompatible_convention(path, convention));
+    let rendered = match convention {
+        PathConvention::Posix if path_bytes.starts_with(b"/") => {
+            Some(String::from_utf8_lossy(path_bytes).into_owned())
+        }
+        PathConvention::Windows => render_windows_opaque_fallback(path_bytes),
+        PathConvention::Posix => None,
+    };
+    rendered.ok_or_else(|| NativePathStringError::OpaqueFallback {
+        path: path.to_string(),
+    })
+}
+
+fn render_windows_opaque_fallback(path_bytes: &[u8]) -> Option<String> {
+    if !path_bytes.len().is_multiple_of(2) {
+        return None;
     }
-    path.to_abs_path()
-        .map(|path| path.as_path().to_string_lossy().into_owned())
-        .map_err(|_| NativePathStringError::OpaqueFallback {
-            path: path.to_string(),
-        })
+    let path_wide = path_bytes
+        .chunks_exact(2)
+        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+        .collect::<Vec<_>>();
+
+    // Windows absolute paths either have a rooted drive prefix (`C:\\`) or a
+    // rooted namespace/UNC prefix (`\\server`, `\\.\\`, or `\\?\\`).
+    let has_drive_root = matches!(
+        path_wide.as_slice(),
+        [drive, colon, separator, ..]
+            if ((u16::from(b'A')..=u16::from(b'Z')).contains(drive)
+                || (u16::from(b'a')..=u16::from(b'z')).contains(drive))
+                && *colon == u16::from(b':')
+                && is_windows_separator(*separator)
+    );
+    let has_namespace_or_unc_root = matches!(
+        path_wide.as_slice(),
+        [first, second, ..]
+            if is_windows_separator(*first) && is_windows_separator(*second)
+    );
+    (has_drive_root || has_namespace_or_unc_root).then(|| String::from_utf16_lossy(&path_wide))
+}
+
+fn is_windows_separator(character: u16) -> bool {
+    character == u16::from(b'\\') || character == u16::from(b'/')
 }
 
 impl fmt::Display for NativePathString {
@@ -148,7 +182,7 @@ fn render_windows_path(path: &PathUri) -> Result<String, NativePathStringError> 
     if let Some(host) = url.host_str() {
         // A URI authority selects the UNC form: `file://server/share/file`
         // becomes `\\server\share\file`. The first segment is the share name,
-        // which must be present and valid as a Windows path component.
+        // which must be present.
         let Some(share) = segments.next() else {
             return Err(incompatible_convention(path, PathConvention::Windows));
         };
@@ -156,7 +190,6 @@ fn render_windows_path(path: &PathUri) -> Result<String, NativePathStringError> 
         if share.is_empty() {
             return Err(incompatible_convention(path, PathConvention::Windows));
         }
-        validate_windows_component(path, &share)?;
         rendered.push_str(r"\\");
         rendered.push_str(host);
         rendered.push('\\');
@@ -178,11 +211,8 @@ fn render_windows_path(path: &PathUri) -> Result<String, NativePathStringError> 
 
     for segment in segments {
         // URL path separators become Windows separators after each component
-        // has been decoded and checked using Windows filename rules.
+        // has been decoded.
         let segment = decode_native_segment(path, segment, PathConvention::Windows)?;
-        if !segment.is_empty() {
-            validate_windows_component(path, &segment)?;
-        }
         rendered.push('\\');
         rendered.push_str(&segment);
     }
@@ -224,25 +254,6 @@ fn decode_native_segment(
         })
 }
 
-fn validate_windows_component(
-    path: &PathUri,
-    component: &str,
-) -> Result<(), NativePathStringError> {
-    // Windows forbids control characters and `<>:"/\|?*` in components. It
-    // also aliases trailing spaces and dots, so names such as `report?.txt`,
-    // `trailing.`, and `trailing ` are rejected instead of being rewritten.
-    let contains_invalid_character = component
-        .chars()
-        .any(|character| character <= '\u{1f}' || r#"<>:"/\|?*"#.contains(character));
-    if contains_invalid_character || component.ends_with([' ', '.']) {
-        return Err(NativePathStringError::InvalidWindowsComponent {
-            path: path.to_string(),
-            component: component.to_string(),
-        });
-    }
-    Ok(())
-}
-
 fn incompatible_convention(path: &PathUri, convention: PathConvention) -> NativePathStringError {
     NativePathStringError::IncompatibleConvention {
         path: path.to_string(),
@@ -266,8 +277,6 @@ pub enum NativePathStringError {
         path: String,
         convention: PathConvention,
     },
-    #[error("path URI `{path}` contains invalid Windows path component `{component}`")]
-    InvalidWindowsComponent { path: String, component: String },
 }
 
 #[cfg(test)]

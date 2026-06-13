@@ -123,8 +123,8 @@ impl PathUri {
         self.0.path()
     }
 
-    fn is_opaque_fallback(&self) -> bool {
-        decode_bad_path_uri(&self.0).is_some()
+    fn opaque_fallback_bytes(&self) -> Option<Vec<u8>> {
+        decode_bad_path_uri(&self.0)
     }
 
     /// Returns the decoded final URI path segment, or `None` for the URI root
