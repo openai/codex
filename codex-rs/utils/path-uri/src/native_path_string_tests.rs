@@ -6,11 +6,30 @@ use pretty_assertions::assert_eq;
 fn renders_posix_paths_on_every_host() {
     for (uri, expected) in [
         ("file:///", "/"),
+        ("file:///home/alice/src/main.rs", "/home/alice/src/main.rs"),
         ("file:///home/alice/a%20file.rs", "/home/alice/a file.rs"),
+        ("file:///workspace/src/lib.rs", "/workspace/src/lib.rs"),
+        (
+            "file:///workspace/tests/test.rs",
+            "/workspace/tests/test.rs",
+        ),
+        ("file:///etc", "/etc"),
         ("file:///tmp/", "/tmp/"),
         ("file:///C:/Project", "/C:/Project"),
+        ("file:///C:", "/C:"),
         ("file:///tmp/%E2%98%83", "/tmp/☃"),
         ("file:///tmp/a%5Cb", "/tmp/a\\b"),
+        ("file:///tmp/100%25/file", "/tmp/100%/file"),
+        ("file:///tmp/a%3Fb%23c%25d", "/tmp/a?b#c%d"),
+        ("file:///tmp/a%252Fb", "/tmp/a%2Fb"),
+        (
+            "file:///bad/path/L3RtcC9udWxsLQAt_y1ieXRl",
+            "/bad/path/L3RtcC9udWxsLQAt_y1ieXRl",
+        ),
+        ("FILE:///workspace/src", "/workspace/src"),
+        ("file:/workspace/src", "/workspace/src"),
+        ("file://localhost/workspace/src", "/workspace/src"),
+        ("file://LOCALHOST/workspace/src", "/workspace/src"),
     ] {
         let path = PathUri::parse(uri).expect("valid file URI");
         assert_eq!(
@@ -31,6 +50,8 @@ fn renders_windows_drive_paths_on_every_host() {
         ),
         ("file:///C:/", "C:\\"),
         ("file:///C:", "C:\\"),
+        ("file:///C:/Users", r"C:\Users"),
+        ("file:///C:/Windows", r"C:\Windows"),
         ("file:///d:/snowman/%E2%98%83", r"d:\snowman\☃"),
         ("file:///C:/tmp/", "C:\\tmp\\"),
         ("file:///C:/test%20with%20%25/path", r"C:\test with %\path"),
@@ -66,6 +87,7 @@ fn renders_windows_unc_paths_on_every_host() {
             "file://server/share/src/main.rs",
             r"\\server\share\src\main.rs",
         ),
+        ("file://server/share", r"\\server\share"),
         ("file://server/share/", "\\\\server\\share\\"),
         ("file://shares/files/c%23/p.cs", r"\\shares\files\c#\p.cs"),
         (
@@ -86,7 +108,9 @@ fn renders_windows_unc_paths_on_every_host() {
 #[test]
 fn rejects_paths_incompatible_with_the_convention() {
     for (uri, convention) in [
+        ("file://server/share/file.txt", PathConvention::Posix),
         ("file://server/share/file.rs", PathConvention::Posix),
+        ("file:///usr/local/file.txt", PathConvention::Windows),
         ("file:///home/alice/file.rs", PathConvention::Windows),
         ("file://server/", PathConvention::Windows),
         ("file:///_:/path", PathConvention::Windows),
@@ -117,14 +141,14 @@ fn renders_native_opaque_fallback_paths_lossily() {
     use std::os::unix::ffi::OsStringExt;
 
     let native_path = std::path::PathBuf::from(std::ffi::OsString::from_vec(
-        b"/tmp/null-\0-non-utf8-\xff".to_vec(),
+        b"/tmp/null-\0-\xff-byte".to_vec(),
     ));
     let path = PathUri::from_path(native_path).expect("absolute native path");
 
     assert_eq!(
         NativePathString::from_path_uri(&path, PathConvention::Posix)
             .map(NativePathString::into_string),
-        Ok("/tmp/null-\0-non-utf8-�".to_string())
+        Ok("/tmp/null-\0-�-byte".to_string())
     );
     assert_eq!(
         NativePathString::from_path_uri(&path, PathConvention::Windows),
@@ -133,6 +157,24 @@ fn renders_native_opaque_fallback_paths_lossily() {
             convention: PathConvention::Windows,
         })
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn renders_windows_namespace_fallback_paths() {
+    for native_path in [
+        r"\\.\COM1",
+        r"\\?\Volume{00000000-0000-0000-0000-000000000000}\file.rs",
+    ] {
+        let path = PathUri::from_path(native_path).expect("absolute Windows namespace path");
+
+        assert_eq!(
+            NativePathString::from_path_uri(&path, PathConvention::Windows)
+                .map(NativePathString::into_string),
+            Ok(native_path.to_string()),
+            "rendering {native_path}"
+        );
+    }
 }
 
 #[cfg(windows)]
