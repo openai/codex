@@ -336,6 +336,19 @@ fn is_valid_windows_component(component: &str) -> bool {
         .chars()
         .any(|character| character <= '\u{1f}' || r#"<>:"/\|?*"#.contains(character))
         && !component.ends_with([' ', '.'])
+        && !is_reserved_windows_component(component)
+}
+
+fn is_reserved_windows_component(component: &str) -> bool {
+    let stem = component.split('.').next().unwrap_or(component);
+    let stem = stem.to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$")
+        || stem.strip_prefix("COM").is_some_and(|suffix| {
+            matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+        })
+        || stem.strip_prefix("LPT").is_some_and(|suffix| {
+            matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+        })
 }
 
 fn reject_opaque_base(path: &PathUri) -> Result<(), ApiPathStringError> {

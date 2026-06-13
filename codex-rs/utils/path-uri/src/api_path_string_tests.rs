@@ -493,3 +493,24 @@ fn relative_resolution_rejects_incompatible_and_opaque_bases() {
         Ok(PathUri::parse("file:///tmp").expect("absolute URI"))
     );
 }
+
+#[test]
+fn native_resolution_rejects_reserved_windows_device_names() {
+    let base = PathUri::parse("file:///C:/workspace").expect("Windows URI");
+
+    for path in [
+        r"C:\AUX",
+        r"C:\prn.txt",
+        r"C:\COM9.log",
+        r"C:\lpt1",
+        r"child\NUL.txt",
+    ] {
+        assert!(
+            matches!(
+                base.resolve_native(path, PathConvention::Windows),
+                Err(ApiPathStringError::InvalidNativePath { .. })
+            ),
+            "expected reserved Windows path to fail: {path}"
+        );
+    }
+}
