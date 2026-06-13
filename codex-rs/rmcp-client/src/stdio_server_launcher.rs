@@ -35,6 +35,7 @@ use codex_exec_server::ExecEnvPolicy;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcess;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+use codex_utils_path_uri::PathUri;
 #[cfg(unix)]
 use codex_utils_pty::process_group::kill_process_group;
 #[cfg(unix)]
@@ -478,6 +479,8 @@ impl ExecutorStdioServerLauncher {
                 "executor stdio server requires an explicit cwd",
             ));
         };
+        let cwd = PathUri::from_path(&cwd)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
         let program_name = program.to_string_lossy().into_owned();
         let envs = create_env_overlay_for_remote_mcp_server(env, &env_vars);
         let remote_env_vars = remote_mcp_env_var_names(&env_vars);

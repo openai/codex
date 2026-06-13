@@ -887,7 +887,8 @@ mod tests {
             .start(crate::ExecParams {
                 process_id: ProcessId::from("default-env-proc"),
                 argv: vec!["true".to_string()],
-                cwd: std::env::current_dir().expect("read current dir"),
+                cwd: PathUri::from_path(std::env::current_dir().expect("read current dir"))
+                    .expect("cwd URI"),
                 env_policy: None,
                 env: Default::default(),
                 tty: false,

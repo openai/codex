@@ -156,6 +156,12 @@ impl LocalProcess {
             .argv
             .split_first()
             .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
+        let cwd = params.cwd.to_abs_path().map_err(|err| {
+            invalid_params(format!(
+                "cwd `{}` is not native to this exec-server host: {err}",
+                params.cwd
+            ))
+        })?;
 
         {
             let mut process_map = self.inner.processes.lock().await;
@@ -172,26 +178,20 @@ impl LocalProcess {
             codex_utils_pty::spawn_pty_process(
                 program,
                 args,
-                params.cwd.as_path(),
+                cwd.as_path(),
                 &env,
                 &params.arg0,
                 TerminalSize::default(),
             )
             .await
         } else if params.pipe_stdin {
-            codex_utils_pty::spawn_pipe_process(
-                program,
-                args,
-                params.cwd.as_path(),
-                &env,
-                &params.arg0,
-            )
-            .await
+            codex_utils_pty::spawn_pipe_process(program, args, cwd.as_path(), &env, &params.arg0)
+                .await
         } else {
             codex_utils_pty::spawn_pipe_process_no_stdin(
                 program,
                 args,
-                params.cwd.as_path(),
+                cwd.as_path(),
                 &env,
                 &params.arg0,
             )
@@ -783,16 +783,18 @@ fn notification_sender(inner: &Inner) -> Option<RpcNotificationSender> {
 mod tests {
     use super::*;
     use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+    use codex_utils_path_uri::PathUri;
     use codex_utils_pty::ProcessDriver;
     use pretty_assertions::assert_eq;
     use tokio::sync::oneshot;
     use tokio::time::timeout;
 
     fn test_exec_params(env: HashMap<String, String>) -> ExecParams {
+        let cwd = std::env::current_dir().expect("current directory");
         ExecParams {
             process_id: ProcessId::from("env-test"),
             argv: vec!["true".to_string()],
-            cwd: std::path::PathBuf::from("/tmp"),
+            cwd: PathUri::from_path(cwd).expect("cwd URI"),
             env_policy: None,
             env,
             tty: false,

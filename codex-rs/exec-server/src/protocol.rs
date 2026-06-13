@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use crate::FileSystemSandboxContext;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -103,7 +102,8 @@ pub struct ExecParams {
     /// This is a protocol key, not an OS pid.
     pub process_id: ProcessId,
     pub argv: Vec<String>,
-    pub cwd: PathBuf,
+    /// Absolute working directory, converted to a native path by the executing server.
+    pub cwd: PathUri,
     #[serde(default)]
     pub env_policy: Option<ExecEnvPolicy>,
     pub env: HashMap<String, String>,
@@ -465,14 +465,48 @@ mod base64_bytes {
 #[cfg(test)]
 mod tests {
     use super::EnvironmentInfo;
+    use super::ExecParams;
     use super::FsReadFileParams;
     use super::HttpRequestParams;
     use super::ShellInfo;
     use crate::FileSystemSandboxContext;
+    use crate::ProcessId;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_path_uri::PathConvention;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn exec_protocol_accepts_legacy_native_cwd_and_serializes_path_uri() {
+        let legacy_cwd = std::env::current_dir().expect("current directory");
+        let expected_cwd = PathUri::from_path(&legacy_cwd).expect("cwd URI");
+        let params: ExecParams = serde_json::from_value(serde_json::json!({
+            "processId": "legacy-cwd",
+            "argv": ["example"],
+            "cwd": legacy_cwd.to_string_lossy(),
+            "env": {},
+            "tty": false,
+            "pipeStdin": false,
+            "arg0": null,
+        }))
+        .expect("legacy native cwd should deserialize");
+        let expected = ExecParams {
+            process_id: ProcessId::from("legacy-cwd"),
+            argv: vec!["example".to_string()],
+            cwd: expected_cwd.clone(),
+            env_policy: None,
+            env: Default::default(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+        };
+
+        assert_eq!(params, expected);
+        assert_eq!(
+            serde_json::to_value(params).expect("params should serialize")["cwd"],
+            expected_cwd.to_string()
+        );
+    }
 
     #[test]
     fn filesystem_protocol_accepts_legacy_absolute_paths_and_serializes_path_uris() {

@@ -101,7 +101,7 @@ fn exec_server_params_use_env_policy_overlay_contract() {
         capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
         sandbox: codex_sandboxing::SandboxType::None,
         windows_sandbox_policy_cwd: cwd.clone(),
-        windows_sandbox_workspace_roots: vec![cwd],
+        windows_sandbox_workspace_roots: vec![cwd.clone()],
         windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
         permission_profile,
@@ -115,6 +115,10 @@ fn exec_server_params_use_env_policy_overlay_contract() {
         exec_server_params_for_request(/*process_id*/ 123, &request, /*tty*/ true);
 
     assert_eq!(params.process_id.as_str(), "123");
+    assert_eq!(
+        params.cwd,
+        codex_utils_path_uri::PathUri::from_abs_path(&cwd)
+    );
     assert!(params.env_policy.is_some());
     assert_eq!(
         params.env,
