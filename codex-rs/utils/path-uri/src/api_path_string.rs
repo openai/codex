@@ -51,7 +51,7 @@ impl fmt::Display for PathConvention {
 /// accidentally applying the current host's path rules. Opaque fallback paths
 /// are decoded using the supplied convention and converted to UTF-8 lossily at
 /// this API boundary because the value is serialized as a JSON string.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, TS)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, TS)]
 #[ts(type = "string")]
 pub struct ApiPathString(String);
 
@@ -86,6 +86,19 @@ impl ApiPathString {
         .map(Self)
     }
 
+    /// Parses this API string as an absolute path using the requested native
+    /// path convention and returns its canonical path URI.
+    pub fn to_path_uri(&self, convention: PathConvention) -> Result<PathUri, ApiPathStringError> {
+        let path = match convention {
+            PathConvention::Posix => parse_posix_path(&self.0),
+            PathConvention::Windows => parse_windows_path(&self.0),
+        };
+        path.ok_or_else(|| ApiPathStringError::InvalidNativePath {
+            path: self.0.clone(),
+            convention,
+        })
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -93,6 +106,88 @@ impl ApiPathString {
     pub fn into_string(self) -> String {
         self.0
     }
+}
+
+fn parse_posix_path(path: &str) -> Option<PathUri> {
+    let path = path.strip_prefix('/')?;
+    if path.contains('\0') {
+        return Some(PathUri::from_opaque_path_bytes(
+            format!("/{path}").as_bytes(),
+        ));
+    }
+    path_uri_from_segments(None, path.split('/'))
+}
+
+fn parse_windows_path(path: &str) -> Option<PathUri> {
+    let bytes = path.as_bytes();
+    let uses_namespace = matches!(
+        bytes,
+        [first, second, namespace @ (b'.' | b'?'), separator, ..]
+            if is_windows_separator_byte(*first)
+                && is_windows_separator_byte(*second)
+                && is_windows_separator_byte(*separator)
+                && matches!(*namespace, b'.' | b'?')
+    );
+    if uses_namespace || path.contains('\0') {
+        return Some(windows_opaque_path_uri(path));
+    }
+
+    if matches!(
+        bytes,
+        [drive, b':', separator, ..]
+            if drive.is_ascii_alphabetic() && is_windows_separator_byte(*separator)
+    ) {
+        return path_uri_from_segments(
+            None,
+            std::iter::once(&path[..2]).chain(path[3..].split(is_windows_separator_char)),
+        );
+    }
+
+    if matches!(bytes, [first, second, ..]
+        if is_windows_separator_byte(*first) && is_windows_separator_byte(*second))
+    {
+        let mut components = path[2..].split(is_windows_separator_char);
+        let host = components.next().filter(|host| !host.is_empty())?;
+        let share = components.next().filter(|share| !share.is_empty())?;
+        return path_uri_from_segments(Some(host), std::iter::once(share).chain(components))
+            .or_else(|| Some(windows_opaque_path_uri(path)));
+    }
+
+    None
+}
+
+fn path_uri_from_segments<'a>(
+    host: Option<&str>,
+    segments: impl Iterator<Item = &'a str>,
+) -> Option<PathUri> {
+    let mut url = url::Url::parse("file:///").ok()?;
+    if let Some(host) = host {
+        url.set_host(Some(host)).ok()?;
+    }
+    {
+        let mut url_segments = url.path_segments_mut().ok()?;
+        url_segments.clear();
+        for segment in segments {
+            url_segments.push(segment);
+        }
+    }
+    PathUri::try_from(url).ok()
+}
+
+fn windows_opaque_path_uri(path: &str) -> PathUri {
+    let path_bytes = path
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    PathUri::from_opaque_path_bytes(&path_bytes)
+}
+
+fn is_windows_separator_char(character: char) -> bool {
+    matches!(character, '\\' | '/')
+}
+
+fn is_windows_separator_byte(character: u8) -> bool {
+    matches!(character, b'\\' | b'/')
 }
 
 fn render_opaque_fallback(
@@ -260,6 +355,11 @@ pub enum ApiPathStringError {
     OpaqueFallback { path: String },
     #[error("path URI `{path}` cannot be rendered using {convention} path syntax")]
     IncompatibleConvention {
+        path: String,
+        convention: PathConvention,
+    },
+    #[error("path `{path}` is not absolute using {convention} path syntax")]
+    InvalidNativePath {
         path: String,
         convention: PathConvention,
     },

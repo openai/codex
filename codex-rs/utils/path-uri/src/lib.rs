@@ -82,22 +82,24 @@ impl PathUri {
         }
 
         #[cfg(unix)]
-        let encoded_path = {
+        let path_bytes = {
             use std::os::unix::ffi::OsStrExt;
-            base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .encode(path.as_path().as_os_str().as_bytes())
+            path.as_path().as_os_str().as_bytes().to_vec()
         };
         #[cfg(windows)]
-        let encoded_path = {
+        let path_bytes = {
             use std::os::windows::ffi::OsStrExt;
-            let path_bytes = path
-                .as_path()
+            path.as_path()
                 .as_os_str()
                 .encode_wide()
                 .flat_map(u16::to_le_bytes)
-                .collect::<Vec<_>>();
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(path_bytes)
+                .collect::<Vec<_>>()
         };
+        Self::from_opaque_path_bytes(&path_bytes)
+    }
+
+    fn from_opaque_path_bytes(path_bytes: &[u8]) -> Self {
+        let encoded_path = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(path_bytes);
         let Ok(uri) = Self::parse(&format!("{BAD_PATH_URI_PREFIX}{encoded_path}")) else {
             unreachable!("URL-safe base64 always produces a valid fallback path URI");
         };

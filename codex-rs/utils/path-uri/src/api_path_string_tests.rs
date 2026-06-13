@@ -11,7 +11,7 @@ struct RenderCase {
 }
 
 impl RenderCase {
-    const fn renders(
+    const fn round_trips(
         uri: &'static str,
         convention: PathConvention,
         rendered: &'static str,
@@ -19,7 +19,7 @@ impl RenderCase {
         Self {
             uri,
             convention,
-            expected: RenderExpectation::Rendered(rendered),
+            expected: RenderExpectation::RoundTrip(rendered),
         }
     }
 
@@ -30,11 +30,24 @@ impl RenderCase {
             expected: RenderExpectation::Error(error),
         }
     }
+
+    const fn renders_lossily(
+        uri: &'static str,
+        convention: PathConvention,
+        rendered: &'static str,
+    ) -> Self {
+        Self {
+            uri,
+            convention,
+            expected: RenderExpectation::RenderOnly(rendered),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
 enum RenderExpectation {
-    Rendered(&'static str),
+    RoundTrip(&'static str),
+    RenderOnly(&'static str),
     Error(ExpectedError),
 }
 
@@ -46,185 +59,199 @@ enum ExpectedError {
 
 const RENDER_CASES: &[RenderCase] = &[
     // POSIX paths.
-    RenderCase::renders("file:///", PathConvention::Posix, "/"),
-    RenderCase::renders(
+    RenderCase::round_trips("file:///", PathConvention::Posix, "/"),
+    RenderCase::round_trips(
         "file:///home/alice/src/main.rs",
         PathConvention::Posix,
         "/home/alice/src/main.rs",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file:///home/alice/a%20file.rs",
         PathConvention::Posix,
         "/home/alice/a file.rs",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file:///workspace/src/lib.rs",
         PathConvention::Posix,
         "/workspace/src/lib.rs",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file:///workspace/tests/test.rs",
         PathConvention::Posix,
         "/workspace/tests/test.rs",
     ),
-    RenderCase::renders("file:///etc", PathConvention::Posix, "/etc"),
-    RenderCase::renders("file:///tmp/", PathConvention::Posix, "/tmp/"),
-    RenderCase::renders("file:///C:/Project", PathConvention::Posix, "/C:/Project"),
-    RenderCase::renders("file:///C:", PathConvention::Posix, "/C:"),
-    RenderCase::renders("file:///tmp/%E2%98%83", PathConvention::Posix, "/tmp/☃"),
-    RenderCase::renders("file:///tmp/a%5Cb", PathConvention::Posix, "/tmp/a\\b"),
-    RenderCase::renders(
+    RenderCase::round_trips("file:///etc", PathConvention::Posix, "/etc"),
+    RenderCase::round_trips("file:///tmp/", PathConvention::Posix, "/tmp/"),
+    RenderCase::round_trips("file:///C:/Project", PathConvention::Posix, "/C:/Project"),
+    RenderCase::round_trips("file:///C:", PathConvention::Posix, "/C:"),
+    RenderCase::round_trips("file:///tmp/%E2%98%83", PathConvention::Posix, "/tmp/☃"),
+    RenderCase::round_trips("file:///tmp/a%5Cb", PathConvention::Posix, "/tmp/a\\b"),
+    RenderCase::round_trips(
         "file:///tmp/100%25/file",
         PathConvention::Posix,
         "/tmp/100%/file",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file:///tmp/a%3Fb%23c%25d",
         PathConvention::Posix,
         "/tmp/a?b#c%d",
     ),
-    RenderCase::renders("file:///tmp/a%252Fb", PathConvention::Posix, "/tmp/a%2Fb"),
-    RenderCase::renders(
+    RenderCase::round_trips("file:///tmp/a%252Fb", PathConvention::Posix, "/tmp/a%2Fb"),
+    RenderCase::round_trips(
         "file:///bad/path/L3RtcC9udWxsLQAt_y1ieXRl",
         PathConvention::Posix,
         "/bad/path/L3RtcC9udWxsLQAt_y1ieXRl",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "FILE:///workspace/src",
         PathConvention::Posix,
         "/workspace/src",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file:/workspace/src",
         PathConvention::Posix,
         "/workspace/src",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file://localhost/workspace/src",
         PathConvention::Posix,
         "/workspace/src",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file://LOCALHOST/workspace/src",
         PathConvention::Posix,
         "/workspace/src",
     ),
     // Windows drive paths.
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file:///C:/Users/Alice%20Smith/src/main.rs",
         PathConvention::Windows,
         r"C:\Users\Alice Smith\src\main.rs",
     ),
-    RenderCase::renders("file:///C:/", PathConvention::Windows, "C:\\"),
-    RenderCase::renders("file:///C:", PathConvention::Windows, "C:\\"),
-    RenderCase::renders("file:///C:/Users", PathConvention::Windows, r"C:\Users"),
-    RenderCase::renders("file:///C:/Windows", PathConvention::Windows, r"C:\Windows"),
-    RenderCase::renders(
+    RenderCase::round_trips("file:///C:/", PathConvention::Windows, "C:\\"),
+    RenderCase::renders_lossily("file:///C:", PathConvention::Windows, "C:\\"),
+    RenderCase::round_trips("file:///C:/Users", PathConvention::Windows, r"C:\Users"),
+    RenderCase::round_trips("file:///C:/Windows", PathConvention::Windows, r"C:\Windows"),
+    RenderCase::round_trips(
         "file:///d:/snowman/%E2%98%83",
         PathConvention::Windows,
         r"d:\snowman\☃",
     ),
-    RenderCase::renders("file:///C:/tmp/", PathConvention::Windows, "C:\\tmp\\"),
-    RenderCase::renders(
+    RenderCase::round_trips("file:///C:/tmp/", PathConvention::Windows, "C:\\tmp\\"),
+    RenderCase::round_trips(
         "file:///C:/test%20with%20%25/path",
         PathConvention::Windows,
         r"C:\test with %\path",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file:///C:/test%20with%20%2525/c%23code",
         PathConvention::Windows,
         r"C:\test with %25\c#code",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file:///C:/Source/Z%C3%BCrich%20or%20Zurich%20(%CB%88zj%CA%8A%C9%99r%C9%AAk,/Code/resources/app/plugins/c%23/plugin.json",
         PathConvention::Windows,
         r"C:\Source\Zürich or Zurich (ˈzjʊərɪk,\Code\resources\app\plugins\c#\plugin.json",
     ),
-    RenderCase::renders(
-        "file:///C:/Users/Abd-al-Haseeb%27s_Dell/Studio/w3mage/wp-content/database.ht.sqlite",
+    RenderCase::round_trips(
+        "file:///C:/project/owner's_file/database.sqlite",
         PathConvention::Windows,
-        r"C:\Users\Abd-al-Haseeb's_Dell\Studio\w3mage\wp-content\database.ht.sqlite",
+        r"C:\project\owner's_file\database.sqlite",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file:///C:/project/%25A0.txt",
         PathConvention::Windows,
         r"C:\project\%A0.txt",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file:///C:/project/%252e.txt",
         PathConvention::Windows,
         r"C:\project\%2e.txt",
     ),
     // Windows UNC paths.
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file://server/share/src/main.rs",
         PathConvention::Windows,
         r"\\server\share\src\main.rs",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file://server/share",
         PathConvention::Windows,
         r"\\server\share",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file://server/share/",
         PathConvention::Windows,
         "\\\\server\\share\\",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file://shares/files/c%23/p.cs",
         PathConvention::Windows,
         r"\\shares\files\c#\p.cs",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file://monacotools1/certificates/SSL/",
         PathConvention::Windows,
         "\\\\monacotools1\\certificates\\SSL\\",
     ),
     // Opaque fallbacks rendered according to their source convention.
-    RenderCase::renders(
+    RenderCase::renders_lossily(
         "file:///%00/bad/path/L3RtcC9udWxsLQAt_y1ieXRl",
         PathConvention::Posix,
         "/tmp/null-\0-�-byte",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file:///%00/bad/path/XABcAC4AXABDAE8ATQAxAFwA",
         PathConvention::Windows,
         r"\\.\COM1\",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file:///%00/bad/path/XABcAD8AXABWAG8AbAB1AG0AZQB7ADAAMAAwADAAMAAwADAAMAAtADAAMAAwADAALQAwADAAMAAwAC0AMAAwADAAMAAtADAAMAAwADAAMAAwADAAMAAwADAAMAAwAH0AXABmAGkAbABlAC4AcgBzAA",
         PathConvention::Windows,
         r"\\?\Volume{00000000-0000-0000-0000-000000000000}\file.rs",
     ),
     // Windows rendering preserves path text without filesystem validation.
-    RenderCase::renders("file:///C:/a%3Fb", PathConvention::Windows, "C:\\a?b"),
-    RenderCase::renders("file:///C:/a%2Ab", PathConvention::Windows, "C:\\a*b"),
-    RenderCase::renders(
+    RenderCase::round_trips("file:///C:/a%3Fb", PathConvention::Windows, "C:\\a?b"),
+    RenderCase::round_trips("file:///C:/a*b", PathConvention::Windows, "C:\\a*b"),
+    RenderCase::round_trips(
         "file:///C:/trailing.",
         PathConvention::Windows,
         "C:\\trailing.",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file:///C:/trailing%20",
         PathConvention::Windows,
         "C:\\trailing ",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file:///C:/control-%01",
         PathConvention::Windows,
         "C:\\control-\u{1}",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file:///C:/file.txt:stream",
         PathConvention::Windows,
         "C:\\file.txt:stream",
     ),
-    RenderCase::renders(
+    RenderCase::round_trips(
         "file://server/sh%3Fare/file.rs",
         PathConvention::Windows,
         "\\\\server\\sh?are\\file.rs",
     ),
+    // These renderings intentionally lose URI byte or segment boundaries.
+    RenderCase::renders_lossily(
+        "file:///tmp/non-utf8-%FF",
+        PathConvention::Posix,
+        "/tmp/non-utf8-�",
+    ),
+    RenderCase::renders_lossily(
+        "file:///tmp/non-utf8-%A0",
+        PathConvention::Posix,
+        "/tmp/non-utf8-�",
+    ),
+    RenderCase::renders_lossily("file:///tmp/a%2Fb", PathConvention::Posix, "/tmp/a/b"),
+    RenderCase::renders_lossily("file:///C:/a%2Fb", PathConvention::Windows, "C:\\a/b"),
+    RenderCase::renders_lossily("file:///C:/a%5Cb", PathConvention::Windows, "C:\\a\\b"),
     // URI shapes that do not match the requested convention.
     RenderCase::rejects(
         "file://server/share/file.txt",
@@ -267,20 +294,6 @@ const RENDER_CASES: &[RenderCase] = &[
         PathConvention::Windows,
         ExpectedError::OpaqueFallback,
     ),
-    // Non-UTF-8 bytes and encoded separators are rendered lossily as path text.
-    RenderCase::renders(
-        "file:///tmp/non-utf8-%FF",
-        PathConvention::Posix,
-        "/tmp/non-utf8-�",
-    ),
-    RenderCase::renders(
-        "file:///tmp/non-utf8-%A0",
-        PathConvention::Posix,
-        "/tmp/non-utf8-�",
-    ),
-    RenderCase::renders("file:///tmp/a%2Fb", PathConvention::Posix, "/tmp/a/b"),
-    RenderCase::renders("file:///C:/a%2Fb", PathConvention::Windows, "C:\\a/b"),
-    RenderCase::renders("file:///C:/a%5Cb", PathConvention::Windows, "C:\\a\\b"),
 ];
 
 #[test]
@@ -288,7 +301,8 @@ fn renders_native_paths_from_shared_cases() {
     for case in RENDER_CASES {
         let path = PathUri::parse(case.uri).expect("valid file URI");
         let expected = match case.expected {
-            RenderExpectation::Rendered(rendered) => Ok(ApiPathString(rendered.to_string())),
+            RenderExpectation::RoundTrip(rendered) => Ok(ApiPathString(rendered.to_string())),
+            RenderExpectation::RenderOnly(rendered) => Ok(ApiPathString(rendered.to_string())),
             RenderExpectation::Error(ExpectedError::OpaqueFallback) => {
                 Err(ApiPathStringError::OpaqueFallback {
                     path: path.to_string(),
@@ -306,6 +320,38 @@ fn renders_native_paths_from_shared_cases() {
             ApiPathString::from_path_uri(&path, case.convention),
             expected,
             "rendering {case:?}"
+        );
+
+        if let RenderExpectation::RoundTrip(rendered) = case.expected {
+            let api_path = ApiPathString(rendered.to_string());
+            let reparsed = api_path
+                .to_path_uri(case.convention)
+                .expect("native path should parse using its convention");
+            assert_eq!(reparsed, path, "parsing {case:?}");
+            assert_eq!(
+                ApiPathString::from_path_uri(&reparsed, case.convention),
+                Ok(api_path),
+                "round-tripping {case:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn rejects_relative_api_paths() {
+    for (raw_path, convention) in [
+        ("workspace/file.rs", PathConvention::Posix),
+        (r"workspace\file.rs", PathConvention::Windows),
+        (r"C:file.rs", PathConvention::Windows),
+    ] {
+        let path = ApiPathString(raw_path.to_string());
+
+        assert_eq!(
+            path.to_path_uri(convention),
+            Err(ApiPathStringError::InvalidNativePath {
+                path: raw_path.to_string(),
+                convention,
+            })
         );
     }
 }
@@ -359,13 +405,16 @@ fn renders_native_non_unicode_windows_fallback_lossily() {
 }
 
 #[test]
-fn serializes_as_a_string() {
+fn serializes_and_deserializes_as_a_string() {
     let path = PathUri::parse("file:///workspace/src/lib.rs").expect("valid file URI");
     let rendered = ApiPathString::from_path_uri(&path, PathConvention::Posix)
         .expect("POSIX URI should render");
 
+    let json = serde_json::to_string(&rendered).expect("rendered path should serialize");
+    assert_eq!(json, r#""/workspace/src/lib.rs""#);
     assert_eq!(
-        serde_json::to_string(&rendered).expect("rendered path should serialize"),
-        r#""/workspace/src/lib.rs""#
+        serde_json::from_str::<ApiPathString>(&json)
+            .expect("rendered path should deserialize from a string"),
+        rendered
     );
 }
