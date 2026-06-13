@@ -9,6 +9,7 @@ use crate::exec_env::create_env;
 use crate::function_tool::FunctionCallError;
 use crate::maybe_emit_implicit_skill_invocation;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -50,6 +51,19 @@ pub(crate) struct ShellCommandHandlerOptions {
 }
 
 impl ShellCommandHandler {
+    fn compatible_execution_cwd(
+        turn_context: &TurnContext,
+    ) -> codex_utils_absolute_path::AbsolutePathBuf {
+        turn_context
+            .environments
+            .primary()
+            .and_then(TurnEnvironment::compatible_cwd)
+            .unwrap_or_else(|| {
+                #[allow(deprecated)]
+                turn_context.cwd.clone()
+            })
+    }
+
     pub(crate) fn new(options: ShellCommandHandlerOptions) -> Self {
         let backend = match options.backend_config {
             ShellCommandBackendConfig::Classic => ShellCommandBackend::Classic,
@@ -92,8 +106,11 @@ impl ShellCommandHandler {
         let shell = session.user_shell();
         let use_login_shell = Self::resolve_use_login_shell(params.login, allow_login_shell)?;
         let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
-        #[allow(deprecated)]
-        let cwd = turn_context.resolve_path(params.workdir.clone());
+        let base_cwd = Self::compatible_execution_cwd(turn_context);
+        let cwd = params
+            .workdir
+            .as_ref()
+            .map_or(base_cwd.clone(), |workdir| base_cwd.join(workdir));
 
         Ok(ExecParams {
             command,
@@ -176,16 +193,14 @@ impl ShellCommandHandler {
             ));
         }
 
-        #[allow(deprecated)]
-        let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
+        let base_cwd = Self::compatible_execution_cwd(turn.as_ref());
+        let cwd = resolve_workdir_base_path(&arguments, &base_cwd)?;
         let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
-        #[allow(deprecated)]
-        let workdir = turn.resolve_path(params.workdir.clone());
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
             turn.as_ref(),
             &params.command,
-            &workdir,
+            &cwd,
         )
         .await;
         let prefix_rule = params.prefix_rule.clone();

@@ -130,6 +130,41 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
     assert_eq!(exec_params.arg0, None);
 }
 
+#[tokio::test]
+async fn shell_command_handler_uses_selected_local_environment_cwd() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let selected = turn_context.environments.turn_environments[0].clone();
+    let selected_dir = tempfile::tempdir().expect("selected cwd");
+    let selected_cwd = selected_dir.path().to_path_buf().abs();
+    turn_context.environments.turn_environments[0] = TurnEnvironment::new(
+        selected.environment_id,
+        selected.environment,
+        selected_cwd.clone(),
+        selected.shell,
+    );
+    let params = ShellCommandToolCallParams {
+        command: "echo hello".to_string(),
+        workdir: Some("subdir".to_string()),
+        login: None,
+        timeout_ms: None,
+        sandbox_permissions: None,
+        additional_permissions: None,
+        prefix_rule: None,
+        justification: None,
+    };
+
+    let exec_params = ShellCommandHandler::to_exec_params(
+        &params,
+        &session,
+        &turn_context,
+        session.thread_id,
+        /*allow_login_shell*/ false,
+    )
+    .expect("selected local environment should be executable");
+
+    assert_eq!(exec_params.cwd, selected_cwd.join("subdir"));
+}
+
 #[test]
 fn shell_command_handler_respects_explicit_login_flag() {
     let (_tx, shell_snapshot) = watch::channel(Some(Arc::new(ShellSnapshot {
