@@ -6,6 +6,8 @@ use codex_tools::UnifiedExecShellMode;
 use codex_tools::ZshForkConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
@@ -52,6 +54,7 @@ fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> 
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
+        CommandShellResolution::LocalHost,
     )
     .map_err(anyhow::Error::msg)?;
     let command = resolved.command;
@@ -74,6 +77,7 @@ fn test_get_command_respects_explicit_bash_shell() -> anyhow::Result<()> {
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
+        CommandShellResolution::LocalHost,
     )
     .map_err(anyhow::Error::msg)?;
     let command = resolved.command;
@@ -115,6 +119,7 @@ fn test_get_command_respects_explicit_powershell_shell() -> anyhow::Result<()> {
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
+        CommandShellResolution::LocalHost,
     )
     .map_err(anyhow::Error::msg)?;
     let command = resolved.command;
@@ -137,12 +142,146 @@ fn test_get_command_respects_explicit_cmd_shell() -> anyhow::Result<()> {
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
+        CommandShellResolution::LocalHost,
     )
     .map_err(anyhow::Error::msg)?;
     let command = resolved.command;
 
     assert_eq!(command[2], "echo hello");
     Ok(())
+}
+
+#[test]
+fn remote_command_uses_target_default_shell() -> anyhow::Result<()> {
+    let args: ExecCommandArgs = parse_arguments(r#"{"cmd":"Get-Location"}"#)?;
+    let shell_path = r"C:\Program Files\PowerShell\7\pwsh.exe";
+    let default_shell = Arc::new(crate::shell::Shell::from_environment_shell_info(
+        codex_exec_server::ShellInfo {
+            name: "powershell".to_string(),
+            path: shell_path.to_string(),
+        },
+    )?);
+
+    assert_eq!(
+        get_command(
+            &args,
+            default_shell,
+            &UnifiedExecShellMode::Direct,
+            /*allow_login_shell*/ false,
+            CommandShellResolution::RemoteTarget,
+        ),
+        Ok(ResolvedCommand {
+            command: vec![
+                shell_path.to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "Get-Location".to_string(),
+            ],
+            shell_type: ShellType::PowerShell,
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn remote_command_classifies_explicit_shell_without_host_lookup() -> anyhow::Result<()> {
+    let default_shell = Arc::new(default_user_shell());
+
+    for (shell, expected) in [
+        (
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            ResolvedCommand {
+                command: vec![
+                    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe".to_string(),
+                    "-NoProfile".to_string(),
+                    "-Command".to_string(),
+                    "echo hello".to_string(),
+                ],
+                shell_type: ShellType::PowerShell,
+            },
+        ),
+        (
+            r"C:\Windows\System32\cmd.exe",
+            ResolvedCommand {
+                command: vec![
+                    r"C:\Windows\System32\cmd.exe".to_string(),
+                    "/c".to_string(),
+                    "echo hello".to_string(),
+                ],
+                shell_type: ShellType::Cmd,
+            },
+        ),
+        (
+            "/usr/bin/bash",
+            ResolvedCommand {
+                command: vec![
+                    "/usr/bin/bash".to_string(),
+                    "-c".to_string(),
+                    "echo hello".to_string(),
+                ],
+                shell_type: ShellType::Bash,
+            },
+        ),
+    ] {
+        let args: ExecCommandArgs = parse_arguments(
+            &serde_json::json!({ "cmd": "echo hello", "shell": shell }).to_string(),
+        )?;
+
+        assert_eq!(
+            get_command(
+                &args,
+                Arc::clone(&default_shell),
+                &UnifiedExecShellMode::Direct,
+                /*allow_login_shell*/ false,
+                CommandShellResolution::RemoteTarget,
+            ),
+            Ok(expected),
+            "resolving {shell}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn remote_command_rejects_unknown_shell() -> anyhow::Result<()> {
+    let args: ExecCommandArgs =
+        parse_arguments(r#"{"cmd":"echo hello","shell":"C:\\tools\\fish.exe"}"#)?;
+
+    let error = get_command(
+        &args,
+        Arc::new(default_user_shell()),
+        &UnifiedExecShellMode::Direct,
+        /*allow_login_shell*/ false,
+        CommandShellResolution::RemoteTarget,
+    )
+    .expect_err("unknown remote shell should fail");
+
+    assert_eq!(
+        error,
+        "unsupported remote shell `C:\\tools\\fish.exe`; expected zsh, bash, sh, pwsh, powershell, or cmd"
+    );
+    Ok(())
+}
+
+#[test]
+fn workdir_resolution_uses_target_path_convention() {
+    let windows = PathUri::parse("file:///C:/workspace/src").expect("Windows cwd URI");
+    let posix = PathUri::parse("file:///workspace/src").expect("POSIX cwd URI");
+
+    assert_eq!(
+        [
+            resolve_workdir_uri(&windows, Some(r"..\build"), PathConvention::Windows),
+            resolve_workdir_uri(&windows, Some(r"D:\tools"), PathConvention::Windows),
+            resolve_workdir_uri(&posix, Some("../../../tmp"), PathConvention::Posix),
+            resolve_workdir_uri(&posix, Some("/var/tmp"), PathConvention::Posix),
+        ],
+        [
+            Ok(PathUri::parse("file:///C:/workspace/build").expect("relative Windows URI")),
+            Ok(PathUri::parse("file:///D:/tools").expect("absolute Windows URI")),
+            Ok(PathUri::parse("file:///tmp").expect("bounded POSIX URI")),
+            Ok(PathUri::parse("file:///var/tmp").expect("absolute POSIX URI")),
+        ]
+    );
 }
 
 #[test]
@@ -155,6 +294,7 @@ fn test_get_command_rejects_explicit_login_when_disallowed() -> anyhow::Result<(
         Arc::new(default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ false,
+        CommandShellResolution::LocalHost,
     )
     .expect_err("explicit login should be rejected");
 
@@ -188,6 +328,7 @@ fn test_get_command_rejects_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<
         Arc::new(default_user_shell()),
         &shell_mode,
         /*allow_login_shell*/ true,
+        CommandShellResolution::LocalHost,
     )
     .expect_err("explicit shell should be rejected");
 

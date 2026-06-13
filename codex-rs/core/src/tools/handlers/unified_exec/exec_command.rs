@@ -34,10 +34,12 @@ use codex_utils_output_truncation::approx_token_count;
 
 use super::super::shell_spec::CommandToolOptions;
 use super::super::shell_spec::create_exec_command_tool_with_environment_id;
+use super::CommandShellResolution;
 use super::ExecCommandArgs;
 use super::ExecCommandEnvironmentArgs;
 use super::get_command;
 use super::post_unified_exec_tool_use_payload;
+use super::resolve_workdir_uri;
 use super::shell_mode_for_environment;
 
 #[derive(Clone, Copy)]
@@ -129,17 +131,27 @@ impl ExecCommandHandler {
                 "unified exec is unavailable in this session".to_string(),
             ));
         };
+        let environment = Arc::clone(&turn_environment.environment);
+        let workdir = environment_args
+            .workdir
+            .as_deref()
+            .filter(|workdir| !workdir.is_empty());
+        let cwd_uri = resolve_workdir_uri(
+            turn_environment.cwd_uri(),
+            workdir,
+            turn_environment.path_convention(),
+        )
+        .map_err(FunctionCallError::RespondToModel)?;
         let base_cwd = turn_environment.compatible_cwd().ok_or_else(|| {
             FunctionCallError::RespondToModel(
                 "cross-platform unified exec requires native remote routing".to_string(),
             )
         })?;
-        let cwd = environment_args
-            .workdir
-            .as_deref()
-            .filter(|workdir| !workdir.is_empty())
-            .map_or_else(|| base_cwd.clone(), |workdir| base_cwd.join(workdir));
-        let environment = Arc::clone(&turn_environment.environment);
+        let cwd = cwd_uri.to_abs_path().map_err(|error| {
+            FunctionCallError::RespondToModel(format!(
+                "working directory `{cwd_uri}` cannot be used on the app-server host: {error}"
+            ))
+        })?;
         let fs = environment.get_filesystem();
         let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
         let hook_command = args.cmd.clone();
@@ -150,19 +162,28 @@ impl ExecCommandHandler {
             &cwd,
         )
         .await;
-        let process_id = manager.allocate_process_id().await;
         let shell_mode =
             shell_mode_for_environment(&turn.unified_exec_shell_mode, environment.as_ref());
+        let (default_shell, shell_resolution) = if environment.is_remote() {
+            (
+                Arc::new(turn_environment.shell.clone()),
+                CommandShellResolution::RemoteTarget,
+            )
+        } else {
+            (session.user_shell(), CommandShellResolution::LocalHost)
+        };
         let resolved_command = get_command(
             &args,
-            session.user_shell(),
+            default_shell,
             &shell_mode,
             turn.config.permissions.allow_login_shell,
+            shell_resolution,
         )
         .map_err(FunctionCallError::RespondToModel)?;
         let command = resolved_command.command;
         let shell_type = resolved_command.shell_type;
         let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
+        let process_id = manager.allocate_process_id().await;
 
         let ExecCommandArgs {
             tty,

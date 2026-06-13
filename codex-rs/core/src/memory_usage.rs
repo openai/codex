@@ -69,6 +69,7 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
                     invocation.session.user_shell(),
                     &invocation.turn.unified_exec_shell_mode,
                     invocation.turn.config.permissions.allow_login_shell,
+                    crate::tools::handlers::unified_exec::CommandShellResolution::LocalHost,
                 )
                 .ok()?;
                 #[allow(deprecated)]
