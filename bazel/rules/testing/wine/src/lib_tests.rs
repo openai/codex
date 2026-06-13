@@ -18,8 +18,6 @@ use tokio::process::Command as TokioCommand;
 use super::WineTestCommand;
 use super::WineTestProcess;
 use super::install_powershell_runtime;
-use super::run_powershell;
-use super::run_powershell_with_pty;
 
 // The marker makes the assertion resilient to Wine or PTY startup chatter.
 const POWERSHELL_SMOKE_MARKER: &str = "WINE_PWSH_SMOKE";
@@ -39,28 +37,6 @@ const POWERSHELL_SMOKE_SCRIPT: &str = concat!(
     "$PSVersionTable.PSEdition + '|' + ",
     "$IsWindows.ToString().ToLowerInvariant() + '|' + $separatorCode)",
 );
-
-fn assert_powershell_smoke_output(output: &str) -> Result<()> {
-    let marker_start = output
-        .find(POWERSHELL_SMOKE_MARKER)
-        .with_context(|| format!("PowerShell smoke marker was missing from {output:?}"))?;
-    let smoke = output[marker_start..]
-        .lines()
-        .next()
-        .context("PowerShell smoke marker line was incomplete")?
-        .trim_end_matches('\r');
-    let fields = smoke.split('|').collect::<Vec<_>>();
-    assert_eq!(fields.len(), 5, "unexpected PowerShell smoke output: {smoke}");
-    assert_eq!(fields[0], POWERSHELL_SMOKE_MARKER);
-    assert_eq!(
-        fields[1].split('.').next(),
-        Some("7"),
-        "expected PowerShell 7.x, got {}",
-        fields[1],
-    );
-    assert_eq!(&fields[2..], &["Core", "true", "92"]);
-    Ok(())
-}
 
 async fn waiting_smoke_process() -> Result<WineTestProcess> {
     let executable = codex_utils_cargo_bin::cargo_bin("wine-smoke")?;
@@ -303,11 +279,48 @@ fn powershell_runtime_is_materialized_at_the_windows_fallback_path() -> Result<(
 
 #[tokio::test]
 async fn pinned_powershell_runs_without_a_pty_under_wine() -> Result<()> {
-    run_powershell(POWERSHELL_SMOKE_SCRIPT).await
+    let output = WineTestCommand::powershell(POWERSHELL_SMOKE_SCRIPT)
+        .output()
+        .await?;
+    assert!(
+        output.status.success(),
+        "PowerShell failed; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    Ok(())
 }
 
 #[tokio::test]
 async fn pinned_powershell_runs_with_a_pty_under_wine() -> Result<()> {
-    let output = run_powershell_with_pty(POWERSHELL_SMOKE_SCRIPT).await?;
-    assert_powershell_smoke_output(&output)
+    let output = WineTestCommand::powershell(POWERSHELL_SMOKE_SCRIPT)
+        .with_pty()
+        .output()
+        .await?;
+    assert!(
+        output.status.success(),
+        "PowerShell failed; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let output = String::from_utf8(output.stdout)?;
+    let marker_start = output
+        .find(POWERSHELL_SMOKE_MARKER)
+        .with_context(|| format!("PowerShell smoke marker was missing from {output:?}"))?;
+    let smoke = output[marker_start..]
+        .lines()
+        .next()
+        .context("PowerShell smoke marker line was incomplete")?
+        .trim_end_matches('\r');
+    let fields = smoke.split('|').collect::<Vec<_>>();
+    assert_eq!(fields.len(), 5, "unexpected PowerShell smoke output: {smoke}");
+    assert_eq!(fields[0], POWERSHELL_SMOKE_MARKER);
+    assert_eq!(
+        fields[1].split('.').next(),
+        Some("7"),
+        "expected PowerShell 7.x, got {}",
+        fields[1],
+    );
+    assert_eq!(&fields[2..], &["Core", "true", "92"]);
+    Ok(())
 }
