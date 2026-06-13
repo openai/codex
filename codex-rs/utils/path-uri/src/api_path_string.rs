@@ -105,6 +105,22 @@ impl ApiPathString {
         })
     }
 
+    /// Parses this API string as an absolute, lexically normalized path URI.
+    ///
+    /// Unlike [`Self::to_path_uri`], this rejects opaque fallback forms and
+    /// Windows components that cannot name ordinary filesystem entries. Use
+    /// this at process-execution boundaries where the resulting URI must be
+    /// portable across hosts and renderable by the target executor.
+    pub fn to_normalized_path_uri(
+        &self,
+        convention: PathConvention,
+    ) -> Result<PathUri, ApiPathStringError> {
+        match convention {
+            PathConvention::Posix => parse_resolved_posix_path(&self.0),
+            PathConvention::Windows => parse_resolved_windows_path(&self.0),
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -126,15 +142,7 @@ fn parse_posix_path(path: &str) -> Option<PathUri> {
 
 fn parse_windows_path(path: &str) -> Option<PathUri> {
     let bytes = path.as_bytes();
-    let uses_namespace = matches!(
-        bytes,
-        [first, second, namespace @ (b'.' | b'?'), separator, ..]
-            if is_windows_separator_byte(*first)
-                && is_windows_separator_byte(*second)
-                && is_windows_separator_byte(*separator)
-                && matches!(*namespace, b'.' | b'?')
-    );
-    if uses_namespace || path.contains('\0') {
+    if uses_windows_namespace(path) || path.contains('\0') {
         return Some(windows_opaque_path_uri(path));
     }
 
@@ -205,23 +213,24 @@ fn resolve_windows_path(base: &PathUri, path: &str) -> Result<PathUri, ApiPathSt
 }
 
 fn parse_resolved_posix_path(path: &str) -> Result<PathUri, ApiPathStringError> {
+    let native_path = path;
     let Some(path) = path.strip_prefix('/') else {
         return Err(invalid_native_path(path, PathConvention::Posix));
     };
     if path.contains('\0') {
-        return Err(invalid_native_path(path, PathConvention::Posix));
+        return Err(invalid_native_path(native_path, PathConvention::Posix));
     }
     build_resolved_path_uri(
         /*host*/ None,
         path.split('/'),
         /*protected_segments*/ 0,
-        path,
+        native_path,
         PathConvention::Posix,
     )
 }
 
 fn parse_resolved_windows_path(path: &str) -> Result<PathUri, ApiPathStringError> {
-    if path.contains('\0') {
+    if uses_windows_namespace(path) || path.contains('\0') {
         return Err(invalid_native_path(path, PathConvention::Windows));
     }
 
@@ -233,6 +242,9 @@ fn parse_resolved_windows_path(path: &str) -> Result<PathUri, ApiPathStringError
         let Some(share) = segments.next().filter(|share| !share.is_empty()) else {
             return Err(invalid_native_path(path, PathConvention::Windows));
         };
+        if !is_valid_windows_component(host) || !is_valid_windows_component(share) {
+            return Err(invalid_native_path(path, PathConvention::Windows));
+        }
         return build_resolved_path_uri(
             Some(host),
             std::iter::once(share).chain(segments),
@@ -256,6 +268,17 @@ fn parse_resolved_windows_path(path: &str) -> Result<PathUri, ApiPathStringError
         /*protected_segments*/ 1,
         path,
         PathConvention::Windows,
+    )
+}
+
+fn uses_windows_namespace(path: &str) -> bool {
+    matches!(
+        path.as_bytes(),
+        [first, second, namespace @ (b'.' | b'?'), separator, ..]
+            if is_windows_separator_byte(*first)
+                && is_windows_separator_byte(*second)
+                && is_windows_separator_byte(*separator)
+                && matches!(*namespace, b'.' | b'?')
     )
 }
 
@@ -569,7 +592,7 @@ pub enum ApiPathStringError {
         path: String,
         convention: PathConvention,
     },
-    #[error("path `{path}` is not absolute using {convention} path syntax")]
+    #[error("path `{path}` is not a valid absolute {convention} path")]
     InvalidNativePath {
         path: String,
         convention: PathConvention,

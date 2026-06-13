@@ -532,11 +532,13 @@ impl ThreadManager {
                     "failed to resolve shell for environment `{environment_id}`: {err}"
                 ))
             })?;
-            let cwd = cwd.to_path_uri(info.path_convention).map_err(|err| {
-                CodexErr::InvalidRequest(format!(
-                    "invalid cwd for environment `{environment_id}`: {err}"
-                ))
-            })?;
+            let cwd = cwd
+                .to_normalized_path_uri(info.path_convention)
+                .map_err(|err| {
+                    CodexErr::InvalidRequest(format!(
+                        "invalid cwd for environment `{environment_id}`: {err}"
+                    ))
+                })?;
             selections.push(TurnEnvironmentSelection {
                 environment_id,
                 cwd,

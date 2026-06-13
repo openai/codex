@@ -15,6 +15,7 @@ use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
@@ -133,6 +134,34 @@ async fn exercise_app_server(websocket_url: String) -> Result<()> {
     )
     .await?;
     timeout(APP_SERVER_TIMEOUT, app_server.initialize()).await??;
+
+    let invalid_cwd = r"C:\workspace\NUL.txt";
+    let invalid_request_id = app_server
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            environments: Some(vec![TurnEnvironmentParams {
+                environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                cwd: ApiPathString::new(invalid_cwd),
+            }]),
+            ..Default::default()
+        })
+        .await?;
+    let invalid_response: JSONRPCError = timeout(
+        APP_SERVER_TIMEOUT,
+        app_server.read_stream_until_error_message(RequestId::Integer(invalid_request_id)),
+    )
+    .await??;
+    assert_eq!(invalid_response.id, RequestId::Integer(invalid_request_id));
+    assert_eq!(
+        invalid_response.error.message,
+        format!(
+            "invalid cwd for environment `{REMOTE_ENVIRONMENT_ID}`: path `{invalid_cwd}` is not a valid absolute Windows path"
+        )
+    );
+    assert!(
+        response_mock.requests().is_empty(),
+        "invalid environment cwd must fail before model inference"
+    );
 
     let environment = remote_windows_environment();
     let thread_request_id = app_server

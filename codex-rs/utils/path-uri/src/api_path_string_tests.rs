@@ -357,6 +357,61 @@ fn rejects_relative_api_paths() {
 }
 
 #[test]
+fn normalized_native_paths_are_host_independent() {
+    for (raw_path, convention, expected_uri) in [
+        (
+            "/workspace/../space #/%/é",
+            PathConvention::Posix,
+            "file:///space%20%23/%25/%C3%A9",
+        ),
+        (
+            r"C:\workspace\..\space #\100%\é",
+            PathConvention::Windows,
+            "file:///C:/space%20%23/100%25/%C3%A9",
+        ),
+        (
+            r"\\server\share\..\folder",
+            PathConvention::Windows,
+            "file://server/share/folder",
+        ),
+    ] {
+        assert_eq!(
+            ApiPathString::new(raw_path).to_normalized_path_uri(convention),
+            Ok(PathUri::parse(expected_uri).expect("expected path URI")),
+            "normalizing {raw_path:?}"
+        );
+    }
+}
+
+#[test]
+fn normalized_native_paths_reject_nonportable_execution_paths() {
+    for (raw_path, convention) in [
+        ("relative", PathConvention::Posix),
+        ("/workspace/bad\0name", PathConvention::Posix),
+        (r"C:relative", PathConvention::Windows),
+        (r"\root-relative", PathConvention::Windows),
+        (r"\\server", PathConvention::Windows),
+        (r"\\server\..\folder", PathConvention::Windows),
+        (r"\\server\.\folder", PathConvention::Windows),
+        (r"\\server\NUL\folder", PathConvention::Windows),
+        (r"C:\workspace\NUL.txt", PathConvention::Windows),
+        (r"C:\workspace\trailing.", PathConvention::Windows),
+        ("C:\\workspace\\bad\0name", PathConvention::Windows),
+        (r"\\?\C:\workspace", PathConvention::Windows),
+        ("/workspace", PathConvention::Windows),
+    ] {
+        assert_eq!(
+            ApiPathString::new(raw_path).to_normalized_path_uri(convention),
+            Err(ApiPathStringError::InvalidNativePath {
+                path: raw_path.to_string(),
+                convention,
+            }),
+            "normalizing {raw_path:?}"
+        );
+    }
+}
+
+#[test]
 fn renders_an_absolute_path_using_the_explicit_convention() {
     #[cfg(unix)]
     let (native_path, convention, expected) = (
@@ -504,6 +559,8 @@ fn native_resolution_rejects_reserved_windows_device_names() {
         r"C:\COM9.log",
         r"C:\lpt1",
         r"child\NUL.txt",
+        r"\\server\..\folder",
+        r"\\server\.\folder",
     ] {
         assert!(
             matches!(

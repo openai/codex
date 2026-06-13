@@ -415,7 +415,26 @@ async fn native_environment_selections_reject_duplicate_ids() {
     assert_eq!(
         error.to_string(),
         format!(
-            "invalid cwd for environment `local`: path `relative` is not absolute using {} path syntax",
+            "invalid cwd for environment `local`: path `relative` is not a valid absolute {} path",
+            PathConvention::native()
+        )
+    );
+
+    let invalid_native_cwd = match PathConvention::native() {
+        PathConvention::Posix => "/workspace/bad\0name",
+        PathConvention::Windows => r"C:\workspace\NUL.txt",
+    };
+    let error = manager
+        .resolve_native_environment_selections([(
+            "local".to_string(),
+            ApiPathString::new(invalid_native_cwd),
+        )])
+        .await
+        .expect_err("nonportable cwd must fail at the environment boundary");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "invalid cwd for environment `local`: path `{invalid_native_cwd}` is not a valid absolute {} path",
             PathConvention::native()
         )
     );
