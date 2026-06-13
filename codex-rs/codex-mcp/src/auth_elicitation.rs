@@ -15,6 +15,10 @@ pub const CONNECTOR_AUTH_FAILURE_LINK_ID_KEY: &str = "link_id";
 pub const CONNECTOR_AUTH_FAILURE_ERROR_CODE_KEY: &str = "error_code";
 pub const CONNECTOR_AUTH_FAILURE_ERROR_HTTP_STATUS_CODE_KEY: &str = "error_http_status_code";
 pub const CONNECTOR_AUTH_FAILURE_ERROR_ACTION_KEY: &str = "error_action";
+const SITES_CONNECTOR_ID: &str = "connector_20205bf7d4e99a89d7154bb849718324";
+const SITES_PUBLICATION_TERMS_REQUIRED_AUTH_REASON_PREFIX: &str =
+    "sites_publication_terms_required:";
+const SITES_PUBLICATION_TERMS_REQUIRED_HTTP_STATUS_CODE: i64 = 428;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexAppsConnectorAuthFailure {
@@ -26,6 +30,23 @@ pub struct CodexAppsConnectorAuthFailure {
     pub error_code: Option<String>,
     pub error_http_status_code: Option<i64>,
     pub error_action: Option<String>,
+}
+
+impl CodexAppsConnectorAuthFailure {
+    /// Returns whether this is the versioned Sites legal disclosure that must
+    /// remain interactive even when ordinary approval prompts are disabled.
+    pub fn is_sites_publication_terms_disclosure(&self) -> bool {
+        self.connector_id == SITES_CONNECTOR_ID
+            && self.error_http_status_code
+                == Some(SITES_PUBLICATION_TERMS_REQUIRED_HTTP_STATUS_CODE)
+            && self
+                .auth_reason
+                .as_deref()
+                .and_then(|reason| {
+                    reason.strip_prefix(SITES_PUBLICATION_TERMS_REQUIRED_AUTH_REASON_PREFIX)
+                })
+                .is_some_and(|version| !version.trim().is_empty())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -167,13 +188,18 @@ pub fn auth_elicitation_completed_result(
     auth_failure: &CodexAppsConnectorAuthFailure,
     meta: Option<serde_json::Value>,
 ) -> CallToolResult {
+    let text = if auth_failure.is_sites_publication_terms_disclosure() {
+        "The ChatGPT Sites Terms were accepted. Retry this tool call now.".to_string()
+    } else {
+        format!(
+            "Authentication for {} was requested and accepted. Retry this tool call now.",
+            auth_failure.connector_name
+        )
+    };
     CallToolResult {
         content: vec![serde_json::json!({
             "type": "text",
-            "text": format!(
-                "Authentication for {} was requested and accepted. Retry this tool call now.",
-                auth_failure.connector_name
-            ),
+            "text": text,
         })],
         structured_content: None,
         is_error: Some(true),
@@ -198,6 +224,9 @@ fn string_auth_failure_field(
 }
 
 fn auth_elicitation_message(auth_failure: &CodexAppsConnectorAuthFailure) -> String {
+    if auth_failure.is_sites_publication_terms_disclosure() {
+        return "Review the ChatGPT Sites Terms to continue.".to_string();
+    }
     match auth_failure.auth_reason.as_deref() {
         Some("oauth_upgrade_required") => format!(
             "Reconnect {} on ChatGPT to grant the permissions needed for this request.",
@@ -343,5 +372,54 @@ mod tests {
 
         assert_eq!(plan.auth_failure.connector_name, "Google Calendar");
         assert_eq!(plan.elicitation.elicitation_id, "codex_apps_auth_call_123");
+    }
+
+    #[test]
+    fn identifies_only_versioned_sites_publication_terms_disclosures() {
+        let mut wrong_status = auth_failure(
+            "connector_20205bf7d4e99a89d7154bb849718324",
+            "sites_publication_terms_required:2026-06-12",
+        );
+        wrong_status.error_http_status_code = Some(401);
+
+        assert_eq!(
+            [
+                auth_failure(
+                    "connector_20205bf7d4e99a89d7154bb849718324",
+                    "sites_publication_terms_required:2026-06-12",
+                )
+                .is_sites_publication_terms_disclosure(),
+                auth_failure(
+                    "connector_calendar",
+                    "sites_publication_terms_required:2026-06-12",
+                )
+                .is_sites_publication_terms_disclosure(),
+                auth_failure(
+                    "connector_20205bf7d4e99a89d7154bb849718324",
+                    "sites_publication_terms_required:",
+                )
+                .is_sites_publication_terms_disclosure(),
+                auth_failure(
+                    "connector_20205bf7d4e99a89d7154bb849718324",
+                    "reauthentication_required",
+                )
+                .is_sites_publication_terms_disclosure(),
+                wrong_status.is_sites_publication_terms_disclosure(),
+            ],
+            [true, false, false, false, false],
+        );
+    }
+
+    fn auth_failure(connector_id: &str, auth_reason: &str) -> CodexAppsConnectorAuthFailure {
+        CodexAppsConnectorAuthFailure {
+            connector_id: connector_id.to_string(),
+            connector_name: "Sites".to_string(),
+            install_url: "https://chatgpt.com/apps/sites".to_string(),
+            auth_reason: Some(auth_reason.to_string()),
+            link_id: None,
+            error_code: None,
+            error_http_status_code: Some(SITES_PUBLICATION_TERMS_REQUIRED_HTTP_STATUS_CODE),
+            error_action: None,
+        }
     }
 }

@@ -1221,6 +1221,26 @@ async fn codex_apps_tool_call_request_meta_includes_call_id_without_existing_cod
 }
 
 fn codex_apps_auth_failure_result() -> CallToolResult {
+    codex_apps_auth_failure_result_for(
+        "connector_calendar",
+        "reauthentication_required",
+        /*error_http_status_code*/ 401,
+    )
+}
+
+fn codex_apps_sites_publication_terms_failure_result() -> CallToolResult {
+    codex_apps_auth_failure_result_for(
+        "connector_20205bf7d4e99a89d7154bb849718324",
+        "sites_publication_terms_required:2026-06-12",
+        /*error_http_status_code*/ 428,
+    )
+}
+
+fn codex_apps_auth_failure_result_for(
+    connector_id: &str,
+    auth_reason: &str,
+    error_http_status_code: i64,
+) -> CallToolResult {
     CallToolResult {
         content: vec![serde_json::json!({
             "type": "text",
@@ -1232,12 +1252,12 @@ fn codex_apps_auth_failure_result() -> CallToolResult {
             MCP_TOOL_CODEX_APPS_META_KEY: {
                 "connector_auth_failure": {
                     "is_auth_failure": true,
-                    "auth_reason": "reauthentication_required",
-                    "connector_id": "connector_calendar",
+                    "auth_reason": auth_reason,
+                    "connector_id": connector_id,
                     "connector_name": "Untrusted Calendar",
                     "link_id": "link_123",
                     "error_code": "UNAUTHORIZED",
-                    "error_http_status_code": 401,
+                    "error_http_status_code": error_http_status_code,
                     "error_action": "TRIGGER_REAUTHENTICATION",
                 },
             },
@@ -1252,6 +1272,16 @@ fn codex_apps_auth_failure_metadata() -> McpToolApprovalMetadata {
         Some("Manage events and schedules."),
         Some("Create Event"),
         Some("Create a calendar event."),
+    )
+}
+
+fn codex_apps_sites_publication_terms_metadata() -> McpToolApprovalMetadata {
+    approval_metadata(
+        Some("connector_20205bf7d4e99a89d7154bb849718324"),
+        Some("Sites"),
+        Some("Create and publish websites."),
+        Some("Create Site"),
+        Some("Create a new website."),
     )
 }
 
@@ -1334,54 +1364,67 @@ async fn codex_apps_auth_elicitation_non_host_owned_server_returns_original_resu
 }
 
 #[tokio::test]
-async fn codex_apps_auth_elicitation_disallowed_by_policy_returns_original_result() {
-    let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
-    install_host_owned_codex_apps_manager(&session, &turn_context).await;
-    let mut features = Features::with_defaults();
-    features.enable(Feature::AuthElicitation);
-    let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
-    turn_context.features = ManagedFeatures::from(features);
-    turn_context
-        .approval_policy
-        .set(AskForApproval::Never)
-        .expect("test setup should allow updating approval policy");
-    let result = codex_apps_auth_failure_result();
-    let metadata = codex_apps_auth_failure_metadata();
-
-    let returned = maybe_request_codex_apps_auth_elicitation(
-        &session,
-        turn_context,
-        "call_123",
-        CODEX_APPS_MCP_SERVER_NAME,
-        Some(&metadata),
-        result.clone(),
+async fn non_sites_invocation_cannot_forge_sites_terms_elicitation_under_never_policy() {
+    assert_codex_apps_auth_elicitation_not_requested(
+        AskForApproval::Never,
+        codex_apps_sites_publication_terms_failure_result(),
+        codex_apps_auth_failure_metadata(),
     )
     .await;
-
-    assert_eq!(returned, result);
-    assert!(rx_event.try_recv().is_err());
 }
 
 #[tokio::test]
-async fn codex_apps_auth_elicitation_granular_mcp_disabled_returns_original_result() {
-    let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
-    install_host_owned_codex_apps_manager(&session, &turn_context).await;
-    let mut features = Features::with_defaults();
-    features.enable(Feature::AuthElicitation);
-    let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
-    turn_context.features = ManagedFeatures::from(features);
-    turn_context
-        .approval_policy
-        .set(AskForApproval::Granular(GranularApprovalConfig {
+async fn codex_apps_auth_elicitation_is_disallowed_by_never_policy() {
+    assert_codex_apps_auth_elicitation_not_requested(
+        AskForApproval::Never,
+        codex_apps_auth_failure_result(),
+        codex_apps_auth_failure_metadata(),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn codex_apps_sites_publication_terms_elicitation_is_allowed_by_never_policy() {
+    assert_codex_apps_auth_elicitation_requested(
+        AskForApproval::Never,
+        codex_apps_sites_publication_terms_failure_result(),
+        codex_apps_sites_publication_terms_metadata(),
+        "The ChatGPT Sites Terms were accepted. Retry this tool call now.",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn codex_apps_sites_terms_elicitation_respects_granular_mcp_disabled() {
+    assert_codex_apps_auth_elicitation_not_requested(
+        AskForApproval::Granular(GranularApprovalConfig {
             sandbox_approval: true,
             rules: true,
             skill_approval: true,
             request_permissions: true,
             mcp_elicitations: false,
-        }))
+        }),
+        codex_apps_sites_publication_terms_failure_result(),
+        codex_apps_sites_publication_terms_metadata(),
+    )
+    .await;
+}
+
+async fn assert_codex_apps_auth_elicitation_not_requested(
+    approval_policy: AskForApproval,
+    result: CallToolResult,
+    metadata: McpToolApprovalMetadata,
+) {
+    let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
+    install_host_owned_codex_apps_manager(&session, &turn_context).await;
+    let mut features = Features::with_defaults();
+    features.enable(Feature::AuthElicitation);
+    let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
+    turn_context.features = ManagedFeatures::from(features);
+    turn_context
+        .approval_policy
+        .set(approval_policy)
         .expect("test setup should allow updating approval policy");
-    let result = codex_apps_auth_failure_result();
-    let metadata = codex_apps_auth_failure_metadata();
 
     let returned = maybe_request_codex_apps_auth_elicitation(
         &session,
@@ -1399,16 +1442,34 @@ async fn codex_apps_auth_elicitation_granular_mcp_disabled_returns_original_resu
 
 #[tokio::test]
 async fn codex_apps_auth_elicitation_feature_enabled_requests_elicitation() {
+    assert_codex_apps_auth_elicitation_requested(
+        AskForApproval::OnRequest,
+        codex_apps_auth_failure_result(),
+        codex_apps_auth_failure_metadata(),
+        "Authentication for Google Calendar was requested and accepted. Retry this tool call now.",
+    )
+    .await;
+}
+
+async fn assert_codex_apps_auth_elicitation_requested(
+    approval_policy: AskForApproval,
+    result: CallToolResult,
+    metadata: McpToolApprovalMetadata,
+    completion_text: &str,
+) {
     let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
     install_host_owned_codex_apps_manager(&session, &turn_context).await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     let mut features = Features::with_defaults();
     features.enable(Feature::AuthElicitation);
-    Arc::get_mut(&mut turn_context)
-        .expect("single turn context ref")
-        .features = ManagedFeatures::from(features);
-    let result = codex_apps_auth_failure_result();
-    let metadata = codex_apps_auth_failure_metadata();
+    {
+        let turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
+        turn_context.features = ManagedFeatures::from(features);
+        turn_context
+            .approval_policy
+            .set(approval_policy)
+            .expect("test setup should allow updating approval policy");
+    }
 
     let request_task = tokio::spawn({
         let session = Arc::clone(&session);
@@ -1465,7 +1526,7 @@ async fn codex_apps_auth_elicitation_feature_enabled_requests_elicitation() {
         returned.content,
         vec![serde_json::json!({
             "type": "text",
-            "text": "Authentication for Google Calendar was requested and accepted. Retry this tool call now.",
+            "text": completion_text,
         })]
     );
 }

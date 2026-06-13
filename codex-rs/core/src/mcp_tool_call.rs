@@ -615,17 +615,6 @@ async fn maybe_request_codex_apps_auth_elicitation(
         return result;
     }
 
-    match turn_context.approval_policy.value() {
-        AskForApproval::Never => return result,
-        AskForApproval::Granular(granular_config) if !granular_config.allows_mcp_elicitations() => {
-            return result;
-        }
-        AskForApproval::OnFailure
-        | AskForApproval::OnRequest
-        | AskForApproval::UnlessTrusted
-        | AskForApproval::Granular(_) => {}
-    }
-
     let connector_id = metadata.and_then(|metadata| metadata.connector_id.as_deref());
     let connector_name = metadata.and_then(|metadata| metadata.connector_name.as_deref());
     let install_url = connector_id.map(|connector_id| {
@@ -639,6 +628,20 @@ async fn maybe_request_codex_apps_auth_elicitation(
     else {
         return result;
     };
+
+    match turn_context.approval_policy.value() {
+        AskForApproval::Never if !plan.auth_failure.is_sites_publication_terms_disclosure() => {
+            return result;
+        }
+        AskForApproval::Granular(granular_config) if !granular_config.allows_mcp_elicitations() => {
+            return result;
+        }
+        AskForApproval::Never
+        | AskForApproval::OnFailure
+        | AskForApproval::OnRequest
+        | AskForApproval::UnlessTrusted
+        | AskForApproval::Granular(_) => {}
+    }
 
     let request_id = rmcp::model::RequestId::String(plan.elicitation.elicitation_id.clone().into());
     let params = McpServerElicitationRequestParams {
