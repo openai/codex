@@ -92,68 +92,6 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
     Ok(())
 }
 
-async fn assert_exec_process_rejects_non_native_cwd_without_reserving_process_id(
-    use_remote: bool,
-) -> Result<()> {
-    let context = create_process_context(use_remote).await?;
-    let process_id = ProcessId::from("proc-non-native-cwd");
-    let cwd = PathUri::parse("file://server/share/checkout")?;
-    let source = match cwd.to_abs_path() {
-        Ok(path) => anyhow::bail!(
-            "UNC cwd should not be native on Unix: {}",
-            path.as_path().display()
-        ),
-        Err(source) => source,
-    };
-    let error = match context
-        .backend
-        .start(ExecParams {
-            process_id: process_id.clone(),
-            argv: vec!["true".to_string()],
-            cwd: cwd.clone(),
-            env_policy: /*env_policy*/ None,
-            env: Default::default(),
-            tty: false,
-            pipe_stdin: false,
-            arg0: None,
-        })
-        .await
-    {
-        Ok(_) => anyhow::bail!("non-native cwd should fail before process launch"),
-        Err(error) => error,
-    };
-    let ExecServerError::Server { code, message } = error else {
-        anyhow::bail!("unexpected non-native cwd error: {error}");
-    };
-    assert_eq!(
-        (code, message),
-        (
-            -32602,
-            format!("cwd URI `{cwd}` is not valid on this exec-server host: {source}")
-        )
-    );
-
-    let session = context
-        .backend
-        .start(ExecParams {
-            process_id,
-            argv: vec!["true".to_string()],
-            cwd: PathUri::from_path(std::env::current_dir()?)?,
-            env_policy: /*env_policy*/ None,
-            env: Default::default(),
-            tty: false,
-            pipe_stdin: false,
-            arg0: None,
-        })
-        .await?;
-    let wake_rx = session.process.subscribe_wake();
-    assert_eq!(
-        collect_process_output_from_reads(session.process, wake_rx).await?,
-        (String::new(), Some(0), true)
-    );
-    Ok(())
-}
-
 async fn read_process_until_change(
     session: Arc<dyn ExecProcess>,
     wake_rx: &mut watch::Receiver<u64>,
@@ -842,14 +780,77 @@ async fn exec_process_uses_requested_cwd(use_remote: bool) -> Result<()> {
 
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
-#[cfg_attr(not(unix), ignore = "Unix-only exec-server process test")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 // Serialize tests that launch a real exec-server process through the full CLI.
 #[serial_test::serial(remote_exec_server)]
 async fn exec_process_rejects_non_native_cwd_without_reserving_process_id(
     use_remote: bool,
 ) -> Result<()> {
-    assert_exec_process_rejects_non_native_cwd_without_reserving_process_id(use_remote).await
+    let context = create_process_context(use_remote).await?;
+    let process_id = ProcessId::from("proc-non-native-cwd");
+    let cwd = PathUri::parse(if cfg!(windows) {
+        "file:///usr/local/checkout"
+    } else {
+        "file://server/share/checkout"
+    })?;
+    let source = match cwd.to_abs_path() {
+        Ok(path) => anyhow::bail!(
+            "cwd should not be native on this host: {}",
+            path.as_path().display()
+        ),
+        Err(source) => source,
+    };
+    let current_exe = std::env::current_exe()?;
+    let argv = vec![
+        current_exe.to_string_lossy().into_owned(),
+        "--list".to_string(),
+    ];
+    let error = match context
+        .backend
+        .start(ExecParams {
+            process_id: process_id.clone(),
+            argv: argv.clone(),
+            cwd: cwd.clone(),
+            env_policy: /*env_policy*/ None,
+            env: Default::default(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+        })
+        .await
+    {
+        Ok(_) => anyhow::bail!("non-native cwd should fail before process launch"),
+        Err(error) => error,
+    };
+    let ExecServerError::Server { code, message } = error else {
+        anyhow::bail!("unexpected non-native cwd error: {error}");
+    };
+    assert_eq!(
+        (code, message),
+        (
+            -32602,
+            format!("cwd URI `{cwd}` is not valid on this exec-server host: {source}")
+        )
+    );
+
+    let session = context
+        .backend
+        .start(ExecParams {
+            process_id,
+            argv,
+            cwd: PathUri::from_path(std::env::current_dir()?)?,
+            env_policy: /*env_policy*/ None,
+            env: Default::default(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+        })
+        .await?;
+    let wake_rx = session.process.subscribe_wake();
+    let (_, exit_code, closed) =
+        collect_process_output_from_reads(session.process, wake_rx).await?;
+    assert_eq!((exit_code, closed), (Some(0), true));
+    Ok(())
 }
 
 #[test_case(false ; "local")]
