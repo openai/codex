@@ -50,24 +50,21 @@ impl fmt::Display for PathConvention {
 /// "Native" refers to the supplied [`PathConvention`], which may be foreign to
 /// the operating system running this process. The inner string is private so
 /// path-producing code must render through [`Self::from_path_uri`] rather than
-/// accidentally applying the current host's path rules.
+/// accidentally applying the current host's path rules. Opaque fallback paths
+/// recoverable on the current host are converted to UTF-8 lossily at this API
+/// boundary because the value is serialized as a JSON string.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, TS)]
 #[ts(type = "string")]
 pub struct NativePathString(String);
 
 impl NativePathString {
     /// Renders a path URI using the requested native path convention.
-    ///
-    /// TODO(anp): Once `PathUri` carries an environment identifier, resolve the path
-    /// convention from that identifier instead of requiring it explicitly.
     pub fn from_path_uri(
         path: &PathUri,
         convention: PathConvention,
     ) -> Result<Self, NativePathStringError> {
         if path.is_opaque_fallback() {
-            return Err(NativePathStringError::OpaqueFallback {
-                path: path.to_string(),
-            });
+            return render_opaque_fallback(path, convention).map(Self);
         }
         let value = match convention {
             PathConvention::Posix => render_posix_path(path)?,
@@ -83,6 +80,20 @@ impl NativePathString {
     pub fn into_string(self) -> String {
         self.0
     }
+}
+
+fn render_opaque_fallback(
+    path: &PathUri,
+    convention: PathConvention,
+) -> Result<String, NativePathStringError> {
+    if convention != PathConvention::native() {
+        return Err(incompatible_convention(path, convention));
+    }
+    path.to_abs_path()
+        .map(|path| path.as_path().to_string_lossy().into_owned())
+        .map_err(|_| NativePathStringError::OpaqueFallback {
+            path: path.to_string(),
+        })
 }
 
 impl fmt::Display for NativePathString {
@@ -222,7 +233,7 @@ fn incompatible_convention(path: &PathUri, convention: PathConvention) -> Native
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum NativePathStringError {
-    #[error("opaque fallback path URI `{path}` cannot be rendered as a UTF-8 native path")]
+    #[error("opaque fallback path URI `{path}` cannot be recovered as a native path")]
     OpaqueFallback { path: String },
     #[error("path URI `{path}` cannot be rendered using {convention} path syntax")]
     IncompatibleConvention {

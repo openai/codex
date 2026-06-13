@@ -100,17 +100,66 @@ fn rejects_paths_incompatible_with_the_convention() {
 }
 
 #[test]
-fn rejects_opaque_fallback_paths() {
+fn rejects_opaque_fallback_paths_that_cannot_be_recovered() {
     let path = PathUri::parse("file:///%00/bad/path/YQ").expect("canonical opaque fallback URI");
 
-    for convention in [PathConvention::Posix, PathConvention::Windows] {
-        assert_eq!(
-            NativePathString::from_path_uri(&path, convention),
-            Err(NativePathStringError::OpaqueFallback {
-                path: path.to_string(),
-            })
-        );
-    }
+    assert_eq!(
+        NativePathString::from_path_uri(&path, PathConvention::native()),
+        Err(NativePathStringError::OpaqueFallback {
+            path: path.to_string(),
+        })
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn renders_native_opaque_fallback_paths_lossily() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let native_path = std::path::PathBuf::from(std::ffi::OsString::from_vec(
+        b"/tmp/null-\0-non-utf8-\xff".to_vec(),
+    ));
+    let path = PathUri::from_path(native_path).expect("absolute native path");
+
+    assert_eq!(
+        NativePathString::from_path_uri(&path, PathConvention::Posix)
+            .map(NativePathString::into_string),
+        Ok("/tmp/null-\0-non-utf8-�".to_string())
+    );
+    assert_eq!(
+        NativePathString::from_path_uri(&path, PathConvention::Windows),
+        Err(NativePathStringError::IncompatibleConvention {
+            path: path.to_string(),
+            convention: PathConvention::Windows,
+        })
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn renders_native_opaque_fallback_paths_lossily() {
+    use std::os::windows::ffi::OsStringExt;
+
+    let native_path = std::path::PathBuf::from(std::ffi::OsString::from_wide(
+        &r"C:\bad\"
+            .encode_utf16()
+            .chain([0xd800])
+            .collect::<Vec<_>>(),
+    ));
+    let path = PathUri::from_path(native_path).expect("absolute native path");
+
+    assert_eq!(
+        NativePathString::from_path_uri(&path, PathConvention::Windows)
+            .map(NativePathString::into_string),
+        Ok(r"C:\bad\�".to_string())
+    );
+    assert_eq!(
+        NativePathString::from_path_uri(&path, PathConvention::Posix),
+        Err(NativePathStringError::IncompatibleConvention {
+            path: path.to_string(),
+            convention: PathConvention::Posix,
+        })
+    );
 }
 
 #[test]
