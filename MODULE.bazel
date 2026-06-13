@@ -326,7 +326,6 @@ http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "ht
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
 new_local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
 
-include("//bazel/modules:powershell.MODULE.bazel")
 include("//bazel/modules:wine.MODULE.bazel")
 
 new_local_repository(

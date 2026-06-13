@@ -47,7 +47,7 @@ struct WineProcesses {
 
 struct WineRuntimePaths {
     dll_path: PathBuf,
-    powershell_runtime: Option<PathBuf>,
+    powershell_runtime: PathBuf,
     wine: PathBuf,
     wineserver: PathBuf,
 }
@@ -80,9 +80,7 @@ impl WineTestCommand {
     pub fn spawn(self) -> Result<WineTestProcess> {
         let runtime = WineRuntimePaths::from_runfiles()?;
         let prefix = TempDir::new().context("create isolated Wine prefix")?;
-        if let Some(powershell_runtime) = runtime.powershell_runtime.as_deref() {
-            install_powershell_runtime(prefix.path(), powershell_runtime)?;
-        }
+        install_powershell_runtime(prefix.path(), &runtime.powershell_runtime)?;
         let mut command = StdCommand::new(&runtime.wine);
         configure_wine_environment(&mut command, &runtime, prefix.path());
         command
@@ -173,17 +171,10 @@ impl WineRuntimePaths {
             .context("locate Wine runtime directory")?
             .to_path_buf();
         let wineserver = codex_utils_cargo_bin::cargo_bin("wineserver")?;
-        let powershell_runtime = if std::env::var_os("CARGO_BIN_EXE_pwsh-runtime-marker").is_some() {
-            let marker = codex_utils_cargo_bin::cargo_bin("pwsh-runtime-marker")?;
-            Some(
-                marker
-                    .parent()
-                    .context("locate PowerShell runtime directory")?
-                    .to_path_buf(),
-            )
-        } else {
-            None
-        };
+        let powershell_runtime = codex_utils_cargo_bin::cargo_bin("pwsh-runtime-marker")?
+            .parent()
+            .context("locate PowerShell runtime directory")?
+            .to_path_buf();
         Ok(Self {
             dll_path,
             powershell_runtime,
@@ -346,10 +337,7 @@ fn configure_wine_environment(command: &mut StdCommand, runtime: &WineRuntimePat
         .env("TMP", r"C:\windows\temp");
 }
 
-/// Installs the opt-in pinned PowerShell runtime into a Wine prefix.
-///
-/// The calling `wine_rust_test` target must set `include_powershell = True`;
-/// otherwise the runtime marker is absent.
+/// Installs the pinned PowerShell runtime into a Wine prefix.
 pub fn install_pinned_powershell_runtime(prefix: &Path) -> Result<()> {
     let marker = codex_utils_cargo_bin::cargo_bin("pwsh-runtime-marker")?;
     let runtime = marker
