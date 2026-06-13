@@ -63,7 +63,16 @@ impl TurnEnvironments {
                     && environment.cwd_uri() == &selected_environment.cwd
             }) {
                 Some(environment) => environment.clone(),
-                None => self.resolve_selection(selected_environment).await?,
+                None => match self.resolve_selection(selected_environment).await {
+                    Ok(environment) => environment,
+                    Err(err) => {
+                        tracing::warn!(
+                            "skipping unresolved turn environment `{}`: {err}",
+                            selected_environment.environment_id
+                        );
+                        continue;
+                    }
+                },
             };
             turn_environments.push(turn_environment);
         }
@@ -292,6 +301,31 @@ url = "ws://127.0.0.1:8765"
                 .expect("resolved shell")
             )
         );
+    }
+
+    #[tokio::test]
+    async fn unresolved_environment_selections_are_skipped() {
+        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let manager = Arc::new(EnvironmentManager::default_for_tests());
+        let local = TurnEnvironmentSelection {
+            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+            cwd: cwd.clone(),
+        };
+
+        let resolved = TurnEnvironments::resolve(
+            manager,
+            &[
+                TurnEnvironmentSelection {
+                    environment_id: "missing".to_string(),
+                    cwd,
+                },
+                local.clone(),
+            ],
+        )
+        .await
+        .expect("valid environment selections should resolve");
+
+        assert_eq!(resolved.to_selections(), vec![local]);
     }
 
     #[tokio::test]
