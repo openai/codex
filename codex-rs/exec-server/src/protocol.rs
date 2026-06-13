@@ -79,8 +79,8 @@ pub struct EnvironmentInfo {
 impl EnvironmentInfo {
     /// Renders a path using this environment's native path syntax.
     ///
-    /// TODO(anp): Once `PathUri` carries an environment identifier, resolve the
-    /// environment from that identifier and verify it matches this metadata.
+    /// TODO(anp): Once `PathUri` carries an environment identifier, invert this
+    /// relationship and use the URI to resolve the environment information.
     pub fn render_path(&self, path: &PathUri) -> Result<NativePathString, NativePathStringError> {
         NativePathString::from_path_uri(path, self.path_convention)
     }
