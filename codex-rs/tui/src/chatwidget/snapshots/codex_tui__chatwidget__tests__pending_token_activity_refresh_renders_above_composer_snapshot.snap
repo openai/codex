@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
+---
+
+/usage daily
+
+ Token activity
+   Loading...
+
+
+› Ask Codex to do anything
+
+  gpt-5.5 default · /tmp/project

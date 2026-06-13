@@ -174,6 +174,7 @@ impl<'a> SlashInput<'a> {
                 collaboration_modes_enabled: self.command_flags.collaboration_modes_enabled,
                 connectors_enabled: self.command_flags.connectors_enabled,
                 plugins_command_enabled: self.command_flags.plugins_command_enabled,
+                token_activity_command_enabled: self.command_flags.token_activity_command_enabled,
                 service_tier_commands_enabled: self.command_flags.service_tier_commands_enabled,
                 goal_command_enabled: self.command_flags.goal_command_enabled,
                 personality_command_enabled: self.command_flags.personality_command_enabled,
