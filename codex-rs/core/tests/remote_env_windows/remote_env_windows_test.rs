@@ -2,7 +2,11 @@
 
 use anyhow::Context;
 use anyhow::Result;
+use app_test_support::TestAppServer;
+use codex_app_server_protocol::JSONRPCError;
+use codex_app_server_protocol::RequestId;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
+use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -25,12 +29,16 @@ use core_test_support::wait_for_event;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
+use tokio::time::timeout;
 use wine_test_support::WineTestCommand;
 
+const APP_SERVER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const CALL_ID: &str = "wine-cmd-smoke";
 const COMMAND: &str = r#"if ((Get-Location).Path -ne 'C:\windows') { exit 1 }"#;
+const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
@@ -162,6 +170,67 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
                 .function_call_output_content_and_success(CALL_ID)
                 .context("command output should be present")?;
             assert_ne!(success, Some(false));
+
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn app_server_rejects_windows_environment_cwd_uri() -> Result<()> {
+    let executable = codex_utils_cargo_bin::cargo_bin("wine-windows-exec-server")?;
+    let mut exec_server = WineTestCommand::new(executable)
+        .env("CODEX_HOME", r"C:\codex-home")
+        .spawn()?;
+    let stdout = exec_server.take_stdout();
+
+    exec_server
+        .scope(async move {
+            let mut lines = BufReader::new(stdout).lines();
+            let exec_server_url = loop {
+                let line = lines
+                    .next_line()
+                    .await?
+                    .context("Wine exec-server exited before reporting its URL")?;
+                if line.starts_with("ws://") {
+                    break line;
+                }
+            };
+
+            let codex_home = TempDir::new()?;
+            let mut app_server = TestAppServer::new_with_env(
+                codex_home.path(),
+                &[(
+                    CODEX_EXEC_SERVER_URL_ENV_VAR,
+                    Some(exec_server_url.as_str()),
+                )],
+            )
+            .await?;
+            timeout(APP_SERVER_READ_TIMEOUT, app_server.initialize()).await??;
+
+            let request_id = app_server
+                .send_raw_request(
+                    "thread/start",
+                    Some(json!({
+                        "environments": [{
+                            "environmentId": REMOTE_ENVIRONMENT_ID,
+                            "cwd": "file:///C:/windows",
+                        }],
+                    })),
+                )
+                .await?;
+            let error: JSONRPCError = timeout(
+                APP_SERVER_READ_TIMEOUT,
+                app_server.read_stream_until_error_message(RequestId::Integer(request_id)),
+            )
+            .await??;
+
+            assert_eq!(error.id, RequestId::Integer(request_id));
+            assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
+            assert_eq!(
+                error.error.message,
+                "Invalid request: AbsolutePathBuf deserialized without a base path"
+            );
 
             Ok(())
         })

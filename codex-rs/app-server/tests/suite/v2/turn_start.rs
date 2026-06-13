@@ -1354,47 +1354,6 @@ async fn turn_start_rejects_unknown_environment_before_starting_turn() -> Result
 }
 
 #[tokio::test]
-async fn thread_start_rejects_remote_environment_path_uri() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let codex_home = TempDir::new()?;
-    create_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        "never",
-        &BTreeMap::default(),
-    )?;
-
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_raw_request(
-            "thread/start",
-            Some(json!({
-                "environments": [{
-                    "environmentId": "remote",
-                    "cwd": "file:///C:/windows",
-                }],
-            })),
-        )
-        .await?;
-    let err: JSONRPCError = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-
-    assert_eq!(err.id, RequestId::Integer(request_id));
-    assert_eq!(err.error.code, INVALID_REQUEST_ERROR_CODE);
-    assert_eq!(
-        err.error.message,
-        "Invalid request: AbsolutePathBuf deserialized without a base path"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<()> {
     // Provide a mock server and config so model wiring is valid.
     // Three Codex turns hit the mock model (session start + two turn/start calls).
