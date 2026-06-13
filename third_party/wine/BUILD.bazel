@@ -1,0 +1,40 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "bin/wine",
+    "bin/wineserver",
+])
+
+filegroup(
+    name = "wine",
+    srcs = ["bin/wine"],
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "wineserver",
+    srcs = ["bin/wineserver"],
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "runtime_marker",
+    srcs = ["lib/wine/x86_64-unix/ntdll.so"],
+    tags = ["manual"],
+)
+
+# Static import libraries are build-time-only, so omit them from test runfiles.
+filegroup(
+    name = "runtime",
+    srcs = glob(
+        [
+            "lib/wine/**",
+            "share/wine/**",
+        ],
+        # This BUILD file is also loaded from the source tree, where the
+        # archive-only paths are intentionally absent.
+        allow_empty = True,
+        exclude = ["**/*.a"],
+    ),
+    tags = ["manual"],
+)

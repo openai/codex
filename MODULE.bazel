@@ -326,6 +326,8 @@ http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "ht
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
 new_local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
 
+include("//bazel/modules:wine.MODULE.bazel")
+
 new_local_repository(
     name = "v8_targets",
     build_file = "//third_party/v8:BUILD.bazel",
