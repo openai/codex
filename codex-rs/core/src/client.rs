@@ -806,13 +806,10 @@ impl ModelClient {
         api_provider: codex_api::Provider,
         api_auth: SharedAuthProvider,
         responses_metadata: &CodexResponsesMetadata,
-        turn_state: Option<Arc<OnceLock<String>>>,
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
-        let headers = self
-            .build_websocket_headers(responses_metadata, turn_state.as_ref())
-            .await;
+        let headers = self.build_websocket_headers(responses_metadata).await;
         let websocket_telemetry = ModelClientSession::build_websocket_telemetry(
             session_telemetry,
             auth_context,
@@ -826,7 +823,7 @@ impl ModelClient {
             ApiWebSocketResponsesClient::new(api_provider, api_auth).connect(
                 headers,
                 codex_login::default_client::default_headers(),
-                turn_state,
+                /*turn_state*/ None,
                 Some(websocket_telemetry),
             ),
         )
@@ -886,16 +883,14 @@ impl ModelClient {
     }
 
     /// Builds websocket handshake headers for both prewarm and turn-time reconnect.
-    ///
-    /// Callers should pass the current turn-state lock when available so sticky-routing state is
-    /// replayed on reconnect within the same turn.
     async fn build_websocket_headers(
         &self,
         responses_metadata: &CodexResponsesMetadata,
-        turn_state: Option<&Arc<OnceLock<String>>>,
     ) -> ApiHeaderMap {
-        let mut headers =
-            build_responses_headers(self.state.beta_features_header.as_deref(), turn_state);
+        let mut headers = build_responses_headers(
+            self.state.beta_features_header.as_deref(),
+            /*turn_state*/ None,
+        );
         if let Ok(header_value) = HeaderValue::from_str(&responses_metadata.thread_id) {
             headers.insert("x-client-request-id", header_value);
         }
@@ -1088,7 +1083,6 @@ impl ModelClientSession {
                 client_setup.api_provider,
                 client_setup.api_auth,
                 responses_metadata,
-                Some(Arc::clone(&self.turn_state)),
                 auth_context,
                 RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
             )
@@ -1120,7 +1114,6 @@ impl ModelClientSession {
             api_provider,
             api_auth,
             responses_metadata,
-            options,
             auth_context,
             request_route_telemetry,
         } = params;
@@ -1133,10 +1126,6 @@ impl ModelClientSession {
             self.websocket_session.last_request = None;
             self.websocket_session.last_response_rx = None;
             self.websocket_session.last_response_from_untraced_warmup = false;
-            let turn_state = options
-                .turn_state
-                .clone()
-                .unwrap_or_else(|| Arc::clone(&self.turn_state));
             let new_conn = match self
                 .client
                 .connect_websocket(
@@ -1144,7 +1133,6 @@ impl ModelClientSession {
                     api_provider,
                     api_auth,
                     responses_metadata,
-                    Some(turn_state),
                     auth_context,
                     request_route_telemetry,
                 )
@@ -1346,15 +1334,6 @@ impl ModelClientSession {
                 client_setup.api_auth.as_ref(),
                 pending_retry,
             );
-            let compression = self.responses_request_compression(client_setup.auth.as_ref());
-
-            let options = self
-                .build_responses_options(
-                    responses_metadata,
-                    compression,
-                    model_info.use_responses_lite,
-                )
-                .await;
             let request = self.client.build_responses_request(
                 &client_setup.api_provider,
                 prompt,
@@ -1364,12 +1343,15 @@ impl ModelClientSession {
                 service_tier.clone(),
                 responses_metadata,
             )?;
+            let mut client_metadata = self
+                .client
+                .build_ws_client_metadata(responses_metadata, model_info.use_responses_lite);
+            if let Some(turn_state) = self.turn_state.get() {
+                client_metadata.insert(X_CODEX_TURN_STATE_HEADER.to_string(), turn_state.clone());
+            }
             let mut ws_payload = ResponseCreateWsRequest {
                 client_metadata: response_create_client_metadata(
-                    Some(self.client.build_ws_client_metadata(
-                        responses_metadata,
-                        model_info.use_responses_lite,
-                    )),
+                    Some(client_metadata),
                     request_trace.as_ref(),
                 ),
                 ..ResponseCreateWsRequest::from(&request)
@@ -1384,7 +1366,6 @@ impl ModelClientSession {
                     api_provider: client_setup.api_provider,
                     api_auth: client_setup.api_auth,
                     responses_metadata,
-                    options: &options,
                     auth_context: request_auth_context,
                     request_route_telemetry: RequestRouteTelemetry::for_endpoint(
                         RESPONSES_ENDPOINT,
@@ -1441,7 +1422,11 @@ impl ModelClientSession {
                     ))
                 })?;
             let stream_result = websocket_connection
-                .stream_request(ws_request, self.websocket_session.connection_reused())
+                .stream_request(
+                    ws_request,
+                    self.websocket_session.connection_reused(),
+                    Some(Arc::clone(&self.turn_state)),
+                )
                 .await
                 .map_err(|err| {
                     let response_debug_context =
@@ -1920,7 +1905,6 @@ struct WebsocketConnectParams<'a> {
     api_provider: codex_api::Provider,
     api_auth: SharedAuthProvider,
     responses_metadata: &'a CodexResponsesMetadata,
-    options: &'a ApiResponsesOptions,
     auth_context: AuthRequestTelemetryContext,
     request_route_telemetry: RequestRouteTelemetry,
 }

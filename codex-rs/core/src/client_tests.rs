@@ -585,7 +585,7 @@ async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses() 
     );
 
     let headers = model_client
-        .build_websocket_headers(&responses_metadata, /*turn_state*/ None)
+        .build_websocket_headers(&responses_metadata)
         .await;
 
     assert_eq!(
