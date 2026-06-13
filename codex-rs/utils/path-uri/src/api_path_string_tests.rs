@@ -418,3 +418,78 @@ fn serializes_and_deserializes_as_a_string() {
         rendered
     );
 }
+
+#[test]
+fn resolves_posix_paths_without_host_path_rules() {
+    let base = PathUri::parse("file:///workspace/src").expect("base URI");
+
+    for (path, expected) in [
+        ("", "file:///workspace/src"),
+        ("../README.md", "file:///workspace/README.md"),
+        ("../../../README.md", "file:///README.md"),
+        ("/tmp/output", "file:///tmp/output"),
+        (
+            r"generated\output",
+            "file:///workspace/src/generated%5Coutput",
+        ),
+    ] {
+        assert_eq!(
+            base.resolve_native(path, PathConvention::Posix),
+            Ok(PathUri::parse(expected).expect("resolved URI")),
+            "resolving {path}"
+        );
+    }
+}
+
+#[test]
+fn resolves_windows_drive_and_unc_paths_without_host_path_rules() {
+    let drive = PathUri::parse("file:///C:/workspace/src").expect("drive URI");
+    let share = PathUri::parse("file://server/share/workspace/src").expect("share URI");
+
+    for (base, path, expected) in [
+        (&drive, "", "file:///C:/workspace/src"),
+        (&drive, r"..\README.md", "file:///C:/workspace/README.md"),
+        (&drive, r"\logs\output.txt", "file:///C:/logs/output.txt"),
+        (&drive, r"D:\other\file.txt", "file:///D:/other/file.txt"),
+        (
+            &drive,
+            r"\\other\share\file.txt",
+            "file://other/share/file.txt",
+        ),
+        (
+            &share,
+            r"..\..\..\README.md",
+            "file://server/share/README.md",
+        ),
+        (
+            &share,
+            r"\logs\output.txt",
+            "file://server/share/logs/output.txt",
+        ),
+    ] {
+        assert_eq!(
+            base.resolve_native(path, PathConvention::Windows),
+            Ok(PathUri::parse(expected).expect("resolved URI")),
+            "resolving {path}"
+        );
+    }
+}
+
+#[test]
+fn relative_resolution_rejects_incompatible_and_opaque_bases() {
+    let posix = PathUri::parse("file:///workspace").expect("POSIX URI");
+    let opaque = PathUri::parse("file:///%00/bad/path/YQ").expect("opaque fallback URI");
+
+    assert!(matches!(
+        posix.resolve_native("child", PathConvention::Windows),
+        Err(ApiPathStringError::IncompatibleConvention { .. })
+    ));
+    assert!(matches!(
+        opaque.resolve_native("child", PathConvention::Posix),
+        Err(ApiPathStringError::OpaqueFallback { .. })
+    ));
+    assert_eq!(
+        opaque.resolve_native("/tmp", PathConvention::Posix),
+        Ok(PathUri::parse("file:///tmp").expect("absolute URI"))
+    );
+}

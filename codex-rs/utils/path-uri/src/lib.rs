@@ -206,6 +206,20 @@ impl PathUri {
         Self::try_from(url)
     }
 
+    /// Resolves a native absolute or relative path against this URI using the
+    /// supplied path convention.
+    ///
+    /// This is host-independent: Windows paths can be resolved on POSIX and
+    /// vice versa. Relative navigation is lexical and cannot escape the drive,
+    /// UNC share, or POSIX root represented by this URI.
+    pub fn resolve_native(
+        &self,
+        path: &str,
+        convention: PathConvention,
+    ) -> Result<Self, ApiPathStringError> {
+        api_path_string::resolve_native_path(self, path, convention)
+    }
+
     /// Converts this file URI to a path using the current host's path rules.
     ///
     /// Conversion should succeed when the URI was created from an

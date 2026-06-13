@@ -56,6 +56,12 @@ impl fmt::Display for PathConvention {
 pub struct ApiPathString(String);
 
 impl ApiPathString {
+    /// Wraps an API path string without interpreting it using the current
+    /// host's path rules.
+    pub fn new(path: impl Into<String>) -> Self {
+        Self(path.into())
+    }
+
     /// Converts an absolute path to a [`PathUri`] before rendering it using the
     /// requested native path convention.
     pub fn from_abs_path(
@@ -154,6 +160,198 @@ fn parse_windows_path(path: &str) -> Option<PathUri> {
     }
 
     None
+}
+
+pub(crate) fn resolve_native_path(
+    base: &PathUri,
+    path: &str,
+    convention: PathConvention,
+) -> Result<PathUri, ApiPathStringError> {
+    if path.is_empty() {
+        return Ok(base.clone());
+    }
+
+    match convention {
+        PathConvention::Posix => {
+            if path.starts_with('/') {
+                return parse_resolved_posix_path(path);
+            }
+            reject_opaque_base(base)?;
+            let base = render_posix_path(base)?;
+            parse_resolved_posix_path(&format!("{}/{path}", base.trim_end_matches('/')))
+        }
+        PathConvention::Windows => resolve_windows_path(base, path),
+    }
+}
+
+fn resolve_windows_path(base: &PathUri, path: &str) -> Result<PathUri, ApiPathStringError> {
+    if is_absolute_windows_path(path) {
+        return parse_resolved_windows_path(path);
+    }
+
+    reject_opaque_base(base)?;
+    let base = render_windows_path(base)?;
+    let path = if path.starts_with(['\\', '/']) {
+        let root_end = windows_root_end(&base);
+        format!(
+            "{}\\{}",
+            &base[..root_end],
+            path.trim_start_matches(['\\', '/'])
+        )
+    } else {
+        format!("{}\\{path}", base.trim_end_matches(['\\', '/']))
+    };
+    parse_resolved_windows_path(&path)
+}
+
+fn parse_resolved_posix_path(path: &str) -> Result<PathUri, ApiPathStringError> {
+    let Some(path) = path.strip_prefix('/') else {
+        return Err(invalid_native_path(path, PathConvention::Posix));
+    };
+    if path.contains('\0') {
+        return Err(invalid_native_path(path, PathConvention::Posix));
+    }
+    build_resolved_path_uri(
+        /*host*/ None,
+        path.split('/'),
+        /*protected_segments*/ 0,
+        path,
+        PathConvention::Posix,
+    )
+}
+
+fn parse_resolved_windows_path(path: &str) -> Result<PathUri, ApiPathStringError> {
+    if path.contains('\0') {
+        return Err(invalid_native_path(path, PathConvention::Windows));
+    }
+
+    if let Some(rest) = path.strip_prefix(r"\\").or_else(|| path.strip_prefix("//")) {
+        let mut segments = rest.split(is_windows_separator_char);
+        let Some(host) = segments.next().filter(|host| !host.is_empty()) else {
+            return Err(invalid_native_path(path, PathConvention::Windows));
+        };
+        let Some(share) = segments.next().filter(|share| !share.is_empty()) else {
+            return Err(invalid_native_path(path, PathConvention::Windows));
+        };
+        return build_resolved_path_uri(
+            Some(host),
+            std::iter::once(share).chain(segments),
+            /*protected_segments*/ 1,
+            path,
+            PathConvention::Windows,
+        );
+    }
+
+    let bytes = path.as_bytes();
+    if !matches!(
+        bytes,
+        [drive, b':', separator, ..]
+            if drive.is_ascii_alphabetic() && is_windows_separator_byte(*separator)
+    ) {
+        return Err(invalid_native_path(path, PathConvention::Windows));
+    }
+    build_resolved_path_uri(
+        /*host*/ None,
+        std::iter::once(&path[..2]).chain(path[3..].split(is_windows_separator_char)),
+        /*protected_segments*/ 1,
+        path,
+        PathConvention::Windows,
+    )
+}
+
+fn build_resolved_path_uri<'a>(
+    host: Option<&str>,
+    segments: impl IntoIterator<Item = &'a str>,
+    protected_segments: usize,
+    native_path: &str,
+    convention: PathConvention,
+) -> Result<PathUri, ApiPathStringError> {
+    let segments = segments.into_iter().collect::<Vec<_>>();
+    let preserve_trailing_separator = segments
+        .last()
+        .is_some_and(|segment| matches!(*segment, "" | "." | ".."));
+    let mut normalized_segments = Vec::with_capacity(segments.len());
+    for segment in segments {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                if normalized_segments.len() > protected_segments {
+                    normalized_segments.pop();
+                }
+            }
+            _ => {
+                let is_drive = convention == PathConvention::Windows
+                    && host.is_none()
+                    && normalized_segments.is_empty()
+                    && is_windows_drive(segment);
+                if convention == PathConvention::Windows
+                    && !is_drive
+                    && !is_valid_windows_component(segment)
+                {
+                    return Err(invalid_native_path(native_path, convention));
+                }
+                normalized_segments.push(segment);
+            }
+        }
+    }
+    if normalized_segments.len() < protected_segments {
+        return Err(invalid_native_path(native_path, convention));
+    }
+    if preserve_trailing_separator {
+        normalized_segments.push("");
+    }
+
+    path_uri_from_segments(host, normalized_segments.into_iter())
+        .ok_or_else(|| invalid_native_path(native_path, convention))
+}
+
+fn is_absolute_windows_path(path: &str) -> bool {
+    path.strip_prefix(r"\\")
+        .or_else(|| path.strip_prefix("//"))
+        .is_some()
+        || matches!(
+            path.as_bytes(),
+            [drive, b':', separator, ..]
+                if drive.is_ascii_alphabetic() && is_windows_separator_byte(*separator)
+        )
+}
+
+fn windows_root_end(path: &str) -> usize {
+    if path.starts_with(r"\\") {
+        path.match_indices('\\')
+            .nth(3)
+            .map_or(path.len(), |(index, _)| index)
+    } else {
+        2
+    }
+}
+
+fn is_windows_drive(component: &str) -> bool {
+    let bytes = component.as_bytes();
+    bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
+fn is_valid_windows_component(component: &str) -> bool {
+    !component
+        .chars()
+        .any(|character| character <= '\u{1f}' || r#"<>:"/\|?*"#.contains(character))
+        && !component.ends_with([' ', '.'])
+}
+
+fn reject_opaque_base(path: &PathUri) -> Result<(), ApiPathStringError> {
+    if path.opaque_fallback_bytes().is_some() {
+        return Err(ApiPathStringError::OpaqueFallback {
+            path: path.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn invalid_native_path(path: &str, convention: PathConvention) -> ApiPathStringError {
+    ApiPathStringError::InvalidNativePath {
+        path: path.to_string(),
+        convention,
+    }
 }
 
 fn path_uri_from_segments<'a>(
