@@ -7,6 +7,7 @@ use tracing::trace;
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerError;
+use crate::ExecServerFileSystemSandboxContext;
 use crate::ExecutorFileSystem;
 use crate::ExecutorFileSystemFuture;
 use crate::FileMetadata;
@@ -286,10 +287,11 @@ impl ExecutorFileSystem for RemoteFileSystem {
 
 fn remote_sandbox_context(
     sandbox: Option<&FileSystemSandboxContext>,
-) -> Option<FileSystemSandboxContext> {
+) -> Option<ExecServerFileSystemSandboxContext> {
     sandbox
         .cloned()
         .map(FileSystemSandboxContext::drop_cwd_if_unused)
+        .map(Into::into)
 }
 
 fn map_remote_error(error: ExecServerError) -> io::Error {

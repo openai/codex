@@ -498,6 +498,7 @@ mod tests {
     use crate::ProcessId;
     use crate::environment_provider::EnvironmentDefault;
     use crate::environment_provider::EnvironmentProviderSnapshot;
+    use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
 
     fn test_runtime_paths() -> ExecServerRuntimePaths {

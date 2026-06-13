@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::FileSystemSandboxContext;
+use crate::ExecServerFileSystemSandboxContext;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_utils_path_uri::PathUri;
@@ -198,7 +198,7 @@ pub struct TerminateResponse {
 #[serde(rename_all = "camelCase")]
 pub struct FsReadFileParams {
     pub path: PathUri,
-    pub sandbox: Option<FileSystemSandboxContext>,
+    pub sandbox: Option<ExecServerFileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -212,7 +212,7 @@ pub struct FsReadFileResponse {
 pub struct FsWriteFileParams {
     pub path: PathUri,
     pub data_base64: String,
-    pub sandbox: Option<FileSystemSandboxContext>,
+    pub sandbox: Option<ExecServerFileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -224,7 +224,7 @@ pub struct FsWriteFileResponse {}
 pub struct FsCreateDirectoryParams {
     pub path: PathUri,
     pub recursive: Option<bool>,
-    pub sandbox: Option<FileSystemSandboxContext>,
+    pub sandbox: Option<ExecServerFileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -235,7 +235,7 @@ pub struct FsCreateDirectoryResponse {}
 #[serde(rename_all = "camelCase")]
 pub struct FsGetMetadataParams {
     pub path: PathUri,
-    pub sandbox: Option<FileSystemSandboxContext>,
+    pub sandbox: Option<ExecServerFileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -253,7 +253,7 @@ pub struct FsGetMetadataResponse {
 #[serde(rename_all = "camelCase")]
 pub struct FsCanonicalizeParams {
     pub path: PathUri,
-    pub sandbox: Option<FileSystemSandboxContext>,
+    pub sandbox: Option<ExecServerFileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -266,7 +266,7 @@ pub struct FsCanonicalizeResponse {
 #[serde(rename_all = "camelCase")]
 pub struct FsReadDirectoryParams {
     pub path: PathUri,
-    pub sandbox: Option<FileSystemSandboxContext>,
+    pub sandbox: Option<ExecServerFileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -289,7 +289,7 @@ pub struct FsRemoveParams {
     pub path: PathUri,
     pub recursive: Option<bool>,
     pub force: Option<bool>,
-    pub sandbox: Option<FileSystemSandboxContext>,
+    pub sandbox: Option<ExecServerFileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -302,7 +302,7 @@ pub struct FsCopyParams {
     pub source_path: PathUri,
     pub destination_path: PathUri,
     pub recursive: bool,
-    pub sandbox: Option<FileSystemSandboxContext>,
+    pub sandbox: Option<ExecServerFileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -466,8 +466,10 @@ mod tests {
             PermissionProfile::default(),
             PathUri::from_path(&legacy_cwd).expect("cwd URI"),
         );
+        let expected_exec_server_sandbox: crate::ExecServerFileSystemSandboxContext =
+            expected_sandbox.into();
         let mut legacy_sandbox =
-            serde_json::to_value(&expected_sandbox).expect("sandbox should serialize");
+            serde_json::to_value(&expected_exec_server_sandbox).expect("sandbox should serialize");
         legacy_sandbox["cwd"] = serde_json::json!(legacy_cwd.to_string_lossy());
         let params: FsReadFileParams = serde_json::from_value(serde_json::json!({
             "path": legacy_path.to_string_lossy(),
@@ -476,7 +478,7 @@ mod tests {
         .expect("legacy absolute path should deserialize");
         let expected = FsReadFileParams {
             path: PathUri::from_path(legacy_path).expect("path URI"),
-            sandbox: Some(expected_sandbox.clone()),
+            sandbox: Some(expected_exec_server_sandbox.clone()),
         };
 
         assert_eq!(params, expected);
@@ -484,7 +486,7 @@ mod tests {
             serde_json::to_value(params).expect("params should serialize"),
             serde_json::json!({
                 "path": expected.path.to_string(),
-                "sandbox": serde_json::to_value(expected_sandbox)
+                "sandbox": serde_json::to_value(expected_exec_server_sandbox)
                     .expect("sandbox should serialize"),
             })
         );

@@ -9,6 +9,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -32,7 +33,7 @@ use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeResponse;
 
 #[tokio::test]
-async fn remote_file_system_sends_path_and_sandbox_cwd_uris_without_native_conversion() {
+async fn remote_file_system_sends_path_and_sandbox_uris_without_native_conversion() {
     let (websocket_url, captured_params, server) =
         record_read_file_params(/*expected_requests*/ 2).await;
     let file_system = RemoteFileSystem::new(LazyRemoteExecServerClient::new(
@@ -43,12 +44,24 @@ async fn remote_file_system_sends_path_and_sandbox_cwd_uris_without_native_conve
         PathUri::parse("file://server/share/src/main.rs").expect("valid UNC URI"),
     ];
     let sandbox_cwd = non_native_cwd();
-    let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-        path: FileSystemPath::Special {
-            value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+    let permission_root = AbsolutePathBuf::from_absolute_path(
+        std::env::temp_dir().join("exec-server-permission-root"),
+    )
+    .expect("absolute permission root");
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: permission_root,
+            },
+            access: FileSystemAccessMode::Read,
         },
-        access: FileSystemAccessMode::Write,
-    }]);
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+    ]);
     let sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
         PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
         sandbox_cwd,
@@ -68,7 +81,7 @@ async fn remote_file_system_sends_path_and_sandbox_cwd_uris_without_native_conve
         .into_iter()
         .map(|path| FsReadFileParams {
             path,
-            sandbox: Some(sandbox.clone()),
+            sandbox: Some(sandbox.clone().into()),
         })
         .collect::<Vec<_>>();
     assert_eq!(

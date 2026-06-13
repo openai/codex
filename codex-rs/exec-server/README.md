@@ -352,10 +352,17 @@ absolute path strings and normalize them to `file:` URIs:
 - `fs/copy`
 
 Each filesystem request accepts an optional `sandbox` object. When `sandbox`
-contains a `ReadOnly` or `WorkspaceWrite` policy, the operation runs in a
-hidden helper process launched from the top-level `codex` executable and
-prepared through the shared sandbox transform path. Helper requests and
-responses are passed over stdin/stdout.
+contains a managed permission profile, concrete filesystem permission paths
+are canonical `file:` URIs. Native absolute path strings and legacy
+`file_system.read` / `file_system.write` roots remain accepted for compatibility
+and are normalized to the canonical tagged profile with `file:` URIs when
+serialized. The server converts those paths to native absolute paths before
+invoking the local filesystem; a URI that is not native to the server host is
+rejected as an invalid request.
+
+Sandboxed operations run in a hidden helper process launched from the
+top-level `codex` executable and prepared through the shared sandbox transform
+path. Helper requests and responses are passed over stdin/stdout.
 
 ## Errors
 
@@ -384,6 +391,10 @@ The crate exports:
 - `ExecServerClientConnectOptions`
 - `RemoteExecServerConnectArgs`
 - protocol request/response structs for process and filesystem RPCs
+- exec-server-owned sandbox permission types, including
+  `ExecServerFileSystemSandboxContext`, `ExecServerPermissionProfile`, and the
+  filesystem path, entry, access, special-path, network, and Windows-level
+  types they contain
 - `DEFAULT_LISTEN_URL` and `ExecServerListenUrlParseError`
 - `ExecServerRuntimePaths`
 - `run_main()` for embedding the websocket server
