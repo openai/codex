@@ -12,6 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CODEX_RS_ROOT = REPO_ROOT / "codex-rs"
+BUILDIFIER = REPO_ROOT / "tools" / "buildifier"
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,15 @@ class FormatterResult:
 def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
     just_args = ["just", "--unstable", "--fmt"]
     cargo_args = ["cargo", "fmt", "--", "--config", "imports_granularity=Item"]
+    # Invoke DotSlash explicitly because Windows does not honor shebangs.
+    buildifier_args = [
+        "dotslash",
+        str(BUILDIFIER),
+        "-mode=check" if check else "-mode=fix",
+        "-lint=off",
+        "-r",
+        ".",
+    ]
     # Each `--project` retains its local dependency and Ruff configuration context.
     sdk_uv_run_args = [
         "uv",
@@ -86,6 +96,7 @@ def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
             # for each crate, so suppress that expected stderr noise.
             (Command(tuple(cargo_args), CODEX_RS_ROOT, discard_stderr=True),),
         ),
+        FormatterGroup("Bazel/Starlark", (Command(tuple(buildifier_args)),)),
         FormatterGroup(
             "Python SDK",
             (

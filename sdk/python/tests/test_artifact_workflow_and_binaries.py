@@ -108,7 +108,9 @@ def test_root_fmt_recipes_use_shared_formatter_driver() -> None:
     }
     expected = {
         "working_directory": 'set working-directory := "codex-rs"',
-        "fmt_comment": "# Format the justfile, Rust, Python SDK code, and Python scripts.",
+        "fmt_comment": (
+            "# Format the justfile, Rust, Bazel/Starlark, Python SDK code, and Python scripts."
+        ),
         "fmt_commands": ["{{ python }} ../scripts/format.py"],
         "fmt_check_comment": "# Check formatting without modifying files.",
         "fmt_check_commands": ["{{ python }} ../scripts/format.py --check"],
@@ -131,11 +133,12 @@ def test_root_format_driver_covers_all_formatter_groups() -> None:
     assert [group.name for group in formatters] == [
         "Just",
         "Rust",
+        "Bazel/Starlark",
         "Python SDK",
         "Python scripts",
     ]
     assert [group.name for group in checks] == [group.name for group in formatters]
-    assert [len(group.commands) for group in formatters] == [1, 1, 2, 1]
+    assert [len(group.commands) for group in formatters] == [1, 1, 1, 2, 1]
     assert [len(group.commands) for group in checks] == [
         len(group.commands) for group in formatters
     ]
@@ -157,22 +160,22 @@ def test_root_format_driver_covers_all_formatter_groups() -> None:
     )
     assert all(
         command.args[: len(sdk_uv_run_args)] == sdk_uv_run_args
-        for group in (formatters[2], checks[2])
+        for group in (formatters[3], checks[3])
         for command in group.commands
     )
     assert all(
         command.args[: len(scripts_uv_run_args)] == scripts_uv_run_args
-        for group in (formatters[3], checks[3])
+        for group in (formatters[4], checks[4])
         for command in group.commands
     )
-    assert formatters[2].commands[0].args[-5:] == (
+    assert formatters[3].commands[0].args[-5:] == (
         "ruff",
         "check",
         "--fix",
         "--fix-only",
         "sdk/python",
     )
-    assert checks[2].commands[0].args[-4:] == (
+    assert checks[3].commands[0].args[-4:] == (
         "ruff",
         "check",
         "--diff",
@@ -195,11 +198,23 @@ def test_root_format_driver_covers_all_formatter_groups() -> None:
         "imports_granularity=Item",
         "--check",
     )
-    assert [group.commands[-1].args[-3:] for group in formatters[2:]] == [
+    assert formatters[2].commands[-1].args[-4:] == (
+        "-mode=fix",
+        "-lint=off",
+        "-r",
+        ".",
+    )
+    assert checks[2].commands[-1].args[-4:] == (
+        "-mode=check",
+        "-lint=off",
+        "-r",
+        ".",
+    )
+    assert [group.commands[-1].args[-3:] for group in formatters[3:]] == [
         ("ruff", "format", "sdk/python"),
         ("ruff", "format", "scripts"),
     ]
-    assert [group.commands[-1].args[-4:] for group in checks[2:]] == [
+    assert [group.commands[-1].args[-4:] for group in checks[3:]] == [
         ("ruff", "format", "--check", "sdk/python"),
         ("ruff", "format", "--check", "scripts"),
     ]
