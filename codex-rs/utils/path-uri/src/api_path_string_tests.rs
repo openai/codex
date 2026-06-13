@@ -571,3 +571,23 @@ fn native_resolution_rejects_reserved_windows_device_names() {
         );
     }
 }
+
+#[test]
+fn native_resolution_rejects_drive_relative_and_incomplete_unc_paths() {
+    let base = PathUri::parse("file:///C:/workspace").expect("Windows URI");
+
+    for (path, rejected_path) in [
+        (r"C:relative", r"C:\workspace\C:relative"),
+        (r"\\server", r"\\server"),
+        ("\\\\server\\", "\\\\server\\"),
+    ] {
+        assert_eq!(
+            base.resolve_native(path, PathConvention::Windows),
+            Err(ApiPathStringError::InvalidNativePath {
+                path: rejected_path.to_string(),
+                convention: PathConvention::Windows,
+            }),
+            "resolving {path:?}"
+        );
+    }
+}
