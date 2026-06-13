@@ -115,7 +115,7 @@ fn parse_posix_path(path: &str) -> Option<PathUri> {
             format!("/{path}").as_bytes(),
         ));
     }
-    path_uri_from_segments(None, path.split('/'))
+    path_uri_from_segments(/*host*/ None, path.split('/'))
 }
 
 fn parse_windows_path(path: &str) -> Option<PathUri> {
@@ -138,7 +138,7 @@ fn parse_windows_path(path: &str) -> Option<PathUri> {
             if drive.is_ascii_alphabetic() && is_windows_separator_byte(*separator)
     ) {
         return path_uri_from_segments(
-            None,
+            /*host*/ None,
             std::iter::once(&path[..2]).chain(path[3..].split(is_windows_separator_char)),
         );
     }
