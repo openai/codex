@@ -135,15 +135,10 @@ fn rejects_opaque_fallback_paths_that_cannot_be_recovered() {
     );
 }
 
-#[cfg(unix)]
 #[test]
-fn renders_native_opaque_fallback_paths_lossily() {
-    use std::os::unix::ffi::OsStringExt;
-
-    let native_path = std::path::PathBuf::from(std::ffi::OsString::from_vec(
-        b"/tmp/null-\0-\xff-byte".to_vec(),
-    ));
-    let path = PathUri::from_path(native_path).expect("absolute native path");
+fn renders_posix_opaque_fallback_paths_lossily_on_every_host() {
+    let path = PathUri::parse("file:///%00/bad/path/L3RtcC9udWxsLQAt_y1ieXRl")
+        .expect("valid POSIX opaque fallback URI");
 
     assert_eq!(
         NativePathString::from_path_uri(&path, PathConvention::Posix)
@@ -152,32 +147,31 @@ fn renders_native_opaque_fallback_paths_lossily() {
     );
     assert_eq!(
         NativePathString::from_path_uri(&path, PathConvention::Windows),
-        Err(NativePathStringError::IncompatibleConvention {
+        Err(NativePathStringError::OpaqueFallback {
             path: path.to_string(),
-            convention: PathConvention::Windows,
         })
     );
 }
 
-#[cfg(windows)]
 #[test]
-fn renders_windows_namespace_fallback_paths() {
-    for (native_path, expected) in [
-        // `AbsolutePathBuf` normalizes a device namespace root by retaining
-        // its root separator, so `\\.\COM1` round-trips as `\\.\COM1\`.
-        (r"\\.\COM1", r"\\.\COM1\"),
+fn renders_windows_namespace_fallback_paths_on_every_host() {
+    for (uri, expected) in [
         (
-            r"\\?\Volume{00000000-0000-0000-0000-000000000000}\file.rs",
+            "file:///%00/bad/path/XABcAC4AXABDAE8ATQAxAFwA",
+            r"\\.\COM1\",
+        ),
+        (
+            "file:///%00/bad/path/XABcAD8AXABWAG8AbAB1AG0AZQB7ADAAMAAwADAAMAAwADAAMAAtADAAMAAwADAALQAwADAAMAAwAC0AMAAwADAAMAAtADAAMAAwADAAMAAwADAAMAAwADAAMAAwAH0AXABmAGkAbABlAC4AcgBzAA",
             r"\\?\Volume{00000000-0000-0000-0000-000000000000}\file.rs",
         ),
     ] {
-        let path = PathUri::from_path(native_path).expect("absolute Windows namespace path");
+        let path = PathUri::parse(uri).expect("valid Windows opaque fallback URI");
 
         assert_eq!(
             NativePathString::from_path_uri(&path, PathConvention::Windows)
                 .map(NativePathString::into_string),
             Ok(expected.to_string()),
-            "rendering {native_path}"
+            "rendering {uri}"
         );
     }
 }
@@ -237,20 +231,26 @@ fn rejects_encoded_separators() {
 }
 
 #[test]
-fn rejects_invalid_windows_components() {
-    for uri in [
-        "file:///C:/a%3Fb",
-        "file:///C:/a%2Ab",
-        "file:///C:/trailing.",
-        "file:///C:/trailing%20",
-        "file:///C:/control-%01",
-        "file://server/sh%3Fare/file.rs",
+fn renders_windows_components_without_filesystem_validation() {
+    for (uri, expected) in [
+        ("file:///C:/a%3Fb", "C:\\a?b"),
+        ("file:///C:/a%2Ab", "C:\\a*b"),
+        ("file:///C:/trailing.", "C:\\trailing."),
+        ("file:///C:/trailing%20", "C:\\trailing "),
+        ("file:///C:/control-%01", "C:\\control-\u{1}"),
+        ("file:///C:/file.txt:stream", "C:\\file.txt:stream"),
+        (
+            "file://server/sh%3Fare/file.rs",
+            "\\\\server\\sh?are\\file.rs",
+        ),
     ] {
         let path = PathUri::parse(uri).expect("valid file URI");
-        assert!(matches!(
+
+        assert_eq!(
             NativePathString::from_path_uri(&path, PathConvention::Windows),
-            Err(NativePathStringError::InvalidWindowsComponent { .. })
-        ));
+            Ok(NativePathString(expected.to_string())),
+            "rendering {uri}"
+        );
     }
 }
 
