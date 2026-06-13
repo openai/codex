@@ -15,6 +15,15 @@ bazel test \
   --test_output=errors
 ```
 
+The full cross-OS flow uses a real Linux app-server for two turns against the
+same Windows exec-server:
+
+```sh
+bazel test \
+  //codex-rs/core/tests/remote_env_windows:wine-app-server-windows-exec-server-test \
+  --test_output=errors
+```
+
 No system Wine or apt packages are required. The target is intentionally
 limited to x86-64 for simplicity, so Bazel marks it incompatible elsewhere.
 Every process gets a fresh `WINEPREFIX` and isolated wineserver.

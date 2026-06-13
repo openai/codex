@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -23,6 +24,8 @@ pub(crate) const POWERSHELL_PATH: &str = r"C:\Program Files\PowerShell\7\pwsh.ex
 pub(crate) const POWERSHELL_VERSION: &str = "7.2.24";
 pub(crate) const WINDOWS_WORKSPACE: &str = r"C:\workspace";
 
+const POWERSHELL_DIRECTORY: &str = "drive_c/Program Files/PowerShell/7";
+
 pub(crate) struct WineExecServer {
     processes: Option<WineProcesses>,
 }
@@ -41,6 +44,7 @@ impl WineExecServer {
     pub(crate) async fn start() -> Result<(Self, String)> {
         let prefix = TempDir::new().context("create Wine prefix")?;
         wine_test_support::install_pinned_powershell_runtime(prefix.path())?;
+        install_powershell_exe_alias(prefix.path())?;
 
         let executable = codex_utils_cargo_bin::cargo_bin("wine-windows-exec-server")?;
         let wine = codex_utils_cargo_bin::cargo_bin("wine")?;
@@ -81,6 +85,10 @@ impl WineExecServer {
             ("TEMP".to_string(), r"C:\windows\temp".to_string()),
             ("TMP".to_string(), r"C:\windows\temp".to_string()),
             ("CODEX_HOME".to_string(), r"C:\codex-home".to_string()),
+            (
+                "WINEPATH".to_string(),
+                r"C:\Program Files\PowerShell\7".to_string(),
+            ),
             ("DOTNET_CLI_TELEMETRY_OPTOUT".to_string(), "1".to_string()),
             ("DOTNET_NOLOGO".to_string(), "1".to_string()),
             (
@@ -169,6 +177,22 @@ impl WineExecServer {
         self.processes.take();
         result
     }
+}
+
+fn install_powershell_exe_alias(prefix: &std::path::Path) -> Result<()> {
+    let directory = prefix.join(POWERSHELL_DIRECTORY);
+    let source = directory.join("pwsh.exe");
+    let target = directory.join("powershell.exe");
+    if fs::hard_link(&source, &target).is_err() {
+        fs::copy(&source, &target).with_context(|| {
+            format!(
+                "copy PowerShell executable alias from {} to {}",
+                source.display(),
+                target.display()
+            )
+        })?;
+    }
+    Ok(())
 }
 
 impl Drop for WineExecServer {

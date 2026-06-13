@@ -26,3 +26,39 @@ wine_rust_test(
         "@crates//:tokio",
     ],
 )
+
+wine_rust_test(
+    name = "wine-app-server-windows-exec-server-test",
+    timeout = "moderate",
+    srcs = [
+        "wine_app_server_windows_exec_server_test.rs",
+        "wine_exec_server_harness.rs",
+    ],
+    crate_name = "wine_app_server_windows_exec_server_test",
+    crate_root = "wine_app_server_windows_exec_server_test.rs",
+    data = [
+        "//codex-rs/app-server:codex-app-server",
+    ],
+    include_powershell = True,
+    rustc_env = {
+        "BAZEL_PACKAGE": "codex-rs/core/tests/remote_env_windows",
+    },
+    windows_binaries = {
+        "wine-windows-exec-server": "//codex-rs/exec-server/testing:windows-exec-server",
+    },
+    deps = [
+        "//bazel/rules/testing/wine:wine_test_support",
+        "//codex-rs/app-server-protocol",
+        "//codex-rs/app-server/tests/common",
+        "//codex-rs/core/tests/common",
+        "//codex-rs/exec-server",
+        "//codex-rs/utils/cargo-bin",
+        "//codex-rs/utils/path-uri",
+        "//codex-rs/utils/pty",
+        "@crates//:anyhow",
+        "@crates//:pretty_assertions",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+        "@crates//:tokio",
+    ],
+)

@@ -10,6 +10,8 @@ use codex_exec_server::ExecServerRuntimePaths;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     std::fs::create_dir_all(r"C:\workspace")?;
+    std::fs::create_dir_all(r"C:\workspace\relative")?;
+    std::fs::create_dir_all(r"C:\workspace\absolute")?;
     let current_exe = std::env::current_exe()?;
     // This fixture is always a Windows executable, so it neither invokes nor
     // needs the separate Linux sandbox binary.
