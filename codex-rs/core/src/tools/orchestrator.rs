@@ -19,6 +19,7 @@ use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::begin_network_approval;
 use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::network_approval::finish_immediate_network_approval;
+use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -49,6 +50,13 @@ pub(crate) struct ToolOrchestrator {
 pub(crate) struct OrchestratorRunResult<Out> {
     pub output: Out,
     pub deferred_network_approval: Option<DeferredNetworkApproval>,
+}
+
+struct InitialApproval {
+    requirement: ExecApprovalRequirement,
+    already_approved: bool,
+    strict_auto_review: bool,
+    use_guardian: bool,
 }
 
 impl ToolOrchestrator {
@@ -129,28 +137,23 @@ impl ToolOrchestrator {
         }
     }
 
-    pub async fn run<Rq, Out, T>(
-        &mut self,
+    async fn resolve_initial_approval<Rq, T>(
         tool: &mut T,
         req: &Rq,
         tool_ctx: &ToolCtx,
         turn_ctx: &crate::session::turn_context::TurnContext,
         approval_policy: AskForApproval,
-    ) -> Result<OrchestratorRunResult<Out>, ToolError>
+    ) -> Result<InitialApproval, ToolError>
     where
-        T: ToolRuntime<Rq, Out>,
+        T: Approvable<Rq>,
     {
         let otel = turn_ctx.session_telemetry.clone();
         let otel_tn = flat_tool_name(&tool_ctx.tool_name).into_owned();
         let otel_ci = &tool_ctx.call_id;
         let strict_auto_review = tool_ctx.session.strict_auto_review_enabled_for_turn().await;
         let use_guardian = routes_approval_to_guardian(turn_ctx) || strict_auto_review;
-
-        // 1) Approval
         let mut already_approved = false;
-
         let file_system_sandbox_policy = turn_ctx.file_system_sandbox_policy();
-        let network_sandbox_policy = turn_ctx.network_sandbox_policy();
         let requirement = tool.exec_approval_requirement(req).unwrap_or_else(|| {
             default_exec_approval_requirement(approval_policy, &file_system_sandbox_policy)
         });
@@ -217,6 +220,57 @@ impl ToolOrchestrator {
                 already_approved = true;
             }
         }
+
+        Ok(InitialApproval {
+            requirement,
+            already_approved,
+            strict_auto_review,
+            use_guardian,
+        })
+    }
+
+    /// Runs the normal command-approval phase without constructing a sandbox attempt.
+    ///
+    /// Callers must validate that enforcement is disabled or owned by the target
+    /// environment before using this path.
+    pub(crate) async fn approve_direct_execution<Rq, T>(
+        &mut self,
+        tool: &mut T,
+        req: &Rq,
+        tool_ctx: &ToolCtx,
+        turn_ctx: &crate::session::turn_context::TurnContext,
+        approval_policy: AskForApproval,
+    ) -> Result<(), ToolError>
+    where
+        T: Approvable<Rq>,
+    {
+        Self::resolve_initial_approval(tool, req, tool_ctx, turn_ctx, approval_policy)
+            .await
+            .map(|_| ())
+    }
+
+    pub async fn run<Rq, Out, T>(
+        &mut self,
+        tool: &mut T,
+        req: &Rq,
+        tool_ctx: &ToolCtx,
+        turn_ctx: &crate::session::turn_context::TurnContext,
+        approval_policy: AskForApproval,
+    ) -> Result<OrchestratorRunResult<Out>, ToolError>
+    where
+        T: ToolRuntime<Rq, Out>,
+    {
+        let otel = turn_ctx.session_telemetry.clone();
+        let InitialApproval {
+            requirement,
+            already_approved,
+            strict_auto_review,
+            use_guardian,
+        } = Self::resolve_initial_approval(tool, req, tool_ctx, turn_ctx, approval_policy).await?;
+        let otel_tn = flat_tool_name(&tool_ctx.tool_name).into_owned();
+        let otel_ci = &tool_ctx.call_id;
+        let file_system_sandbox_policy = turn_ctx.file_system_sandbox_policy();
+        let network_sandbox_policy = turn_ctx.network_sandbox_policy();
 
         // 2) First attempt under the selected sandbox.
         let sandbox_override = sandbox_override_for_first_attempt(
@@ -484,7 +538,7 @@ impl ToolOrchestrator {
     // PermissionRequest hooks take top precedence for answering approval
     // prompts. If no matching hook returns a decision, fall back to the
     // normal guardian or user approval path.
-    async fn request_approval<Rq, Out, T>(
+    async fn request_approval<Rq, T>(
         tool: &mut T,
         req: &Rq,
         permission_request_run_id: &str,
@@ -494,7 +548,7 @@ impl ToolOrchestrator {
         otel: &codex_otel::SessionTelemetry,
     ) -> Result<ReviewDecision, ToolError>
     where
-        T: ToolRuntime<Rq, Out>,
+        T: Approvable<Rq>,
     {
         if evaluate_permission_request_hooks
             && let Some(permission_request) = tool.permission_request_payload(req)

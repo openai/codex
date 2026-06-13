@@ -142,26 +142,48 @@ impl ExecCommandHandler {
             turn_environment.path_convention(),
         )
         .map_err(FunctionCallError::RespondToModel)?;
-        let base_cwd = turn_environment.compatible_cwd().ok_or_else(|| {
-            FunctionCallError::RespondToModel(
-                "cross-platform unified exec requires native remote routing".to_string(),
+        let is_remote = environment.is_remote();
+        let (cwd, sandbox_cwd, args) = if is_remote {
+            let raw_arguments: serde_json::Value = parse_arguments(&arguments)?;
+            if raw_arguments
+                .get("additional_permissions")
+                .is_some_and(|permissions| !permissions.is_null())
+            {
+                return Err(FunctionCallError::RespondToModel(
+                    "remote exec does not support per-command permission elevation until it can be enforced by the exec-server".to_string(),
+                ));
+            }
+            #[allow(deprecated)]
+            let compatibility_cwd = turn.cwd.clone();
+            (
+                compatibility_cwd,
+                None,
+                parse_arguments::<ExecCommandArgs>(&arguments)?,
             )
-        })?;
-        let cwd = cwd_uri.to_abs_path().map_err(|error| {
-            FunctionCallError::RespondToModel(format!(
-                "working directory `{cwd_uri}` cannot be used on the app-server host: {error}"
-            ))
-        })?;
-        let fs = environment.get_filesystem();
-        let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
+        } else {
+            let sandbox_cwd = turn_environment.compatible_cwd().ok_or_else(|| {
+                FunctionCallError::RespondToModel(
+                    "selected local environment has an incompatible cwd".to_string(),
+                )
+            })?;
+            let cwd = cwd_uri.to_abs_path().map_err(|error| {
+                FunctionCallError::RespondToModel(format!(
+                    "working directory `{cwd_uri}` cannot be used on the app-server host: {error}"
+                ))
+            })?;
+            let args = parse_arguments_with_base_path(&arguments, &cwd)?;
+            (cwd, Some(sandbox_cwd), args)
+        };
         let hook_command = args.cmd.clone();
-        maybe_emit_implicit_skill_invocation(
-            session.as_ref(),
-            context.turn.as_ref(),
-            &hook_command,
-            &cwd,
-        )
-        .await;
+        if !is_remote {
+            maybe_emit_implicit_skill_invocation(
+                session.as_ref(),
+                context.turn.as_ref(),
+                &hook_command,
+                &cwd,
+            )
+            .await;
+        }
         let shell_mode =
             shell_mode_for_environment(&turn.unified_exec_shell_mode, environment.as_ref());
         let (default_shell, shell_resolution) = if environment.is_remote() {
@@ -183,7 +205,6 @@ impl ExecCommandHandler {
         let command = resolved_command.command;
         let shell_type = resolved_command.shell_type;
         let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
-        let process_id = manager.allocate_process_id().await;
 
         let ExecCommandArgs {
             tty,
@@ -195,6 +216,43 @@ impl ExecCommandHandler {
             prefix_rule,
             ..
         } = args;
+
+        if is_remote {
+            if sandbox_permissions.requests_sandbox_override() || additional_permissions.is_some() {
+                return Err(FunctionCallError::RespondToModel(
+                    "remote exec does not support per-command permission elevation until it can be enforced by the exec-server".to_string(),
+                ));
+            }
+            let process_id = manager.allocate_process_id().await;
+            emit_unified_exec_tty_metric(&turn.session_telemetry, tty);
+            return execute_unified_exec(
+                manager,
+                ExecCommandRequest {
+                    command,
+                    shell_type,
+                    hook_command,
+                    process_id,
+                    environment_id: turn_environment.environment_id.clone(),
+                    yield_time_ms,
+                    max_output_tokens,
+                    cwd,
+                    cwd_uri,
+                    sandbox_cwd,
+                    environment,
+                    shell_mode,
+                    network: context.turn.network.clone(),
+                    tty,
+                    sandbox_permissions,
+                    additional_permissions: None,
+                    additional_permissions_preapproved: false,
+                    justification,
+                    prefix_rule,
+                },
+                &context,
+                &command_for_display,
+            )
+            .await;
+        }
 
         let exec_permission_approvals_enabled =
             session.features().enabled(Feature::ExecPermissionApprovals);
@@ -223,7 +281,6 @@ impl ExecCommandHandler {
             )
         {
             let approval_policy = context.turn.approval_policy.value();
-            manager.release_process_id(process_id).await;
             return Err(FunctionCallError::RespondToModel(format!(
                 "approval policy is {approval_policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {approval_policy:?}"
             )));
@@ -248,12 +305,10 @@ impl ExecCommandHandler {
             |permissions| Ok(Some(permissions)),
         ) {
             Ok(normalized) => normalized,
-            Err(err) => {
-                manager.release_process_id(process_id).await;
-                return Err(FunctionCallError::RespondToModel(err));
-            }
+            Err(err) => return Err(FunctionCallError::RespondToModel(err)),
         };
 
+        let fs = environment.get_filesystem();
         if let Some(output) = intercept_apply_patch(
             &command,
             &cwd,
@@ -267,7 +322,6 @@ impl ExecCommandHandler {
         )
         .await?
         {
-            manager.release_process_id(process_id).await;
             return Ok(boxed_tool_output(ExecCommandToolOutput {
                 event_call_id: String::new(),
                 chunk_id: String::new(),
@@ -282,56 +336,70 @@ impl ExecCommandHandler {
             }));
         }
 
+        let process_id = manager.allocate_process_id().await;
         emit_unified_exec_tty_metric(&turn.session_telemetry, tty);
-        match manager
-            .exec_command(
-                ExecCommandRequest {
-                    command,
-                    shell_type,
-                    hook_command: hook_command.clone(),
-                    process_id,
-                    yield_time_ms,
-                    max_output_tokens,
-                    cwd,
-                    sandbox_cwd: base_cwd,
-                    environment,
-                    shell_mode,
-                    network: context.turn.network.clone(),
-                    tty,
-                    sandbox_permissions: effective_additional_permissions.sandbox_permissions,
-                    additional_permissions: normalized_additional_permissions,
-                    additional_permissions_preapproved: effective_additional_permissions
-                        .permissions_preapproved,
-                    justification,
-                    prefix_rule,
-                },
-                &context,
-            )
-            .await
-        {
-            Ok(response) => Ok(boxed_tool_output(response)),
-            Err(UnifiedExecError::SandboxDenied { output, .. }) => {
-                let output_text = output.aggregated_output.text;
-                let original_token_count = approx_token_count(&output_text);
-                Ok(boxed_tool_output(ExecCommandToolOutput {
-                    event_call_id: context.call_id.clone(),
-                    chunk_id: generate_chunk_id(),
-                    wall_time: output.duration,
-                    raw_output: output_text.into_bytes(),
-                    truncation_policy: turn.truncation_policy,
-                    max_output_tokens,
-                    // Sandbox denial is terminal, so there is no live
-                    // process for write_stdin to resume.
-                    process_id: None,
-                    exit_code: Some(output.exit_code),
-                    original_token_count: Some(original_token_count),
-                    hook_command: Some(hook_command),
-                }))
-            }
-            Err(err) => Err(FunctionCallError::RespondToModel(format!(
-                "exec_command failed for `{command_for_display}`: {err:?}"
-            ))),
+        execute_unified_exec(
+            manager,
+            ExecCommandRequest {
+                command,
+                shell_type,
+                hook_command,
+                process_id,
+                environment_id: turn_environment.environment_id.clone(),
+                yield_time_ms,
+                max_output_tokens,
+                cwd,
+                cwd_uri,
+                sandbox_cwd,
+                environment,
+                shell_mode,
+                network: context.turn.network.clone(),
+                tty,
+                sandbox_permissions: effective_additional_permissions.sandbox_permissions,
+                additional_permissions: normalized_additional_permissions,
+                additional_permissions_preapproved: effective_additional_permissions
+                    .permissions_preapproved,
+                justification,
+                prefix_rule,
+            },
+            &context,
+            &command_for_display,
+        )
+        .await
+    }
+}
+
+async fn execute_unified_exec(
+    manager: &UnifiedExecProcessManager,
+    request: ExecCommandRequest,
+    context: &UnifiedExecContext,
+    command_for_display: &str,
+) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+    let max_output_tokens = request.max_output_tokens;
+    let hook_command = request.hook_command.clone();
+    match manager.exec_command(request, context).await {
+        Ok(response) => Ok(boxed_tool_output(response)),
+        Err(UnifiedExecError::SandboxDenied { output, .. }) => {
+            let output_text = output.aggregated_output.text;
+            let original_token_count = approx_token_count(&output_text);
+            Ok(boxed_tool_output(ExecCommandToolOutput {
+                event_call_id: context.call_id.clone(),
+                chunk_id: generate_chunk_id(),
+                wall_time: output.duration,
+                raw_output: output_text.into_bytes(),
+                truncation_policy: context.turn.truncation_policy,
+                max_output_tokens,
+                // Sandbox denial is terminal, so there is no live
+                // process for write_stdin to resume.
+                process_id: None,
+                exit_code: Some(output.exit_code),
+                original_token_count: Some(original_token_count),
+                hook_command: Some(hook_command),
+            }))
         }
+        Err(err) => Err(FunctionCallError::RespondToModel(format!(
+            "exec_command failed for `{command_for_display}`: {err:?}"
+        ))),
     }
 }
 

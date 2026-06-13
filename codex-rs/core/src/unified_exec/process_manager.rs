@@ -53,6 +53,7 @@ use crate::unified_exec::process::UnifiedExecProcess;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -74,6 +75,9 @@ const NETWORK_ACCESS_DENIED_MESSAGE: &str =
     "Network access was denied by the Codex sandbox network proxy.";
 const LATE_NETWORK_DENIAL_GRACE_PERIOD: Duration = Duration::from_millis(100);
 const INTERRUPT: &str = "\u{3}";
+const MANAGED_REMOTE_EXEC_UNSUPPORTED: &str = "remote exec with a managed permission profile is not supported until sandbox construction runs on the exec-server; select an external or disabled permission profile";
+const MANAGED_REMOTE_NETWORK_UNSUPPORTED: &str = "remote exec with managed network enforcement is not supported until network policy runs on the exec-server";
+const REMOTE_PERMISSION_ELEVATION_UNSUPPORTED: &str = "remote exec does not support per-command permission elevation until it can be enforced by the exec-server";
 
 /// Test-only override for deterministic unified exec process IDs.
 ///
@@ -131,19 +135,20 @@ fn env_overlay_for_exec_server(
         .collect()
 }
 
-fn exec_server_env_for_request(
-    request: &ExecRequest,
+fn exec_server_env(
+    exec_server_env_config: Option<&ExecServerEnvConfig>,
+    request_env: &HashMap<String, String>,
 ) -> (
     Option<codex_exec_server::ExecEnvPolicy>,
     HashMap<String, String>,
 ) {
-    if let Some(exec_server_env_config) = &request.exec_server_env_config {
+    if let Some(exec_server_env_config) = exec_server_env_config {
         (
             Some(exec_server_env_config.policy.clone()),
-            env_overlay_for_exec_server(&request.env, &exec_server_env_config.local_policy_env),
+            env_overlay_for_exec_server(request_env, &exec_server_env_config.local_policy_env),
         )
     } else {
-        (None, request.env.clone())
+        (None, request_env.clone())
     }
 }
 
@@ -152,7 +157,7 @@ fn exec_server_params_for_request(
     request: &ExecRequest,
     tty: bool,
 ) -> codex_exec_server::ExecParams {
-    let (env_policy, env) = exec_server_env_for_request(request);
+    let (env_policy, env) = exec_server_env(request.exec_server_env_config.as_ref(), &request.env);
     codex_exec_server::ExecParams {
         process_id: exec_server_process_id(process_id).into(),
         argv: request.command.clone(),
@@ -163,6 +168,45 @@ fn exec_server_params_for_request(
         pipe_stdin: false,
         arg0: request.arg0.clone(),
     }
+}
+
+fn exec_server_params_for_remote_request(
+    request: &UnifiedExecToolRequest,
+) -> codex_exec_server::ExecParams {
+    let (env_policy, env) = exec_server_env(request.exec_server_env_config.as_ref(), &request.env);
+    codex_exec_server::ExecParams {
+        process_id: exec_server_process_id(request.process_id).into(),
+        argv: if matches!(request.shell_type, crate::shell::ShellType::PowerShell) {
+            codex_shell_command::powershell::prefix_powershell_script_with_utf8(&request.command)
+        } else {
+            request.command.clone()
+        },
+        cwd: request.cwd_uri.clone(),
+        env_policy,
+        env,
+        tty: request.tty,
+        pipe_stdin: false,
+        // App-host sandbox helpers are never valid on the remote executor.
+        arg0: None,
+    }
+}
+
+fn validate_remote_direct_request(
+    permission_profile: &PermissionProfile,
+    managed_network: bool,
+    sandbox_permissions: crate::sandboxing::SandboxPermissions,
+    additional_permissions: Option<&codex_protocol::models::AdditionalPermissionProfile>,
+) -> Result<(), &'static str> {
+    if matches!(permission_profile, PermissionProfile::Managed { .. }) {
+        return Err(MANAGED_REMOTE_EXEC_UNSUPPORTED);
+    }
+    if managed_network {
+        return Err(MANAGED_REMOTE_NETWORK_UNSUPPORTED);
+    }
+    if sandbox_permissions.requests_sandbox_override() || additional_permissions.is_some() {
+        return Err(REMOTE_PERMISSION_ELEVATION_UNSUPPORTED);
+    }
+    Ok(())
 }
 
 /// Borrowed process state prepared for a `write_stdin` or poll operation.
@@ -1027,6 +1071,13 @@ impl UnifiedExecProcessManager {
         cwd: AbsolutePathBuf,
         context: &UnifiedExecContext,
     ) -> Result<(UnifiedExecProcess, Option<DeferredNetworkApproval>), UnifiedExecError> {
+        if request.environment.is_remote() {
+            let process = self
+                .open_remote_session_with_approval(request, context)
+                .await?;
+            return Ok((process, None));
+        }
+
         let local_policy_env = create_env(
             &context.turn.shell_environment_policy,
             /*thread_id*/ None,
@@ -1065,7 +1116,9 @@ impl UnifiedExecProcessManager {
             shell_type: request.shell_type,
             hook_command: request.hook_command.clone(),
             process_id: request.process_id,
+            environment_id: request.environment_id.clone(),
             cwd,
+            cwd_uri: request.cwd_uri.clone(),
             sandbox_cwd: request.sandbox_cwd.clone(),
             environment: Arc::clone(&request.environment),
             env,
@@ -1109,6 +1162,94 @@ impl UnifiedExecProcessManager {
                 }
                 other => UnifiedExecError::create_process(format!("{other:?}")),
             })
+    }
+
+    async fn open_remote_session_with_approval(
+        &self,
+        request: &ExecCommandRequest,
+        context: &UnifiedExecContext,
+    ) -> Result<UnifiedExecProcess, UnifiedExecError> {
+        validate_remote_direct_request(
+            &context.turn.permission_profile(),
+            request.network.is_some(),
+            request.sandbox_permissions,
+            request.additional_permissions.as_ref(),
+        )
+        .map_err(|message| UnifiedExecError::create_process(message.to_string()))?;
+
+        let exec_approval_requirement = context
+            .session
+            .services
+            .exec_policy
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &request.command,
+                approval_policy: context.turn.approval_policy.value(),
+                permission_profile: context.turn.permission_profile(),
+                windows_sandbox_level: context.turn.windows_sandbox_level,
+                sandbox_permissions: request.sandbox_permissions,
+                prefix_rule: request.prefix_rule.clone(),
+            })
+            .await;
+        let mut env = HashMap::from([(
+            CODEX_THREAD_ID_ENV_VAR.to_string(),
+            context.session.thread_id.to_string(),
+        )]);
+        env = apply_unified_exec_env(env);
+        let req = UnifiedExecToolRequest {
+            command: request.command.clone(),
+            shell_type: request.shell_type,
+            hook_command: request.hook_command.clone(),
+            process_id: request.process_id,
+            environment_id: request.environment_id.clone(),
+            cwd: request.cwd.clone(),
+            cwd_uri: request.cwd_uri.clone(),
+            sandbox_cwd: None,
+            environment: Arc::clone(&request.environment),
+            env,
+            exec_server_env_config: Some(ExecServerEnvConfig {
+                policy: exec_env_policy_from_shell_policy(&context.turn.shell_environment_policy),
+                local_policy_env: HashMap::new(),
+            }),
+            explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
+            network: None,
+            tty: request.tty,
+            sandbox_permissions: request.sandbox_permissions,
+            additional_permissions: None,
+            #[cfg(unix)]
+            additional_permissions_preapproved: false,
+            justification: request.justification.clone(),
+            exec_approval_requirement,
+        };
+        let mut orchestrator = ToolOrchestrator::new();
+        let mut runtime = UnifiedExecRuntime::new(self, request.shell_mode.clone());
+        let tool_ctx = ToolCtx {
+            session: context.session.clone(),
+            turn: context.turn.clone(),
+            call_id: context.call_id.clone(),
+            tool_name: ToolName::plain("exec_command"),
+        };
+        orchestrator
+            .approve_direct_execution(
+                &mut runtime,
+                &req,
+                &tool_ctx,
+                &context.turn,
+                context.turn.approval_policy.value(),
+            )
+            .await
+            .map_err(|error| match error {
+                ToolError::Rejected(message) => UnifiedExecError::create_process(message),
+                ToolError::Codex(error) => UnifiedExecError::create_process(error.to_string()),
+            })?;
+
+        let started = request
+            .environment
+            .get_exec_backend()
+            .start(exec_server_params_for_remote_request(&req))
+            .await
+            .map_err(|error| UnifiedExecError::create_process(error.to_string()))?;
+        UnifiedExecProcess::from_exec_server_started(started, codex_sandboxing::SandboxType::None)
+            .await
     }
 
     pub(super) async fn collect_output_until_deadline(

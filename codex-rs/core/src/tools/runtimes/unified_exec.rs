@@ -51,6 +51,7 @@ use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_tools::UnifiedExecShellMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -64,8 +65,10 @@ pub struct UnifiedExecRequest {
     pub shell_type: ShellType,
     pub hook_command: String,
     pub process_id: i32,
+    pub environment_id: String,
     pub cwd: AbsolutePathBuf,
-    pub sandbox_cwd: AbsolutePathBuf,
+    pub cwd_uri: PathUri,
+    pub sandbox_cwd: Option<AbsolutePathBuf>,
     pub environment: Arc<Environment>,
     pub env: HashMap<String, String>,
     pub exec_server_env_config: Option<ExecServerEnvConfig>,
@@ -85,7 +88,8 @@ pub struct UnifiedExecRequest {
 #[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct UnifiedExecApprovalKey {
     pub command: Vec<String>,
-    pub cwd: AbsolutePathBuf,
+    pub environment_id: String,
+    pub cwd: PathUri,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
@@ -137,7 +141,8 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
     fn approval_keys(&self, req: &UnifiedExecRequest) -> Vec<Self::ApprovalKey> {
         vec![UnifiedExecApprovalKey {
             command: canonicalize_command_for_approval(&req.command),
-            cwd: req.cwd.clone(),
+            environment_id: req.environment_id.clone(),
+            cwd: req.cwd_uri.clone(),
             tty: req.tty,
             sandbox_permissions: req.sandbox_permissions,
             additional_permissions: req.additional_permissions.clone(),
@@ -224,7 +229,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
 
 impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRuntime<'a> {
     fn sandbox_cwd<'b>(&self, req: &'b UnifiedExecRequest) -> Option<&'b AbsolutePathBuf> {
-        Some(&req.sandbox_cwd)
+        req.sandbox_cwd.as_ref()
     }
 
     fn network_approval_spec(
@@ -461,8 +466,10 @@ mod tests {
             shell_type: ShellType::Sh,
             hook_command: "pwd".to_string(),
             process_id: 1000,
-            cwd,
-            sandbox_cwd: sandbox_cwd.clone(),
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            cwd: cwd.clone(),
+            cwd_uri: PathUri::from_abs_path(&cwd),
+            sandbox_cwd: Some(sandbox_cwd.clone()),
             environment: Arc::new(Environment::default_for_tests()),
             env: HashMap::new(),
             exec_server_env_config: None,
@@ -481,6 +488,33 @@ mod tests {
         };
 
         assert_eq!(runtime.sandbox_cwd(&request), Some(&sandbox_cwd));
+    }
+
+    #[tokio::test]
+    async fn unified_exec_approval_keys_include_environment_and_canonical_cwd() {
+        let manager = UnifiedExecProcessManager::default();
+        let runtime = UnifiedExecRuntime::new(&manager, UnifiedExecShellMode::Direct);
+        let mut request = test_request(
+            SandboxPermissions::UseDefault,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            },
+        );
+        request.environment_id = "windows".to_string();
+        request.cwd_uri = PathUri::parse("file:///C:/workspace").expect("Windows cwd URI");
+
+        assert_eq!(
+            runtime.approval_keys(&request),
+            vec![UnifiedExecApprovalKey {
+                command: canonicalize_command_for_approval(&request.command),
+                environment_id: "windows".to_string(),
+                cwd: request.cwd_uri,
+                tty: request.tty,
+                sandbox_permissions: request.sandbox_permissions,
+                additional_permissions: request.additional_permissions,
+            }]
+        );
     }
 
     #[tokio::test]
@@ -560,8 +594,10 @@ mod tests {
             shell_type: ShellType::Zsh,
             hook_command: "echo hi".to_string(),
             process_id: 1000,
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
             cwd: cwd.clone(),
-            sandbox_cwd: cwd,
+            cwd_uri: PathUri::from_abs_path(&cwd),
+            sandbox_cwd: Some(cwd),
             environment: Arc::new(Environment::default_for_tests()),
             env: HashMap::new(),
             exec_server_env_config: None,

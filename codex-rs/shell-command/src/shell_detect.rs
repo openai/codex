@@ -38,6 +38,12 @@ impl DetectedShell {
 
 pub fn detect_shell_type(shell_path: impl AsRef<std::path::Path>) -> Option<ShellType> {
     let shell_path = shell_path.as_ref();
+    if let Some(path) = shell_path.as_os_str().to_str()
+        && let Some(file_name) = path.rsplit(['/', '\\']).next()
+        && file_name != path
+    {
+        return detect_shell_type(PathBuf::from(file_name));
+    }
     match shell_path.as_os_str().to_str() {
         Some("zsh") => Some(ShellType::Zsh),
         Some("sh") => Some(ShellType::Sh),
@@ -345,6 +351,12 @@ mod tests {
         );
         assert_eq!(
             detect_shell_type(PathBuf::from("pwsh.exe")),
+            Some(ShellType::PowerShell)
+        );
+        assert_eq!(
+            detect_shell_type(PathBuf::from(
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+            )),
             Some(ShellType::PowerShell)
         );
         assert_eq!(

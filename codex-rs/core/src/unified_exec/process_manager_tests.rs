@@ -129,9 +129,125 @@ fn exec_server_params_use_env_policy_overlay_contract() {
     );
 }
 
+#[tokio::test]
+async fn remote_exec_params_preserve_target_cwd_and_clear_host_arg0() {
+    let compatibility_cwd: codex_utils_absolute_path::AbsolutePathBuf = std::env::current_dir()
+        .expect("current dir")
+        .try_into()
+        .expect("absolute path");
+    let cwd_uri = codex_utils_path_uri::PathUri::parse("file:///C:/workspace/build")
+        .expect("Windows cwd URI");
+    let policy = codex_exec_server::ExecEnvPolicy {
+        inherit: codex_protocol::config_types::ShellEnvironmentPolicyInherit::Core,
+        ignore_default_excludes: false,
+        exclude: vec!["SECRET".to_string()],
+        r#set: HashMap::new(),
+        include_only: Vec::new(),
+    };
+    let request = UnifiedExecToolRequest {
+        command: vec![
+            r"C:\Program Files\PowerShell\7\pwsh.exe".to_string(),
+            "-Command".to_string(),
+            "Get-Location".to_string(),
+        ],
+        shell_type: crate::shell::ShellType::PowerShell,
+        hook_command: "Get-Location".to_string(),
+        process_id: 4321,
+        environment_id: "windows".to_string(),
+        cwd: compatibility_cwd,
+        cwd_uri: cwd_uri.clone(),
+        sandbox_cwd: None,
+        environment: Arc::new(codex_exec_server::Environment::default_for_tests()),
+        env: HashMap::from([("CODEX_CI".to_string(), "1".to_string())]),
+        exec_server_env_config: Some(ExecServerEnvConfig {
+            policy: policy.clone(),
+            local_policy_env: HashMap::new(),
+        }),
+        explicit_env_overrides: HashMap::new(),
+        network: None,
+        tty: false,
+        sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+        additional_permissions: None,
+        #[cfg(unix)]
+        additional_permissions_preapproved: false,
+        justification: None,
+        exec_approval_requirement: crate::tools::sandboxing::ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+    };
+    let expected_argv =
+        codex_shell_command::powershell::prefix_powershell_script_with_utf8(&request.command);
+
+    assert_eq!(
+        exec_server_params_for_remote_request(&request),
+        codex_exec_server::ExecParams {
+            process_id: codex_exec_server::ProcessId::from("4321"),
+            argv: expected_argv,
+            cwd: cwd_uri,
+            env_policy: Some(policy),
+            env: request.env,
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+        }
+    );
+}
+
 #[test]
 fn exec_server_process_id_matches_unified_exec_process_id() {
     assert_eq!(exec_server_process_id(/*process_id*/ 4321), "4321");
+}
+
+#[test]
+fn remote_direct_execution_requires_target_owned_or_disabled_enforcement() {
+    use codex_protocol::models::AdditionalPermissionProfile;
+    use codex_protocol::models::PermissionProfile;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
+
+    assert_eq!(
+        [
+            validate_remote_direct_request(
+                &PermissionProfile::Disabled,
+                /*managed_network*/ false,
+                crate::sandboxing::SandboxPermissions::UseDefault,
+                /*additional_permissions*/ None,
+            ),
+            validate_remote_direct_request(
+                &PermissionProfile::External {
+                    network: NetworkSandboxPolicy::Restricted,
+                },
+                /*managed_network*/ false,
+                crate::sandboxing::SandboxPermissions::UseDefault,
+                /*additional_permissions*/ None,
+            ),
+            validate_remote_direct_request(
+                &PermissionProfile::read_only(),
+                /*managed_network*/ false,
+                crate::sandboxing::SandboxPermissions::UseDefault,
+                /*additional_permissions*/ None,
+            ),
+            validate_remote_direct_request(
+                &PermissionProfile::Disabled,
+                /*managed_network*/ true,
+                crate::sandboxing::SandboxPermissions::UseDefault,
+                /*additional_permissions*/ None,
+            ),
+            validate_remote_direct_request(
+                &PermissionProfile::Disabled,
+                /*managed_network*/ false,
+                crate::sandboxing::SandboxPermissions::RequireEscalated,
+                Some(&AdditionalPermissionProfile::default()),
+            ),
+        ],
+        [
+            Ok(()),
+            Ok(()),
+            Err(MANAGED_REMOTE_EXEC_UNSUPPORTED),
+            Err(MANAGED_REMOTE_NETWORK_UNSUPPORTED),
+            Err(REMOTE_PERMISSION_ELEVATION_UNSUPPORTED),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -164,6 +280,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         Arc::clone(&turn),
         "call-unified-denied".to_string(),
     );
+    let turn_environment = turn.environments.primary().expect("primary environment");
     let request = ExecCommandRequest {
         command: vec![
             "sh".to_string(),
@@ -173,12 +290,14 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         shell_type: crate::shell::ShellType::Sh,
         hook_command: "echo before".to_string(),
         process_id: 123,
+        environment_id: turn_environment.environment_id.clone(),
         yield_time_ms: 1000,
         max_output_tokens: None,
         #[allow(deprecated)]
         cwd: turn.cwd.clone(),
+        cwd_uri: turn_environment.cwd_uri().clone(),
         #[allow(deprecated)]
-        sandbox_cwd: turn.cwd.clone(),
+        sandbox_cwd: Some(turn.cwd.clone()),
         environment: turn
             .environments
             .primary_environment()

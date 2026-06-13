@@ -226,6 +226,27 @@ mod tests {
     }
 
     #[test]
+    fn prefixes_windows_powershell_path_on_a_foreign_host() {
+        let shell = r"C:\Program Files\PowerShell\7\pwsh.exe";
+        let cmd = vec![
+            shell.to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Write-Host hi".to_string(),
+        ];
+
+        assert_eq!(
+            prefix_powershell_script_with_utf8(&cmd),
+            vec![
+                shell.to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                format!("{UTF8_OUTPUT_PREFIX}Write-Host hi"),
+            ]
+        );
+    }
+
+    #[test]
     fn does_not_duplicate_utf8_prefix() {
         let cmd = vec![
             "powershell".to_string(),

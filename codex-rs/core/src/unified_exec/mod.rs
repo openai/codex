@@ -33,6 +33,7 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_tools::UnifiedExecShellMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_path_uri::PathUri;
 use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
@@ -93,10 +94,13 @@ pub(crate) struct ExecCommandRequest {
     pub shell_type: ShellType,
     pub hook_command: String,
     pub process_id: i32,
+    pub environment_id: String,
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
+    /// App-host-compatible cwd retained for approval and event compatibility.
     pub cwd: AbsolutePathBuf,
-    pub sandbox_cwd: AbsolutePathBuf,
+    pub cwd_uri: PathUri,
+    pub sandbox_cwd: Option<AbsolutePathBuf>,
     pub environment: Arc<Environment>,
     pub shell_mode: UnifiedExecShellMode,
     pub network: Option<NetworkProxy>,
