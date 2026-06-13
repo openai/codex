@@ -354,14 +354,10 @@ struct PluginLoadCacheKey {
 
 impl PluginsManager {
     pub fn new(codex_home: PathBuf) -> Self {
-        Self::new_with_restriction_product(
-            codex_home,
-            Some(Product::Codex),
-            /*auth_mode*/ None,
-        )
+        Self::new_with_options(codex_home, Some(Product::Codex), /*auth_mode*/ None)
     }
 
-    pub fn new_with_restriction_product(
+    pub fn new_with_options(
         codex_home: PathBuf,
         restriction_product: Option<Product>,
         auth_mode: Option<AuthMode>,

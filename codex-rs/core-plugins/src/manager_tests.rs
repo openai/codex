@@ -62,7 +62,7 @@ fn plugins_manager_tracks_auth_mode() {
     assert!(manager.set_auth_mode(/*auth_mode*/ None));
     assert_eq!(manager.auth_mode(), None);
 
-    let manager_with_auth = PluginsManager::new_with_restriction_product(
+    let manager_with_auth = PluginsManager::new_with_options(
         tmp.path().join("auth"),
         Some(Product::Codex),
         Some(AuthMode::Chatgpt),
@@ -3045,7 +3045,7 @@ plugins = true
 
     let mut config = load_config(tmp.path(), tmp.path()).await;
     config.chatgpt_base_url = format!("{}/backend-api/", server.uri());
-    let manager = PluginsManager::new_with_restriction_product(
+    let manager = PluginsManager::new_with_options(
         tmp.path().to_path_buf(),
         Some(Product::Chatgpt),
         /*auth_mode*/ None,
@@ -3082,7 +3082,7 @@ plugins = true
 
     let mut config = load_config(tmp.path(), tmp.path()).await;
     config.chatgpt_base_url = format!("{}/backend-api/", server.uri());
-    let manager = PluginsManager::new_with_restriction_product(
+    let manager = PluginsManager::new_with_options(
         tmp.path().to_path_buf(),
         /*restriction_product*/ None,
         /*auth_mode*/ None,
