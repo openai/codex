@@ -10,6 +10,7 @@ use codex_exec_server::ExecOutputStream;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEvent;
+use codex_exec_server::ExecServerError;
 use codex_exec_server::ProcessId;
 use codex_exec_server::ProcessSignal;
 use codex_exec_server::ReadResponse;
@@ -88,6 +89,64 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
 
     assert_eq!(exit_code, Some(0));
     assert!(closed);
+    Ok(())
+}
+
+async fn assert_exec_process_rejects_non_native_cwd_without_reserving_process_id(
+    use_remote: bool,
+) -> Result<()> {
+    let context = create_process_context(use_remote).await?;
+    let process_id = ProcessId::from("proc-non-native-cwd");
+    let cwd = PathUri::parse("file://server/share/checkout")?;
+    let source = cwd
+        .to_abs_path()
+        .expect_err("UNC cwd should not be native on Unix");
+    let error = match context
+        .backend
+        .start(ExecParams {
+            process_id: process_id.clone(),
+            argv: vec!["true".to_string()],
+            cwd: cwd.clone(),
+            env_policy: /*env_policy*/ None,
+            env: Default::default(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+        })
+        .await
+    {
+        Ok(_) => anyhow::bail!("non-native cwd should fail before process launch"),
+        Err(error) => error,
+    };
+    let ExecServerError::Server { code, message } = error else {
+        anyhow::bail!("unexpected non-native cwd error: {error}");
+    };
+    assert_eq!(
+        (code, message),
+        (
+            -32602,
+            format!("cwd URI `{cwd}` is not valid on this exec-server host: {source}")
+        )
+    );
+
+    let session = context
+        .backend
+        .start(ExecParams {
+            process_id,
+            argv: vec!["true".to_string()],
+            cwd: PathUri::from_path(std::env::current_dir()?)?,
+            env_policy: /*env_policy*/ None,
+            env: Default::default(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+        })
+        .await?;
+    let wake_rx = session.process.subscribe_wake();
+    assert_eq!(
+        collect_process_output_from_reads(session.process, wake_rx).await?,
+        (String::new(), Some(0), true)
+    );
     Ok(())
 }
 
@@ -775,6 +834,18 @@ async fn exec_process_uses_requested_cwd(use_remote: bool) -> Result<()> {
         (expected_cwd, Some(0), true)
     );
     Ok(())
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[cfg_attr(not(unix), ignore = "Unix-only exec-server process test")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Serialize tests that launch a real exec-server process through the full CLI.
+#[serial_test::serial(remote_exec_server)]
+async fn exec_process_rejects_non_native_cwd_without_reserving_process_id(
+    use_remote: bool,
+) -> Result<()> {
+    assert_exec_process_rejects_non_native_cwd_without_reserving_process_id(use_remote).await
 }
 
 #[test_case(false ; "local")]
