@@ -8,41 +8,6 @@ use std::fmt;
 use thiserror::Error;
 use ts_rs::TS;
 
-/// Path syntax used to render a [`PathUri`] as an operating-system path.
-///
-/// This describes path grammar rather than a specific operating system because
-/// Linux and macOS share the POSIX representation relevant here.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
-pub enum PathConvention {
-    Posix,
-    Windows,
-}
-
-impl PathConvention {
-    /// Returns the path convention used by the current process.
-    #[cfg(windows)]
-    pub const fn native() -> Self {
-        Self::Windows
-    }
-
-    /// Returns the path convention used by the current process.
-    #[cfg(unix)]
-    pub const fn native() -> Self {
-        Self::Posix
-    }
-}
-
-impl fmt::Display for PathConvention {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Posix => f.write_str("POSIX"),
-            Self::Windows => f.write_str("Windows"),
-        }
-    }
-}
-
 /// A UTF-8 path rendered using an explicitly selected native path convention.
 ///
 /// "Native" refers to the supplied [`PathConvention`], which may be foreign to
@@ -53,8 +18,11 @@ impl fmt::Display for PathConvention {
 /// this API boundary because the value is serialized as a JSON string.
 ///
 /// Deserialization accepts any UTF-8 string without interpreting or validating
-/// it. Relative path text remains valid until an operation such as
-/// [`Self::to_path_uri`] requires an absolute path.
+/// it. That unrestricted construction path is intentionally available only to
+/// serde: Codex-internal code cannot construct this type directly from a raw
+/// `String` and is instead encouraged to convert through [`PathUri`] or
+/// [`AbsolutePathBuf`]. Relative path text remains valid until an operation
+/// such as [`Self::to_path_uri`] requires an absolute path.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, TS)]
 #[serde(transparent)]
 #[ts(type = "string")]
@@ -389,6 +357,41 @@ pub enum ApiPathStringError {
         path: String,
         convention: PathConvention,
     },
+}
+
+/// Path syntax used to render a [`PathUri`] as an operating-system path.
+///
+/// This describes path grammar rather than a specific operating system because
+/// Linux and macOS share the POSIX representation relevant here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum PathConvention {
+    Posix,
+    Windows,
+}
+
+impl PathConvention {
+    /// Returns the path convention used by the current process.
+    #[cfg(windows)]
+    pub const fn native() -> Self {
+        Self::Windows
+    }
+
+    /// Returns the path convention used by the current process.
+    #[cfg(unix)]
+    pub const fn native() -> Self {
+        Self::Posix
+    }
+}
+
+impl fmt::Display for PathConvention {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Posix => f.write_str("POSIX"),
+            Self::Windows => f.write_str("Windows"),
+        }
+    }
 }
 
 #[cfg(test)]

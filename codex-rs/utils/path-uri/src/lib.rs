@@ -35,12 +35,8 @@ const BAD_PATH_URI_PREFIX: &str = "file:///%00/bad/path/";
 /// created by [`Self::from_abs_path`] are opaque to these lexical operations.
 ///
 /// `file:` paths retain their URI spelling so they can be parsed independently
-/// of the current host. In particular, `/C:/src` is structurally ambiguous
-/// between a Windows drive path and a valid POSIX path;
-/// [`Self::infer_path_convention`] applies a documented heuristic, while
-/// [`Self::to_abs_path`] applies the current host's rules. A local POSIX
-/// `file:` URI can also retain percent-encoded non-UTF-8 bytes for lossless
-/// native round trips.
+/// of the current host. A local POSIX `file:` URI can also retain
+/// percent-encoded non-UTF-8 bytes for lossless native round trips.
 ///
 /// Like [VS Code resources], path operations use `/` URI separators on every
 /// host. Lexical path operations preserve a URL authority without interpreting
