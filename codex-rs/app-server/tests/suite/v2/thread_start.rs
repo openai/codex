@@ -1,3 +1,4 @@
+use anyhow::Context;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::PathBufExt;
@@ -21,6 +22,8 @@ use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_app_server_protocol::TurnEnvironmentParams;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::loader::project_trust_key;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::set_project_trust_level;
@@ -197,15 +200,15 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_start_resolves_runtime_workspace_roots_against_cwd() -> Result<()> {
+async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
 
     let cwd_tmp = TempDir::new()?;
     let cwd = cwd_tmp.path().to_path_buf();
-    let relative_root = PathBuf::from("extra-root");
-    std::fs::create_dir_all(cwd.join(&relative_root))?;
+    let extra_root = cwd.join("extra-root");
+    std::fs::create_dir_all(&extra_root)?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -213,7 +216,7 @@ async fn thread_start_resolves_runtime_workspace_roots_against_cwd() -> Result<(
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
             cwd: Some(cwd.to_string_lossy().to_string()),
-            runtime_workspace_roots: Some(vec![relative_root.clone()]),
+            runtime_workspace_roots: Some(vec![extra_root.abs()]),
             ..Default::default()
         })
         .await?;
@@ -230,10 +233,7 @@ async fn thread_start_resolves_runtime_workspace_roots_against_cwd() -> Result<(
     } = to_response::<ThreadStartResponse>(resp)?;
 
     assert_eq!(response_cwd, cwd.abs());
-    assert_eq!(
-        runtime_workspace_roots,
-        vec![cwd_tmp.path().join(relative_root).abs()]
-    );
+    assert_eq!(runtime_workspace_roots, vec![extra_root.abs()]);
 
     Ok(())
 }
@@ -403,11 +403,13 @@ async fn thread_start_response_excludes_empty_project_instruction_source() -> Re
 }
 
 #[tokio::test]
-async fn thread_start_without_selected_environment_excludes_instruction_sources() -> Result<()> {
+async fn thread_start_without_selected_environment_includes_only_global_instruction_source()
+-> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
-    std::fs::write(codex_home.path().join("AGENTS.md"), "global instructions")?;
+    let global_agents_path = codex_home.path().join("AGENTS.md");
+    std::fs::write(&global_agents_path, "global instructions")?;
     let workspace = TempDir::new()?;
     std::fs::write(workspace.path().join("AGENTS.md"), "project instructions")?;
 
@@ -427,11 +429,56 @@ async fn thread_start_without_selected_environment_excludes_instruction_sources(
     )
     .await??;
     let ThreadStartResponse {
+        thread,
         instruction_sources,
         ..
     } = to_response::<ThreadStartResponse>(response)?;
 
-    assert!(instruction_sources.is_empty());
+    assert_eq!(
+        instruction_sources
+            .into_iter()
+            .map(normalize_path_for_comparison)
+            .collect::<Vec<_>>(),
+        vec![normalize_path_for_comparison(std::fs::canonicalize(
+            global_agents_path,
+        )?)]
+    );
+
+    let turn_request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "inspect instructions".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_request_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .context("failed to fetch received requests")?;
+    let model_request = requests
+        .iter()
+        .find(|request| request.url.path().ends_with("/responses"))
+        .context("expected model request")?;
+    let model_request_body = model_request
+        .body_json::<Value>()
+        .context("model request body should be JSON")?
+        .to_string();
+    assert!(model_request_body.contains("global instructions"));
+    assert!(!model_request_body.contains("project instructions"));
 
     Ok(())
 }
@@ -711,7 +758,7 @@ async fn thread_start_emits_mcp_server_status_updated_notifications() -> Result<
         .send_thread_start_request(ThreadStartParams::default())
         .await?;
 
-    let _: ThreadStartResponse = to_response(
+    let start_response: ThreadStartResponse = to_response(
         timeout(
             DEFAULT_READ_TIMEOUT,
             mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
@@ -748,6 +795,7 @@ async fn thread_start_emits_mcp_server_status_updated_notifications() -> Result<
     assert_eq!(
         starting,
         McpServerStatusUpdatedNotification {
+            thread_id: Some(start_response.thread.id.clone()),
             name: "optional_broken".to_string(),
             status: McpServerStartupState::Starting,
             error: None,
@@ -780,6 +828,7 @@ async fn thread_start_emits_mcp_server_status_updated_notifications() -> Result<
     let ServerNotification::McpServerStatusUpdated(failed) = failed else {
         anyhow::bail!("unexpected notification variant");
     };
+    assert_eq!(failed.thread_id, Some(start_response.thread.id));
     assert_eq!(failed.name, "optional_broken");
     assert_eq!(failed.status, McpServerStartupState::Failed);
     assert!(

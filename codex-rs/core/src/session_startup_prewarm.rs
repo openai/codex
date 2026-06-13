@@ -4,10 +4,13 @@ use std::time::Instant;
 
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 use tracing::info;
+use tracing::instrument;
 use tracing::warn;
 
 use crate::client::ModelClientSession;
+use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::session::session::Session;
 use crate::session::turn::build_prompt;
@@ -19,7 +22,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructions;
 
 pub(crate) struct SessionStartupPrewarmHandle {
-    task: JoinHandle<CodexResult<ModelClientSession>>,
+    task: AbortOnDropHandle<CodexResult<ModelClientSession>>,
     started_at: Instant,
     timeout: Duration,
 }
@@ -40,12 +43,18 @@ impl SessionStartupPrewarmHandle {
         timeout: Duration,
     ) -> Self {
         Self {
-            task,
+            task: AbortOnDropHandle::new(task),
             started_at,
             timeout,
         }
     }
 
+    pub(crate) async fn abort(self) {
+        self.task.abort();
+        let _ = self.task.await;
+    }
+
+    #[instrument(name = "startup_prewarm.resolve", level = "trace", skip_all)]
     async fn resolve(
         self,
         session_telemetry: &SessionTelemetry,
@@ -260,10 +269,14 @@ async fn schedule_startup_prewarm_inner(
         build_prompt_started_at.elapsed(),
         /*status*/ None,
     );
-    let window_id = session.services.model_client.current_window_id();
-    let startup_turn_metadata_header = startup_turn_context
+    let window_id = session.current_window_id().await;
+    let responses_metadata = startup_turn_context
         .turn_metadata_state
-        .current_header_value_for_prewarm(&window_id);
+        .to_responses_metadata(
+            session.installation_id.clone(),
+            window_id,
+            CodexResponsesRequestKind::Prewarm,
+        );
     let mut client_session = session.services.model_client.new_session();
     let websocket_warmup_started_at = Instant::now();
     client_session
@@ -274,7 +287,7 @@ async fn schedule_startup_prewarm_inner(
             startup_turn_context.reasoning_effort.clone(),
             startup_turn_context.reasoning_summary,
             startup_turn_context.config.service_tier.clone(),
-            startup_turn_metadata_header.as_deref(),
+            &responses_metadata,
         )
         .await?;
     startup_turn_context.session_telemetry.record_startup_phase(

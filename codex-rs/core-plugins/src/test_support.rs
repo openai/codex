@@ -88,10 +88,6 @@ pub(crate) fn write_openai_curated_marketplace(root: &Path, plugin_names: &[&str
     }
 }
 
-pub(crate) fn write_curated_plugin_sha(codex_home: &Path) {
-    write_curated_plugin_sha_with(codex_home, TEST_CURATED_PLUGIN_SHA);
-}
-
 pub(crate) fn write_curated_plugin_sha_with(codex_home: &Path, sha: &str) {
     write_file(&codex_home.join(".tmp/plugins.sha"), &format!("{sha}\n"));
 }

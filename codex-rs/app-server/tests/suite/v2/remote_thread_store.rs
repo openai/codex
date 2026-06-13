@@ -20,6 +20,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use codex_app_server::in_process;
+use codex_app_server::in_process::InProcessClientHandle;
 use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server_protocol::ClientInfo;
@@ -27,8 +28,11 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ThreadDeleteParams;
+use codex_app_server_protocol::ThreadDeleteResponse;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -37,11 +41,18 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
+use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
+use codex_protocol::ThreadId;
+use codex_protocol::models::BaseInstructions;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadMemoryMode;
+use codex_thread_store::CreateThreadParams as StoreCreateThreadParams;
 use codex_thread_store::InMemoryThreadStore;
+use codex_thread_store::ThreadPersistenceMetadata;
+use codex_thread_store::ThreadStore;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -50,7 +61,7 @@ use uuid::Uuid;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test]
-async fn thread_start_with_non_local_thread_store_does_not_create_local_persistence() -> Result<()>
+async fn thread_delete_with_non_local_thread_store_does_not_create_local_persistence() -> Result<()>
 {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -59,43 +70,10 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
     // here so this regression stays focused on thread persistence artifacts.
     create_config_toml_with_thread_store(codex_home.path(), &server.uri(), &store_id)?;
 
-    let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .loader_overrides(loader_overrides.clone())
-        .build()
-        .await?;
-
     let thread_store = InMemoryThreadStore::for_id(store_id.clone());
     let _in_memory_store = InMemoryThreadStoreId { store_id };
 
-    let mut client = in_process::start(InProcessStartArgs {
-        arg0_paths: Arg0DispatchPaths::default(),
-        config: Arc::new(config),
-        cli_overrides: Vec::new(),
-        loader_overrides,
-        strict_config: false,
-        cloud_config_bundle: CloudConfigBundleLoader::default(),
-        thread_config_loader: Arc::new(NoopThreadConfigLoader),
-        feedback: CodexFeedback::new(),
-        log_db: None,
-        state_db: None,
-        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
-        config_warnings: Vec::new(),
-        session_source: SessionSource::Cli,
-        enable_codex_api_key_env: false,
-        initialize: InitializeParams {
-            client_info: ClientInfo {
-                name: "codex-app-server-tests".to_string(),
-                title: None,
-                version: "0.1.0".to_string(),
-            },
-            capabilities: None,
-        },
-        channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
-    })
-    .await?;
+    let mut client = start_in_process_server(codex_home.path()).await?;
 
     let response = client
         .request(ClientRequest::ThreadStart {
@@ -164,11 +142,39 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
     assert_eq!(data[0].id, thread.id);
     assert_eq!(data[0].path, None);
 
+    delete_thread(&client, /*request_id*/ 4, thread.id.clone()).await?;
+    let unloaded_thread_id = ThreadId::from_string(&Uuid::new_v4().to_string())?;
+    thread_store
+        .create_thread(StoreCreateThreadParams {
+            thread_id: unloaded_thread_id,
+            extra_config: None,
+            forked_from_id: None,
+            parent_thread_id: None,
+            source: SessionSource::Cli,
+            thread_source: None,
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            multi_agent_version: None,
+            metadata: ThreadPersistenceMetadata {
+                cwd: Some(codex_home.path().to_path_buf()),
+                model_provider: "mock_provider".to_string(),
+                memory_mode: ThreadMemoryMode::Enabled,
+            },
+        })
+        .await?;
+    delete_thread(
+        &client,
+        /*request_id*/ 5,
+        unloaded_thread_id.to_string(),
+    )
+    .await?;
+
     client.shutdown().await?;
 
     let calls = thread_store.calls().await;
-    assert_eq!(calls.create_thread, 1);
+    assert_eq!(calls.create_thread, 2);
     assert_eq!(calls.list_threads, 1);
+    assert_eq!(calls.delete_thread, 2);
     assert!(
         calls.append_items > 0,
         "turn/start should append rollout items through the injected store"
@@ -180,6 +186,152 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
 
     assert_no_local_persistence_artifacts(codex_home.path())?;
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn cold_thread_resume_reuses_non_local_history_probe() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let store_id = Uuid::new_v4().to_string();
+    create_config_toml_with_thread_store(codex_home.path(), &server.uri(), &store_id)?;
+
+    let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
+    let config = Arc::new(
+        ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .loader_overrides(loader_overrides.clone())
+            .build()
+            .await?,
+    );
+    let thread_store = InMemoryThreadStore::for_id(store_id.clone());
+    let _in_memory_store = InMemoryThreadStoreId { store_id };
+
+    let mut client = start_in_process_client(config.clone(), loader_overrides.clone()).await?;
+    let response = client
+        .request(ClientRequest::ThreadStart {
+            request_id: RequestId::Integer(1),
+            params: ThreadStartParams::default(),
+        })
+        .await?
+        .expect("thread/start should succeed");
+    let ThreadStartResponse { thread, .. } = serde_json::from_value(response)?;
+
+    client
+        .request(ClientRequest::TurnStart {
+            request_id: RequestId::Integer(2),
+            params: TurnStartParams {
+                thread_id: thread.id.clone(),
+                client_user_message_id: None,
+                input: vec![V2UserInput::Text {
+                    text: "Materialize the thread".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        })
+        .await?
+        .expect("turn/start should succeed");
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let Some(event) = client.next_event().await else {
+                anyhow::bail!("in-process app-server stopped before turn/completed");
+            };
+            if let InProcessServerEvent::ServerNotification(ServerNotification::TurnCompleted(
+                completed,
+            )) = event
+                && completed.thread_id == thread.id
+            {
+                return Ok::<(), anyhow::Error>(());
+            }
+        }
+    })
+    .await??;
+    client.shutdown().await?;
+
+    let client = start_in_process_client(config, loader_overrides).await?;
+    let reads_before_resume = thread_store.calls().await.read_thread_with_history;
+    // The in-memory store is pathless, so resume currently fails later while
+    // assembling the response. The history-bearing probe must still be reused.
+    let _resume_result = client
+        .request(ClientRequest::ThreadResume {
+            request_id: RequestId::Integer(3),
+            params: ThreadResumeParams {
+                thread_id: thread.id.clone(),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    assert_eq!(
+        thread_store.calls().await.read_thread_with_history,
+        reads_before_resume + 1
+    );
+
+    client.shutdown().await?;
+    Ok(())
+}
+
+async fn start_in_process_server(codex_home: &Path) -> Result<InProcessClientHandle> {
+    let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
+    let config = Arc::new(
+        ConfigBuilder::default()
+            .codex_home(codex_home.to_path_buf())
+            .fallback_cwd(Some(codex_home.to_path_buf()))
+            .loader_overrides(loader_overrides.clone())
+            .build()
+            .await?,
+    );
+
+    Ok(start_in_process_client(config, loader_overrides).await?)
+}
+
+async fn start_in_process_client(
+    config: Arc<Config>,
+    loader_overrides: LoaderOverrides,
+) -> std::io::Result<InProcessClientHandle> {
+    in_process::start(InProcessStartArgs {
+        arg0_paths: Arg0DispatchPaths::default(),
+        config,
+        cli_overrides: Vec::new(),
+        loader_overrides,
+        strict_config: false,
+        cloud_config_bundle: CloudConfigBundleLoader::default(),
+        thread_config_loader: Arc::new(NoopThreadConfigLoader),
+        feedback: CodexFeedback::new(),
+        log_db: None,
+        state_db: None,
+        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+        config_warnings: Vec::new(),
+        session_source: SessionSource::Cli,
+        enable_codex_api_key_env: false,
+        initialize: InitializeParams {
+            client_info: ClientInfo {
+                name: "codex-app-server-tests".to_string(),
+                title: None,
+                version: "0.1.0".to_string(),
+            },
+            capabilities: None,
+        },
+        channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+    })
+    .await
+}
+
+async fn delete_thread(
+    client: &InProcessClientHandle,
+    request_id: i64,
+    thread_id: String,
+) -> Result<()> {
+    let response = client
+        .request(ClientRequest::ThreadDelete {
+            request_id: RequestId::Integer(request_id),
+            params: ThreadDeleteParams { thread_id },
+        })
+        .await?
+        .map_err(|error| anyhow::anyhow!("thread/delete failed: {}", error.message))?;
+    let _: ThreadDeleteResponse = serde_json::from_value(response)?;
     Ok(())
 }
 

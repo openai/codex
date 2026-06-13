@@ -11,16 +11,17 @@ use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
+use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::TurnEnvironment {
-    crate::session::turn_context::TurnEnvironment {
-        environment_id: environment_id.to_string(),
-        environment: std::sync::Arc::new(codex_exec_server::Environment::default_for_tests()),
-        cwd: std::env::temp_dir().abs(),
-        shell: None,
-    }
+    crate::session::turn_context::TurnEnvironment::new(
+        environment_id.to_string(),
+        std::sync::Arc::new(codex_exec_server::Environment::default_for_tests()),
+        std::env::temp_dir().abs(),
+        /*shell*/ None,
+    )
 }
 
 #[test]
@@ -206,12 +207,13 @@ async fn file_system_sandbox_context_uses_active_attempt() {
         NetworkSandboxPolicy::Restricted,
     );
     let manager = SandboxManager::new();
+    let sandbox_policy_cwd = PathUri::from_abs_path(&path);
     let attempt = SandboxAttempt {
         sandbox: SandboxType::MacosSeatbelt,
         permissions: &permissions,
         enforce_managed_network: false,
         manager: &manager,
-        sandbox_cwd: &path,
+        sandbox_cwd: &sandbox_policy_cwd,
         workspace_roots: std::slice::from_ref(&path),
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: true,
@@ -232,7 +234,10 @@ async fn file_system_sandbox_context_uses_active_attempt() {
     let expected_permissions =
         PermissionProfile::from_runtime_permissions(&file_system_policy, network_policy);
     assert_eq!(sandbox.permissions, expected_permissions);
-    assert_eq!(sandbox.cwd, Some(path.clone()));
+    assert_eq!(
+        sandbox.cwd,
+        Some(codex_utils_path_uri::PathUri::from_abs_path(&path))
+    );
     assert_eq!(
         sandbox.windows_sandbox_level,
         WindowsSandboxLevel::RestrictedToken
@@ -260,12 +265,13 @@ async fn no_sandbox_attempt_has_no_file_system_context() {
     };
     let permissions = PermissionProfile::Disabled;
     let manager = SandboxManager::new();
+    let sandbox_policy_cwd = PathUri::from_abs_path(&path);
     let attempt = SandboxAttempt {
         sandbox: SandboxType::None,
         permissions: &permissions,
         enforce_managed_network: false,
         manager: &manager,
-        sandbox_cwd: &path,
+        sandbox_cwd: &sandbox_policy_cwd,
         workspace_roots: std::slice::from_ref(&path),
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,

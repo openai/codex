@@ -8,11 +8,19 @@ retries = 1
 [profile.default.junit]
 path = "junit.xml"
 
+[profile.local]
+inherits = "default"
+
 [test-groups.app_server_protocol_codegen]
 max-threads = 1
 
 [test-groups.app_server_integration]
 max-threads = 1
+
+# Higher concurrency causes integration test timeouts under resource contention
+# on common developer machines.
+[test-groups.app_server_integration_local]
+max-threads = 4
 
 [test-groups.core_apply_patch_cli_integration]
 max-threads = 1
@@ -41,6 +49,12 @@ test-group = 'app_server_protocol_codegen'
 # Keep the library unit tests parallel.
 filter = 'package(codex-app-server) & kind(test)'
 test-group = 'app_server_integration'
+
+[[profile.local.overrides]]
+# Use up to four app-server subprocesses locally. The global nextest pool still
+# limits this to the machine's logical CPU count.
+filter = 'package(codex-app-server) & kind(test)'
+test-group = 'app_server_integration_local'
 
 [[profile.default.overrides]]
 # These tests exercise full Codex turns and apply_patch execution, and they are

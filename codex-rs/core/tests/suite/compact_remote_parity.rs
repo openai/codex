@@ -5,7 +5,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use codex_core::LoadedAgentsMd;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::config_types::ServiceTier;
@@ -29,6 +28,7 @@ const FIXED_CWD: &str = "/tmp/codex_remote_compaction_parity_workspace";
 const IMAGE_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 const SUMMARY: &str = "REMOTE_COMPACTION_PARITY_ENCRYPTED_SUMMARY";
 const DUMMY_FUNCTION_NAME: &str = "test_tool";
+const USER_INSTRUCTIONS: &str = "PARITY_USER_INSTRUCTIONS";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Mode {
@@ -509,7 +509,12 @@ async fn build_harness_inner(
     auto_compact_limit: Option<i64>,
 ) -> Result<TestCodexHarness> {
     fs::create_dir_all(FIXED_CWD)?;
-    let mut builder = test_codex().with_auth(settings.auth.build());
+    let mut builder = test_codex()
+        .with_auth(settings.auth.build())
+        .with_pre_build_hook(|home| {
+            fs::write(home.join("AGENTS.md"), USER_INSTRUCTIONS)
+                .expect("write global instructions");
+        });
     if hooks {
         builder = builder.with_pre_build_hook(write_manual_compact_hooks);
     }
@@ -518,9 +523,6 @@ async fn build_harness_inner(
             FIXED_CWD,
         ))
         .expect("fixed cwd should be absolute");
-        config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
-            "PARITY_USER_INSTRUCTIONS",
-        ));
         config.developer_instructions = Some("PARITY_DEVELOPER_INSTRUCTIONS".to_string());
         if settings.service_tier_fast {
             config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
@@ -529,8 +531,8 @@ async fn build_harness_inner(
         if hooks {
             trust_discovered_hooks(config);
         }
-        if mode == Mode::V2 {
-            let _ = config.features.enable(Feature::RemoteCompactionV2);
+        if mode == Mode::Legacy {
+            let _ = config.features.disable(Feature::RemoteCompactionV2);
         }
     }))
     .await
@@ -605,7 +607,6 @@ async fn capture_from_requests(
 async fn submit_user_input(codex: &codex_core::CodexThread, items: Vec<UserInput>) -> Result<()> {
     codex
         .submit(Op::UserInput {
-            environments: None,
             items,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,

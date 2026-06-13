@@ -30,9 +30,6 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use serde::Serialize;
 use std::path::PathBuf;
 
-const INVALID_REQUEST_SUBREASON_MAX_BYTES: usize = 512;
-const INVALID_REQUEST_SUBREASON_TRUNCATION_SUFFIX: &str = "...";
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AcceptedLineFingerprint {
     pub path_hash: String,
@@ -104,6 +101,23 @@ pub struct TurnTokenUsageFact {
     pub token_usage: TokenUsage,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TurnProfile {
+    pub before_first_sampling_ms: u64,
+    pub sampling_ms: u64,
+    pub between_sampling_overhead_ms: u64,
+    pub tool_blocking_ms: u64,
+    pub after_last_sampling_ms: u64,
+    pub sampling_request_count: u32,
+    pub sampling_retry_count: u32,
+}
+
+#[derive(Clone)]
+pub struct TurnProfileFact {
+    pub turn_id: String,
+    pub profile: TurnProfile,
+}
+
 #[derive(Clone)]
 pub struct TurnCodexErrorFact {
     pub(crate) turn_id: String,
@@ -123,7 +137,7 @@ impl TurnCodexErrorFact {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum CodexErrKind {
+pub enum CodexErrKind {
     TurnAborted,
     Stream,
     ContextWindowExceeded,
@@ -165,7 +179,6 @@ pub(crate) enum CodexErrKind {
 #[derive(Clone)]
 pub(crate) struct TurnCodexError {
     pub(crate) kind: CodexErrKind,
-    pub(crate) subreason: Option<String>,
     pub(crate) http_status_code: Option<u16>,
 }
 
@@ -173,26 +186,6 @@ impl TurnCodexError {
     fn from_codex_err(error: &CodexErr) -> Self {
         Self {
             kind: error.into(),
-            subreason: match error {
-                CodexErr::InvalidRequest(message) => {
-                    // InvalidRequest can contain raw provider response bodies, so bound the
-                    // analytics copy without changing the source CodexErr.
-                    let subreason = if message.len() <= INVALID_REQUEST_SUBREASON_MAX_BYTES {
-                        message.clone()
-                    } else {
-                        let truncated_len = message.floor_char_boundary(
-                            INVALID_REQUEST_SUBREASON_MAX_BYTES
-                                .saturating_sub(INVALID_REQUEST_SUBREASON_TRUNCATION_SUFFIX.len()),
-                        );
-                        format!(
-                            "{}{INVALID_REQUEST_SUBREASON_TRUNCATION_SUFFIX}",
-                            &message[..truncated_len]
-                        )
-                    };
-                    Some(subreason)
-                }
-                _ => None,
-            },
             http_status_code: error.http_status_code_value(),
         }
     }
@@ -371,6 +364,7 @@ pub enum CompactionReason {
     UserRequested,
     ContextLimit,
     ModelDownshift,
+    CompHashChanged,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -414,12 +408,37 @@ pub struct CodexCompactionEvent {
     pub phase: CompactionPhase,
     pub strategy: CompactionStrategy,
     pub status: CompactionStatus,
-    pub error: Option<String>,
+    pub codex_error_kind: Option<CodexErrKind>,
+    pub codex_error_http_status_code: Option<u16>,
     pub active_context_tokens_before: i64,
     pub active_context_tokens_after: i64,
+    pub retained_image_count: Option<usize>,
+    pub compaction_summary_tokens: Option<i64>,
+    pub cached_input_tokens: Option<i64>,
     pub started_at: u64,
     pub completed_at: u64,
     pub duration_ms: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GoalEventKind {
+    Created,
+    UsageAccounted,
+    StatusChanged,
+    Cleared,
+}
+
+#[derive(Clone)]
+pub struct CodexGoalEvent {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub goal_id: String,
+    pub event_kind: GoalEventKind,
+    pub goal_status: codex_state::ThreadGoalStatus,
+    pub has_token_budget: bool,
+    pub cumulative_tokens_accounted: Option<i64>,
+    pub cumulative_time_accounted_seconds: Option<i64>,
 }
 
 #[allow(dead_code)]
@@ -473,9 +492,11 @@ pub(crate) enum AnalyticsFact {
 pub(crate) enum CustomAnalyticsFact {
     SubAgentThreadStarted(SubAgentThreadStartedInput),
     Compaction(Box<CodexCompactionEvent>),
+    Goal(Box<CodexGoalEvent>),
     GuardianReview(Box<GuardianReviewEventParams>),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
     TurnTokenUsage(Box<TurnTokenUsageFact>),
+    TurnProfile(Box<TurnProfileFact>),
     TurnCodexError(Box<TurnCodexErrorFact>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),

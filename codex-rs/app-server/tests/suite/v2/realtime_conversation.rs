@@ -36,9 +36,13 @@ use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
+use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_features::FEATURES;
 use codex_features::Feature;
+use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
@@ -310,13 +314,16 @@ impl RealtimeE2eHarness {
         let start_request_id = self
             .mcp
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+                architecture: None,
                 thread_id: self.thread_id.clone(),
+                model: None,
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(Some("backend prompt".to_string())),
                 realtime_session_id: None,
                 transport: Some(ThreadRealtimeStartTransport::Webrtc {
                     sdp: offer_sdp.to_string(),
                 }),
+                version: None,
                 voice: None,
             })
             .await?;
@@ -387,6 +394,7 @@ impl RealtimeE2eHarness {
             .send_thread_realtime_append_text_request(ThreadRealtimeAppendTextParams {
                 thread_id,
                 text: text.to_string(),
+                role: ConversationTextRole::User,
             })
             .await?;
         let response: JSONRPCResponse = timeout(
@@ -555,11 +563,14 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
             thread_id: thread_start.thread.id.clone(),
+            model: Some("realtime-treatment-model".to_string()),
             output_modality: RealtimeOutputModality::Audio,
             prompt: None,
             realtime_session_id: None,
             transport: None,
+            version: None,
             voice: Some(RealtimeVoice::Cedar),
         })
         .await?;
@@ -587,6 +598,10 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     assert_eq!(
         startup_context_request.body_json()["session"]["audio"]["output"]["voice"],
         "cedar"
+    );
+    assert_eq!(
+        realtime_server.single_handshake().uri(),
+        "/v1/realtime?model=realtime-treatment-model"
     );
     assert_eq!(
         startup_context_request.body_json()["session"]["output_modalities"],
@@ -623,6 +638,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         .send_thread_realtime_append_text_request(ThreadRealtimeAppendTextParams {
             thread_id: started.thread_id.clone(),
             text: "hello".to_string(),
+            role: ConversationTextRole::Developer,
         })
         .await?;
     let text_append_response: JSONRPCResponse = timeout(
@@ -722,6 +738,25 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         connection[0].body_json()["session"]["instructions"].as_str(),
         Some(startup_context_instructions.as_str()),
     );
+    let text_request = connection
+        .iter()
+        .map(WebSocketRequest::body_json)
+        .find(|request| request["type"] == "conversation.item.create")
+        .context("expected conversation item request")?;
+    assert_eq!(
+        text_request,
+        json!({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "developer",
+                "content": [{
+                    "type": "input_text",
+                    "text": "hello",
+                }],
+            },
+        })
+    );
     let mut request_types = [
         connection[1].body_json()["type"]
             .as_str()
@@ -804,11 +839,14 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
             thread_id: thread_start.thread.id.clone(),
+            model: None,
             output_modality: RealtimeOutputModality::Text,
             prompt: None,
             realtime_session_id: None,
             transport: None,
+            version: None,
             voice: None,
         })
         .await?;
@@ -978,11 +1016,14 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
             thread_id: thread_start.thread.id.clone(),
+            model: None,
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: None,
+            version: None,
             voice: None,
         })
         .await?;
@@ -1075,13 +1116,16 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
     let thread_id = thread_start.thread.id;
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
             thread_id: thread_id.clone(),
+            model: None,
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
                 sdp: "v=offer\r\n".to_string(),
             }),
+            version: None,
             voice: None,
         })
         .await?;
@@ -1325,6 +1369,136 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
     );
 
     harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn webrtc_assistant_output_without_handoff_reaches_realtime() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let final_answer = "long output ".repeat(1_000);
+    for (version, expected_version, preamble) in [
+        (
+            RealtimeTestVersion::V1,
+            RealtimeConversationVersion::V1,
+            "direct preamble from v1",
+        ),
+        (
+            RealtimeTestVersion::V2,
+            RealtimeConversationVersion::V2,
+            "direct preamble from v2",
+        ),
+    ] {
+        let mut harness = RealtimeE2eHarness::new(
+            version,
+            main_loop_responses(vec![responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "message",
+                        "role": "assistant",
+                        "id": "msg-preamble",
+                        "phase": "commentary",
+                        "content": [{"type": "output_text", "text": preamble}]
+                    }
+                }),
+                responses::ev_assistant_message("msg-final", &final_answer),
+                responses::ev_completed("resp-1"),
+            ])]),
+            realtime_sideband(vec![realtime_sideband_connection(vec![
+                vec![session_updated("sess_standalone_output")],
+                vec![],
+                match version {
+                    RealtimeTestVersion::V1 => vec![],
+                    RealtimeTestVersion::V2 => vec![
+                        json!({
+                            "type": "response.created",
+                            "response": { "id": "resp_preamble" }
+                        }),
+                        json!({
+                            "type": "response.done",
+                            "response": { "id": "resp_preamble" }
+                        }),
+                    ],
+                },
+                vec![],
+                vec![],
+            ])]),
+        )
+        .await?;
+
+        let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
+        assert_eq!(started.started.version, expected_version);
+
+        let request_id = harness
+            .mcp
+            .send_turn_start_request(TurnStartParams {
+                thread_id: harness.thread_id.clone(),
+                input: vec![V2UserInput::Text {
+                    text: "direct text turn".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        let response: JSONRPCResponse = timeout(
+            DEFAULT_TIMEOUT,
+            harness
+                .mcp
+                .read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        let _: TurnStartResponse = to_response(response)?;
+        let _ = harness
+            .read_notification::<TurnCompletedNotification>("turn/completed")
+            .await?;
+
+        let preamble_request = harness.sideband_outbound_request(/*request_index*/ 1).await;
+        let output_text = match version {
+            RealtimeTestVersion::V1 => {
+                let final_request = harness.sideband_outbound_request(/*request_index*/ 2).await;
+                assert_eq!(
+                    preamble_request,
+                    json!({
+                        "type": "conversation.handoff.append",
+                        "handoff_id": "codex",
+                        "output_text": preamble,
+                    })
+                );
+                assert_eq!(final_request["type"], "conversation.handoff.append");
+                assert_eq!(final_request["handoff_id"], "codex");
+                final_request["output_text"]
+                    .as_str()
+                    .expect("output text")
+                    .to_string()
+            }
+            RealtimeTestVersion::V2 => {
+                assert_v2_progress_update(&preamble_request, preamble);
+                assert_v2_response_create(
+                    &harness.sideband_outbound_request(/*request_index*/ 2).await,
+                );
+                let final_request = harness.sideband_outbound_request(/*request_index*/ 3).await;
+                assert_eq!(final_request["type"], "conversation.item.create");
+                assert_eq!(final_request["item"]["type"], "message");
+                assert_eq!(final_request["item"]["role"], "user");
+                assert_eq!(final_request["item"]["content"][0]["type"], "input_text");
+                let output_text = final_request["item"]["content"][0]["text"]
+                    .as_str()
+                    .expect("output text");
+                assert!(output_text.starts_with("[BACKEND] "));
+                assert_v2_response_create(
+                    &harness.sideband_outbound_request(/*request_index*/ 4).await,
+                );
+                output_text.to_string()
+            }
+        };
+        assert!(output_text.contains("tokens truncated"));
+        assert!(output_text.len() <= 4_000);
+
+        harness.shutdown().await;
+    }
+
     Ok(())
 }
 
@@ -1990,13 +2164,16 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
             thread_id: thread_start.thread.id,
+            model: None,
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
                 sdp: "v=offer\r\n".to_string(),
             }),
+            version: None,
             voice: None,
         })
         .await?;
@@ -2049,11 +2226,14 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
             thread_id: thread_start.thread.id.clone(),
+            model: None,
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: None,
+            version: None,
             voice: None,
         })
         .await?;

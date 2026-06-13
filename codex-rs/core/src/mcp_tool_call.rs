@@ -319,8 +319,7 @@ async fn handle_approved_mcp_tool_call(
     let server_origin = sess
         .services
         .mcp_connection_manager
-        .read()
-        .await
+        .load_full()
         .server_origin(&server)
         .map(str::to_string);
 
@@ -606,8 +605,7 @@ async fn maybe_request_codex_apps_auth_elicitation(
     if !sess
         .services
         .mcp_connection_manager
-        .read()
-        .await
+        .load_full()
         .is_host_owned_codex_apps_server(server)
     {
         return result;
@@ -669,13 +667,9 @@ async fn maybe_request_codex_apps_auth_elicitation(
     auth_elicitation_completed_result(&plan.auth_failure, result.meta)
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "Codex Apps cache refresh reads through the session-owned manager guard"
-)]
 async fn refresh_codex_apps_after_connector_auth(sess: &Session, turn_context: &TurnContext) {
     let mcp_tools_result = {
-        let manager = sess.services.mcp_connection_manager.read().await;
+        let manager = sess.services.mcp_connection_manager.load_full();
         manager.hard_refresh_codex_apps_tools_cache().await
     };
 
@@ -694,10 +688,6 @@ async fn refresh_codex_apps_after_connector_auth(sess: &Session, turn_context: &
     }
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "MCP sandbox metadata reads through the session-owned manager guard"
-)]
 async fn augment_mcp_tool_request_meta_with_sandbox_state(
     sess: &Session,
     turn_context: &TurnContext,
@@ -707,8 +697,7 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     let supports_sandbox_state_meta = sess
         .services
         .mcp_connection_manager
-        .read()
-        .await
+        .load_full()
         .server_supports_sandbox_state_meta_capability(server)
         .await
         .unwrap_or(false);
@@ -757,8 +746,7 @@ async fn maybe_mark_thread_memory_mode_polluted(
     let pollutes_memory = sess
         .services
         .mcp_connection_manager
-        .read()
-        .await
+        .load_full()
         .server_pollutes_memory(server);
     if !pollutes_memory {
         return;
@@ -1309,6 +1297,7 @@ async fn maybe_request_mcp_tool_approval(
 
     let args = RequestUserInputArgs {
         questions: vec![question],
+        auto_resolution_ms: None,
     };
     let response = sess
         .request_user_input(turn_context.as_ref(), call_id.to_string(), args)
@@ -1414,17 +1403,13 @@ async fn mcp_tool_approval_decision_from_guardian(
     }
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "MCP approval metadata reads through the session-owned manager guard"
-)]
 pub(crate) async fn lookup_mcp_tool_metadata(
     sess: &Session,
     turn_context: &TurnContext,
     server: &str,
     tool_name: &str,
 ) -> Option<McpToolApprovalMetadata> {
-    let manager = sess.services.mcp_connection_manager.read().await;
+    let manager = sess.services.mcp_connection_manager.load_full();
     let plugin_id = manager
         .plugin_id_for_mcp_server_name(server)
         .map(str::to_string);
@@ -1509,10 +1494,6 @@ fn get_mcp_app_resource_uri(
     })
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "MCP app metadata reads through the session-owned manager guard"
-)]
 async fn lookup_mcp_app_usage_metadata(
     sess: &Session,
     server: &str,
@@ -1521,8 +1502,7 @@ async fn lookup_mcp_app_usage_metadata(
     let tools = sess
         .services
         .mcp_connection_manager
-        .read()
-        .await
+        .load_full()
         .list_all_tools()
         .await;
 

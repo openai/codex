@@ -60,6 +60,7 @@ fn test_model_info(
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        use_responses_lite: false,
         auto_review_model_override: None,
         tool_mode: None,
         multi_agent_version: None,
@@ -83,6 +84,7 @@ fn test_model_info(
         context_window: Some(272_000),
         max_context_window: None,
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     }
@@ -211,15 +213,13 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
     );
     assert!(
         description.contains(
-            "Only use `spawn_agent` if and only if the user explicitly asks for sub-agents, delegation, or parallel agent work."
+            "Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work."
         ),
         "expected explicit authorization rule in spawn_agent description: {description:?}"
     );
     assert!(
-        description.contains(
-            "Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not count as permission to spawn."
-        ),
-        "expected non-authorization clarification in spawn_agent description: {description:?}"
+        !description.contains("### When to delegate vs. do the subtask yourself"),
+        "spawn_agent description should not include extra when-to-use delegation guidance: {description:?}"
     );
     assert!(
         description.contains(

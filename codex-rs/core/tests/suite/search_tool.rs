@@ -524,7 +524,6 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     let test = builder.build(&server).await?;
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "Find the calendar create tool".to_string(),
                 text_elements: Vec::new(),
@@ -852,8 +851,11 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
         .get("description")
         .and_then(Value::as_str)
         .expect("spawn_agent description should be present");
-    assert!(description.contains("Only use `spawn_agent` if and only if"));
+    assert!(description.contains(
+        "Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work."
+    ));
     assert!(description.contains("### Designing delegated subtasks"));
+    assert!(!description.contains("### When to delegate vs. do the subtask yourself"));
 
     Ok(())
 }
@@ -934,7 +936,6 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "Use the automation tool".to_string(),
                 text_elements: Vec::new(),
@@ -1245,7 +1246,6 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "Find the rmcp echo tool and call it.".to_string(),
                 text_elements: Vec::new(),
@@ -1563,7 +1563,6 @@ async fn tool_search_matches_dynamic_tools_by_name_description_namespace_and_sch
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "Search for the dynamic tool".to_string(),
                 text_elements: Vec::new(),

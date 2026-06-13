@@ -1,6 +1,5 @@
 #![allow(warnings, clippy::all)]
 
-use async_trait::async_trait;
 use codex_utils_path as path_utils;
 use std::cmp::Reverse;
 use std::ffi::OsStr;
@@ -195,15 +194,14 @@ impl AnchorState {
 ///
 /// We need to apply different logic if we're ultimately going to be returning
 /// threads ordered by created_at or updated_at.
-#[async_trait]
 trait RolloutFileVisitor {
-    async fn visit(
+    fn visit(
         &mut self,
         ts: OffsetDateTime,
         id: Uuid,
         path: PathBuf,
         scanned: usize,
-    ) -> ControlFlow<()>;
+    ) -> impl std::future::Future<Output = ControlFlow<()>> + Send;
 }
 
 /// Collects thread items during directory traversal in created_at order,
@@ -218,7 +216,6 @@ struct FilesByCreatedAtVisitor<'a> {
     cwd_filters: Option<&'a [PathBuf]>,
 }
 
-#[async_trait]
 impl<'a> RolloutFileVisitor for FilesByCreatedAtVisitor<'a> {
     async fn visit(
         &mut self,
@@ -263,7 +260,6 @@ struct FilesByUpdatedAtVisitor<'a> {
     candidates: &'a mut Vec<ThreadCandidate>,
 }
 
-#[async_trait]
 impl<'a> RolloutFileVisitor for FilesByUpdatedAtVisitor<'a> {
     async fn visit(
         &mut self,
@@ -1121,11 +1117,10 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     summary.saw_session_meta = true;
                 }
             }
-            RolloutItem::ResponseItem(_) => {
-                summary.created_at = summary
+            RolloutItem::ResponseItem(_) | RolloutItem::InterAgentCommunication(_) => {
+                summary
                     .created_at
-                    .clone()
-                    .or_else(|| Some(rollout_line.timestamp.clone()));
+                    .get_or_insert_with(|| rollout_line.timestamp.clone());
             }
             RolloutItem::TurnContext(_) => {
                 // Not included in `head`; skip.
@@ -1181,6 +1176,11 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
                 }
                 RolloutItem::ResponseItem(item) => {
                     if let Ok(value) = serde_json::to_value(item) {
+                        head.push(value);
+                    }
+                }
+                RolloutItem::InterAgentCommunication(communication) => {
+                    if let Ok(value) = serde_json::to_value(communication.to_model_input_item()) {
                         head.push(value);
                     }
                 }
@@ -1348,32 +1348,56 @@ async fn find_thread_path_by_id_str_in_subdir(
     if !root.exists() {
         return Ok(unverified_db_path);
     }
-    // This is safe because we know the values are valid.
-    #[allow(clippy::unwrap_used)]
-    let limit = NonZero::new(1).unwrap();
-    let options = file_search::FileSearchOptions {
-        limit,
-        compute_indices: false,
-        respect_gitignore: false,
-        ..Default::default()
+    let (filename_match, filename_scan_error) = match find_rollout_path_by_id_from_filenames(
+        root.as_path(),
+        id_str,
+    )
+    .await
+    {
+        Ok(path) => (path, None),
+        Err(err) => {
+            tracing::warn!(
+                "rollout filename lookup failed during find_thread_path_by_id_str_in_subdir: {err}"
+            );
+            (None, Some(err))
+        }
     };
 
-    let results = file_search::run(
-        id_str,
-        vec![root.clone()],
-        options,
-        /*cancel_flag*/ None,
-    )
-    .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+    let found = match filename_match {
+        Some(path) => Some(path),
+        None => {
+            // This is safe because we know the values are valid.
+            #[allow(clippy::unwrap_used)]
+            let limit = NonZero::new(1).unwrap();
+            let options = file_search::FileSearchOptions {
+                limit,
+                compute_indices: false,
+                respect_gitignore: false,
+                ..Default::default()
+            };
 
-    let found = match results
-        .matches
-        .into_iter()
-        .map(|m| m.full_path())
-        .find_map(compression::RolloutFile::from_path)
-    {
-        Some(rollout_file) => Some(rollout_file.into_path()),
-        None => find_rollout_path_by_id_from_filenames(root.as_path(), id_str).await?,
+            let results = file_search::run(
+                id_str,
+                vec![root.clone()],
+                options,
+                /*cancel_flag*/ None,
+            )
+            .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+
+            let found = results
+                .matches
+                .into_iter()
+                .map(|m| m.full_path())
+                .find_map(compression::RolloutFile::from_path)
+                .map(compression::RolloutFile::into_path);
+
+            if found.is_none()
+                && let Some(err) = filename_scan_error
+            {
+                return Err(err);
+            }
+            found
+        }
     };
     if let Some(found_path) = found.as_ref() {
         tracing::debug!("state db missing rollout path for thread {id_str}");

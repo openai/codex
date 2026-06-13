@@ -6,6 +6,7 @@ use codex_protocol::models::ResponseItem;
 pub fn is_persisted_rollout_item(item: &RolloutItem) -> bool {
     match item {
         RolloutItem::ResponseItem(item) => should_persist_response_item(item),
+        RolloutItem::InterAgentCommunication(_) => true,
         RolloutItem::EventMsg(ev) => should_persist_event_msg(ev),
         // Persist Codex executive markers so we can analyze flows (e.g., compaction, API turns).
         RolloutItem::Compacted(_) | RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {
@@ -30,6 +31,7 @@ pub fn persisted_rollout_items(items: &[RolloutItem]) -> Vec<RolloutItem> {
 pub fn should_persist_response_item(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::Message { .. }
+        | ResponseItem::AgentMessage { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
@@ -60,7 +62,8 @@ pub fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::WebSearchCall { .. } => true,
-        ResponseItem::Reasoning { .. }
+        ResponseItem::AgentMessage { .. }
+        | ResponseItem::Reasoning { .. }
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Compaction { .. }
         | ResponseItem::CompactionTrigger
@@ -89,7 +92,8 @@ pub fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::TurnStarted(_)
         | EventMsg::TurnComplete(_)
         | EventMsg::WebSearchEnd(_)
-        | EventMsg::ImageGenerationEnd(_) => true,
+        | EventMsg::ImageGenerationEnd(_)
+        | EventMsg::SubAgentActivity(_) => true,
         EventMsg::ItemCompleted(event) => {
             // Plan items are derived from streaming tags and are not part of the
             // raw ResponseItem history, so we persist their completion to replay
@@ -115,6 +119,7 @@ pub fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::RealtimeConversationClosed(_)
         | EventMsg::ModelReroute(_)
         | EventMsg::ModelVerification(_)
+        | EventMsg::TurnModerationMetadata(_)
         | EventMsg::AgentReasoningSectionBreak(_)
         | EventMsg::RawResponseItem(_)
         | EventMsg::SessionConfigured(_)

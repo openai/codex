@@ -8,6 +8,62 @@ use super::*;
 const DESKTOP_THREAD_OPENED_MESSAGE: &str = "Opened this session in Codex Desktop.";
 
 impl App {
+    pub(super) fn insert_history_cell(&mut self, tui: &mut tui::Tui, cell: Box<dyn HistoryCell>) {
+        let cell: Arc<dyn HistoryCell> = cell.into();
+        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+            t.insert_cell(cell.clone());
+            tui.frame_requester().schedule_frame();
+        }
+        self.transcript_cells.push(cell.clone());
+        if self.initial_history_replay_buffer.as_ref().is_some() {
+            self.insert_history_cell_lines_with_initial_replay_buffer(
+                tui,
+                cell.as_ref(),
+                self.chat_widget
+                    .history_wrap_width(tui.terminal.last_known_screen_size.width),
+            );
+        } else {
+            self.insert_history_cell_lines(
+                tui,
+                cell.as_ref(),
+                self.chat_widget
+                    .history_wrap_width(tui.terminal.last_known_screen_size.width),
+            );
+        }
+        // A committed cell can unblock a settled /usage card that was waiting
+        // behind a transient active cell or a provisional stream tail.
+        self.chat_widget
+            .request_completed_token_activity_output_insertion();
+    }
+
+    pub(super) fn insert_completed_token_activity_output_if_ready(&mut self, tui: &mut tui::Tui) {
+        if self.chat_widget.token_activity_history_insertion_blocked()
+            || self.transcript_cells.last().is_some_and(|cell| {
+                cell.as_any().is::<history_cell::AgentMessageCell>()
+                    || cell.as_any().is::<history_cell::ProposedPlanStreamCell>()
+            })
+        {
+            return;
+        }
+        self.insert_completed_token_activity_output(tui);
+    }
+
+    pub(super) fn insert_completed_token_activity_output(&mut self, tui: &mut tui::Tui) {
+        if let Some(cell) = self.chat_widget.take_completed_token_activity_output() {
+            self.insert_history_cell(tui, Box::new(cell));
+        }
+    }
+
+    pub(super) fn insert_completed_token_activity_output_after_stream_shutdown(
+        &mut self,
+        tui: &mut tui::Tui,
+    ) {
+        if self.chat_widget.token_activity_history_insertion_blocked() {
+            return;
+        }
+        self.insert_completed_token_activity_output(tui);
+    }
+
     pub(super) fn open_url_in_browser(&mut self, url: String) {
         if let Err(err) = webbrowser::open(&url) {
             self.chat_widget
@@ -110,9 +166,11 @@ impl App {
         self.deferred_history_lines.clear();
         self.has_emitted_history_lines = false;
         self.transcript_reflow.clear();
+        self.chat_widget.clear_pending_token_activity_refreshes();
         self.initial_history_replay_buffer = None;
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
+        self.skill_load_warnings.clear();
     }
 }
 

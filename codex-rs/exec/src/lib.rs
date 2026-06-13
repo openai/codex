@@ -62,8 +62,10 @@ use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::ConfigTomlLoadResult;
 use codex_core::config::find_codex_home;
-use codex_core::config::load_config_as_toml_with_cli_and_load_options;
+use codex_core::config::load_config_toml_with_layer_stack;
+use codex_core::config::resolve_bootstrap_auth_keyring_backend_kind;
 use codex_core::config::resolve_oss_provider;
 use codex_core::config::resolve_profile_v2_config_path;
 use codex_core::find_thread_meta_by_name_str;
@@ -331,7 +333,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         ..Default::default()
     };
 
-    let bootstrap_config_toml = load_config_toml_or_exit(
+    let bootstrap_config = load_bootstrap_config_or_exit(
         &codex_home,
         Some(&config_cwd),
         cli_kv_overrides.clone(),
@@ -340,6 +342,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         CloudConfigBundleLoader::default(),
     )
     .await;
+    let bootstrap_config_toml = &bootstrap_config.config_toml;
 
     let chatgpt_base_url = bootstrap_config_toml
         .chatgpt_base_url
@@ -351,6 +354,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         bootstrap_config_toml
             .cli_auth_credentials_store
             .unwrap_or_default(),
+        resolve_bootstrap_auth_keyring_backend_kind(&bootstrap_config)?,
         chatgpt_base_url,
     )
     .await;
@@ -359,12 +363,12 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     let run_cloud_config_bundle = cloud_config_bundle.clone();
 
     let model_provider = if oss {
-        let config_toml_with_cloud_config;
+        let bootstrap_config_with_cloud_config;
         let config_toml_for_oss = if oss_provider.is_none() {
             // The first load intentionally skips cloud config so we can read
             // auth/base-url settings needed to fetch the bundle. If OSS mode
             // needs a default provider from config, reload with the bundle.
-            config_toml_with_cloud_config = load_config_toml_or_exit(
+            bootstrap_config_with_cloud_config = load_bootstrap_config_or_exit(
                 &codex_home,
                 Some(&config_cwd),
                 cli_kv_overrides.clone(),
@@ -373,9 +377,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
                 cloud_config_bundle.clone(),
             )
             .await;
-            &config_toml_with_cloud_config
+            &bootstrap_config_with_cloud_config.config_toml
         } else {
-            &bootstrap_config_toml
+            bootstrap_config_toml
         };
 
         let resolved = resolve_oss_provider(oss_provider.as_deref(), config_toml_for_oss);
@@ -466,6 +470,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     if let Err(err) = enforce_login_restrictions(&AuthConfig {
         codex_home: config.codex_home.to_path_buf(),
         auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
+        keyring_backend_kind: config.auth_keyring_backend_kind(),
         forced_login_method: config.forced_login_method,
         forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
         chatgpt_base_url: Some(config.chatgpt_base_url.clone()),
@@ -609,15 +614,15 @@ where
 }
 
 #[allow(clippy::print_stderr)]
-async fn load_config_toml_or_exit(
+async fn load_bootstrap_config_or_exit(
     codex_home: &Path,
     cwd: Option<&AbsolutePathBuf>,
     cli_kv_overrides: Vec<(String, codex_config::TomlValue)>,
     loader_overrides: LoaderOverrides,
     strict_config: bool,
     cloud_config_bundle: CloudConfigBundleLoader,
-) -> codex_config::config_toml::ConfigToml {
-    match load_config_as_toml_with_cli_and_load_options(
+) -> ConfigTomlLoadResult {
+    match load_config_toml_with_layer_stack(
         codex_home,
         cwd,
         cli_kv_overrides,
@@ -1044,13 +1049,7 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
-        runtime_workspace_roots: Some(
-            config
-                .workspace_roots
-                .iter()
-                .map(AbsolutePathBuf::to_path_buf)
-                .collect(),
-        ),
+        runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox.flatten(),
@@ -1075,13 +1074,7 @@ fn thread_resume_params_from_config(config: &Config, thread_id: String) -> Threa
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
-        runtime_workspace_roots: Some(
-            config
-                .workspace_roots
-                .iter()
-                .map(AbsolutePathBuf::to_path_buf)
-                .collect(),
-        ),
+        runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox.flatten(),
@@ -1158,7 +1151,7 @@ fn session_configured_from_thread_start_response(
         &response.thread.session_id,
         &response.thread.id,
         response.thread.parent_thread_id.as_deref(),
-        response.thread.thread_source.map(Into::into),
+        response.thread.thread_source.clone().map(Into::into),
         response.thread.name.clone(),
         response.thread.path.clone(),
         response.model.clone(),
@@ -1181,7 +1174,7 @@ fn session_configured_from_thread_resume_response(
         &response.thread.session_id,
         &response.thread.id,
         response.thread.parent_thread_id.as_deref(),
-        response.thread.thread_source.map(Into::into),
+        response.thread.thread_source.clone().map(Into::into),
         response.thread.name.clone(),
         response.thread.path.clone(),
         response.model.clone(),
@@ -1268,6 +1261,11 @@ fn should_process_notification(
 ) -> bool {
     match notification {
         ServerNotification::ConfigWarning(_) | ServerNotification::DeprecationNotice(_) => true,
+        // TODO(anp) resolve duplicate startup warnings
+        ServerNotification::Warning(notification) => notification
+            .thread_id
+            .as_deref()
+            .is_none_or(|candidate| candidate == thread_id),
         ServerNotification::Error(notification) => {
             notification.thread_id == thread_id && notification.turn_id == turn_id
         }

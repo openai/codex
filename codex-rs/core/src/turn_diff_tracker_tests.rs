@@ -2,10 +2,15 @@ use super::*;
 use codex_apply_patch::AppliedPatchDelta;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_exec_server::LOCAL_FS;
+use codex_git_utils::ApplyGitRequest;
+use codex_git_utils::apply_git_patch;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
+use std::time::Duration;
+use std::time::Instant;
 use tempfile::tempdir;
 
 fn git_blob_sha1_hex(data: &str) -> String {
@@ -41,24 +46,28 @@ async fn apply_verified_patch(root: &Path, patch: &str) -> AppliedPatchDelta {
     .expect("patch should apply")
 }
 
+fn tracker_with_root(root: &Path) -> TurnDiffTracker {
+    TurnDiffTracker::with_environment_display_roots([("".to_string(), root.to_path_buf())])
+}
+
 #[tokio::test]
 async fn accumulates_add_then_update_as_single_add() {
     let dir = tempdir().expect("tempdir");
-    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let mut tracker = tracker_with_root(dir.path());
 
     let add = apply_verified_patch(
         dir.path(),
         "*** Begin Patch\n*** Add File: a.txt\n+foo\n*** End Patch",
     )
     .await;
-    tracker.track_delta(&add);
+    tracker.track_delta("", &add);
 
     let update = apply_verified_patch(
         dir.path(),
         "*** Begin Patch\n*** Update File: a.txt\n@@\n foo\n+bar\n*** End Patch",
     )
     .await;
-    tracker.track_delta(&update);
+    tracker.track_delta("", &update);
 
     let right_oid = git_blob_sha1_hex("foo\nbar\n");
     let expected = format!(
@@ -78,14 +87,14 @@ index {ZERO_OID}..{right_oid}
 #[tokio::test]
 async fn invalidated_tracker_suppresses_existing_diff() {
     let dir = tempdir().expect("tempdir");
-    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let mut tracker = tracker_with_root(dir.path());
 
     let add = apply_verified_patch(
         dir.path(),
         "*** Begin Patch\n*** Add File: a.txt\n+foo\n*** End Patch",
     )
     .await;
-    tracker.track_delta(&add);
+    tracker.track_delta("", &add);
 
     tracker.invalidate();
 
@@ -93,17 +102,54 @@ async fn invalidated_tracker_suppresses_existing_diff() {
 }
 
 #[tokio::test]
+async fn tracks_same_absolute_path_across_multiple_environments() {
+    let dir = tempdir().expect("tempdir");
+    let add = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Add File: shared.txt\n+content\n*** End Patch",
+    )
+    .await;
+
+    let mut tracker = TurnDiffTracker::with_environment_display_roots([
+        ("local".to_string(), dir.path().to_path_buf()),
+        ("remote".to_string(), dir.path().to_path_buf()),
+    ]);
+    tracker.track_delta("remote", &add);
+    tracker.track_delta("local", &add);
+
+    let right_oid = git_blob_sha1_hex("content\n");
+    let expected = format!(
+        r#"diff --git a/local/shared.txt b/local/shared.txt
+new file mode {REGULAR_FILE_MODE}
+index {ZERO_OID}..{right_oid}
+--- {DEV_NULL}
++++ b/local/shared.txt
+@@ -0,0 +1 @@
++content
+diff --git a/remote/shared.txt b/remote/shared.txt
+new file mode {REGULAR_FILE_MODE}
+index {ZERO_OID}..{right_oid}
+--- {DEV_NULL}
++++ b/remote/shared.txt
+@@ -0,0 +1 @@
++content
+"#,
+    );
+    assert_eq!(tracker.get_unified_diff(), Some(expected));
+}
+
+#[tokio::test]
 async fn accumulates_delete() {
     let dir = tempdir().expect("tempdir");
     fs::write(dir.path().join("b.txt"), "x\n").expect("seed file");
 
-    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let mut tracker = tracker_with_root(dir.path());
     let delete = apply_verified_patch(
         dir.path(),
         "*** Begin Patch\n*** Delete File: b.txt\n*** End Patch",
     )
     .await;
-    tracker.track_delta(&delete);
+    tracker.track_delta("", &delete);
 
     let left_oid = git_blob_sha1_hex("x\n");
     let expected = format!(
@@ -124,13 +170,13 @@ async fn accumulates_move_and_update() {
     let dir = tempdir().expect("tempdir");
     fs::write(dir.path().join("src.txt"), "line\n").expect("seed file");
 
-    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let mut tracker = tracker_with_root(dir.path());
     let update = apply_verified_patch(
         dir.path(),
         "*** Begin Patch\n*** Update File: src.txt\n*** Move to: dst.txt\n@@\n-line\n+line2\n*** End Patch",
     )
     .await;
-    tracker.track_delta(&update);
+    tracker.track_delta("", &update);
 
     let left_oid = git_blob_sha1_hex("line\n");
     let right_oid = git_blob_sha1_hex("line2\n");
@@ -152,13 +198,13 @@ async fn pure_rename_yields_no_diff() {
     let dir = tempdir().expect("tempdir");
     fs::write(dir.path().join("old.txt"), "same\n").expect("seed file");
 
-    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let mut tracker = tracker_with_root(dir.path());
     let rename = apply_verified_patch(
         dir.path(),
         "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n@@\n same\n*** End Patch",
     )
     .await;
-    tracker.track_delta(&rename);
+    tracker.track_delta("", &rename);
 
     assert_eq!(tracker.get_unified_diff(), None);
 }
@@ -168,13 +214,13 @@ async fn add_over_existing_file_becomes_update() {
     let dir = tempdir().expect("tempdir");
     fs::write(dir.path().join("dup.txt"), "before\n").expect("seed file");
 
-    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let mut tracker = tracker_with_root(dir.path());
     let add = apply_verified_patch(
         dir.path(),
         "*** Begin Patch\n*** Add File: dup.txt\n+after\n*** End Patch",
     )
     .await;
-    tracker.track_delta(&add);
+    tracker.track_delta("", &add);
 
     let left_oid = git_blob_sha1_hex("before\n");
     let right_oid = git_blob_sha1_hex("after\n");
@@ -196,20 +242,20 @@ async fn delete_then_readd_same_path_becomes_update() {
     let dir = tempdir().expect("tempdir");
     fs::write(dir.path().join("cycle.txt"), "before\n").expect("seed file");
 
-    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let mut tracker = tracker_with_root(dir.path());
     let delete = apply_verified_patch(
         dir.path(),
         "*** Begin Patch\n*** Delete File: cycle.txt\n*** End Patch",
     )
     .await;
-    tracker.track_delta(&delete);
+    tracker.track_delta("", &delete);
 
     let add = apply_verified_patch(
         dir.path(),
         "*** Begin Patch\n*** Add File: cycle.txt\n+after\n*** End Patch",
     )
     .await;
-    tracker.track_delta(&add);
+    tracker.track_delta("", &add);
 
     let left_oid = git_blob_sha1_hex("before\n");
     let right_oid = git_blob_sha1_hex("after\n");
@@ -232,13 +278,13 @@ async fn move_over_existing_destination_without_content_change_deletes_source_on
     fs::write(dir.path().join("a.txt"), "same\n").expect("seed source");
     fs::write(dir.path().join("b.txt"), "same\n").expect("seed destination");
 
-    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let mut tracker = tracker_with_root(dir.path());
     let move_overwrite = apply_verified_patch(
         dir.path(),
         "*** Begin Patch\n*** Update File: a.txt\n*** Move to: b.txt\n@@\n same\n*** End Patch",
     )
     .await;
-    tracker.track_delta(&move_overwrite);
+    tracker.track_delta("", &move_overwrite);
 
     let left_oid = git_blob_sha1_hex("same\n");
     let expected = format!(
@@ -261,13 +307,13 @@ async fn move_over_existing_destination_with_content_change_deletes_source_and_u
     fs::write(dir.path().join("a.txt"), "from\n").expect("seed source");
     fs::write(dir.path().join("b.txt"), "existing\n").expect("seed destination");
 
-    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let mut tracker = tracker_with_root(dir.path());
     let move_overwrite = apply_verified_patch(
         dir.path(),
         "*** Begin Patch\n*** Update File: a.txt\n*** Move to: b.txt\n@@\n-from\n+new\n*** End Patch",
     )
     .await;
-    tracker.track_delta(&move_overwrite);
+    tracker.track_delta("", &move_overwrite);
 
     let left_oid_a = git_blob_sha1_hex("from\n");
     let left_oid_b = git_blob_sha1_hex("existing\n");
@@ -298,13 +344,13 @@ async fn preserves_committed_change_order_with_delete_then_move_overwrite() {
     fs::write(dir.path().join("a.txt"), "from\n").expect("seed source");
     fs::write(dir.path().join("b.txt"), "existing\n").expect("seed destination");
 
-    let mut tracker = TurnDiffTracker::with_display_root(dir.path().to_path_buf());
+    let mut tracker = tracker_with_root(dir.path());
     let ordered_patch = apply_verified_patch(
         dir.path(),
         "*** Begin Patch\n*** Delete File: b.txt\n*** Update File: a.txt\n*** Move to: b.txt\n@@\n-from\n+new\n*** End Patch",
     )
     .await;
-    tracker.track_delta(&ordered_patch);
+    tracker.track_delta("", &ordered_patch);
 
     let left_oid_a = git_blob_sha1_hex("from\n");
     let left_oid_b = git_blob_sha1_hex("existing\n");
@@ -327,4 +373,123 @@ index {left_oid_b}..{right_oid_b}
 "#,
     );
     assert_eq!(tracker.get_unified_diff(), Some(expected));
+}
+
+#[tokio::test]
+async fn reuses_rendered_diffs_for_unchanged_paths() {
+    let dir = tempdir().expect("tempdir");
+    let mut tracker = tracker_with_root(dir.path());
+
+    let add_a = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Add File: a.txt\n+one\n*** End Patch",
+    )
+    .await;
+    tracker.track_delta("", &add_a);
+    assert_eq!(tracker.rendered_diff_count(), 1);
+
+    let add_b = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Add File: b.txt\n+two\n*** End Patch",
+    )
+    .await;
+    tracker.track_delta("", &add_b);
+
+    assert_eq!(tracker.rendered_diff_count(), 2);
+    assert_eq!(
+        tracker.get_unified_diff(),
+        tracker.get_unified_diff(),
+        "reading the cached aggregate must not render file diffs",
+    );
+    assert_eq!(tracker.rendered_diff_count(), 2);
+}
+
+#[tokio::test]
+async fn repeated_updates_only_rerender_the_touched_path() {
+    let dir = tempdir().expect("tempdir");
+    let mut tracker = tracker_with_root(dir.path());
+
+    for patch in [
+        "*** Begin Patch\n*** Add File: stable.txt\n+stable\n*** End Patch".to_string(),
+        "*** Begin Patch\n*** Add File: hot.txt\n+value 0\n*** End Patch".to_string(),
+    ] {
+        tracker.track_delta("", &apply_verified_patch(dir.path(), &patch).await);
+    }
+
+    for value in 1..=40 {
+        let patch = format!(
+            "*** Begin Patch\n*** Update File: hot.txt\n@@\n-value {}\n+value {value}\n*** End Patch",
+            value - 1,
+        );
+        tracker.track_delta("", &apply_verified_patch(dir.path(), &patch).await);
+    }
+
+    assert_eq!(tracker.rendered_diff_count(), 42);
+}
+
+#[test]
+fn large_rewrite_returns_promptly_and_preserves_exact_content() {
+    let dir = tempdir().expect("tempdir");
+    assert!(
+        Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(dir.path())
+            .status()
+            .expect("run git init")
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .args(["config", "core.autocrlf", "false"])
+            .current_dir(dir.path())
+            .status()
+            .expect("disable line ending conversion")
+            .success()
+    );
+    let old_content = (0..48_000)
+        .map(|line| format!("old line {line:05}\n"))
+        .collect::<String>();
+    let new_content = (0..48_000)
+        .map(|line| format!("new line {line:05}\n"))
+        .collect::<String>();
+    let path = dir.path().join("large.txt");
+    fs::write(&path, &old_content).expect("seed large file");
+    assert!(
+        Command::new("git")
+            .args(["add", "large.txt"])
+            .current_dir(dir.path())
+            .status()
+            .expect("run git add")
+            .success()
+    );
+    let tracker = tracker_with_root(dir.path());
+    let tracked_path = TrackedPath::new("", &path);
+
+    let started = Instant::now();
+    let diff = tracker
+        .render_diff(
+            &tracked_path,
+            Some(&old_content),
+            &tracked_path,
+            Some(&new_content),
+        )
+        .expect("complete rewrite should produce a diff");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "large rewrite took {:?}",
+        started.elapsed(),
+    );
+    let result = apply_git_patch(&ApplyGitRequest {
+        cwd: dir.path().to_path_buf(),
+        diff,
+        revert: false,
+        preflight: false,
+    })
+    .expect("apply generated diff");
+    assert_eq!(result.exit_code, 0, "{}", result.stderr);
+    assert_eq!(
+        fs::read_to_string(path).expect("read large file"),
+        new_content
+    );
 }

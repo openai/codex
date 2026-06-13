@@ -17,6 +17,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::Weak;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -44,8 +45,9 @@ pub(crate) struct PendingThreadResumeRequest {
 pub(crate) enum ThreadListenerCommand {
     // SendThreadResumeResponse is used to resume an already running thread by sending the thread's history to the client and atomically subscribing for new updates.
     SendThreadResumeResponse(Box<PendingThreadResumeRequest>),
-    // EmitThreadGoalUpdated is used to order app-server goal updates with running-thread resume responses.
+    // EmitThreadGoalUpdated is used to order goal updates with running-thread resume responses and goal clears.
     EmitThreadGoalUpdated {
+        turn_id: Option<String>,
         goal: ThreadGoal,
     },
     // EmitThreadGoalCleared is used to order app-server goal clears with running-thread resume responses.
@@ -284,6 +286,10 @@ pub(crate) struct ConnectionCapabilities {
 #[derive(Clone, Default)]
 pub(crate) struct ThreadStateManager {
     state: Arc<Mutex<ThreadStateManagerInner>>,
+    // Extension event sinks are synchronous, so they need an await-free way to
+    // enqueue work on the active per-thread listener.
+    listener_commands:
+        Arc<StdMutex<HashMap<ThreadId, mpsc::UnboundedSender<ThreadListenerCommand>>>>,
 }
 
 impl ThreadStateManager {
@@ -337,6 +343,35 @@ impl ThreadStateManager {
         state.threads.entry(thread_id).or_default().state.clone()
     }
 
+    pub(crate) fn current_listener_command_tx(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<mpsc::UnboundedSender<ThreadListenerCommand>> {
+        self.listener_commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&thread_id)
+            .cloned()
+    }
+
+    pub(crate) fn register_listener_command_tx(
+        &self,
+        thread_id: ThreadId,
+        tx: mpsc::UnboundedSender<ThreadListenerCommand>,
+    ) {
+        self.listener_commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(thread_id, tx);
+    }
+
+    pub(crate) fn unregister_listener_command_tx(&self, thread_id: ThreadId) {
+        self.listener_commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&thread_id);
+    }
+
     pub(crate) async fn remove_thread_state(&self, thread_id: ThreadId) {
         let thread_state = {
             let mut state = self.state.lock().await;
@@ -350,6 +385,7 @@ impl ThreadStateManager {
             });
             thread_state
         };
+        self.unregister_listener_command_tx(thread_id);
 
         if let Some(thread_state) = thread_state {
             let mut thread_state = thread_state.lock().await;
@@ -375,6 +411,7 @@ impl ThreadStateManager {
         };
 
         for (thread_id, thread_state) in thread_states {
+            self.unregister_listener_command_tx(thread_id);
             let mut thread_state = thread_state.lock().await;
             tracing::debug!(
                 thread_id = %thread_id,

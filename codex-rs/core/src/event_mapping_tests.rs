@@ -1,3 +1,5 @@
+use super::has_non_contextual_dev_message_content;
+use super::is_contextual_dev_message_content;
 use super::parse_turn_item;
 use crate::context::ContextualUserFragment;
 use crate::context::InternalContextSource;
@@ -13,8 +15,29 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
+
+#[test]
+fn recognizes_skills_instructions_as_contextual_developer_content() {
+    assert!(is_contextual_dev_message_content(&[
+        ContentItem::InputText {
+            text: format!("{SKILLS_INSTRUCTIONS_OPEN_TAG}\n## Skills"),
+        },
+    ]));
+}
+
+#[test]
+fn recognizes_token_budget_as_contextual_developer_content() {
+    let content = vec![ContentItem::InputText {
+        text: "<token_budget>\nYou have 710 tokens left in this context window.\n</token_budget>"
+            .to_string(),
+    }];
+
+    assert!(is_contextual_dev_message_content(&content));
+    assert!(!has_non_contextual_dev_message_content(&content));
+}
 
 #[test]
 fn parses_user_message_with_text_and_two_images() {
@@ -324,8 +347,8 @@ fn internal_model_context_does_not_parse_as_visible_turn_item() {
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: InternalModelContextFragment::new(
-                InternalContextSource::from_static("goal"),
-                "Continue working toward the active thread goal.",
+                InternalContextSource::from_static("extension"),
+                "Internal steering.",
             )
             .render(),
         }],

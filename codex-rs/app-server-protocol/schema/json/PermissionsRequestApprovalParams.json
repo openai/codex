@@ -288,8 +288,8 @@
     "environmentId": {
       "default": null,
       "type": [
-        "null",
-        "string"
+        "string",
+        "null"
       ]
     },
     "itemId": {

@@ -14,7 +14,6 @@ use super::*;
 
 pub struct SpawnAgentsOnCsvHandler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for SpawnAgentsOnCsvHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("spawn_agents_on_csv")
@@ -24,7 +23,13 @@ impl ToolExecutor<ToolInvocation> for SpawnAgentsOnCsvHandler {
         create_spawn_agents_on_csv_tool()
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl SpawnAgentsOnCsvHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
@@ -307,5 +312,5 @@ fn single_local_environment_cwd(turn: &TurnContext) -> Result<&AbsolutePathBuf, 
         ));
     }
 
-    Ok(&turn_environment.cwd)
+    Ok(turn_environment.cwd())
 }
