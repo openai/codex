@@ -1,9 +1,6 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("the Wine exec-server test can only run on Linux");
 
-#[path = "wine_exec_server_harness.rs"]
-mod wine_exec_server_harness;
-
 #[path = "non_native_cwd_tests.rs"]
 mod non_native_cwd_tests;
 
@@ -23,12 +20,11 @@ use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tokio::time::timeout;
 use wine_exec_server_harness::POWERSHELL_PATH;
-use wine_exec_server_harness::POWERSHELL_VERSION;
-use wine_exec_server_harness::WINDOWS_WORKSPACE;
-use wine_exec_server_harness::WineExecServer;
+use wine_exec_server_harness::WineExecServerHarness;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(180);
 const POWERSHELL_PREFLIGHT_MARKER: &str = "WINE_PWSH_PREFLIGHT";
+const WINDOWS_WORKSPACE: &str = r"C:\workspace";
 const POWERSHELL_PREFLIGHT_SCRIPT: &str = concat!(
     "$ErrorActionPreference = 'Stop'; ",
     "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); ",
@@ -48,11 +44,9 @@ struct CommandOutput {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn windows_exec_server_runs_powershell_and_cmd_under_wine() -> Result<()> {
     timeout(TEST_TIMEOUT, async {
-        let (server, websocket_url) = WineExecServer::start().await?;
-        let test_result = exercise_exec_server(websocket_url).await;
-        let shutdown_result = server.shutdown().await;
-        test_result?;
-        shutdown_result
+        let (server, websocket_url) =
+            WineExecServerHarness::start_with_workspace(WINDOWS_WORKSPACE).await?;
+        server.scope(exercise_exec_server(websocket_url)).await
     })
     .await
     .context("Wine exec-server test timed out")?
@@ -102,16 +96,18 @@ async fn exercise_exec_server(websocket_url: String) -> Result<()> {
                 powershell.output
             )
         })?;
+    let fields = preflight.split('|').collect::<Vec<_>>();
+    anyhow::ensure!(fields.len() == 6, "unexpected PowerShell preflight: {preflight}");
+    assert_eq!(fields[0], POWERSHELL_PREFLIGHT_MARKER);
     assert_eq!(
-        preflight.split('|').collect::<Vec<_>>(),
-        vec![
-            POWERSHELL_PREFLIGHT_MARKER,
-            POWERSHELL_VERSION,
-            "Core",
-            "true",
-            WINDOWS_WORKSPACE,
-            "92",
-        ]
+        fields[1].split('.').next(),
+        Some("7"),
+        "expected PowerShell 7.x, got {}",
+        fields[1],
+    );
+    assert_eq!(
+        &fields[2..],
+        &["Core", "true", WINDOWS_WORKSPACE, "92"]
     );
 
     let cmd = run_non_tty_command(

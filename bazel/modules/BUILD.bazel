@@ -1,4 +1,3 @@
 exports_files([
-    "powershell.MODULE.bazel",
     "wine.MODULE.bazel",
 ])

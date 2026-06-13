@@ -20,34 +20,17 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use serde_json::json;
-use tokio::io::AsyncBufReadExt;
-use tokio::io::BufReader;
-use wine_test_support::WineTestCommand;
+use wine_exec_server_harness::WineExecServerHarness;
 
 const CALL_ID: &str = "wine-cmd-smoke";
 const COMMAND: &str = "echo WINE_BAZEL_OK&&cd";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn windows_exec_server_rejects_non_native_cwd_uri() -> Result<()> {
-    let executable = codex_utils_cargo_bin::cargo_bin("wine-windows-exec-server")?;
-    let mut exec_server = WineTestCommand::new(executable)
-        .env("CODEX_HOME", r"C:\codex-home")
-        .spawn()?;
-    let stdout = exec_server.take_stdout();
+    let (exec_server, exec_server_url) = WineExecServerHarness::start().await?;
 
     exec_server
         .scope(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            let exec_server_url = loop {
-                let line = lines
-                    .next_line()
-                    .await?
-                    .context("Wine exec-server exited before reporting its URL")?;
-                if line.starts_with("ws://") {
-                    break line;
-                }
-            };
-
             let server = start_mock_server().await;
             let arguments = serde_json::to_string(&json!({
                 "cmd": COMMAND,

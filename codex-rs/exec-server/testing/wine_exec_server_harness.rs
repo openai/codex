@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -19,11 +21,11 @@ use tokio::time::timeout;
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 const BLOCKING_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(crate) const POWERSHELL_PATH: &str = r"C:\Program Files\PowerShell\7\pwsh.exe";
-pub(crate) const POWERSHELL_VERSION: &str = "7.2.24";
-pub(crate) const WINDOWS_WORKSPACE: &str = r"C:\workspace";
+/// PowerShell's installation path inside prefixes prepared by the harness.
+pub const POWERSHELL_PATH: &str = r"C:\Program Files\PowerShell\7\pwsh.exe";
 
-pub(crate) struct WineExecServer {
+/// Runs the Windows exec-server fixture in an isolated Wine prefix.
+pub struct WineExecServerHarness {
     processes: Option<WineProcesses>,
 }
 
@@ -37,10 +39,23 @@ struct WineProcesses {
     wineserver: PathBuf,
 }
 
-impl WineExecServer {
-    pub(crate) async fn start() -> Result<(Self, String)> {
+impl WineExecServerHarness {
+    /// Starts the fixture without creating an application workspace.
+    pub async fn start() -> Result<(Self, String)> {
+        Self::start_inner(/*workspace*/ None).await
+    }
+
+    /// Starts the fixture after creating `workspace` inside the Wine prefix.
+    pub async fn start_with_workspace(workspace: &str) -> Result<(Self, String)> {
+        Self::start_inner(Some(workspace)).await
+    }
+
+    async fn start_inner(workspace: Option<&str>) -> Result<(Self, String)> {
         let prefix = TempDir::new().context("create Wine prefix")?;
         wine_test_support::install_pinned_powershell_runtime(prefix.path())?;
+        if let Some(workspace) = workspace {
+            create_windows_directory(prefix.path(), workspace)?;
+        }
 
         let executable = codex_utils_cargo_bin::cargo_bin("wine-windows-exec-server")?;
         let wine = codex_utils_cargo_bin::cargo_bin("wine")?;
@@ -159,7 +174,22 @@ impl WineExecServer {
         }
     }
 
-    pub(crate) async fn shutdown(mut self) -> Result<()> {
+    /// Runs an operation and then performs bounded asynchronous teardown.
+    pub async fn scope<T>(self, future: impl Future<Output = Result<T>>) -> Result<T> {
+        let scope_result = future.await;
+        let shutdown_result = self.shutdown().await;
+        match (scope_result, shutdown_result) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(_), Err(error)) => Err(error),
+            (Err(error), Err(shutdown_error)) => {
+                Err(error.context(format!("Wine teardown also failed: {shutdown_error:#}")))
+            }
+        }
+    }
+
+    /// Stops the exec-server process and its isolated wineserver.
+    pub async fn shutdown(mut self) -> Result<()> {
         let result = self
             .processes
             .as_mut()
@@ -171,12 +201,23 @@ impl WineExecServer {
     }
 }
 
-impl Drop for WineExecServer {
+impl Drop for WineExecServerHarness {
     fn drop(&mut self) {
         if self.processes.is_some() && !std::thread::panicking() {
-            panic!("WineExecServer dropped without calling async shutdown");
+            panic!("WineExecServerHarness dropped without calling async shutdown");
         }
     }
+}
+
+fn create_windows_directory(prefix: &Path, windows_path: &str) -> Result<()> {
+    let relative = windows_path
+        .strip_prefix(r"C:\")
+        .context("Wine test workspace must be an absolute C: path")?;
+    let host_path = relative
+        .split('\\')
+        .fold(prefix.join("drive_c"), |path, segment| path.join(segment));
+    std::fs::create_dir_all(&host_path)
+        .with_context(|| format!("create Wine test workspace {}", host_path.display()))
 }
 
 impl WineProcesses {

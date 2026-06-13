@@ -6,27 +6,22 @@ wine_rust_test(
     srcs = [
         "non_native_cwd_tests.rs",
         "remote_env_windows_test.rs",
-        "wine_exec_server_harness.rs",
     ],
     crate_name = "remote_env_windows_test",
     crate_root = "remote_env_windows_test.rs",
-    include_powershell = True,
     windows_binaries = {
         "wine-windows-exec-server": "//codex-rs/exec-server/testing:windows-exec-server",
     },
     deps = [
-        "//bazel/rules/testing/wine:wine_test_support",
         "//codex-rs/core/tests/common",
         "//codex-rs/exec-server",
+        "//codex-rs/exec-server/testing:wine-exec-server-harness",
         "//codex-rs/features",
         "//codex-rs/protocol",
-        "//codex-rs/utils/cargo-bin",
         "//codex-rs/utils/path-uri",
-        "//codex-rs/utils/pty",
         "@crates//:anyhow",
         "@crates//:pretty_assertions",
         "@crates//:serde_json",
-        "@crates//:tempfile",
         "@crates//:tokio",
     ],
 )
