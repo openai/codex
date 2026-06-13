@@ -756,7 +756,6 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
 
     let mut begin_event = None;
     let mut end_event = None;
-    let mut task_completed = false;
 
     loop {
         let msg = wait_for_event(&test.codex, |_| true).await;
@@ -768,15 +767,13 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
                     "expected a single ExecCommandEnd event for this call id"
                 );
                 end_event = Some(ev);
-                if task_completed && end_event.is_some() {
-                    break;
-                }
             }
             EventMsg::TurnComplete(_) => {
-                task_completed = true;
-                if task_completed && end_event.is_some() {
-                    break;
-                }
+                assert!(
+                    end_event.is_some(),
+                    "short-lived command should emit ExecCommandEnd before TurnComplete"
+                );
+                break;
             }
             _ => {}
         }

@@ -159,6 +159,7 @@ impl Default for UnifiedExecProcessManager {
 
 struct ProcessEntry {
     process: Arc<UnifiedExecProcess>,
+    exit_watcher: Option<tokio::task::JoinHandle<()>>,
     call_id: String,
     process_id: i32,
     cwd: AbsolutePathBuf,

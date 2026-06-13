@@ -116,7 +116,7 @@ pub(crate) fn spawn_exit_watcher(
     process_id: i32,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     started_at: Instant,
-) {
+) -> tokio::task::JoinHandle<()> {
     let exit_token = process.cancellation_token();
     let output_drained = process.output_drained_notify();
 
@@ -157,7 +157,7 @@ pub(crate) fn spawn_exit_watcher(
             )
             .await;
         }
-    });
+    })
 }
 
 async fn process_chunk(

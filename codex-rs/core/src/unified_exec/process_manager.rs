@@ -580,7 +580,10 @@ impl UnifiedExecProcessManager {
                     process_id,
                     ..
                 } => (Some(process_id), exit_code),
-                ProcessStatus::Exited { exit_code, entry } => {
+                ProcessStatus::Exited {
+                    exit_code,
+                    mut entry,
+                } => {
                     if let Err(message) =
                         finish_deferred_network_approval_after_process_exit_for_session(
                             Some(&context.session),
@@ -589,6 +592,9 @@ impl UnifiedExecProcessManager {
                         .await
                     {
                         return Err(fail_process_with_message(entry.process.as_ref(), message));
+                    }
+                    if let Some(exit_watcher) = entry.exit_watcher.take() {
+                        let _ = exit_watcher.await;
                     }
                     process.check_for_sandbox_denial_with_text(&text).await?;
                     (None, exit_code)
@@ -897,8 +903,21 @@ impl UnifiedExecProcessManager {
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
         initial_exec_command_active: Arc<AtomicBool>,
     ) {
+        let exit_watcher = spawn_exit_watcher(
+            Arc::clone(&process),
+            Arc::clone(&context.session),
+            Arc::clone(&context.turn),
+            context.call_id.clone(),
+            command.to_vec(),
+            cwd_uri,
+            path_convention,
+            process_id,
+            transcript,
+            started_at,
+        );
         let entry = ProcessEntry {
             process: Arc::clone(&process),
+            exit_watcher: Some(exit_watcher),
             call_id: context.call_id.clone(),
             process_id,
             cwd: cwd.clone(),
@@ -921,19 +940,6 @@ impl UnifiedExecProcessManager {
             unregister_network_approval_for_entry(&pruned_entry).await;
             pruned_entry.process.terminate();
         }
-
-        spawn_exit_watcher(
-            Arc::clone(&process),
-            Arc::clone(&context.session),
-            Arc::clone(&context.turn),
-            context.call_id.clone(),
-            command.to_vec(),
-            cwd_uri,
-            path_convention,
-            process_id,
-            transcript,
-            started_at,
-        );
     }
 
     pub(crate) async fn open_session_with_exec_env(
