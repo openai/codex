@@ -1,5 +1,17 @@
 use super::*;
+use codex_network_proxy::ConfigReloader;
+use codex_network_proxy::ConfigReloaderFuture;
+use codex_network_proxy::ConfigState;
+use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::NetworkProxyConfig;
+use codex_network_proxy::NetworkProxyConstraints;
+use codex_network_proxy::NetworkProxyState;
+use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::models::NetworkPermissions;
+use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::AskForApproval;
 use pretty_assertions::assert_eq;
+use tokio::net::TcpListener;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
@@ -248,6 +260,201 @@ fn remote_direct_execution_requires_target_owned_or_disabled_enforcement() {
             Err(REMOTE_PERMISSION_ELEVATION_UNSUPPORTED),
         ]
     );
+}
+
+struct StaticNetworkConfigReloader;
+
+impl ConfigReloader for StaticNetworkConfigReloader {
+    fn source_label(&self) -> String {
+        "static unified exec test config".to_string()
+    }
+
+    fn maybe_reload(&self) -> ConfigReloaderFuture<'_, Option<ConfigState>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn reload_now(&self) -> ConfigReloaderFuture<'_, ConfigState> {
+        Box::pin(async { Err(anyhow::anyhow!("reload is not supported in this test")) })
+    }
+}
+
+async fn test_network_proxy() -> NetworkProxy {
+    let state = codex_network_proxy::build_config_state(
+        NetworkProxyConfig::default(),
+        NetworkProxyConstraints::default(),
+    )
+    .expect("network proxy config state");
+    NetworkProxy::builder()
+        .state(Arc::new(NetworkProxyState::with_reloader(
+            state,
+            Arc::new(StaticNetworkConfigReloader),
+        )))
+        .managed_by_codex(false)
+        .http_addr("127.0.0.1:0".parse().expect("HTTP proxy address"))
+        .socks_addr("127.0.0.1:0".parse().expect("SOCKS proxy address"))
+        .build()
+        .await
+        .expect("network proxy")
+}
+
+struct RemoteRequestFixture {
+    listener: TcpListener,
+    manager: UnifiedExecProcessManager,
+    request: ExecCommandRequest,
+    context: UnifiedExecContext,
+}
+
+impl RemoteRequestFixture {
+    async fn new(permission_profile: PermissionProfile) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("remote backend listener");
+        let environment = Arc::new(
+            codex_exec_server::Environment::create_for_tests(Some(format!(
+                "ws://{}",
+                listener.local_addr().expect("listener address")
+            )))
+            .expect("remote environment"),
+        );
+        let (session, mut turn, _rx_event) =
+            crate::session::tests::make_session_and_context_with_rx().await;
+        let turn_mut = Arc::get_mut(&mut turn).expect("unique turn context");
+        turn_mut.permission_profile = permission_profile;
+        turn_mut.approval_policy = codex_config::Constrained::allow_any(AskForApproval::Never);
+        #[allow(deprecated)]
+        let cwd = turn.cwd.clone();
+        let request = ExecCommandRequest {
+            command: vec!["true".to_string()],
+            shell_type: crate::shell::ShellType::Sh,
+            hook_command: "true".to_string(),
+            process_id: 4321,
+            environment_id: codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string(),
+            yield_time_ms: 1000,
+            max_output_tokens: None,
+            cwd: cwd.clone(),
+            cwd_uri: PathUri::from_abs_path(&cwd),
+            path_convention: PathConvention::native(),
+            sandbox_cwd: None,
+            environment,
+            shell_mode: codex_tools::UnifiedExecShellMode::Direct,
+            network: None,
+            tty: false,
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            additional_permissions_preapproved: false,
+            justification: None,
+            prefix_rule: None,
+        };
+        let context = UnifiedExecContext::new(session, turn, "remote-routing".to_string());
+
+        Self {
+            listener,
+            manager: UnifiedExecProcessManager::default(),
+            request,
+            context,
+        }
+    }
+}
+
+async fn assert_remote_request_rejected_before_backend_start(
+    permission_profile: PermissionProfile,
+    mutate_request: impl FnOnce(&mut ExecCommandRequest),
+    expected_message: &str,
+) {
+    let mut fixture = RemoteRequestFixture::new(permission_profile).await;
+    mutate_request(&mut fixture.request);
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        fixture.manager.open_session_with_sandbox(
+            &fixture.request,
+            fixture.request.cwd.clone(),
+            &fixture.context,
+        ),
+    )
+    .await
+    .expect("remote request validation timed out");
+    let error = match result {
+        Ok(_) => panic!("unsupported remote request reached the backend"),
+        Err(error) => error,
+    };
+    let UnifiedExecError::CreateProcess { message } = &error else {
+        panic!("unexpected remote request error: {error}")
+    };
+    assert_eq!(message, expected_message);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), fixture.listener.accept())
+            .await
+            .is_err(),
+        "remote backend was contacted before request validation"
+    );
+}
+
+#[tokio::test]
+async fn remote_direct_routing_rejects_unsupported_policies_before_launch() {
+    assert_remote_request_rejected_before_backend_start(
+        PermissionProfile::read_only(),
+        |_request| {},
+        MANAGED_REMOTE_EXEC_UNSUPPORTED,
+    )
+    .await;
+    let network_proxy = test_network_proxy().await;
+    assert_remote_request_rejected_before_backend_start(
+        PermissionProfile::Disabled,
+        |request| request.network = Some(network_proxy),
+        MANAGED_REMOTE_NETWORK_UNSUPPORTED,
+    )
+    .await;
+    assert_remote_request_rejected_before_backend_start(
+        PermissionProfile::Disabled,
+        |request| {
+            request.sandbox_permissions = crate::sandboxing::SandboxPermissions::RequireEscalated;
+        },
+        REMOTE_PERMISSION_ELEVATION_UNSUPPORTED,
+    )
+    .await;
+    assert_remote_request_rejected_before_backend_start(
+        PermissionProfile::Disabled,
+        |request| {
+            request.sandbox_permissions =
+                crate::sandboxing::SandboxPermissions::WithAdditionalPermissions;
+            request.additional_permissions = Some(AdditionalPermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: None,
+            });
+        },
+        REMOTE_PERMISSION_ELEVATION_UNSUPPORTED,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn remote_direct_routing_reaches_backend_for_external_enforcement() {
+    let fixture = RemoteRequestFixture::new(PermissionProfile::External {
+        network: NetworkSandboxPolicy::Restricted,
+    })
+    .await;
+    let open_session = fixture.manager.open_session_with_sandbox(
+        &fixture.request,
+        fixture.request.cwd.clone(),
+        &fixture.context,
+    );
+    tokio::pin!(open_session);
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::select! {
+            result = &mut open_session => match result {
+                Ok(_) => panic!("remote session completed before contacting the backend"),
+                Err(error) => panic!("remote session failed before contacting the backend: {error}"),
+            },
+            accepted = fixture.listener.accept() => {
+                accepted.expect("remote backend connection");
+            }
+        }
+    })
+    .await
+    .expect("remote backend was not contacted");
 }
 
 #[tokio::test]
