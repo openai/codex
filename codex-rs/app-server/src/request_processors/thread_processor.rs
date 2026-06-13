@@ -1753,6 +1753,7 @@ impl ThreadRequestProcessor {
         let terminals = thread
             .list_background_terminals()
             .await
+            .map_err(invalid_request)?
             .into_iter()
             .map(|terminal| ThreadBackgroundTerminal {
                 item_id: terminal.item_id,

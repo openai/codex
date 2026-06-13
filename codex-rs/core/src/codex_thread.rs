@@ -404,7 +404,7 @@ impl CodexThread {
         self.codex.agent_status().await
     }
 
-    pub async fn list_background_terminals(&self) -> Vec<BackgroundTerminalInfo> {
+    pub async fn list_background_terminals(&self) -> Result<Vec<BackgroundTerminalInfo>, String> {
         self.codex.session.list_background_terminals().await
     }
 

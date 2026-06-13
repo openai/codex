@@ -480,7 +480,6 @@ impl UnifiedExecProcessManager {
                 context,
                 &request.command,
                 request.hook_command.clone(),
-                cwd.clone(),
                 request.cwd_uri.clone(),
                 request.path_convention,
                 start,
@@ -893,7 +892,6 @@ impl UnifiedExecProcessManager {
         context: &UnifiedExecContext,
         command: &[String],
         hook_command: String,
-        cwd: AbsolutePathBuf,
         cwd_uri: PathUri,
         path_convention: PathConvention,
         started_at: Instant,
@@ -909,7 +907,7 @@ impl UnifiedExecProcessManager {
             Arc::clone(&context.turn),
             context.call_id.clone(),
             command.to_vec(),
-            cwd_uri,
+            cwd_uri.clone(),
             path_convention,
             process_id,
             transcript,
@@ -920,7 +918,8 @@ impl UnifiedExecProcessManager {
             exit_watcher: Some(exit_watcher),
             call_id: context.call_id.clone(),
             process_id,
-            cwd: cwd.clone(),
+            cwd_uri,
+            path_convention,
             initial_exec_command_active,
             hook_command,
             tty,
@@ -1454,7 +1453,7 @@ impl UnifiedExecProcessManager {
         }
     }
 
-    pub(crate) async fn list_processes(&self) -> Vec<BackgroundTerminalInfo> {
+    pub(crate) async fn list_processes(&self) -> Result<Vec<BackgroundTerminalInfo>, String> {
         let store = self.process_store.lock().await;
         let mut entries = store
             .processes
@@ -1464,11 +1463,27 @@ impl UnifiedExecProcessManager {
         entries.sort_by_key(|entry| entry.process_id);
         entries
             .into_iter()
-            .map(|entry| BackgroundTerminalInfo {
-                item_id: entry.call_id.clone(),
-                process_id: entry.process_id.to_string(),
-                command: entry.hook_command.clone(),
-                cwd: entry.cwd.clone(),
+            .map(|entry| {
+                if entry.path_convention != PathConvention::native() {
+                    return Err(format!(
+                        "background terminal process {} uses {} cwd paths, which cannot be listed on a {} host",
+                        entry.process_id,
+                        entry.path_convention,
+                        PathConvention::native(),
+                    ));
+                }
+                let cwd = entry.cwd_uri.to_abs_path().map_err(|error| {
+                    format!(
+                        "background terminal process {} cwd `{}` cannot be represented on this host: {error}",
+                        entry.process_id, entry.cwd_uri,
+                    )
+                })?;
+                Ok(BackgroundTerminalInfo {
+                    item_id: entry.call_id.clone(),
+                    process_id: entry.process_id.to_string(),
+                    command: entry.hook_command.clone(),
+                    cwd,
+                })
             })
             .collect()
     }

@@ -785,7 +785,9 @@ impl Session {
             .await;
     }
 
-    pub(crate) async fn list_background_terminals(&self) -> Vec<BackgroundTerminalInfo> {
+    pub(crate) async fn list_background_terminals(
+        &self,
+    ) -> Result<Vec<BackgroundTerminalInfo>, String> {
         self.services.unified_exec_manager.list_processes().await
     }
 

@@ -129,7 +129,8 @@ async fn exec_command_with_tty(
             exit_watcher: None,
             call_id: context.call_id.clone(),
             process_id,
-            cwd: cwd.clone(),
+            cwd_uri: PathUri::from_abs_path(&cwd),
+            path_convention: PathConvention::native(),
             initial_exec_command_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             hook_command: cmd.to_string(),
             tty,
@@ -366,7 +367,10 @@ async fn unified_exec_persists_across_requests() -> anyhow::Result<()> {
     .await?;
     let process_id = open_shell.process_id.expect("expected process_id");
     assert_eq!(
-        session.list_background_terminals().await,
+        session
+            .list_background_terminals()
+            .await
+            .expect("local terminal cwd should be listable"),
         vec![BackgroundTerminalInfo {
             item_id: "call".to_string(),
             process_id: process_id.to_string(),
@@ -399,7 +403,49 @@ async fn unified_exec_persists_across_requests() -> anyhow::Result<()> {
 
     assert!(session.terminate_background_terminal(process_id).await);
     assert!(!session.terminate_background_terminal(process_id).await);
-    assert!(session.list_background_terminals().await.is_empty());
+    assert!(
+        session
+            .list_background_terminals()
+            .await
+            .expect("local terminal cwd should be listable")
+            .is_empty()
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn background_terminal_listing_rejects_foreign_cwd_conventions() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+
+    let (session, turn) = test_session_and_turn().await;
+    let open_shell = exec_command(
+        &session, &turn, "bash -i", /*yield_time_ms*/ 2_500, /*workdir*/ None,
+    )
+    .await?;
+    let process_id = open_shell.process_id.expect("expected process_id");
+    {
+        let mut store = session
+            .services
+            .unified_exec_manager
+            .process_store
+            .lock()
+            .await;
+        let entry = store
+            .processes
+            .get_mut(&process_id)
+            .expect("background process should be stored");
+        entry.cwd_uri = PathUri::parse("file:///C:/workspace")?;
+        entry.path_convention = PathConvention::Windows;
+    }
+
+    assert_eq!(
+        session.list_background_terminals().await,
+        Err(format!(
+            "background terminal process {process_id} uses Windows cwd paths, which cannot be listed on a POSIX host"
+        ))
+    );
+    assert!(session.terminate_background_terminal(process_id).await);
 
     Ok(())
 }
@@ -676,7 +722,8 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
             exit_watcher: None,
             call_id: "call".to_string(),
             process_id,
-            cwd,
+            cwd_uri: PathUri::from_abs_path(&cwd),
+            path_convention: PathConvention::native(),
             initial_exec_command_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             hook_command: "sleep 60".to_string(),
             tty: true,
@@ -750,7 +797,8 @@ async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Resu
             exit_watcher: None,
             call_id: "call".to_string(),
             process_id,
-            cwd,
+            cwd_uri: PathUri::from_abs_path(&cwd),
+            path_convention: PathConvention::native(),
             initial_exec_command_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hook_command: "sleep 60".to_string(),
             tty: true,
