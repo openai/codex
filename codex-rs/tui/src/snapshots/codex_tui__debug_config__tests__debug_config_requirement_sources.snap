@@ -1,0 +1,23 @@
+---
+source: tui/src/debug_config.rs
+expression: rendered.as_str()
+---
+/debug-config
+
+Config layer stack (lowest precedence first):
+  1. user (/home/alice/.codex/config.toml) (enabled)
+
+Requirements:
+  - allowed_approval_policies: on-request (source: MDM managed_config.toml (legacy))
+  - allowed_approvals_reviewers: auto_review (source: MDM managed_config.toml (legacy))
+  - allowed_sandbox_modes: read-only (source: /etc/codex/requirements.toml)
+  - allowed_web_search_modes: cached, disabled (source: MDM managed_config.toml (legacy))
+  - allow_managed_hooks_only: true (source: MDM managed_config.toml (legacy))
+  - allow_appshots: false (source: MDM managed_config.toml (legacy))
+  - allow_remote_control: false (source: MDM managed_config.toml (legacy))
+  - guardian_policy_config: configured (source: MDM managed_config.toml (legacy))
+  - features: guardian_approval=true (source: MDM managed_config.toml (legacy))
+  - mcp_servers: docs (source: MDM managed_config.toml (legacy))
+  - enforce_residency: us (source: MDM managed_config.toml (legacy))
+  - experimental_network: enabled=true, domains={example.com=allow} (source: MDM managed_config.toml (legacy))
+  - permissions.filesystem.deny_read: /home/alice/.gitconfig (source: /etc/codex/requirements.toml)

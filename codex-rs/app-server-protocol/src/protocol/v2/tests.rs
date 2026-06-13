@@ -1704,6 +1704,7 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             allowed_web_search_modes: None,
             allow_managed_hooks_only: None,
             allow_appshots: None,
+            allow_remote_control: None,
             computer_use: None,
             feature_requirements: None,
             hooks: None,

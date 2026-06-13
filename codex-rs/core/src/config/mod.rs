@@ -2631,6 +2631,7 @@ impl Config {
             web_search_mode: mut constrained_web_search_mode,
             allow_managed_hooks_only: _,
             allow_appshots: _,
+            allow_remote_control: _,
             computer_use: _,
             feature_requirements,
             managed_hooks: _,
