@@ -68,6 +68,7 @@ impl ToolRuntime<(), ()> for TimeoutThenManualRuntime {
 async fn guardian_timeout_falls_back_to_manual_approval() {
     let (session, mut turn) = crate::session::tests::make_session_and_context().await;
     turn.session_source = SessionSource::Cli;
+    turn.manual_approval_fallback_enabled = true;
     let session = Arc::new(session);
     let turn = Arc::new(turn);
     let tool_ctx = ToolCtx {
@@ -94,7 +95,6 @@ async fn guardian_timeout_falls_back_to_manual_approval() {
         &tool_ctx,
         super::ApprovalRequestOptions {
             evaluate_permission_request_hooks: false,
-            manual_fallback_for_guardian_timeout: true,
         },
         &turn.session_telemetry,
     )
@@ -153,7 +153,6 @@ async fn guardian_timeout_stays_terminal_when_manual_fallback_is_disabled() {
         &tool_ctx,
         super::ApprovalRequestOptions {
             evaluate_permission_request_hooks: false,
-            manual_fallback_for_guardian_timeout: false,
         },
         &turn.session_telemetry,
     )

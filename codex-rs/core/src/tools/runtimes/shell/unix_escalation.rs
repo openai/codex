@@ -367,7 +367,7 @@ impl ExecvePromptRequest {
         decision: ReviewDecision,
     ) -> PromptDecision {
         if !matches!(decision, ReviewDecision::TimedOut)
-            || !self.turn.manual_approval_fallback_enabled
+            || !self.turn.guardian_timeout_manual_fallback_enabled()
         {
             return PromptDecision {
                 decision,

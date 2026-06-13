@@ -57,7 +57,6 @@ struct ApprovalDecision {
 
 struct ApprovalRequestOptions {
     evaluate_permission_request_hooks: bool,
-    manual_fallback_for_guardian_timeout: bool,
 }
 
 impl ToolOrchestrator {
@@ -154,7 +153,6 @@ impl ToolOrchestrator {
         let otel_ci = &tool_ctx.call_id;
         let strict_auto_review = tool_ctx.session.strict_auto_review_enabled_for_turn().await;
         let use_guardian = routes_approval_to_guardian(turn_ctx) || strict_auto_review;
-        let manual_fallback_for_guardian_timeout = turn_ctx.manual_approval_fallback_enabled;
 
         // 1) Approval
         let mut already_approved = false;
@@ -184,7 +182,6 @@ impl ToolOrchestrator {
                         tool_ctx,
                         ApprovalRequestOptions {
                             evaluate_permission_request_hooks: false,
-                            manual_fallback_for_guardian_timeout,
                         },
                         &otel,
                     )
@@ -226,7 +223,6 @@ impl ToolOrchestrator {
                     tool_ctx,
                     ApprovalRequestOptions {
                         evaluate_permission_request_hooks: !strict_auto_review,
-                        manual_fallback_for_guardian_timeout,
                     },
                     &otel,
                 )
@@ -415,7 +411,6 @@ impl ToolOrchestrator {
                         tool_ctx,
                         ApprovalRequestOptions {
                             evaluate_permission_request_hooks: !strict_auto_review,
-                            manual_fallback_for_guardian_timeout,
                         },
                         &otel,
                     )
@@ -584,7 +579,7 @@ impl ToolOrchestrator {
             otel_source,
         );
 
-        if !options.manual_fallback_for_guardian_timeout
+        if !turn.guardian_timeout_manual_fallback_enabled()
             || !matches!(decision, ReviewDecision::TimedOut)
             || guardian_review_id.is_none()
         {

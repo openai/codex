@@ -114,6 +114,10 @@ enum TurnMultiAgentRuntime {
 }
 
 impl TurnContext {
+    pub(crate) fn guardian_timeout_manual_fallback_enabled(&self) -> bool {
+        self.manual_approval_fallback_enabled
+    }
+
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
         self.permission_profile.clone()
     }
