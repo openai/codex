@@ -23,6 +23,8 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
+use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
@@ -296,6 +298,131 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
     assert!(report.submit_failed.is_empty());
     assert!(report.timed_out.is_empty());
     assert!(manager.list_thread_ids().await.is_empty());
+}
+
+#[tokio::test]
+async fn start_thread_rejects_explicit_local_environment_when_default_provider_is_disabled() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
+        std::env::current_exe().expect("current exe path"),
+        /*codex_linux_sandbox_exe*/ None,
+    )
+    .expect("runtime paths");
+    let environment_manager = Arc::new(
+        codex_exec_server::EnvironmentManager::create_for_tests(
+            Some("none".to_string()),
+            Some(runtime_paths),
+        )
+        .await,
+    );
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        environment_manager,
+    );
+
+    let result = manager
+        .start_thread_with_options(StartThreadOptions {
+            config: config.clone(),
+            initial_history: InitialHistory::New,
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: vec![TurnEnvironmentSelection {
+                environment_id: "local".to_string(),
+                cwd: PathUri::from_abs_path(&config.cwd),
+            }],
+            thread_extension_init: Default::default(),
+        })
+        .await;
+    let err = match result {
+        Ok(_) => panic!("explicit local environment should not resolve when provider is disabled"),
+        Err(err) => err,
+    };
+
+    assert_eq!(err.to_string(), "unknown turn environment id `local`");
+    assert!(manager.list_thread_ids().await.is_empty());
+}
+
+#[tokio::test]
+async fn native_environment_selections_use_selected_environment_metadata() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = temp_dir.path().join("workspace").abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+    std::fs::create_dir_all(&config.cwd).expect("create workspace");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let selections = manager
+        .resolve_native_environment_selections([(
+            "local".to_string(),
+            ApiPathString::new(config.cwd.display().to_string()),
+        )])
+        .await
+        .expect("resolve local selection");
+
+    assert_eq!(
+        selections,
+        vec![TurnEnvironmentSelection {
+            environment_id: "local".to_string(),
+            cwd: PathUri::from_abs_path(&config.cwd),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn native_environment_selections_reject_duplicate_ids() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = temp_dir.path().join("workspace").abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let native_cwd = ApiPathString::new(config.cwd.display().to_string());
+    let error = manager
+        .resolve_native_environment_selections([
+            ("local".to_string(), native_cwd.clone()),
+            ("local".to_string(), native_cwd),
+        ])
+        .await
+        .expect_err("duplicate ids must fail");
+
+    assert_eq!(error.to_string(), "duplicate turn environment id `local`");
+
+    let error = manager
+        .resolve_native_environment_selections([(
+            "local".to_string(),
+            ApiPathString::new("relative"),
+        )])
+        .await
+        .expect_err("relative cwd must fail at the environment boundary");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "invalid cwd for environment `local`: path `relative` is not absolute using {} path syntax",
+            PathConvention::native()
+        )
+    );
 }
 
 #[tokio::test]

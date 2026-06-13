@@ -541,6 +541,24 @@ fn resolve_request_cwd(cwd: Option<PathBuf>) -> Result<Option<AbsolutePathBuf>, 
     .transpose()
 }
 
+async fn resolve_turn_environment_selections(
+    thread_manager: &ThreadManager,
+    environments: Option<Vec<TurnEnvironmentParams>>,
+) -> Result<Option<Vec<TurnEnvironmentSelection>>, JSONRPCErrorError> {
+    let Some(environments) = environments else {
+        return Ok(None);
+    };
+    thread_manager
+        .resolve_native_environment_selections(
+            environments
+                .into_iter()
+                .map(|environment| (environment.environment_id, environment.cwd)),
+        )
+        .await
+        .map(Some)
+        .map_err(environment_selection_error)
+}
+
 fn resolve_runtime_workspace_roots(workspace_roots: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
     let mut resolved_roots = Vec::new();
     for root in workspace_roots {
