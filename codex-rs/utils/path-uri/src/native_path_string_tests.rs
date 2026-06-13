@@ -41,8 +41,6 @@ enum RenderExpectation {
 enum ExpectedError {
     OpaqueFallback,
     IncompatibleConvention,
-    NonUtf8,
-    EncodedSeparator,
 }
 
 const RENDER_CASES: &[RenderCase] = &[
@@ -268,32 +266,20 @@ const RENDER_CASES: &[RenderCase] = &[
         PathConvention::Windows,
         ExpectedError::OpaqueFallback,
     ),
-    // URI segment encodings that cannot be rendered without changing meaning.
-    RenderCase::rejects(
+    // Non-UTF-8 bytes and encoded separators are rendered lossily as path text.
+    RenderCase::renders(
         "file:///tmp/non-utf8-%FF",
         PathConvention::Posix,
-        ExpectedError::NonUtf8,
+        "/tmp/non-utf8-�",
     ),
-    RenderCase::rejects(
+    RenderCase::renders(
         "file:///tmp/non-utf8-%A0",
         PathConvention::Posix,
-        ExpectedError::NonUtf8,
+        "/tmp/non-utf8-�",
     ),
-    RenderCase::rejects(
-        "file:///tmp/a%2Fb",
-        PathConvention::Posix,
-        ExpectedError::EncodedSeparator,
-    ),
-    RenderCase::rejects(
-        "file:///C:/a%2Fb",
-        PathConvention::Windows,
-        ExpectedError::EncodedSeparator,
-    ),
-    RenderCase::rejects(
-        "file:///C:/a%5Cb",
-        PathConvention::Windows,
-        ExpectedError::EncodedSeparator,
-    ),
+    RenderCase::renders("file:///tmp/a%2Fb", PathConvention::Posix, "/tmp/a/b"),
+    RenderCase::renders("file:///C:/a%2Fb", PathConvention::Windows, "C:\\a/b"),
+    RenderCase::renders("file:///C:/a%5Cb", PathConvention::Windows, "C:\\a\\b"),
 ];
 
 #[test]
@@ -309,17 +295,6 @@ fn renders_native_paths_from_shared_cases() {
             }
             RenderExpectation::Error(ExpectedError::IncompatibleConvention) => {
                 Err(NativePathStringError::IncompatibleConvention {
-                    path: path.to_string(),
-                    convention: case.convention,
-                })
-            }
-            RenderExpectation::Error(ExpectedError::NonUtf8) => {
-                Err(NativePathStringError::NonUtf8 {
-                    path: path.to_string(),
-                })
-            }
-            RenderExpectation::Error(ExpectedError::EncodedSeparator) => {
-                Err(NativePathStringError::EncodedSeparator {
                     path: path.to_string(),
                     convention: case.convention,
                 })

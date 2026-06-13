@@ -60,8 +60,8 @@ impl NativePathString {
     /// Rendering fails when the URI shape does not match the convention, such
     /// as a POSIX path rendered as Windows or a UNC path rendered as POSIX. It
     /// also fails when an opaque fallback does not encode an absolute path for
-    /// the convention, when a URI segment is not valid UTF-8, or when a segment
-    /// contains a percent-encoded separator that would change path structure.
+    /// the convention. Non-UTF-8 segments are rendered lossily, and encoded
+    /// separators are emitted as native path text.
     pub fn from_path_uri(
         path: &PathUri,
         convention: PathConvention,
@@ -167,16 +167,11 @@ fn render_posix_path(path: &PathUri) -> Result<String, NativePathStringError> {
     }
 
     // URI segments are already separated with `/` on every host. Decode each
-    // one independently so `file:///a%20dir/file` becomes `/a dir/file` while
-    // an encoded separator cannot silently introduce another path component.
+    // one independently so `file:///a%20dir/file` becomes `/a dir/file`.
     let mut rendered = String::new();
     for segment in path_segments(&url) {
         rendered.push('/');
-        rendered.push_str(&decode_native_segment(
-            path,
-            segment,
-            PathConvention::Posix,
-        )?);
+        rendered.push_str(&decode_native_segment(segment));
     }
     Ok(rendered)
 }
@@ -192,7 +187,7 @@ fn render_windows_path(path: &PathUri) -> Result<String, NativePathStringError> 
         let Some(share) = segments.next() else {
             return Err(incompatible_convention(path, PathConvention::Windows));
         };
-        let share = decode_native_segment(path, share, PathConvention::Windows)?;
+        let share = decode_native_segment(share);
         if share.is_empty() {
             return Err(incompatible_convention(path, PathConvention::Windows));
         }
@@ -207,7 +202,7 @@ fn render_windows_path(path: &PathUri) -> Result<String, NativePathStringError> 
         let Some(drive) = segments.next() else {
             return Err(incompatible_convention(path, PathConvention::Windows));
         };
-        let drive = decode_native_segment(path, drive, PathConvention::Windows)?;
+        let drive = decode_native_segment(drive);
         let bytes = drive.as_bytes();
         if bytes.len() != 2 || !bytes[0].is_ascii_alphabetic() || bytes[1] != b':' {
             return Err(incompatible_convention(path, PathConvention::Windows));
@@ -218,7 +213,7 @@ fn render_windows_path(path: &PathUri) -> Result<String, NativePathStringError> 
     for segment in segments {
         // URL path separators become Windows separators after each component
         // has been decoded.
-        let segment = decode_native_segment(path, segment, PathConvention::Windows)?;
+        let segment = decode_native_segment(segment);
         rendered.push('\\');
         rendered.push_str(&segment);
     }
@@ -235,29 +230,11 @@ fn path_segments(url: &url::Url) -> std::str::Split<'_, char> {
         .unwrap_or_else(|| unreachable!("validated file URLs have path segments"))
 }
 
-fn decode_native_segment(
-    path: &PathUri,
-    segment: &str,
-    convention: PathConvention,
-) -> Result<String, NativePathStringError> {
+fn decode_native_segment(segment: &str) -> String {
     // Decode exactly once. Thus `%20` becomes a space and `%252F` becomes the
     // literal text `%2F`, rather than being decoded a second time into `/`.
     let bytes = urlencoding::decode_binary(segment.as_bytes());
-    // A separator encoded inside one URI segment would change path structure:
-    // reject `%2F` for both conventions and `%5C` for Windows.
-    let contains_separator =
-        bytes.contains(&b'/') || (convention == PathConvention::Windows && bytes.contains(&b'\\'));
-    if contains_separator {
-        return Err(NativePathStringError::EncodedSeparator {
-            path: path.to_string(),
-            convention,
-        });
-    }
-    std::str::from_utf8(&bytes)
-        .map(str::to_string)
-        .map_err(|_| NativePathStringError::NonUtf8 {
-            path: path.to_string(),
-        })
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 fn incompatible_convention(path: &PathUri, convention: PathConvention) -> NativePathStringError {
@@ -273,13 +250,6 @@ pub enum NativePathStringError {
     OpaqueFallback { path: String },
     #[error("path URI `{path}` cannot be rendered using {convention} path syntax")]
     IncompatibleConvention {
-        path: String,
-        convention: PathConvention,
-    },
-    #[error("path URI `{path}` contains path bytes that are not valid UTF-8")]
-    NonUtf8 { path: String },
-    #[error("path URI `{path}` contains a percent-encoded separator for {convention} path syntax")]
-    EncodedSeparator {
         path: String,
         convention: PathConvention,
     },
