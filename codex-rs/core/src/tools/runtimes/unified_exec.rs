@@ -10,6 +10,7 @@ use crate::exec::ExecExpiration;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianNetworkAccessTrigger;
 use crate::guardian::review_approval_request;
+use crate::plugin_script_lifecycle::PluginScriptExecution;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecServerEnvConfig;
 use crate::sandboxing::SandboxPermissions;
@@ -38,6 +39,8 @@ use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
 use crate::tools::sandboxing::sandbox_permissions_preserving_denied_reads;
 use crate::tools::sandboxing::with_cached_approval;
 use crate::unified_exec::NoopSpawnLifecycle;
+use crate::unified_exec::SpawnLifecycle;
+use crate::unified_exec::SpawnLifecycleHandle;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
@@ -53,6 +56,7 @@ use codex_tools::UnifiedExecShellMode;
 use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
@@ -97,6 +101,116 @@ pub struct UnifiedExecApprovalKey {
 pub struct UnifiedExecRuntime<'a> {
     manager: &'a UnifiedExecProcessManager,
     shell_mode: UnifiedExecShellMode,
+}
+
+trait PluginScriptLifecycle: Send + Sync {
+    fn mark_started(&self);
+    fn mark_cancelled(&self);
+    fn finish(&self, exit_code: Option<i32>, failed: bool);
+}
+
+impl PluginScriptLifecycle for PluginScriptExecution {
+    fn mark_started(&self) {
+        self.mark_started();
+    }
+
+    fn mark_cancelled(&self) {
+        self.mark_cancelled();
+    }
+
+    fn finish(&self, exit_code: Option<i32>, failed: bool) {
+        self.finish(exit_code, failed);
+    }
+}
+
+/// Adds plugin attribution without replacing unified exec's generic spawn work.
+struct PluginScriptSpawnLifecycle {
+    inner: SpawnLifecycleHandle,
+    plugin_script: Arc<dyn PluginScriptLifecycle>,
+}
+
+impl std::fmt::Debug for PluginScriptSpawnLifecycle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PluginScriptSpawnLifecycle")
+            .field("inner", &self.inner)
+            .field("plugin_script", &"tracked")
+            .finish()
+    }
+}
+
+impl SpawnLifecycle for PluginScriptSpawnLifecycle {
+    #[cfg(unix)]
+    fn inherited_fds(&self) -> Vec<i32> {
+        self.inner.inherited_fds()
+    }
+
+    fn after_spawn(&mut self) {
+        self.inner.after_spawn();
+        self.plugin_script.mark_started();
+    }
+
+    fn mark_cancelled(&self) {
+        self.inner.mark_cancelled();
+        self.plugin_script.mark_cancelled();
+    }
+
+    fn finish(&self, exit_code: Option<i32>, failed: bool) {
+        self.inner.finish(exit_code, failed);
+        self.plugin_script.finish(exit_code, failed);
+    }
+}
+
+impl Drop for PluginScriptSpawnLifecycle {
+    fn drop(&mut self) {
+        self.plugin_script
+            .finish(/*exit_code*/ None, /*failed*/ true);
+    }
+}
+
+fn wrap_plugin_script_lifecycle(
+    inner: SpawnLifecycleHandle,
+    plugin_script: Option<Arc<dyn PluginScriptLifecycle>>,
+) -> SpawnLifecycleHandle {
+    match plugin_script {
+        Some(plugin_script) => Box::new(PluginScriptSpawnLifecycle {
+            inner,
+            plugin_script,
+        }),
+        None => inner,
+    }
+}
+
+fn wrap_spawn_lifecycle(
+    inner: SpawnLifecycleHandle,
+    plugin_script: Option<&Arc<PluginScriptExecution>>,
+) -> SpawnLifecycleHandle {
+    wrap_plugin_script_lifecycle(
+        inner,
+        plugin_script
+            .map(|plugin_script| Arc::clone(plugin_script) as Arc<dyn PluginScriptLifecycle>),
+    )
+}
+
+fn should_track_plugin_script(req: &UnifiedExecRequest) -> bool {
+    !req.turn_environment.environment.is_remote()
+}
+
+fn resolve_plugin_script_execution(
+    req: &UnifiedExecRequest,
+    ctx: &ToolCtx,
+) -> Option<Arc<PluginScriptExecution>> {
+    should_track_plugin_script(req)
+        .then(|| {
+            PluginScriptExecution::resolve(
+                ctx.session.as_ref(),
+                ctx.turn.as_ref(),
+                &req.hook_command,
+                &req.cwd,
+                req.shell_type,
+            )
+        })
+        .flatten()
 }
 
 fn unified_exec_options(
@@ -323,6 +437,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         if let Some(network) = managed_network {
             network.apply_to_env(&mut env);
         }
+        let environment_is_remote = req.turn_environment.environment.is_remote();
+        // Resolve before snapshot, sandbox, PowerShell, or exec-server rewriting:
+        // only the original local request has safe plugin roots and cwd.
+        let plugin_script = resolve_plugin_script_execution(req, ctx);
         let explicit_env_overrides = req.explicit_env_overrides.clone();
         #[cfg(unix)]
         let runtime_path_prepends = {
@@ -408,7 +526,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                             req.process_id,
                             &prepared.exec_request,
                             req.tty,
-                            prepared.spawn_lifecycle,
+                            wrap_spawn_lifecycle(prepared.spawn_lifecycle, plugin_script.as_ref()),
                             req.turn_environment.environment.as_ref(),
                         )
                         .await
@@ -446,12 +564,14 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .env_for(command, options, managed_network)
             .map_err(ToolError::Codex)?;
         exec_env.exec_server_env_config = req.exec_server_env_config.clone();
+        let spawn_lifecycle =
+            wrap_spawn_lifecycle(Box::new(NoopSpawnLifecycle), plugin_script.as_ref());
         self.manager
             .open_session_with_exec_env(
                 req.process_id,
                 &exec_env,
                 req.tty,
-                Box::new(NoopSpawnLifecycle),
+                spawn_lifecycle,
                 req.turn_environment.environment.as_ref(),
             )
             .await
@@ -663,6 +783,164 @@ mod tests {
             justification: None,
             exec_approval_requirement,
         }
+    }
+
+    #[derive(Debug)]
+    struct RecordingLifecycle {
+        #[cfg(unix)]
+        inherited_fds: Vec<i32>,
+        events: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+
+    impl SpawnLifecycle for RecordingLifecycle {
+        #[cfg(unix)]
+        fn inherited_fds(&self) -> Vec<i32> {
+            self.inherited_fds.clone()
+        }
+
+        fn after_spawn(&mut self) {
+            self.events.lock().unwrap().push("inner_started");
+        }
+
+        fn mark_cancelled(&self) {
+            self.events.lock().unwrap().push("inner_cancelled");
+        }
+
+        fn finish(&self, _exit_code: Option<i32>, _failed: bool) {
+            self.events.lock().unwrap().push("inner_finished");
+        }
+    }
+
+    struct RecordingPluginLifecycle {
+        events: Arc<std::sync::Mutex<Vec<&'static str>>>,
+        terminal_emitted: std::sync::atomic::AtomicBool,
+    }
+
+    impl PluginScriptLifecycle for RecordingPluginLifecycle {
+        fn mark_started(&self) {
+            self.events.lock().unwrap().push("plugin_started");
+        }
+
+        fn mark_cancelled(&self) {
+            self.events.lock().unwrap().push("plugin_cancelled");
+        }
+
+        fn finish(&self, _exit_code: Option<i32>, _failed: bool) {
+            if !self
+                .terminal_emitted
+                .swap(true, std::sync::atomic::Ordering::AcqRel)
+            {
+                self.events.lock().unwrap().push("plugin_finished");
+            }
+        }
+    }
+
+    fn recording_lifecycle() -> (
+        PluginScriptSpawnLifecycle,
+        Arc<std::sync::Mutex<Vec<&'static str>>>,
+    ) {
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let lifecycle = PluginScriptSpawnLifecycle {
+            inner: Box::new(RecordingLifecycle {
+                #[cfg(unix)]
+                inherited_fds: vec![7, 11],
+                events: Arc::clone(&events),
+            }),
+            plugin_script: Arc::new(RecordingPluginLifecycle {
+                events: Arc::clone(&events),
+                terminal_emitted: std::sync::atomic::AtomicBool::new(false),
+            }),
+        };
+        (lifecycle, events)
+    }
+
+    #[test]
+    fn plugin_lifecycle_starts_after_inner() {
+        let (mut lifecycle, events) = recording_lifecycle();
+
+        lifecycle.after_spawn();
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["inner_started", "plugin_started"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_lifecycle_preserves_inherited_fds() {
+        let (lifecycle, _events) = recording_lifecycle();
+
+        assert_eq!(lifecycle.inherited_fds(), vec![7, 11]);
+    }
+
+    #[test]
+    fn plugin_lifecycle_wraps_local_shell_trackers() {
+        for shell_type in [ShellType::PowerShell, ShellType::Cmd, ShellType::Bash] {
+            let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut lifecycle = wrap_plugin_script_lifecycle(
+                Box::new(RecordingLifecycle {
+                    #[cfg(unix)]
+                    inherited_fds: Vec::new(),
+                    events: Arc::clone(&events),
+                }),
+                Some(Arc::new(RecordingPluginLifecycle {
+                    events: Arc::clone(&events),
+                    terminal_emitted: std::sync::atomic::AtomicBool::new(false),
+                })),
+            );
+
+            lifecycle.after_spawn();
+            lifecycle.finish(Some(0), /*failed*/ false);
+            assert_eq!(
+                *events.lock().unwrap(),
+                vec![
+                    "inner_started",
+                    "plugin_started",
+                    "inner_finished",
+                    "plugin_finished"
+                ],
+                "{shell_type:?} should keep plugin attribution",
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_lifecycle_forwards_cancellation_and_idempotent_terminal_state() {
+        let (lifecycle, events) = recording_lifecycle();
+
+        lifecycle.mark_cancelled();
+        lifecycle.finish(Some(0), /*failed*/ false);
+        lifecycle.finish(Some(9), /*failed*/ true);
+        drop(lifecycle);
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![
+                "inner_cancelled",
+                "plugin_cancelled",
+                "inner_finished",
+                "plugin_finished",
+                "inner_finished",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_unified_exec_requests_do_not_track_plugin_scripts() {
+        let mut request = test_request(
+            SandboxPermissions::UseDefault,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            },
+        );
+        request.environment = Arc::new(
+            Environment::create_for_tests(Some("ws://127.0.0.1:1/remote-exec-server".to_string()))
+                .expect("remote environment"),
+        );
+
+        assert!(!should_track_plugin_script(&request));
     }
 
     fn zsh_fork_mode() -> UnifiedExecShellMode {
