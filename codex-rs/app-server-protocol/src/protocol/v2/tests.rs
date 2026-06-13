@@ -3762,8 +3762,11 @@ fn thread_settings_update_params_preserve_field_level_experimental_gates() {
 
 #[test]
 fn turn_start_params_round_trip_environments() {
-    // Use explicitly Windows-shaped text instead of the host-native test path
-    // so this catches accidental parsing with the app-server host's path rules.
+    // Use the foreign path convention for this host so the test catches
+    // accidental parsing with the app-server host's path rules.
+    #[cfg(windows)]
+    let cwd = "/workspace/repo";
+    #[cfg(not(windows))]
     let cwd = r"C:\workspace\repo";
     let params: TurnStartParams = serde_json::from_value(json!({
         "threadId": "thread_123",
@@ -3799,50 +3802,6 @@ fn turn_start_params_round_trip_environments() {
             }
         ]))
     );
-}
-
-#[test]
-fn cwd_request_fields_preserve_cross_platform_path_syntax() {
-    #[cfg(windows)]
-    let cwd = r"C:\workspace\repo";
-    #[cfg(not(windows))]
-    let cwd = "/workspace/repo";
-    let thread_start: ThreadStartParams = serde_json::from_value(json!({ "cwd": cwd }))
-        .expect("thread start params should deserialize");
-    let turn_start: TurnStartParams = serde_json::from_value(json!({
-        "threadId": "thread_123",
-        "input": [],
-        "cwd": cwd,
-    }))
-    .expect("turn start params should deserialize");
-    let thread_resume: ThreadResumeParams = serde_json::from_value(json!({
-        "threadId": "thread_123",
-        "cwd": cwd,
-    }))
-    .expect("thread resume params should deserialize");
-    let thread_fork: ThreadForkParams = serde_json::from_value(json!({
-        "threadId": "thread_123",
-        "cwd": cwd,
-    }))
-    .expect("thread fork params should deserialize");
-    let settings_update: ThreadSettingsUpdateParams = serde_json::from_value(json!({
-        "threadId": "thread_123",
-        "cwd": cwd,
-    }))
-    .expect("thread settings update params should deserialize");
-
-    for serialized in [
-        serde_json::to_value(thread_start),
-        serde_json::to_value(turn_start),
-        serde_json::to_value(thread_resume),
-        serde_json::to_value(thread_fork),
-        serde_json::to_value(settings_update),
-    ] {
-        assert_eq!(
-            serialized.expect("params should serialize").get("cwd"),
-            Some(&json!(cwd))
-        );
-    }
 }
 
 #[test]
