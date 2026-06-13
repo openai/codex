@@ -31,45 +31,7 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
     // Use a probe/release handshake instead of asserting on wall-clock timing:
     // the child proves it started by writing the probe file, then waits for the
     // test to create the release file before it can emit output and exit.
-    let command = if cfg!(windows) {
-        vec![
-            "powershell.exe".to_string(),
-            "-NoProfile".to_string(),
-            "-NonInteractive".to_string(),
-            "-Command".to_string(),
-            concat!(
-                "[IO.File]::WriteAllText($env:CODEX_PROCESS_EXEC_PROBE_FILE, 'process'); ",
-                "while (!(Test-Path -LiteralPath $env:CODEX_PROCESS_EXEC_RELEASE_FILE)) { ",
-                "Start-Sleep -Milliseconds 20 ",
-                "}; ",
-                "[Console]::Out.Write('process-out'); ",
-                "[Console]::Error.Write('process-err')",
-            )
-            .to_string(),
-        ]
-    } else {
-        vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            concat!(
-                "printf process > \"$CODEX_PROCESS_EXEC_PROBE_FILE\"; ",
-                "while [ ! -e \"$CODEX_PROCESS_EXEC_RELEASE_FILE\" ]; do sleep 0.05; done; ",
-                "printf process-out; ",
-                "printf process-err >&2",
-            )
-            .to_string(),
-        ]
-    };
-    let env = HashMap::from([
-        (
-            "CODEX_PROCESS_EXEC_PROBE_FILE".to_string(),
-            Some(probe_file.display().to_string()),
-        ),
-        (
-            "CODEX_PROCESS_EXEC_RELEASE_FILE".to_string(),
-            Some(release_file.display().to_string()),
-        ),
-    ]);
+    let (command, env) = probe_release_process(&probe_file, &release_file);
     let spawn_request_id = mcp
         .send_process_spawn_request(ProcessSpawnParams {
             env: Some(env),
@@ -88,6 +50,61 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
     assert_eq!(std::fs::read_to_string(&probe_file)?, "process");
     std::fs::write(&release_file, "release")?;
 
+    let exited = read_process_exited(&mut mcp).await?;
+    assert_eq!(
+        exited,
+        ProcessExitedNotification {
+            process_handle,
+            exit_code: 0,
+            stdout: "process-out".to_string(),
+            stdout_cap_reached: false,
+            stderr: "process-err".to_string(),
+            stderr_cap_reached: false,
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn process_spawn_rejects_duplicate_active_handle_without_replacing_original() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let (_server, mut mcp) = initialized_mcp(codex_home.path()).await?;
+
+    let process_handle = "duplicate-active-1".to_string();
+    let probe_file = codex_home.path().join("duplicate-process-created");
+    let release_file = codex_home.path().join("duplicate-process-release");
+    let (command, env) = probe_release_process(&probe_file, &release_file);
+    let spawn_request_id = mcp
+        .send_process_spawn_request(ProcessSpawnParams {
+            env: Some(env),
+            output_bytes_cap: Some(None),
+            timeout_ms: Some(None),
+            ..process_spawn_params(process_handle.clone(), codex_home.path(), command)?
+        })
+        .await?;
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(spawn_request_id))
+        .await?;
+    assert_eq!(response.result, serde_json::json!({}));
+    wait_for_file(&probe_file).await?;
+    assert_eq!(std::fs::read_to_string(&probe_file)?, "process");
+
+    let duplicate_request_id = mcp
+        .send_process_spawn_request(process_spawn_params(
+            process_handle.clone(),
+            codex_home.path(),
+            vec!["codex-process-exec-duplicate-must-not-start".to_string()],
+        )?)
+        .await?;
+    let error = mcp
+        .read_stream_until_error_message(RequestId::Integer(duplicate_request_id))
+        .await?;
+    assert_eq!(
+        error.error.message,
+        format!("duplicate active process handle: {process_handle:?}")
+    );
+
+    std::fs::write(&release_file, "release")?;
     let exited = read_process_exited(&mut mcp).await?;
     assert_eq!(
         exited,
@@ -228,6 +245,52 @@ async fn process_kill_terminates_running_process() -> Result<()> {
     assert!(!exited.stderr_cap_reached);
 
     Ok(())
+}
+
+fn probe_release_process(
+    probe_file: &Path,
+    release_file: &Path,
+) -> (Vec<String>, HashMap<String, Option<String>>) {
+    let command = if cfg!(windows) {
+        vec![
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-NonInteractive".to_string(),
+            "-Command".to_string(),
+            concat!(
+                "[IO.File]::WriteAllText($env:CODEX_PROCESS_EXEC_PROBE_FILE, 'process'); ",
+                "while (!(Test-Path -LiteralPath $env:CODEX_PROCESS_EXEC_RELEASE_FILE)) { ",
+                "Start-Sleep -Milliseconds 20 ",
+                "}; ",
+                "[Console]::Out.Write('process-out'); ",
+                "[Console]::Error.Write('process-err')",
+            )
+            .to_string(),
+        ]
+    } else {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            concat!(
+                "printf process > \"$CODEX_PROCESS_EXEC_PROBE_FILE\"; ",
+                "while [ ! -e \"$CODEX_PROCESS_EXEC_RELEASE_FILE\" ]; do sleep 0.05; done; ",
+                "printf process-out; ",
+                "printf process-err >&2",
+            )
+            .to_string(),
+        ]
+    };
+    let env = HashMap::from([
+        (
+            "CODEX_PROCESS_EXEC_PROBE_FILE".to_string(),
+            Some(probe_file.display().to_string()),
+        ),
+        (
+            "CODEX_PROCESS_EXEC_RELEASE_FILE".to_string(),
+            Some(release_file.display().to_string()),
+        ),
+    ]);
+    (command, env)
 }
 
 async fn initialized_mcp(codex_home: &Path) -> Result<(MockServer, TestAppServer)> {
