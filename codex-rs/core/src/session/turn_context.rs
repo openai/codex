@@ -617,6 +617,7 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> CodexResult<Arc<TurnContext>> {
+        let updated_turn_environments = self.turn_environments_for_update(&updates).await;
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let update_result: CodexResult<_> = {
             let mut state = self.state.lock().await;
@@ -635,13 +636,10 @@ impl Session {
                     });
                     let new_config = notify_config_contributors
                         .then(|| Self::build_effective_session_config(&next));
-                    if updates.environments.is_some() {
-                        state
-                            .turn_environments
-                            .update_selections(next.environment_selections())
-                            .await;
-                    }
                     state.session_configuration = next.clone();
+                    if let Some(turn_environments) = updated_turn_environments {
+                        state.turn_environments = turn_environments;
+                    }
                     Ok((
                         next,
                         permission_profile_changed,
@@ -700,6 +698,19 @@ impl Session {
                 TurnMultiAgentRuntime::ResolveAndStore,
             )
             .await)
+    }
+
+    pub(super) async fn turn_environments_for_update(
+        &self,
+        updates: &SessionSettingsUpdate,
+    ) -> Option<TurnEnvironments> {
+        let selections = updates.environments.as_ref()?.environments.as_slice();
+        let mut turn_environments = {
+            let state = self.state.lock().await;
+            state.turn_environments.clone()
+        };
+        turn_environments.update_selections(selections).await;
+        Some(turn_environments)
     }
 
     #[instrument(name = "turn_context.build", level = "trace", skip_all)]

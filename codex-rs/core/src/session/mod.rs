@@ -1431,6 +1431,7 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
+        let updated_turn_environments = self.turn_environments_for_update(&updates).await;
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let (
             previous_config,
@@ -1462,13 +1463,10 @@ impl Session {
             let next_cwd = updated.cwd().clone();
             let codex_home = updated.codex_home.clone();
             let session_source = updated.session_source.clone();
-            if updates.environments.is_some() {
-                state
-                    .turn_environments
-                    .update_selections(updated.environment_selections())
-                    .await;
-            }
             state.session_configuration = updated;
+            if let Some(turn_environments) = updated_turn_environments {
+                state.turn_environments = turn_environments;
+            }
             (
                 previous_config,
                 new_config,
