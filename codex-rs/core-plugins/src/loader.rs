@@ -1005,21 +1005,7 @@ async fn load_apps_from_paths(
             }
         };
 
-        app_declarations.extend(parsed.apps.into_iter().filter_map(|(name, app)| {
-            if app.id.trim().is_empty() {
-                warn!(
-                    plugin = %plugin_root.display(),
-                    "plugin app config is missing an app id"
-                );
-                None
-            } else {
-                Some(AppDeclaration {
-                    name,
-                    connector_id: AppConnectorId(app.id),
-                    category: cleaned_app_category(app.category),
-                })
-            }
-        }));
+        app_declarations.extend(app_declarations_from_file(parsed, Some(plugin_root)));
     }
     app_declarations
 }

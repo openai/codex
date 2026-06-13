@@ -349,7 +349,6 @@ async fn explicit_plugin_mentions_keep_non_conflicting_mcp_for_chatgpt_auth() ->
         build_apps_enabled_plugin_test_codex(&server, codex_home, apps_server.chatgpt_base_url)
             .await?;
     let codex = Arc::clone(&test_codex.codex);
-    wait_for_mcp_server(&codex, CODEX_APPS_MCP_SERVER_NAME).await?;
     wait_for_mcp_server(&codex, "sample").await?;
 
     codex
