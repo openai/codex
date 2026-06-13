@@ -162,16 +162,21 @@ fn renders_native_opaque_fallback_paths_lossily() {
 #[cfg(windows)]
 #[test]
 fn renders_windows_namespace_fallback_paths() {
-    for native_path in [
-        r"\\.\COM1",
-        r"\\?\Volume{00000000-0000-0000-0000-000000000000}\file.rs",
+    for (native_path, expected) in [
+        // `AbsolutePathBuf` normalizes a device namespace root by retaining
+        // its root separator, so `\\.\COM1` round-trips as `\\.\COM1\`.
+        (r"\\.\COM1", r"\\.\COM1\"),
+        (
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}\file.rs",
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}\file.rs",
+        ),
     ] {
         let path = PathUri::from_path(native_path).expect("absolute Windows namespace path");
 
         assert_eq!(
             NativePathString::from_path_uri(&path, PathConvention::Windows)
                 .map(NativePathString::into_string),
-            Ok(native_path.to_string()),
+            Ok(expected.to_string()),
             "rendering {native_path}"
         );
     }
