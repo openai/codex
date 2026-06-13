@@ -21,5 +21,5 @@ fi
 # The lint configuration does not register the transitioned Windows toolchain.
 printf '%s\n' \
   "//codex-rs/..." \
-  "-//codex-rs/exec-server/tests/foreign-os:smoke-test"
+  "-//codex-rs/core/tests/remote_env_windows:smoke-test"
 printf '%s\n' "${manual_rust_test_targets}"

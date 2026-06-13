@@ -10,7 +10,7 @@ full Codex Windows graph does not yet cross-build.
 
 ```sh
 bazel test \
-  //codex-rs/exec-server/tests/foreign-os:smoke-test \
+  //codex-rs/core/tests/remote_env_windows:smoke-test \
   --test_output=errors
 ```
 

@@ -1,5 +1,4 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary")
-load("//bazel/rules/testing:wine.bzl", "wine_rust_test")
 
 rust_binary(
     name = "windows-exec-server",
@@ -9,28 +8,9 @@ rust_binary(
     crate_root = "windows_exec_server.rs",
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:windows"],
+    visibility = ["//codex-rs/core/tests/remote_env_windows:__pkg__"],
     deps = [
         "//codex-rs/exec-server",
-        "@crates//:tokio",
-    ],
-)
-
-wine_rust_test(
-    name = "smoke-test",
-    timeout = "short",
-    srcs = ["wine_core_test_driver.rs"],
-    crate_name = "wine_core_test_driver",
-    crate_root = "wine_core_test_driver.rs",
-    host_binaries = {
-        "codex-core-tests": "//codex-rs/core:wine-remote-env-test-driver",
-    },
-    windows_binaries = {
-        "wine-windows-exec-server": ":windows-exec-server",
-    },
-    deps = [
-        "//bazel/rules/testing/wine:wine_test_support",
-        "//codex-rs/utils/cargo-bin",
-        "@crates//:anyhow",
         "@crates//:tokio",
     ],
 )

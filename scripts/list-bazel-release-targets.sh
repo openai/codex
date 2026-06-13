@@ -15,5 +15,5 @@ cd "${repo_root}"
 # and cross-compile from this build-only release sweep.
 printf '%s\n' \
   "//codex-rs/..." \
-  "-//codex-rs/exec-server/tests/foreign-os:smoke-test" \
+  "-//codex-rs/core/tests/remote_env_windows:smoke-test" \
   "-//codex-rs/v8-poc:all"
