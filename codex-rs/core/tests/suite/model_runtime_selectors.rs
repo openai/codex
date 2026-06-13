@@ -127,7 +127,6 @@ async fn response_body_for_remote_model(
                 text: "list tools".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
@@ -174,6 +173,7 @@ async fn remote_tool_mode_selector_overrides_feature_flags() -> Result<()> {
             // Code-mode entrypoints.
             codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
             codex_code_mode::WAIT_TOOL_NAME.to_string(),
+            "request_user_input".to_string(),
             // Hosted Responses tools.
             "web_search".to_string(),
             "image_generation".to_string(),
@@ -277,7 +277,6 @@ async fn remote_multi_agent_selector_uses_model_selected_before_first_turn() -> 
                 text: ROOT_PROMPT.into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),

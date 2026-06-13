@@ -1,0 +1,48 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
+load("//bazel/rules/testing:wine.bzl", "wine_rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "wine_test_support",
+    testonly = True,
+    srcs = [
+        "src/lib.rs",
+        "src/lib_tests.rs",
+    ],
+    crate_name = "wine_test_support",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        "//codex-rs/utils/cargo-bin",
+        "@crates//:anyhow",
+        "@crates//:tempfile",
+        "@crates//:tokio",
+    ],
+)
+
+rust_binary(
+    name = "windows-smoke",
+    testonly = True,
+    srcs = ["fixtures/windows_smoke.rs"],
+    crate_name = "wine_smoke",
+    crate_root = "fixtures/windows_smoke.rs",
+    edition = "2024",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:windows"],
+    visibility = ["//visibility:private"],
+)
+
+wine_rust_test(
+    name = "wine-test-support-unit-tests",
+    timeout = "short",
+    crate = ":wine_test_support",
+    windows_binaries = {
+        "wine-smoke": ":windows-smoke",
+    },
+    deps = [
+        "@crates//:futures",
+        "@crates//:pretty_assertions",
+    ],
+)

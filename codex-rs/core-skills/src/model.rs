@@ -9,6 +9,7 @@ use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkillMetadata {
@@ -152,8 +153,8 @@ impl HostLoadedSkills {
             .outcome
             .file_system_for_skill(skill)
             .unwrap_or_else(|| Arc::clone(&LOCAL_FS));
-        fs.read_file_text(&skill.path_to_skills_md, /*sandbox*/ None)
-            .await
+        let path = PathUri::from_abs_path(&skill.path_to_skills_md);
+        fs.read_file_text(&path, /*sandbox*/ None).await
     }
 }
 

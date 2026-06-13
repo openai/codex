@@ -555,16 +555,6 @@ impl OutgoingMessageSender {
             .await;
     }
 
-    pub(crate) fn try_send_server_notification(&self, notification: ServerNotification) {
-        tracing::trace!("app-server event: {notification}");
-        let outgoing_message = OutgoingMessage::AppServerNotification(notification);
-        if let Err(err) = self.sender.try_send(OutgoingEnvelope::Broadcast {
-            message: outgoing_message,
-        }) {
-            warn!("failed to send server notification to client without waiting: {err:?}");
-        }
-    }
-
     pub(crate) async fn send_server_notification_to_connections(
         &self,
         connection_ids: &[ConnectionId],
@@ -725,6 +715,7 @@ mod tests {
     use codex_app_server_protocol::RateLimitWindow;
     use codex_app_server_protocol::ServerResponse;
     use codex_app_server_protocol::ToolRequestUserInputParams;
+    use codex_app_server_protocol::TurnModerationMetadataNotification;
     use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -943,6 +934,31 @@ mod tests {
                     "threadId": "thread-1",
                     "turnId": "turn-1",
                     "verifications": ["trustedAccessForCyber"],
+                },
+            }),
+            serde_json::to_value(jsonrpc_notification)
+                .expect("ensure the notification serializes correctly"),
+            "ensure the notification serializes correctly"
+        );
+    }
+
+    #[test]
+    fn verify_turn_moderation_metadata_notification_serialization() {
+        let notification =
+            ServerNotification::TurnModerationMetadata(TurnModerationMetadataNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                metadata: json!({"presentation": "inline"}),
+            });
+
+        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
+        assert_eq!(
+            json!({
+                "method": "turn/moderationMetadata",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "metadata": {"presentation": "inline"},
                 },
             }),
             serde_json::to_value(jsonrpc_notification)
@@ -1243,6 +1259,7 @@ mod tests {
                     turn_id: "turn-1".to_string(),
                     item_id: "call-1".to_string(),
                     questions: vec![],
+                    auto_resolution_ms: None,
                 },
             ))
             .await;
@@ -1305,6 +1322,7 @@ mod tests {
                     turn_id: "turn-1".to_string(),
                     item_id: "call-1".to_string(),
                     questions: vec![],
+                    auto_resolution_ms: None,
                 },
             ))
             .await;

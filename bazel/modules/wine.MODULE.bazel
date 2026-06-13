@@ -1,0 +1,13 @@
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+# Pin a new-WoW64 build so tests need neither system Wine nor 32-bit host
+# libraries.
+http_archive(
+    name = "wine_linux_x86_64",
+    build_file = "//third_party/wine:BUILD.bazel",
+    sha256 = "39574efa1132c3ca0d5c77dd2eddbe4a49cca0d6cc2c290ff4924493a1c40314",
+    strip_prefix = "wine-11.0-amd64-wow64",
+    urls = [
+        "https://github.com/Kron4ek/Wine-Builds/releases/download/11.0/wine-11.0-amd64-wow64.tar.xz",
+    ],
+)

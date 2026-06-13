@@ -350,7 +350,8 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
                         .collect()
                 })
         }),
-        allowed_permissions: requirements.allowed_permissions,
+        allowed_permission_profiles: requirements.allowed_permission_profiles,
+        default_permissions: requirements.default_permissions,
         allowed_web_search_modes: requirements.allowed_web_search_modes.map(|modes| {
             let mut normalized = modes
                 .into_iter()
@@ -363,6 +364,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         }),
         allow_managed_hooks_only: requirements.allow_managed_hooks_only,
         allow_appshots: requirements.allow_appshots,
+        allow_remote_control: requirements.allow_remote_control,
         computer_use: requirements
             .computer_use
             .map(map_computer_use_requirements_to_api),
@@ -569,27 +571,41 @@ mod tests {
     use codex_config::ConfigRequirementsToml;
     use codex_config::WindowsRequirementsToml;
     use pretty_assertions::assert_eq;
+    use std::collections::BTreeMap;
 
     #[test]
     fn requirements_api_includes_allow_managed_hooks_only() {
         let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
-            allowed_permissions: Some(vec![
-                "managed-standard".to_string(),
-                "managed-build".to_string(),
-            ]),
             allow_managed_hooks_only: Some(true),
             ..ConfigRequirementsToml::default()
         });
 
-        assert_eq!(
-            mapped.allowed_permissions,
-            Some(vec![
-                "managed-standard".to_string(),
-                "managed-build".to_string(),
-            ])
-        );
         assert_eq!(mapped.allow_managed_hooks_only, Some(true));
         assert_eq!(mapped.hooks, None);
+    }
+
+    #[test]
+    fn requirements_api_includes_permission_default_and_allowlist() {
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            allowed_permission_profiles: Some(BTreeMap::from([
+                ("managed-build".to_string(), false),
+                ("managed-standard".to_string(), true),
+            ])),
+            default_permissions: Some("managed-standard".to_string()),
+            ..ConfigRequirementsToml::default()
+        });
+
+        assert_eq!(
+            mapped.allowed_permission_profiles,
+            Some(BTreeMap::from([
+                ("managed-build".to_string(), false),
+                ("managed-standard".to_string(), true),
+            ]))
+        );
+        assert_eq!(
+            mapped.default_permissions,
+            Some("managed-standard".to_string())
+        );
     }
 
     #[test]
@@ -601,6 +617,16 @@ mod tests {
 
         assert_eq!(mapped.allow_appshots, Some(false));
         assert_eq!(mapped.hooks, None);
+    }
+
+    #[test]
+    fn requirements_api_includes_allow_remote_control() {
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            allow_remote_control: Some(false),
+            ..ConfigRequirementsToml::default()
+        });
+
+        assert_eq!(mapped.allow_remote_control, Some(false));
     }
 
     #[test]

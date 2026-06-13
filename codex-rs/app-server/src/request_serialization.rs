@@ -311,7 +311,7 @@ mod tests {
         let key = RequestSerializationQueueKey::Global("test");
         let live_gate = gate();
         let closed_gate = gate();
-        closed_gate.shutdown().await;
+        closed_gate.close().await;
         let (tx, mut rx) = mpsc::unbounded_channel();
         let (blocked_tx, blocked_rx) = oneshot::channel::<()>();
 

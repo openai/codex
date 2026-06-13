@@ -54,6 +54,7 @@ Since only 1 `Task` can be run at a time, for parallel tasks it is recommended t
   - These are messages sent on the `SQ` (UI -> `Codex`)
   - Has an string ID provided by the UI, referred to as `sub_id`
   - `Op` refers to the enum of all possible `Submission` payloads
+  - In the current codebase these are primarily in-process Rust types rather than a stable serde wire contract
     - This enum is `non_exhaustive`; variants can be added at future dates
 - `Event`
   - These are messages sent on the `EQ` (`Codex` -> UI)
@@ -103,7 +104,7 @@ The `response_id` returned from each turn matches the OpenAI `response_id` store
 
 Can operate over any transport that supports bi-directional streaming. - cross-thread channels - IPC channels - stdin/stdout - TCP - HTTP2 - gRPC
 
-Non-framed transports, such as stdin/stdout and TCP, should use newline-delimited JSON in sending messages.
+Events still serialize cleanly to newline-delimited JSON for non-framed transports, such as stdin/stdout and TCP. Submission payloads should be treated as implementation details unless a specific transport owns an explicit adapter.
 
 ## Example Flows
 

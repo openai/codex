@@ -44,6 +44,7 @@ use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use codex_utils_pty::process_group::kill_child_process_group;
 
@@ -372,6 +373,8 @@ pub fn build_exec_request(
             "command args are empty",
         ))
     })?;
+    let cwd = PathUri::from_abs_path(&cwd);
+    let sandbox_policy_cwd_uri = PathUri::from_abs_path(sandbox_cwd);
 
     let manager = SandboxManager::new();
     let command = SandboxCommand {
@@ -392,24 +395,21 @@ pub fn build_exec_request(
             sandbox: sandbox_type,
             enforce_managed_network,
             network: network.as_ref(),
-            sandbox_policy_cwd: sandbox_cwd,
+            sandbox_policy_cwd: &sandbox_policy_cwd_uri,
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_deref(),
             use_legacy_landlock,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
         })
         .map(|request| {
-            let windows_sandbox_policy_cwd = AbsolutePathBuf::try_from(sandbox_cwd.to_path_buf())
-                .unwrap_or_else(|_| request.cwd.clone());
             let windows_sandbox_workspace_roots = if windows_sandbox_workspace_roots.is_empty() {
-                vec![windows_sandbox_policy_cwd.clone()]
+                vec![request.sandbox_policy_cwd.clone()]
             } else {
                 windows_sandbox_workspace_roots.to_vec()
             };
             ExecRequest::from_sandbox_exec_request(
                 request,
                 options,
-                windows_sandbox_policy_cwd,
                 windows_sandbox_workspace_roots,
             )
         })

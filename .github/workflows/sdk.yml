@@ -8,8 +8,8 @@ on:
 jobs:
   python-sdk:
     runs-on:
-      group: codex-runners
-      labels: codex-linux-x64
+      group: ${{ github.event.repository.name }}-runners
+      labels: ${{ github.event.repository.name }}-linux-x64
     timeout-minutes: 10
     steps:
       - name: Checkout repository
@@ -35,17 +35,20 @@ jobs:
             sh -euxc '
               python -m venv /tmp/uv
               /tmp/uv/bin/python -m pip install uv==0.11.3
-              /tmp/uv/bin/uv sync --extra dev --frozen
-              /tmp/uv/bin/uv run --extra dev ruff check --output-format=github .
-              /tmp/uv/bin/uv run --extra dev ruff format --check .
-              /tmp/uv/bin/uv run --extra dev pytest
+              /tmp/uv/bin/uv sync --group dev --frozen
+              /tmp/uv/bin/uv run --frozen --no-sync ruff check --output-format=github .
+              /tmp/uv/bin/uv run --frozen --no-sync ruff format --check .
+              /tmp/uv/bin/uv run --frozen --no-sync pytest
             '
 
   sdks:
     runs-on:
-      group: codex-runners
-      labels: codex-linux-x64
+      group: ${{ github.event.repository.name }}-runners
+      labels: ${{ github.event.repository.name }}-linux-x64
     timeout-minutes: 10
+    environment:
+      name: bazel
+      deployment: false
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

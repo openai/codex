@@ -8,11 +8,18 @@ use core_test_support::responses::ev_apply_patch_shell_command_call_via_heredoc;
 use core_test_support::responses::ev_shell_command_call;
 use core_test_support::test_codex::ApplyPatchModelOutput;
 use pretty_assertions::assert_eq;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+use codex_exec_server::REMOTE_ENVIRONMENT_ID;
+use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -25,11 +32,15 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 #[cfg(target_os = "linux")]
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
+use core_test_support::PathBufExt;
 use core_test_support::assert_regex_match;
+use core_test_support::get_remote_test_env;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -37,11 +48,14 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_shell_command_call_with_args;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_remote;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
+use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
 use serde_json::json;
@@ -88,12 +102,10 @@ async fn submit_without_wait_with_turn_permissions(
                 text: prompt.into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(harness.cwd().to_path_buf()),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -1316,25 +1328,24 @@ async fn apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nest
                 config.cwd = config.cwd.join("subdir");
             })
             .with_workspace_setup(|cwd, fs| async move {
+                let cwd_uri = PathUri::from_path(&cwd)?;
                 fs.create_directory(
-                    &cwd,
+                    &cwd_uri,
                     CreateDirectoryOptions { recursive: true },
                     /*sandbox*/ None,
                 )
                 .await?;
                 let repo_root = cwd.parent().expect("nested cwd should have parent");
+                let git_uri = PathUri::from_path(repo_root.join(".git"))?;
+                let repo_file_uri = PathUri::from_path(repo_root.join("repo.txt"))?;
                 fs.write_file(
-                    &repo_root.join(".git"),
+                    &git_uri,
                     b"gitdir: /tmp/fake-worktree\n".to_vec(),
                     /*sandbox*/ None,
                 )
                 .await?;
-                fs.write_file(
-                    &repo_root.join("repo.txt"),
-                    b"before\n".to_vec(),
-                    /*sandbox*/ None,
-                )
-                .await?;
+                fs.write_file(&repo_file_uri, b"before\n".to_vec(), /*sandbox*/ None)
+                    .await?;
                 Ok(())
             })
     })
@@ -1554,6 +1565,166 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build_with_remote_and_local_env(&server).await?;
+    let file_name = "shared-turn-diff.txt";
+    let shared_cwd = PathBuf::from(format!(
+        "/tmp/codex-remote-turn-diff-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    ))
+    .abs();
+    let shared_cwd_uri = PathUri::from_path(&shared_cwd)?;
+    let _ = fs::remove_dir_all(shared_cwd.as_path());
+    test.fs()
+        .remove(
+            &shared_cwd_uri,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+    fs::create_dir_all(shared_cwd.as_path())?;
+    test.fs()
+        .create_directory(
+            &shared_cwd_uri,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    let local_patch = format!(
+        "*** Begin Patch\n*** Environment ID: {LOCAL_ENVIRONMENT_ID}\n*** Add File: {file_name}\n+local\n*** End Patch"
+    );
+    let remote_patch = format!(
+        "*** Begin Patch\n*** Environment ID: {REMOTE_ENVIRONMENT_ID}\n*** Add File: {file_name}\n+remote\n*** End Patch"
+    );
+    mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-local"),
+                ev_apply_patch_custom_tool_call("call-local", &local_patch),
+                ev_completed("resp-local"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-remote"),
+                ev_apply_patch_custom_tool_call("call-remote", &remote_patch),
+                ev_completed("resp-remote"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-done"),
+                ev_assistant_message("msg-done", "done"),
+                ev_completed("resp-done"),
+            ]),
+        ],
+    )
+    .await;
+
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
+    let environments = vec![
+        local(shared_cwd.clone()),
+        TurnEnvironmentSelection {
+            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+            cwd: shared_cwd.clone(),
+        },
+    ];
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "apply matching patches to local and remote environments".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    environments,
+                )),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let mut last_diff = None;
+    wait_for_event(&test.codex, |event| match event {
+        EventMsg::TurnDiff(ev) => {
+            last_diff = Some(ev.unified_diff.clone());
+            false
+        }
+        EventMsg::TurnComplete(_) => true,
+        _ => false,
+    })
+    .await;
+
+    assert_eq!(fs::read_to_string(shared_cwd.join(file_name))?, "local\n");
+    assert_eq!(
+        test.fs()
+            .read_file_text(
+                &PathUri::from_path(shared_cwd.join(file_name))?,
+                /*sandbox*/ None,
+            )
+            .await?,
+        "remote\n"
+    );
+    let diff = last_diff.expect("expected TurnDiff event");
+    assert_eq!(
+        diff,
+        r#"diff --git a/local/shared-turn-diff.txt b/local/shared-turn-diff.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..40830374235df1c19661a2901b7ca73cc9499f3d
+--- /dev/null
++++ b/local/shared-turn-diff.txt
+@@ -0,0 +1 @@
++local
+diff --git a/remote/shared-turn-diff.txt b/remote/shared-turn-diff.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..9c998f7b995a7327177b38a90d1385170df2b94b
+--- /dev/null
++++ b/remote/shared-turn-diff.txt
+@@ -0,0 +1 @@
++remote
+"#
+    );
+
+    let _ = fs::remove_dir_all(shared_cwd.as_path());
+    test.fs()
+        .remove(
+            &shared_cwd_uri,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1682,8 +1853,9 @@ async fn apply_patch_clears_aggregated_diff_after_inexact_delta() -> Result<()> 
 
     let harness = apply_patch_harness_with(|builder| {
         builder.with_workspace_setup(|cwd, fs| async move {
+            let binary_path_uri = PathUri::from_path(cwd.join("binary.dat"))?;
             fs.write_file(
-                &cwd.join("binary.dat"),
+                &binary_path_uri,
                 vec![0xff, 0xfe, 0xfd],
                 /*sandbox*/ None,
             )

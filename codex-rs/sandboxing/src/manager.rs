@@ -15,8 +15,10 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::io;
 use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,15 +88,20 @@ pub fn with_managed_mitm_ca_readable_root(
 pub struct SandboxCommand {
     pub program: OsString,
     pub args: Vec<String>,
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
     pub env: HashMap<String, String>,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
 }
 
+/// A host-native launch request produced after [`SandboxManager::transform`] validates URI inputs.
+/// Build this only at the execution boundary: in exec-server, or in its logical equivalent within
+/// app-server. Orchestration and transport code should retain [`PathUri`] values and defer
+/// conversion to native paths until this request is created.
 #[derive(Debug)]
 pub struct SandboxExecRequest {
     pub command: Vec<String>,
     pub cwd: AbsolutePathBuf,
+    pub sandbox_policy_cwd: AbsolutePathBuf,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
     pub sandbox: SandboxType,
@@ -117,7 +124,7 @@ pub struct SandboxTransformRequest<'a> {
     // TODO(viyatb): Evaluate switching this to Option<Arc<NetworkProxy>>
     // to make shared ownership explicit across runtime/sandbox plumbing.
     pub network: Option<&'a NetworkProxy>,
-    pub sandbox_policy_cwd: &'a Path,
+    pub sandbox_policy_cwd: &'a PathUri,
     pub codex_linux_sandbox_exe: Option<&'a Path>,
     pub use_legacy_landlock: bool,
     pub windows_sandbox_level: WindowsSandboxLevel,
@@ -126,6 +133,14 @@ pub struct SandboxTransformRequest<'a> {
 
 #[derive(Debug)]
 pub enum SandboxTransformError {
+    InvalidCommandCwd {
+        cwd: PathUri,
+        source: io::Error,
+    },
+    InvalidSandboxPolicyCwd {
+        cwd: PathUri,
+        source: io::Error,
+    },
     MissingLinuxSandboxExecutable,
     #[cfg(target_os = "linux")]
     Wsl1UnsupportedForBubblewrap,
@@ -136,6 +151,16 @@ pub enum SandboxTransformError {
 impl std::fmt::Display for SandboxTransformError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidCommandCwd { cwd, source } => {
+                write!(
+                    f,
+                    "command cwd URI `{cwd}` is not valid on this host: {source}"
+                )
+            }
+            Self::InvalidSandboxPolicyCwd { cwd, source } => write!(
+                f,
+                "sandbox policy cwd URI `{cwd}` is not valid on this host: {source}"
+            ),
             Self::MissingLinuxSandboxExecutable => {
                 write!(f, "missing codex-linux-sandbox executable path")
             }
@@ -147,7 +172,19 @@ impl std::fmt::Display for SandboxTransformError {
     }
 }
 
-impl std::error::Error for SandboxTransformError {}
+impl std::error::Error for SandboxTransformError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidCommandCwd { source, .. }
+            | Self::InvalidSandboxPolicyCwd { source, .. } => Some(source),
+            Self::MissingLinuxSandboxExecutable => None,
+            #[cfg(target_os = "linux")]
+            Self::Wsl1UnsupportedForBubblewrap => None,
+            #[cfg(not(target_os = "macos"))]
+            Self::SeatbeltUnavailable => None,
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct SandboxManager;
@@ -202,6 +239,18 @@ impl SandboxManager {
             windows_sandbox_level,
             windows_sandbox_private_desktop,
         } = request;
+        let native_command_cwd = command.cwd.to_abs_path().map_err(|source| {
+            SandboxTransformError::InvalidCommandCwd {
+                cwd: command.cwd.clone(),
+                source,
+            }
+        })?;
+        let native_sandbox_policy_cwd = sandbox_policy_cwd.to_abs_path().map_err(|source| {
+            SandboxTransformError::InvalidSandboxPolicyCwd {
+                cwd: sandbox_policy_cwd.clone(),
+                source,
+            }
+        })?;
         let additional_permissions = command.additional_permissions.take();
         let managed_mitm_ca_trust_bundle_path =
             network.and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path);
@@ -210,7 +259,7 @@ impl SandboxManager {
         let effective_permission_profile = with_managed_mitm_ca_readable_root(
             effective_permission_profile,
             managed_mitm_ca_trust_bundle_path.as_ref(),
-            sandbox_policy_cwd,
+            native_sandbox_policy_cwd.as_path(),
         );
         let (effective_file_system_policy, effective_network_policy) =
             effective_permission_profile.to_runtime_permissions();
@@ -230,7 +279,7 @@ impl SandboxManager {
                     command: os_argv_to_strings(argv),
                     file_system_sandbox_policy: &effective_file_system_policy,
                     network_sandbox_policy: effective_network_policy,
-                    sandbox_policy_cwd,
+                    sandbox_policy_cwd: native_sandbox_policy_cwd.as_path(),
                     enforce_managed_network,
                     network,
                     extra_allow_unix_sockets: &[],
@@ -255,9 +304,9 @@ impl SandboxManager {
                 )?;
                 let mut args = create_linux_sandbox_command_args_for_permission_profile(
                     os_argv_to_strings(argv),
-                    command.cwd.as_path(),
+                    native_command_cwd.as_path(),
                     &effective_permission_profile,
-                    sandbox_policy_cwd,
+                    native_sandbox_policy_cwd.as_path(),
                     use_legacy_landlock,
                     allow_proxy_network,
                 );
@@ -274,7 +323,8 @@ impl SandboxManager {
 
         Ok(SandboxExecRequest {
             command: argv,
-            cwd: command.cwd,
+            cwd: native_command_cwd,
+            sandbox_policy_cwd: native_sandbox_policy_cwd,
             env: command.env,
             network: network.cloned(),
             sandbox,
@@ -338,8 +388,8 @@ fn ensure_linux_bubblewrap_is_supported(
     allow_network_for_proxy: bool,
     is_wsl1: bool,
 ) -> Result<(), SandboxTransformError> {
-    let requires_bubblewrap = !use_legacy_landlock
-        && (!file_system_sandbox_policy.has_full_disk_write_access() || allow_network_for_proxy);
+    let requires_bubblewrap = allow_network_for_proxy
+        || (!use_legacy_landlock && !file_system_sandbox_policy.has_full_disk_write_access());
     if is_wsl1 && requires_bubblewrap {
         return Err(SandboxTransformError::Wsl1UnsupportedForBubblewrap);
     }
