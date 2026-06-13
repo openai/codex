@@ -124,9 +124,26 @@ def test_root_fmt_recipes_use_shared_formatter_driver() -> None:
     )
 
 
-def test_root_format_driver_covers_all_formatter_groups() -> None:
+def test_root_format_driver_covers_all_formatter_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The shared driver should retain every formatter in both modes."""
     script = _load_root_format_script_module()
+    git_ls_files_args = [
+        "git",
+        "ls-files",
+        "-z",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+    ]
+
+    def fake_check_output(args, *, cwd):
+        assert args == git_ls_files_args
+        assert cwd == script.REPO_ROOT
+        return b"MODULE.bazel\0README.md\0third_party/v8/libcxx.BUILD.bazel\0"
+
+    monkeypatch.setattr(script.subprocess, "check_output", fake_check_output)
     formatters = script.formatter_groups(check=False)
     checks = script.formatter_groups(check=True)
 
@@ -213,9 +230,10 @@ def test_root_format_driver_covers_all_formatter_groups() -> None:
         "-lint=off",
     )
     assert format_buildifier_args[4:] == check_buildifier_args[4:]
-    assert "MODULE.bazel" in format_buildifier_args[4:]
-    assert "third_party/v8/libcxx.BUILD.bazel" in format_buildifier_args[4:]
-    assert not any(path.startswith("codex-rs/target/") for path in format_buildifier_args[4:])
+    assert format_buildifier_args[4:] == (
+        "MODULE.bazel",
+        "third_party/v8/libcxx.BUILD.bazel",
+    )
     assert [group.commands[-1].args[-3:] for group in formatters[3:]] == [
         ("ruff", "format", "sdk/python"),
         ("ruff", "format", "scripts"),
