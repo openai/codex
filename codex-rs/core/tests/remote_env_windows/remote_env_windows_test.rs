@@ -1,161 +1,203 @@
-//! Bazel-only integration coverage for a Windows exec-server running under Wine.
+#[cfg(not(target_os = "linux"))]
+compile_error!("the Wine exec-server test can only run on Linux");
+
+#[path = "wine_exec_server_harness.rs"]
+mod wine_exec_server_harness;
+
+#[path = "non_native_cwd_tests.rs"]
+mod non_native_cwd_tests;
+
+use std::collections::HashMap;
+use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_exec_server::REMOTE_ENVIRONMENT_ID;
-use codex_features::Feature;
-use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::Op;
-use codex_protocol::protocol::TurnEnvironmentSelection;
-use codex_protocol::protocol::TurnEnvironmentSelections;
-use codex_protocol::user_input::UserInput;
-use core_test_support::responses::ev_assistant_message;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_function_call;
-use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_sse_sequence;
-use core_test_support::responses::sse;
-use core_test_support::responses::start_mock_server;
-use core_test_support::test_codex::test_codex;
-use core_test_support::test_codex::turn_permission_fields;
-use core_test_support::wait_for_event;
-use serde_json::json;
-use tokio::io::AsyncBufReadExt;
-use tokio::io::BufReader;
-use wine_test_support::WineTestCommand;
+use codex_exec_server::ExecEnvPolicy;
+use codex_exec_server::ExecParams;
+use codex_exec_server::ExecServerClient;
+use codex_exec_server::ProcessId;
+use codex_exec_server::ReadParams;
+use codex_exec_server::RemoteExecServerConnectArgs;
+use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+use codex_utils_path_uri::PathUri;
+use pretty_assertions::assert_eq;
+use tokio::time::timeout;
+use wine_exec_server_harness::POWERSHELL_PATH;
+use wine_exec_server_harness::POWERSHELL_VERSION;
+use wine_exec_server_harness::WINDOWS_WORKSPACE;
+use wine_exec_server_harness::WineExecServer;
 
-const CALL_ID: &str = "wine-cmd-smoke";
-const COMMAND: &str = "echo WINE_BAZEL_OK&&cd";
+const TEST_TIMEOUT: Duration = Duration::from_secs(180);
+const POWERSHELL_PREFLIGHT_MARKER: &str = "WINE_PWSH_PREFLIGHT";
+const POWERSHELL_PREFLIGHT_SCRIPT: &str = concat!(
+    "$ErrorActionPreference = 'Stop'; ",
+    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); ",
+    "$separatorCode = [int]([System.IO.Path]::DirectorySeparatorChar); ",
+    "Write-Output ('WINE_PWSH_PREFLIGHT|' + ",
+    "$PSVersionTable.PSVersion.ToString() + '|' + ",
+    "$PSVersionTable.PSEdition + '|' + ",
+    "$IsWindows.ToString().ToLowerInvariant() + '|' + ",
+    "(Get-Location).ProviderPath + '|' + $separatorCode)",
+);
+
+struct CommandOutput {
+    exit_code: Option<i32>,
+    output: String,
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn windows_exec_server_rejects_non_native_cwd_uri() -> Result<()> {
-    let executable = codex_utils_cargo_bin::cargo_bin("wine-windows-exec-server")?;
-    let mut exec_server = WineTestCommand::new(executable)
-        .env("CODEX_HOME", r"C:\codex-home")
-        .spawn()?;
-    let stdout = exec_server.take_stdout();
+async fn windows_exec_server_runs_powershell_and_cmd_under_wine() -> Result<()> {
+    timeout(TEST_TIMEOUT, async {
+        let (server, websocket_url) = WineExecServer::start().await?;
+        let test_result = exercise_exec_server(websocket_url).await;
+        let shutdown_result = server.shutdown().await;
+        test_result?;
+        shutdown_result
+    })
+    .await
+    .context("Wine exec-server test timed out")?
+}
 
-    exec_server
-        .scope(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            let exec_server_url = loop {
-                let line = lines
-                    .next_line()
-                    .await?
-                    .context("Wine exec-server exited before reporting its URL")?;
-                if line.starts_with("ws://") {
-                    break line;
-                }
-            };
+async fn exercise_exec_server(websocket_url: String) -> Result<()> {
+    let client = ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
+        websocket_url,
+        "wine-windows-bazel-test".to_string(),
+    ))
+    .await?;
 
-            let server = start_mock_server().await;
-            let arguments = serde_json::to_string(&json!({
-                "cmd": COMMAND,
-                "login": false,
-                "yield_time_ms": 5_000,
-            }))?;
-            let response_mock = mount_sse_sequence(
-                &server,
-                vec![
-                    sse(vec![
-                        ev_response_created("resp-1"),
-                        ev_function_call(CALL_ID, "exec_command", &arguments),
-                        ev_completed("resp-1"),
-                    ]),
-                    sse(vec![
-                        ev_response_created("resp-2"),
-                        ev_assistant_message("msg-1", "done"),
-                        ev_completed("resp-2"),
-                    ]),
-                ],
+    let info = client.environment_info().await?;
+    assert_eq!(info.shell.name, "powershell");
+    assert!(
+        info.shell.path.eq_ignore_ascii_case(POWERSHELL_PATH),
+        "expected pinned PowerShell path, got {info:?}",
+    );
+
+    let powershell = run_non_tty_command(
+        &client,
+        "wine-pwsh-preflight",
+        vec![
+            info.shell.path,
+            "-NoLogo".to_string(),
+            "-NoProfile".to_string(),
+            "-NonInteractive".to_string(),
+            "-Command".to_string(),
+            POWERSHELL_PREFLIGHT_SCRIPT.to_string(),
+        ],
+        PathUri::parse("file:///C:/workspace")?,
+    )
+    .await?;
+    assert_eq!(
+        powershell.exit_code,
+        Some(0),
+        "unexpected PowerShell output: {:?}",
+        powershell.output
+    );
+    let preflight = powershell
+        .output
+        .lines()
+        .find(|line| line.starts_with(POWERSHELL_PREFLIGHT_MARKER))
+        .with_context(|| {
+            format!(
+                "PowerShell preflight marker was missing from {:?}",
+                powershell.output
             )
-            .await;
+        })?;
+    assert_eq!(
+        preflight.split('|').collect::<Vec<_>>(),
+        vec![
+            POWERSHELL_PREFLIGHT_MARKER,
+            POWERSHELL_VERSION,
+            "Core",
+            "true",
+            WINDOWS_WORKSPACE,
+            "92",
+        ]
+    );
 
-            let mut builder = test_codex()
-                .with_model("gpt-5.2")
-                .with_exec_server_url(exec_server_url)
-                .with_config(|config| {
-                    config.use_experimental_unified_exec_tool = true;
-                    config
-                        .features
-                        .enable(Feature::UnifiedExec)
-                        .expect("test config should allow feature update");
-                });
-            let test = builder.build(&server).await?;
-            let (sandbox_policy, permission_profile) =
-                turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
-            let environments = TurnEnvironmentSelections::new(
-                test.config.cwd.clone(),
-                vec![TurnEnvironmentSelection {
-                    environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                    cwd: test.config.cwd.clone(),
-                }],
-            );
+    let cmd = run_non_tty_command(
+        &client,
+        "wine-cmd-smoke",
+        vec![
+            r"C:\windows\system32\cmd.exe".to_string(),
+            "/D".to_string(),
+            "/C".to_string(),
+            "echo WINE_BAZEL_OK&&cd".to_string(),
+        ],
+        PathUri::parse("file:///C:/workspace")?,
+    )
+    .await?;
+    assert_eq!(cmd.exit_code, Some(0));
+    assert!(
+        cmd.output.contains("WINE_BAZEL_OK"),
+        "unexpected output: {:?}",
+        cmd.output
+    );
+    assert!(
+        cmd.output.contains(WINDOWS_WORKSPACE),
+        "unexpected output: {:?}",
+        cmd.output
+    );
 
-            test.codex
-                .submit(Op::UserInput {
-                    items: vec![UserInput::Text {
-                        text: "run the Windows smoke command".to_string(),
-                        text_elements: Vec::new(),
-                    }],
-                    final_output_json_schema: None,
-                    responsesapi_client_metadata: None,
-                    additional_context: Default::default(),
-                    thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                        environments: Some(environments),
-                        approval_policy: Some(AskForApproval::Never),
-                        sandbox_policy: Some(sandbox_policy),
-                        permission_profile,
-                        collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
-                            mode: codex_protocol::config_types::ModeKind::Default,
-                            settings: codex_protocol::config_types::Settings {
-                                model: test.session_configured.model.clone(),
-                                reasoning_effort: None,
-                                developer_instructions: None,
-                            },
-                        }),
-                        ..Default::default()
-                    },
-                })
-                .await?;
+    Ok(())
+}
 
-            let mut saw_exec_event = false;
-            loop {
-                match wait_for_event(&test.codex, |_| true).await {
-                    EventMsg::ExecCommandBegin(event) if event.call_id == CALL_ID => {
-                        saw_exec_event = true
-                    }
-                    EventMsg::ExecCommandEnd(event) if event.call_id == CALL_ID => {
-                        saw_exec_event = true
-                    }
-                    EventMsg::TurnComplete(_) => break,
-                    _ => {}
-                }
-            }
-
-            assert!(
-                !saw_exec_event,
-                "a non-native cwd should be rejected before process lifecycle events",
-            );
-
-            let request = response_mock
-                .last_request()
-                .context("model should receive the rejected command output")?;
-            let (output, success) = request
-                .function_call_output_content_and_success(CALL_ID)
-                .context("rejected command output should be present")?;
-            let output = output.context("rejected command output should contain text")?;
-            assert!(
-                output.contains("exec-server rejected request (-32602)")
-                    && output.contains("cwd URI")
-                    && output.contains("is not valid on this exec-server host"),
-                "unexpected command output: {output:?}",
-            );
-            assert_ne!(success, Some(true));
-
-            Ok(())
+async fn run_non_tty_command(
+    client: &ExecServerClient,
+    process_id: &str,
+    argv: Vec<String>,
+    cwd: PathUri,
+) -> Result<CommandOutput> {
+    let process_id = ProcessId::from(process_id);
+    let response = client
+        .exec(ExecParams {
+            process_id: process_id.clone(),
+            argv,
+            cwd,
+            env_policy: Some(ExecEnvPolicy {
+                inherit: ShellEnvironmentPolicyInherit::Core,
+                ignore_default_excludes: true,
+                exclude: Vec::new(),
+                r#set: HashMap::new(),
+                include_only: Vec::new(),
+            }),
+            env: HashMap::from([
+                ("DOTNET_CLI_TELEMETRY_OPTOUT".to_string(), "1".to_string()),
+                ("DOTNET_NOLOGO".to_string(), "1".to_string()),
+                (
+                    "POWERSHELL_TELEMETRY_OPTOUT".to_string(),
+                    "1".to_string(),
+                ),
+                ("POWERSHELL_UPDATECHECK".to_string(), "Off".to_string()),
+            ]),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
         })
-        .await
+        .await?;
+    assert_eq!(response.process_id, process_id);
+
+    let mut after_seq = None;
+    let mut output = Vec::new();
+    let exit_code = loop {
+        let response = client
+            .read(ReadParams {
+                process_id: process_id.clone(),
+                after_seq,
+                max_bytes: Some(1024 * 1024),
+                wait_ms: Some(5_000),
+            })
+            .await?;
+        for chunk in response.chunks {
+            output.extend(chunk.chunk.into_inner());
+        }
+        if response.closed {
+            break response.exit_code;
+        }
+        after_seq = response.next_seq.checked_sub(1);
+    };
+
+    Ok(CommandOutput {
+        exit_code,
+        output: String::from_utf8(output)?,
+    })
 }
