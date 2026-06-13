@@ -28,6 +28,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
@@ -44,7 +45,7 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test]
-async fn thread_shell_command_history_responses_exclude_persisted_command_executions() -> Result<()>
+async fn thread_shell_command_history_responses_restore_persisted_command_execution() -> Result<()>
 {
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
@@ -72,11 +73,12 @@ async fn thread_shell_command_history_responses_exclude_persisted_command_execut
     )
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+    let thread_id = thread.id;
     let (shell_command, expected_output) = current_shell_output_command("hello from bang")?;
 
     let shell_id = mcp
         .send_thread_shell_command_request(ThreadShellCommandParams {
-            thread_id: thread.id.clone(),
+            thread_id: thread_id.clone(),
             command: shell_command,
         })
         .await?;
@@ -121,6 +123,7 @@ async fn thread_shell_command_history_responses_exclude_persisted_command_execut
     assert_eq!(status, &CommandExecutionStatus::Completed);
     assert_eq!(aggregated_output.as_deref(), Some(expected_output.as_str()));
     assert_eq!(*exit_code, Some(0));
+    let expected_completed_item = completed.item;
 
     timeout(
         DEFAULT_READ_TIMEOUT,
@@ -128,9 +131,13 @@ async fn thread_shell_command_history_responses_exclude_persisted_command_execut
     )
     .await??;
 
+    drop(mcp);
+    let mut mcp = TestAppServer::new(codex_home.as_path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
-            thread_id: thread.id.clone(),
+            thread_id: thread_id.clone(),
             include_turns: true,
         })
         .await?;
@@ -141,15 +148,19 @@ async fn thread_shell_command_history_responses_exclude_persisted_command_execut
     .await??;
     let ThreadReadResponse { thread, .. } = to_response::<ThreadReadResponse>(read_resp)?;
     assert_eq!(thread.turns.len(), 1);
-    assert_no_command_executions(&thread.turns[0].items, "thread/read");
+    assert_only_command_execution(
+        &thread.turns[0].items,
+        &expected_completed_item,
+        "thread/read",
+    );
 
     let turns_list_id = mcp
         .send_thread_turns_list_request(ThreadTurnsListParams {
-            thread_id: thread.id.clone(),
+            thread_id: thread_id.clone(),
             cursor: None,
             limit: None,
             sort_direction: Some(SortDirection::Asc),
-            items_view: None,
+            items_view: Some(TurnItemsView::Full),
         })
         .await?;
     let turns_list_resp: JSONRPCResponse = timeout(
@@ -160,11 +171,15 @@ async fn thread_shell_command_history_responses_exclude_persisted_command_execut
     let ThreadTurnsListResponse { data, .. } =
         to_response::<ThreadTurnsListResponse>(turns_list_resp)?;
     assert_eq!(data.len(), 1);
-    assert_no_command_executions(&data[0].items, "thread/turns/list");
+    assert_only_command_execution(
+        &data[0].items,
+        &expected_completed_item,
+        "thread/turns/list",
+    );
 
     let fork_id = mcp
         .send_thread_fork_request(ThreadForkParams {
-            thread_id: thread.id,
+            thread_id,
             ..Default::default()
         })
         .await?;
@@ -175,7 +190,11 @@ async fn thread_shell_command_history_responses_exclude_persisted_command_execut
     .await??;
     let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
     assert_eq!(thread.turns.len(), 1);
-    assert_no_command_executions(&thread.turns[0].items, "thread/fork");
+    assert_only_command_execution(
+        &thread.turns[0].items,
+        &expected_completed_item,
+        "thread/fork",
+    );
 
     Ok(())
 }
@@ -340,6 +359,7 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
     };
     assert_eq!(source, &CommandExecutionSource::UserShell);
     assert_eq!(aggregated_output.as_deref(), Some(expected_output.as_str()));
+    let expected_completed_item = completed.item;
 
     mcp.send_response(
         request_id,
@@ -371,17 +391,23 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
     .await??;
     let ThreadReadResponse { thread, .. } = to_response::<ThreadReadResponse>(read_resp)?;
     assert_eq!(thread.turns.len(), 1);
-    assert_no_command_executions(&thread.turns[0].items, "thread/read");
+    assert!(
+        thread.turns[0].items.contains(&expected_completed_item),
+        "thread/read should include the persisted user shell command execution"
+    );
 
     Ok(())
 }
 
-fn assert_no_command_executions(items: &[ThreadItem], context: &str) {
-    assert!(
-        items
-            .iter()
-            .all(|item| !matches!(item, ThreadItem::CommandExecution { .. })),
-        "{context} should always exclude command executions from returned turns"
+fn assert_only_command_execution(items: &[ThreadItem], expected: &ThreadItem, context: &str) {
+    let command_executions = items
+        .iter()
+        .filter(|item| matches!(item, ThreadItem::CommandExecution { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        command_executions,
+        vec![expected],
+        "{context} should include exactly the persisted command execution"
     );
 }
 

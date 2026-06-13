@@ -19,6 +19,8 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -146,11 +148,12 @@ async fn exercise_app_server(websocket_url: String) -> Result<()> {
     )
     .await??;
     let ThreadStartResponse { thread, .. } = to_response(thread_response)?;
+    let thread_id = thread.id;
 
     let first_items = submit_turn_and_collect_command(
         &mut app_server,
         TurnStartParams {
-            thread_id: thread.id.clone(),
+            thread_id: thread_id.clone(),
             input: vec![UserInput::Text {
                 text: "Run the default Windows shell in a relative workdir.".to_string(),
                 text_elements: Vec::new(),
@@ -175,7 +178,7 @@ async fn exercise_app_server(websocket_url: String) -> Result<()> {
     let sticky_items = submit_turn_and_collect_command(
         &mut app_server,
         TurnStartParams {
-            thread_id: thread.id,
+            thread_id: thread_id.clone(),
             input: vec![UserInput::Text {
                 text: "Use explicit powershell.exe in an absolute workdir.".to_string(),
                 text_elements: Vec::new(),
@@ -191,6 +194,71 @@ async fn exercise_app_server(websocket_url: String) -> Result<()> {
         ABSOLUTE_WINDOWS_CWD,
         STICKY_OUTPUT_MARKER,
         "powershell.exe",
+    );
+
+    drop(app_server);
+    let mut app_server = TestAppServer::new_with_program_and_env(
+        codex_home.path(),
+        &app_server_program,
+        &[(
+            CODEX_EXEC_SERVER_URL_ENV_VAR,
+            Some(websocket_url.as_str()),
+        )],
+    )
+    .await?;
+    timeout(APP_SERVER_TIMEOUT, app_server.initialize()).await??;
+    let read_request_id = app_server
+        .send_thread_read_request(ThreadReadParams {
+            thread_id,
+            include_turns: true,
+        })
+        .await?;
+    let read_response: JSONRPCResponse = timeout(
+        APP_SERVER_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(read_request_id)),
+    )
+    .await??;
+    let ThreadReadResponse {
+        thread: persisted_thread,
+    } = to_response(read_response)?;
+    let persisted_command_ids = persisted_thread
+        .turns
+        .iter()
+        .map(|turn| {
+            turn.items
+                .iter()
+                .filter_map(|item| match item {
+                    ThreadItem::CommandExecution { id, .. } => Some(id.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        persisted_command_ids,
+        vec![vec![FIRST_EXEC_CALL_ID], vec![STICKY_EXEC_CALL_ID]]
+    );
+    let persisted_first = persisted_thread.turns[0]
+        .items
+        .iter()
+        .find(|item| matches!(item, ThreadItem::CommandExecution { id, .. } if id == FIRST_EXEC_CALL_ID))
+        .context("persisted first command should be present")?;
+    assert_completed_command_item(
+        persisted_first,
+        FIRST_EXEC_CALL_ID,
+        FIRST_WINDOWS_CWD,
+        FIRST_OUTPUT_MARKER,
+    );
+    let persisted_sticky = persisted_thread.turns[1]
+        .items
+        .iter()
+        .find(|item| matches!(item, ThreadItem::CommandExecution { id, .. } if id == STICKY_EXEC_CALL_ID))
+        .context("persisted sticky command should be present")?;
+    assert_completed_command_item(
+        persisted_sticky,
+        STICKY_EXEC_CALL_ID,
+        ABSOLUTE_WINDOWS_CWD,
+        STICKY_OUTPUT_MARKER,
     );
 
     let requests = response_mock.requests();
@@ -234,6 +302,7 @@ async fn exercise_app_server(websocket_url: String) -> Result<()> {
         assert_no_linux_execution_artifacts(&request.body_json().to_string(), &linux_cwd);
     }
     assert_no_linux_execution_artifacts(&format!("{first_items:?}{sticky_items:?}"), &linux_cwd);
+    assert_no_linux_execution_artifacts(&format!("{persisted_thread:?}"), &linux_cwd);
 
     Ok(())
 }

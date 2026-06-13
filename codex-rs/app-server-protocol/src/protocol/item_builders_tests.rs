@@ -1,9 +1,12 @@
 use super::*;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::ExecCommandBeginEvent;
+use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::ExecCommandStatus;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
+use std::time::Duration;
 
 fn begin_event(
     cwd: PathUri,
@@ -49,6 +52,53 @@ fn windows_command_event_renders_windows_native_cwd() {
             aggregated_output: None,
             exit_code: None,
             duration_ms: None,
+        }
+    );
+}
+
+#[test]
+fn persisted_windows_command_completion_renders_windows_native_cwd() {
+    let event = ExecCommandEndEvent {
+        call_id: "exec-1".to_string(),
+        process_id: None,
+        turn_id: "turn-1".to_string(),
+        completed_at_ms: 0,
+        command: vec![
+            "pwsh.exe".to_string(),
+            "-Command".to_string(),
+            "pwd".to_string(),
+        ],
+        cwd: PathUri::parse("file:///C:/Research/space%20%23%25").expect("Windows cwd URI"),
+        path_convention: PathConvention::Windows,
+        parsed_cmd: vec![ParsedCommand::Unknown {
+            cmd: "pwsh.exe -Command pwd".to_string(),
+        }],
+        source: ExecCommandSource::Agent,
+        interaction_input: None,
+        stdout: String::new(),
+        stderr: String::new(),
+        aggregated_output: "C:\\Research\\space #%\r\n".to_string(),
+        exit_code: 0,
+        duration: Duration::from_millis(12),
+        formatted_output: String::new(),
+        status: ExecCommandStatus::Completed,
+    };
+
+    assert_eq!(
+        build_command_execution_end_item(&event),
+        ThreadItem::CommandExecution {
+            id: "exec-1".to_string(),
+            command: "pwsh.exe -Command pwd".to_string(),
+            cwd: ApiPathString::new(r"C:\Research\space #%"),
+            process_id: None,
+            source: CommandExecutionSource::Agent,
+            status: CommandExecutionStatus::Completed,
+            command_actions: vec![CommandAction::Unknown {
+                command: "pwsh.exe -Command pwd".to_string(),
+            }],
+            aggregated_output: Some("C:\\Research\\space #%\r\n".to_string()),
+            exit_code: Some(0),
+            duration_ms: Some(12),
         }
     );
 }

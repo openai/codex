@@ -1,6 +1,21 @@
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use codex_protocol::models::ResponseItem;
+use codex_utils_string::truncate_middle_chars;
+
+const PERSISTED_EXEC_AGGREGATED_OUTPUT_MAX_BYTES: usize = 10_000;
+
+fn truncate_persisted_exec_output(output: &str) -> String {
+    let mut retained_bytes = PERSISTED_EXEC_AGGREGATED_OUTPUT_MAX_BYTES;
+    loop {
+        let truncated = truncate_middle_chars(output, retained_bytes);
+        if truncated.len() <= PERSISTED_EXEC_AGGREGATED_OUTPUT_MAX_BYTES {
+            return truncated;
+        }
+        retained_bytes = retained_bytes
+            .saturating_sub(truncated.len() - PERSISTED_EXEC_AGGREGATED_OUTPUT_MAX_BYTES);
+    }
+}
 
 /// Whether a rollout `item` should be persisted in rollout files.
 pub fn is_persisted_rollout_item(item: &RolloutItem) -> bool {
@@ -20,10 +35,25 @@ pub fn persisted_rollout_items(items: &[RolloutItem]) -> Vec<RolloutItem> {
     let mut persisted = Vec::new();
     for item in items {
         if is_persisted_rollout_item(item) {
-            persisted.push(item.clone());
+            persisted.push(sanitize_rollout_item_for_persistence(item.clone()));
         }
     }
     persisted
+}
+
+fn sanitize_rollout_item_for_persistence(item: RolloutItem) -> RolloutItem {
+    match item {
+        RolloutItem::EventMsg(EventMsg::ExecCommandEnd(mut event)) => {
+            // Rebuilt app-server history needs the aggregate, while the per-stream and
+            // model-formatted copies would only duplicate potentially large output.
+            event.aggregated_output = truncate_persisted_exec_output(&event.aggregated_output);
+            event.stdout.clear();
+            event.stderr.clear();
+            event.formatted_output.clear();
+            RolloutItem::EventMsg(EventMsg::ExecCommandEnd(event))
+        }
+        _ => item,
+    }
 }
 
 /// Whether a `ResponseItem` should be persisted in rollout files.
@@ -93,6 +123,7 @@ pub fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::TurnComplete(_)
         | EventMsg::WebSearchEnd(_)
         | EventMsg::ImageGenerationEnd(_)
+        | EventMsg::ExecCommandEnd(_)
         | EventMsg::SubAgentActivity(_) => true,
         EventMsg::ItemCompleted(event) => {
             // Plan items are derived from streaming tags and are not part of the
@@ -102,7 +133,6 @@ pub fn should_persist_event_msg(ev: &EventMsg) -> bool {
         }
         EventMsg::Error(_)
         | EventMsg::GuardianAssessment(_)
-        | EventMsg::ExecCommandEnd(_)
         | EventMsg::ViewImageToolCall(_)
         | EventMsg::CollabAgentSpawnEnd(_)
         | EventMsg::CollabAgentInteractionEnd(_)
@@ -159,3 +189,7 @@ pub fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::CollabResumeBegin(_) => false,
     }
 }
+
+#[cfg(test)]
+#[path = "policy_tests.rs"]
+mod tests;
