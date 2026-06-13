@@ -19517,7 +19517,12 @@
       "TurnEnvironmentParams": {
         "properties": {
           "cwd": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/ApiPathString"
+              }
+            ],
+            "description": "Absolute cwd rendered using the selected environment's path convention."
           },
           "environmentId": {
             "type": "string"
