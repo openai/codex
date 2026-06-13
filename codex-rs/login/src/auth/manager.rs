@@ -347,13 +347,7 @@ impl CodexAuth {
     }
 
     pub fn uses_codex_backend(&self) -> bool {
-        matches!(
-            self,
-            Self::Chatgpt(_)
-                | Self::ChatgptAuthTokens(_)
-                | Self::AgentIdentity(_)
-                | Self::PersonalAccessToken(_)
-        )
+        self.api_auth_mode().uses_codex_backend()
     }
 
     pub fn is_external_chatgpt_tokens(&self) -> bool {
@@ -2079,15 +2073,8 @@ impl AuthManager {
     }
 
     pub fn current_auth_uses_codex_backend(&self) -> bool {
-        matches!(
-            self.auth_mode(),
-            Some(
-                AuthMode::Chatgpt
-                    | AuthMode::ChatgptAuthTokens
-                    | AuthMode::AgentIdentity
-                    | AuthMode::PersonalAccessToken
-            )
-        )
+        self.get_api_auth_mode()
+            .is_some_and(AuthMode::uses_codex_backend)
     }
 
     fn should_refresh_proactively(auth: &CodexAuth) -> bool {
