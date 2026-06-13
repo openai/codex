@@ -36,9 +36,7 @@ class FormatterResult:
     returncode: int
 
 
-def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
-    just_args = ["just", "--unstable", "--fmt"]
-    cargo_args = ["cargo", "fmt", "--", "--config", "imports_granularity=Item"]
+def buildifier_formatter_group(*, check: bool) -> FormatterGroup:
     repository_files = subprocess.check_output(
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         cwd=REPO_ROOT,
@@ -67,6 +65,12 @@ def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
         "-lint=off",
         *buildifier_files,
     ]
+    return FormatterGroup("Bazel/Starlark", (Command(tuple(buildifier_args)),))
+
+
+def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
+    just_args = ["just", "--unstable", "--fmt"]
+    cargo_args = ["cargo", "fmt", "--", "--config", "imports_granularity=Item"]
     # Each `--project` retains its local dependency and Ruff configuration context.
     sdk_uv_run_args = [
         "uv",
@@ -116,7 +120,7 @@ def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
             # for each crate, so suppress that expected stderr noise.
             (Command(tuple(cargo_args), CODEX_RS_ROOT, discard_stderr=True),),
         ),
-        FormatterGroup("Bazel/Starlark", (Command(tuple(buildifier_args)),)),
+        buildifier_formatter_group(check=check),
         FormatterGroup(
             "Python SDK",
             (
