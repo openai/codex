@@ -2,27 +2,27 @@ load("//bazel/rules/testing:wine.bzl", "wine_rust_test")
 
 wine_rust_test(
     name = "smoke-test",
-    timeout = "short",
-    srcs = ["remote_env_windows_test.rs"],
+    timeout = "moderate",
+    srcs = [
+        "remote_env_windows_test.rs",
+        "wine_exec_server_harness.rs",
+    ],
     crate_name = "remote_env_windows_test",
     crate_root = "remote_env_windows_test.rs",
-    # Environment identity validation ends this fixture's host-shell-mismatch premise.
-    # A hermetic target-shell smoke test replaces it once remote shell routing lands.
-    target_compatible_with = ["@platforms//:incompatible"],
+    include_powershell = True,
     windows_binaries = {
         "wine-windows-exec-server": "//codex-rs/exec-server/testing:windows-exec-server",
     },
     deps = [
         "//bazel/rules/testing/wine:wine_test_support",
-        "//codex-rs/core/tests/common",
         "//codex-rs/exec-server",
-        "//codex-rs/features",
         "//codex-rs/protocol",
         "//codex-rs/utils/cargo-bin",
         "//codex-rs/utils/path-uri",
+        "//codex-rs/utils/pty",
         "@crates//:anyhow",
         "@crates//:pretty_assertions",
-        "@crates//:serde_json",
+        "@crates//:tempfile",
         "@crates//:tokio",
     ],
 )
