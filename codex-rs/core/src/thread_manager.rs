@@ -67,6 +67,7 @@ use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
 use codex_thread_store::UpdateThreadMetadataParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::ApiPathString;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
@@ -471,6 +472,52 @@ impl ThreadManager {
                 })?;
         }
         Ok(())
+    }
+
+    /// Resolves environment-native cwd strings using metadata from each selected environment.
+    pub async fn resolve_native_environment_selections(
+        &self,
+        environments: impl IntoIterator<Item = (String, ApiPathString)>,
+    ) -> CodexResult<Vec<TurnEnvironmentSelection>> {
+        let environments = environments.into_iter();
+        let mut environment_ids = HashSet::new();
+        let mut selections = Vec::with_capacity(environments.size_hint().0);
+        for (environment_id, cwd) in environments {
+            if !environment_ids.insert(environment_id.clone()) {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "duplicate turn environment id `{environment_id}`"
+                )));
+            }
+            let environment = self
+                .state
+                .environment_manager
+                .get_environment(&environment_id)
+                .ok_or_else(|| {
+                    CodexErr::InvalidRequest(format!(
+                        "unknown turn environment id `{environment_id}`"
+                    ))
+                })?;
+            let info = environment.info().await.map_err(|err| {
+                CodexErr::InvalidRequest(format!(
+                    "failed to get info for environment `{environment_id}`: {err}"
+                ))
+            })?;
+            crate::shell::Shell::from_environment_shell_info(info.shell).map_err(|err| {
+                CodexErr::InvalidRequest(format!(
+                    "failed to resolve shell for environment `{environment_id}`: {err}"
+                ))
+            })?;
+            let cwd = cwd.to_path_uri(info.path_convention).map_err(|err| {
+                CodexErr::InvalidRequest(format!(
+                    "invalid cwd for environment `{environment_id}`: {err}"
+                ))
+            })?;
+            selections.push(TurnEnvironmentSelection {
+                environment_id,
+                cwd,
+            });
+        }
+        Ok(selections)
     }
 
     pub fn get_models_manager(&self) -> SharedModelsManager {

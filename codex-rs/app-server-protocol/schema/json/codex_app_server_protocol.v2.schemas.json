@@ -380,6 +380,9 @@
       },
       "type": "object"
     },
+    "ApiPathString": {
+      "type": "string"
+    },
     "AppBranding": {
       "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
       "properties": {
@@ -16720,7 +16723,12 @@
     "TurnEnvironmentParams": {
       "properties": {
         "cwd": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApiPathString"
+            }
+          ],
+          "description": "Absolute cwd rendered using the selected environment's path convention."
         },
         "environmentId": {
           "type": "string"

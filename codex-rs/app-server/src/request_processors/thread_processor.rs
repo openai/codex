@@ -874,7 +874,8 @@ impl ThreadRequestProcessor {
                 "`permissions` cannot be combined with `sandbox`",
             ));
         }
-        let environment_selections = self.parse_environment_selections(environments)?;
+        let environment_selections =
+            resolve_turn_environment_selections(self.thread_manager.as_ref(), environments).await?;
         let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
@@ -1281,27 +1282,6 @@ impl ThreadRequestProcessor {
             personality,
             ..Default::default()
         }
-    }
-
-    fn parse_environment_selections(
-        &self,
-        environments: Option<Vec<TurnEnvironmentParams>>,
-    ) -> Result<Option<Vec<TurnEnvironmentSelection>>, JSONRPCErrorError> {
-        let environment_selections = environments.map(|environments| {
-            environments
-                .into_iter()
-                .map(|environment| TurnEnvironmentSelection {
-                    environment_id: environment.environment_id,
-                    cwd: codex_utils_path_uri::PathUri::from_abs_path(&environment.cwd),
-                })
-                .collect::<Vec<_>>()
-        });
-        if let Some(environment_selections) = environment_selections.as_ref() {
-            self.thread_manager
-                .validate_environment_selections(environment_selections)
-                .map_err(environment_selection_error)?;
-        }
-        Ok(environment_selections)
     }
 
     async fn thread_archive_inner(
