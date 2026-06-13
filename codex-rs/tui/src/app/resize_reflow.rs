@@ -264,6 +264,14 @@ impl App {
     /// transient stream rows.
     pub(super) fn maybe_finish_stream_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
         if !self.terminal_resize_reflow_enabled() {
+            if self.transcript_reflow.take_stream_finish_reflow_needed() {
+                self.schedule_immediate_history_cell_refresh(tui);
+                self.maybe_run_resize_reflow(tui)?;
+                return Ok(());
+            }
+            if self.transcript_reflow.history_cell_refresh_requested() {
+                return Ok(());
+            }
             self.transcript_reflow.clear();
             return Ok(());
         }
@@ -286,6 +294,22 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
+    fn schedule_immediate_history_cell_refresh(&mut self, tui: &mut tui::Tui) {
+        self.transcript_reflow.schedule_history_cell_refresh();
+        tui.frame_requester().schedule_frame();
+    }
+
+    pub(crate) fn retry_pending_history_cell_refresh(&self, tui: &mut tui::Tui) {
+        if self.transcript_reflow.history_cell_refresh_requested() {
+            tui.frame_requester().schedule_frame();
+        }
+    }
+
+    pub(super) fn should_handle_draw_pre_render(&self) -> bool {
+        self.terminal_resize_reflow_enabled()
+            || self.transcript_reflow.history_cell_refresh_requested()
+    }
+
     /// Force stream-finalized output through the resize reflow path.
     ///
     /// Proposed plan consolidation uses this stricter path because a completed plan is inserted or
@@ -293,7 +317,9 @@ impl App {
     /// resize, the visible scrollback can keep the pre-consolidation wrapping.
     pub(super) fn finish_required_stream_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
         if !self.terminal_resize_reflow_enabled() {
-            self.transcript_reflow.clear();
+            if !self.transcript_reflow.history_cell_refresh_requested() {
+                self.transcript_reflow.clear();
+            }
             return Ok(());
         }
         self.schedule_immediate_resize_reflow(tui);
@@ -334,7 +360,10 @@ impl App {
                 } else {
                     frame_requester.schedule_frame_in(TRANSCRIPT_REFLOW_DEBOUNCE);
                 }
-            } else if !self.terminal_resize_reflow_enabled() && width.changed {
+            } else if !self.terminal_resize_reflow_enabled()
+                && width.changed
+                && !self.transcript_reflow.history_cell_refresh_requested()
+            {
                 self.transcript_reflow.clear();
             }
         }
@@ -388,7 +417,9 @@ impl App {
     /// reuse terminal-wrapped output here would preserve exactly the stale wrapping this feature is
     /// meant to remove.
     pub(super) fn maybe_run_resize_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        if !self.terminal_resize_reflow_enabled() {
+        if !self.terminal_resize_reflow_enabled()
+            && !self.transcript_reflow.history_cell_refresh_requested()
+        {
             self.transcript_reflow.clear();
             return Ok(());
         }
