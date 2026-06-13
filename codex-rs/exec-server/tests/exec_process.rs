@@ -91,36 +91,6 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
     Ok(())
 }
 
-async fn assert_exec_process_uses_requested_cwd(use_remote: bool) -> Result<()> {
-    let context = create_process_context(use_remote).await?;
-    let cwd = TempDir::new()?;
-    let expected_cwd = std::fs::canonicalize(cwd.path())?;
-    let session = context
-        .backend
-        .start(ExecParams {
-            process_id: ProcessId::from("proc-cwd"),
-            argv: vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                "pwd -P".to_string(),
-            ],
-            cwd: PathUri::from_path(expected_cwd.clone())?,
-            env_policy: /*env_policy*/ None,
-            env: Default::default(),
-            tty: false,
-            pipe_stdin: false,
-            arg0: None,
-        })
-        .await?;
-    let wake_rx = session.process.subscribe_wake();
-
-    assert_eq!(
-        collect_process_output_from_reads(session.process, wake_rx).await?,
-        (format!("{}\n", expected_cwd.display()), Some(0), true)
-    );
-    Ok(())
-}
-
 async fn read_process_until_change(
     session: Arc<dyn ExecProcess>,
     wake_rx: &mut watch::Receiver<u64>,
@@ -763,12 +733,48 @@ async fn exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
 
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
-#[cfg_attr(not(unix), ignore = "Unix-only exec-server process test")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 // Serialize tests that launch a real exec-server process through the full CLI.
 #[serial_test::serial(remote_exec_server)]
 async fn exec_process_uses_requested_cwd(use_remote: bool) -> Result<()> {
-    assert_exec_process_uses_requested_cwd(use_remote).await
+    let context = create_process_context(use_remote).await?;
+    let cwd = TempDir::new()?;
+    let expected_cwd = std::fs::canonicalize(cwd.path())?;
+    let argv = if cfg!(windows) {
+        vec![
+            std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string()),
+            "/C".to_string(),
+            "cd".to_string(),
+        ]
+    } else {
+        vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "pwd -P".to_string(),
+        ]
+    };
+    let session = context
+        .backend
+        .start(ExecParams {
+            process_id: ProcessId::from("proc-cwd"),
+            argv,
+            cwd: PathUri::from_path(expected_cwd.clone())?,
+            env_policy: /*env_policy*/ None,
+            env: Default::default(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+        })
+        .await?;
+    let wake_rx = session.process.subscribe_wake();
+    let (output, exit_code, closed) =
+        collect_process_output_from_reads(session.process, wake_rx).await?;
+
+    assert_eq!(
+        (std::fs::canonicalize(output.trim())?, exit_code, closed),
+        (expected_cwd, Some(0), true)
+    );
+    Ok(())
 }
 
 #[test_case(false ; "local")]
