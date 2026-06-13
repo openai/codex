@@ -17,11 +17,11 @@ use thiserror::Error;
 use ts_rs::TS;
 use url::Url;
 
-mod native_path_string;
+mod api_path_string;
 
-pub use native_path_string::NativePathString;
-pub use native_path_string::NativePathStringError;
-pub use native_path_string::PathConvention;
+pub use api_path_string::ApiPathString;
+pub use api_path_string::ApiPathStringError;
+pub use api_path_string::PathConvention;
 
 pub const FILE_SCHEME: &str = "file";
 const BAD_PATH_URI_PREFIX: &str = "file:///%00/bad/path/";

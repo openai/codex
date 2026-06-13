@@ -1,5 +1,6 @@
 use super::*;
 use crate::PathUri;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 
 #[derive(Clone, Copy, Debug)]
@@ -287,14 +288,14 @@ fn renders_native_paths_from_shared_cases() {
     for case in RENDER_CASES {
         let path = PathUri::parse(case.uri).expect("valid file URI");
         let expected = match case.expected {
-            RenderExpectation::Rendered(rendered) => Ok(NativePathString(rendered.to_string())),
+            RenderExpectation::Rendered(rendered) => Ok(ApiPathString(rendered.to_string())),
             RenderExpectation::Error(ExpectedError::OpaqueFallback) => {
-                Err(NativePathStringError::OpaqueFallback {
+                Err(ApiPathStringError::OpaqueFallback {
                     path: path.to_string(),
                 })
             }
             RenderExpectation::Error(ExpectedError::IncompatibleConvention) => {
-                Err(NativePathStringError::IncompatibleConvention {
+                Err(ApiPathStringError::IncompatibleConvention {
                     path: path.to_string(),
                     convention: case.convention,
                 })
@@ -302,11 +303,34 @@ fn renders_native_paths_from_shared_cases() {
         };
 
         assert_eq!(
-            NativePathString::from_path_uri(&path, case.convention),
+            ApiPathString::from_path_uri(&path, case.convention),
             expected,
             "rendering {case:?}"
         );
     }
+}
+
+#[test]
+fn renders_an_absolute_path_using_the_explicit_convention() {
+    #[cfg(unix)]
+    let (native_path, convention, expected) = (
+        "/workspace/a file.rs",
+        PathConvention::Posix,
+        "/workspace/a file.rs",
+    );
+    #[cfg(windows)]
+    let (native_path, convention, expected) = (
+        r"C:\workspace\a file.rs",
+        PathConvention::Windows,
+        r"C:\workspace\a file.rs",
+    );
+    let path = AbsolutePathBuf::from_absolute_path_checked(native_path)
+        .expect("native path should be absolute");
+
+    assert_eq!(
+        ApiPathString::from_abs_path(&path, convention),
+        Ok(ApiPathString(expected.to_string()))
+    );
 }
 
 #[cfg(windows)]
@@ -323,12 +347,12 @@ fn renders_native_non_unicode_windows_fallback_lossily() {
     let path = PathUri::from_path(native_path).expect("absolute native path");
 
     assert_eq!(
-        NativePathString::from_path_uri(&path, PathConvention::Windows),
-        Ok(NativePathString(r"C:\bad\�".to_string()))
+        ApiPathString::from_path_uri(&path, PathConvention::Windows),
+        Ok(ApiPathString(r"C:\bad\�".to_string()))
     );
     assert_eq!(
-        NativePathString::from_path_uri(&path, PathConvention::Posix),
-        Err(NativePathStringError::OpaqueFallback {
+        ApiPathString::from_path_uri(&path, PathConvention::Posix),
+        Err(ApiPathStringError::OpaqueFallback {
             path: path.to_string(),
         })
     );
@@ -337,7 +361,7 @@ fn renders_native_non_unicode_windows_fallback_lossily() {
 #[test]
 fn serializes_as_a_string() {
     let path = PathUri::parse("file:///workspace/src/lib.rs").expect("valid file URI");
-    let rendered = NativePathString::from_path_uri(&path, PathConvention::Posix)
+    let rendered = ApiPathString::from_path_uri(&path, PathConvention::Posix)
         .expect("POSIX URI should render");
 
     assert_eq!(
