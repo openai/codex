@@ -337,15 +337,6 @@ fn configure_wine_environment(command: &mut StdCommand, runtime: &WineRuntimePat
         .env("TMP", r"C:\windows\temp");
 }
 
-/// Installs the pinned PowerShell runtime into a Wine prefix.
-pub fn install_pinned_powershell_runtime(prefix: &Path) -> Result<()> {
-    let marker = codex_utils_cargo_bin::cargo_bin("pwsh-runtime-marker")?;
-    let runtime = marker
-        .parent()
-        .context("locate PowerShell runtime directory")?;
-    install_powershell_runtime(prefix, runtime)
-}
-
 fn install_powershell_runtime(prefix: &Path, runtime: &Path) -> Result<()> {
     let powershell_parent = prefix
         .join("drive_c")
