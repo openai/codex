@@ -58,6 +58,8 @@ use codex_protocol::protocol::ExecCommandSource;
 use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
     ("NO_COLOR", "1"),
@@ -337,7 +339,6 @@ async fn emit_failed_initial_exec_end_if_unstored(
     process_started_alive: bool,
     context: &UnifiedExecContext,
     request: &ExecCommandRequest,
-    cwd: AbsolutePathBuf,
     transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
     fallback_output: String,
     message: String,
@@ -352,7 +353,8 @@ async fn emit_failed_initial_exec_end_if_unstored(
         Arc::clone(&context.turn),
         context.call_id.clone(),
         request.command.clone(),
-        cwd,
+        request.cwd_uri.clone(),
+        request.path_convention,
         Some(request.process_id.to_string()),
         transcript,
         fallback_output,
@@ -459,7 +461,8 @@ impl UnifiedExecProcessManager {
         );
         let emitter = ToolEmitter::unified_exec(
             &request.command,
-            cwd.clone(),
+            request.cwd_uri.clone(),
+            request.path_convention,
             ExecCommandSource::UnifiedExecStartup,
             Some(request.process_id.to_string()),
         );
@@ -478,6 +481,8 @@ impl UnifiedExecProcessManager {
                 &request.command,
                 request.hook_command.clone(),
                 cwd.clone(),
+                request.cwd_uri.clone(),
+                request.path_convention,
                 start,
                 request.process_id,
                 request.tty,
@@ -536,7 +541,6 @@ impl UnifiedExecProcessManager {
                 process_started_alive,
                 context,
                 &request,
-                cwd.clone(),
                 Arc::clone(&transcript),
                 text.clone(),
                 message.clone(),
@@ -556,7 +560,6 @@ impl UnifiedExecProcessManager {
                 process_started_alive,
                 context,
                 &request,
-                cwd.clone(),
                 Arc::clone(&transcript),
                 text.clone(),
                 message.clone(),
@@ -608,7 +611,6 @@ impl UnifiedExecProcessManager {
                     process_started_alive,
                     context,
                     &request,
-                    cwd.clone(),
                     Arc::clone(&transcript),
                     text.clone(),
                     message.clone(),
@@ -625,7 +627,8 @@ impl UnifiedExecProcessManager {
                 Arc::clone(&context.turn),
                 context.call_id.clone(),
                 request.command.clone(),
-                cwd.clone(),
+                request.cwd_uri.clone(),
+                request.path_convention,
                 Some(process_id.to_string()),
                 Arc::clone(&transcript),
                 text.clone(),
@@ -885,6 +888,8 @@ impl UnifiedExecProcessManager {
         command: &[String],
         hook_command: String,
         cwd: AbsolutePathBuf,
+        cwd_uri: PathUri,
+        path_convention: PathConvention,
         started_at: Instant,
         process_id: i32,
         tty: bool,
@@ -923,7 +928,8 @@ impl UnifiedExecProcessManager {
             Arc::clone(&context.turn),
             context.call_id.clone(),
             command.to_vec(),
-            cwd,
+            cwd_uri,
+            path_convention,
             process_id,
             transcript,
             started_at,

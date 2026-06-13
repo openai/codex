@@ -3206,8 +3206,11 @@ pub struct ExecCommandBeginEvent {
     pub started_at_ms: i64,
     /// The command to be executed.
     pub command: Vec<String>,
-    /// The command's working directory if not the default cwd for the agent.
-    pub cwd: AbsolutePathBuf,
+    /// The command's working directory in the executing environment.
+    pub cwd: PathUri,
+    /// Path syntax used by the executing environment.
+    #[serde(default = "PathConvention::native")]
+    pub path_convention: PathConvention,
     pub parsed_cmd: Vec<ParsedCommand>,
     /// Where the command originated. Defaults to Agent for backward compatibility.
     #[serde(default)]
@@ -3232,8 +3235,11 @@ pub struct ExecCommandEndEvent {
     pub completed_at_ms: i64,
     /// The command that was executed.
     pub command: Vec<String>,
-    /// The command's working directory if not the default cwd for the agent.
-    pub cwd: AbsolutePathBuf,
+    /// The command's working directory in the executing environment.
+    pub cwd: PathUri,
+    /// Path syntax used by the executing environment.
+    #[serde(default = "PathConvention::native")]
+    pub path_convention: PathConvention,
     pub parsed_cmd: Vec<ParsedCommand>,
     /// Where the command originated. Defaults to Agent for backward compatibility.
     #[serde(default)]
@@ -5382,6 +5388,25 @@ mod tests {
 
         let deserialized: ExecCommandOutputDeltaEvent = serde_json::from_str(&serialized)?;
         assert_eq!(deserialized, event);
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_legacy_exec_command_event_uses_native_path_convention() -> Result<()> {
+        let cwd = AbsolutePathBuf::current_dir()?;
+        let value = json!({
+            "call_id": "call-1",
+            "turn_id": "turn-1",
+            "command": ["echo", "hello"],
+            "cwd": cwd,
+            "parsed_cmd": [],
+        });
+
+        let event: ExecCommandBeginEvent = serde_json::from_value(value)?;
+        assert_eq!(
+            (event.cwd, event.path_convention),
+            (PathUri::from_abs_path(&cwd), PathConvention::native()),
+        );
         Ok(())
     }
 

@@ -23,6 +23,7 @@ use crate::protocol::v2::PatchApplyStatus;
 use crate::protocol::v2::PatchChangeKind;
 use crate::protocol::v2::ThreadItem;
 use codex_protocol::ThreadId;
+use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::ExecCommandBeginEvent;
@@ -42,8 +43,37 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub fn native_command_cwd(cwd: &AbsolutePathBuf) -> ApiPathString {
-    ApiPathString::from_path_uri(&PathUri::from_abs_path(cwd), PathConvention::native())
-        .unwrap_or_else(|_| ApiPathString::new(cwd.to_string_lossy().into_owned()))
+    native_command_cwd_from_uri(&PathUri::from_abs_path(cwd), PathConvention::native())
+}
+
+fn native_command_cwd_from_uri(cwd: &PathUri, path_convention: PathConvention) -> ApiPathString {
+    ApiPathString::from_path_uri(cwd, path_convention)
+        .unwrap_or_else(|_| ApiPathString::new(cwd.to_string()))
+}
+
+fn command_actions_for_event(
+    parsed_cmd: &[ParsedCommand],
+    cwd: &PathUri,
+    path_convention: PathConvention,
+) -> Vec<CommandAction> {
+    let host_cwd = (path_convention == PathConvention::native())
+        .then(|| cwd.to_abs_path().ok())
+        .flatten();
+    parsed_cmd
+        .iter()
+        .cloned()
+        .map(|parsed| match host_cwd.as_ref() {
+            Some(cwd) => CommandAction::from_core_with_cwd(parsed, cwd),
+            None => CommandAction::Unknown {
+                command: match parsed {
+                    ParsedCommand::Read { cmd, .. }
+                    | ParsedCommand::ListFiles { cmd, .. }
+                    | ParsedCommand::Search { cmd, .. }
+                    | ParsedCommand::Unknown { cmd } => cmd,
+                },
+            },
+        })
+        .collect()
 }
 
 pub fn build_file_change_approval_request_item(
@@ -98,16 +128,15 @@ pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> Th
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: native_command_cwd(&payload.cwd),
+        cwd: native_command_cwd_from_uri(&payload.cwd, payload.path_convention),
         process_id: payload.process_id.clone(),
         source: payload.source.into(),
         status: CommandExecutionStatus::InProgress,
-        command_actions: payload
-            .parsed_cmd
-            .iter()
-            .cloned()
-            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &payload.cwd))
-            .collect(),
+        command_actions: command_actions_for_event(
+            &payload.parsed_cmd,
+            &payload.cwd,
+            payload.path_convention,
+        ),
         aggregated_output: None,
         exit_code: None,
         duration_ms: None,
@@ -125,16 +154,15 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: native_command_cwd(&payload.cwd),
+        cwd: native_command_cwd_from_uri(&payload.cwd, payload.path_convention),
         process_id: payload.process_id.clone(),
         source: payload.source.into(),
         status: (&payload.status).into(),
-        command_actions: payload
-            .parsed_cmd
-            .iter()
-            .cloned()
-            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &payload.cwd))
-            .collect(),
+        command_actions: command_actions_for_event(
+            &payload.parsed_cmd,
+            &payload.cwd,
+            payload.path_convention,
+        ),
         aggregated_output,
         exit_code: Some(payload.exit_code),
         duration_ms: Some(duration_ms),
@@ -324,3 +352,7 @@ fn format_file_change_diff(change: &FileChange) -> String {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "item_builders_tests.rs"]
+mod tests;

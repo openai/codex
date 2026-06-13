@@ -22,7 +22,8 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExecOutputStream;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 
 pub(crate) const TRAILING_OUTPUT_GRACE: Duration = Duration::from_millis(100);
 
@@ -110,7 +111,8 @@ pub(crate) fn spawn_exit_watcher(
     turn_ref: Arc<TurnContext>,
     call_id: String,
     command: Vec<String>,
-    cwd: AbsolutePathBuf,
+    cwd: PathUri,
+    path_convention: PathConvention,
     process_id: i32,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     started_at: Instant,
@@ -130,6 +132,7 @@ pub(crate) fn spawn_exit_watcher(
                 call_id,
                 command,
                 cwd,
+                path_convention,
                 Some(process_id.to_string()),
                 transcript,
                 String::new(),
@@ -145,6 +148,7 @@ pub(crate) fn spawn_exit_watcher(
                 call_id,
                 command,
                 cwd,
+                path_convention,
                 Some(process_id.to_string()),
                 transcript,
                 String::new(),
@@ -197,7 +201,8 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
     turn_ref: Arc<TurnContext>,
     call_id: String,
     command: Vec<String>,
-    cwd: AbsolutePathBuf,
+    cwd: PathUri,
+    path_convention: PathConvention,
     process_id: Option<String>,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     fallback_output: String,
@@ -222,6 +227,7 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
     let emitter = ToolEmitter::unified_exec(
         &command,
         cwd,
+        path_convention,
         ExecCommandSource::UnifiedExecStartup,
         process_id,
     );
@@ -242,7 +248,8 @@ pub(crate) async fn emit_failed_exec_end_for_unified_exec(
     turn_ref: Arc<TurnContext>,
     call_id: String,
     command: Vec<String>,
-    cwd: AbsolutePathBuf,
+    cwd: PathUri,
+    path_convention: PathConvention,
     process_id: Option<String>,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     fallback_output: String,
@@ -276,6 +283,7 @@ pub(crate) async fn emit_failed_exec_end_for_unified_exec(
     let emitter = ToolEmitter::unified_exec(
         &command,
         cwd,
+        path_convention,
         ExecCommandSource::UnifiedExecStartup,
         process_id,
     );

@@ -296,6 +296,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         #[allow(deprecated)]
         cwd: turn.cwd.clone(),
         cwd_uri: turn_environment.cwd_uri().clone(),
+        path_convention: turn_environment.path_convention(),
         #[allow(deprecated)]
         sandbox_cwd: Some(turn.cwd.clone()),
         environment: turn
@@ -322,8 +323,6 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         /*process_started_alive*/ false,
         &context,
         &request,
-        #[allow(deprecated)]
-        turn.cwd.clone(),
         transcript,
         "PRE_DENIAL_MARKER".to_string(),
         "Network access denied".to_string(),
@@ -345,6 +344,8 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
     );
     assert_eq!(end_event.exit_code, -1);
     assert_eq!(end_event.process_id.as_deref(), Some("123"));
+    assert_eq!(end_event.cwd, request.cwd_uri);
+    assert_eq!(end_event.path_convention, request.path_convention);
     assert_eq!(
         end_event.aggregated_output,
         "PRE_DENIAL_MARKER\nNetwork access denied"

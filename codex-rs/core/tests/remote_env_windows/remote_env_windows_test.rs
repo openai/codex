@@ -160,10 +160,7 @@ async fn windows_exec_server_records_host_shell_mismatch() -> Result<()> {
             );
             assert_eq!(
                 (begin.cwd.clone(), begin.source),
-                (
-                    test.config.cwd.clone(),
-                    ExecCommandSource::UnifiedExecStartup,
-                ),
+                (selected_cwd.clone(), ExecCommandSource::UnifiedExecStartup),
             );
 
             let end = end.context("exec_command should emit an end event")?;
@@ -180,7 +177,7 @@ async fn windows_exec_server_records_host_shell_mismatch() -> Result<()> {
                 ),
                 (
                     begin.command,
-                    test.config.cwd.clone(),
+                    selected_cwd,
                     ExecCommandSource::UnifiedExecStartup,
                     String::new(),
                     String::new(),

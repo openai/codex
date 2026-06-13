@@ -21,6 +21,8 @@ use codex_protocol::protocol::PatchApplyStatus;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_shell_command::parse_command::parse_command;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -92,28 +94,21 @@ fn tracker_update_for_known_delta<'a>(
     }
 }
 
-pub(crate) async fn emit_exec_command_begin(
-    ctx: ToolEventCtx<'_>,
-    command: &[String],
-    cwd: &AbsolutePathBuf,
-    parsed_cmd: &[ParsedCommand],
-    source: ExecCommandSource,
-    interaction_input: Option<String>,
-    process_id: Option<&str>,
-) {
+async fn emit_exec_command_begin(ctx: ToolEventCtx<'_>, exec_input: ExecCommandInput<'_>) {
     ctx.session
         .send_event(
             ctx.turn,
             EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id: ctx.call_id.to_string(),
-                process_id: process_id.map(str::to_owned),
+                process_id: exec_input.process_id.map(str::to_owned),
                 turn_id: ctx.turn.sub_id.clone(),
                 started_at_ms: now_unix_timestamp_ms(),
-                command: command.to_vec(),
-                cwd: cwd.clone(),
-                parsed_cmd: parsed_cmd.to_vec(),
-                source,
-                interaction_input,
+                command: exec_input.command.to_vec(),
+                cwd: exec_input.cwd.clone(),
+                path_convention: exec_input.path_convention,
+                parsed_cmd: exec_input.parsed_cmd.to_vec(),
+                source: exec_input.source,
+                interaction_input: exec_input.interaction_input.map(str::to_owned),
             }),
         )
         .await;
@@ -122,7 +117,8 @@ pub(crate) async fn emit_exec_command_begin(
 pub(crate) enum ToolEmitter {
     Shell {
         command: Vec<String>,
-        cwd: AbsolutePathBuf,
+        cwd: PathUri,
+        path_convention: PathConvention,
         source: ExecCommandSource,
         parsed_cmd: Vec<ParsedCommand>,
     },
@@ -133,7 +129,8 @@ pub(crate) enum ToolEmitter {
     },
     UnifiedExec {
         command: Vec<String>,
-        cwd: AbsolutePathBuf,
+        cwd: PathUri,
+        path_convention: PathConvention,
         source: ExecCommandSource,
         parsed_cmd: Vec<ParsedCommand>,
         process_id: Option<String>,
@@ -145,7 +142,8 @@ impl ToolEmitter {
         let parsed_cmd = parse_command(&command);
         Self::Shell {
             command,
-            cwd,
+            cwd: PathUri::from_abs_path(&cwd),
+            path_convention: PathConvention::native(),
             source,
             parsed_cmd,
         }
@@ -165,7 +163,8 @@ impl ToolEmitter {
 
     pub fn unified_exec(
         command: &[String],
-        cwd: AbsolutePathBuf,
+        cwd: PathUri,
+        path_convention: PathConvention,
         source: ExecCommandSource,
         process_id: Option<String>,
     ) -> Self {
@@ -173,6 +172,7 @@ impl ToolEmitter {
         Self::UnifiedExec {
             command: command.to_vec(),
             cwd,
+            path_convention,
             source,
             parsed_cmd,
             process_id,
@@ -185,6 +185,7 @@ impl ToolEmitter {
                 Self::Shell {
                     command,
                     cwd,
+                    path_convention,
                     source,
                     parsed_cmd,
                     ..
@@ -194,7 +195,12 @@ impl ToolEmitter {
                 emit_exec_stage(
                     ctx,
                     ExecCommandInput::new(
-                        command, cwd, parsed_cmd, *source, /*interaction_input*/ None,
+                        command,
+                        cwd,
+                        *path_convention,
+                        parsed_cmd,
+                        *source,
+                        /*interaction_input*/ None,
                         /*process_id*/ None,
                     ),
                     stage,
@@ -314,6 +320,7 @@ impl ToolEmitter {
                 Self::UnifiedExec {
                     command,
                     cwd,
+                    path_convention,
                     source,
                     parsed_cmd,
                     process_id,
@@ -325,6 +332,7 @@ impl ToolEmitter {
                     ExecCommandInput::new(
                         command,
                         cwd,
+                        *path_convention,
                         parsed_cmd,
                         *source,
                         /*interaction_input*/ None,
@@ -432,7 +440,8 @@ impl ToolEmitter {
 
 struct ExecCommandInput<'a> {
     command: &'a [String],
-    cwd: &'a AbsolutePathBuf,
+    cwd: &'a PathUri,
+    path_convention: PathConvention,
     parsed_cmd: &'a [ParsedCommand],
     source: ExecCommandSource,
     interaction_input: Option<&'a str>,
@@ -442,7 +451,8 @@ struct ExecCommandInput<'a> {
 impl<'a> ExecCommandInput<'a> {
     fn new(
         command: &'a [String],
-        cwd: &'a AbsolutePathBuf,
+        cwd: &'a PathUri,
+        path_convention: PathConvention,
         parsed_cmd: &'a [ParsedCommand],
         source: ExecCommandSource,
         interaction_input: Option<&'a str>,
@@ -451,6 +461,7 @@ impl<'a> ExecCommandInput<'a> {
         Self {
             command,
             cwd,
+            path_convention,
             parsed_cmd,
             source,
             interaction_input,
@@ -476,16 +487,7 @@ async fn emit_exec_stage(
 ) {
     match stage {
         ToolEventStage::Begin => {
-            emit_exec_command_begin(
-                ctx,
-                exec_input.command,
-                exec_input.cwd,
-                exec_input.parsed_cmd,
-                exec_input.source,
-                exec_input.interaction_input.map(str::to_owned),
-                exec_input.process_id,
-            )
-            .await;
+            emit_exec_command_begin(ctx, exec_input).await;
         }
         ToolEventStage::Success { output, .. }
         | ToolEventStage::Failure(ToolEventFailure::Output(output)) => {
@@ -548,6 +550,7 @@ async fn emit_exec_end(
                 completed_at_ms: now_unix_timestamp_ms(),
                 command: exec_input.command.to_vec(),
                 cwd: exec_input.cwd.clone(),
+                path_convention: exec_input.path_convention,
                 parsed_cmd: exec_input.parsed_cmd.to_vec(),
                 source: exec_input.source,
                 interaction_input: exec_input.interaction_input.map(str::to_owned),

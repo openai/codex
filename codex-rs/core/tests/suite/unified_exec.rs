@@ -17,6 +17,7 @@ use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExecCommandStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use core_test_support::TempDirExt;
 use core_test_support::assert_regex_match;
@@ -430,7 +431,10 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
 
     assert_command(&begin_event.command, "-lc", "/bin/echo hello unified exec");
 
-    assert_eq!(begin_event.cwd.as_path(), cwd.as_path());
+    assert_eq!(
+        (begin_event.cwd, begin_event.path_convention),
+        (PathUri::from_path(&cwd)?, PathConvention::native()),
+    );
 
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -495,8 +499,8 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
     .await;
 
     assert_eq!(
-        begin_event.cwd.as_path(),
-        workdir.as_path(),
+        (begin_event.cwd, begin_event.path_convention),
+        (PathUri::from_path(&workdir)?, PathConvention::native(),),
         "exec_command cwd should resolve relative workdir against turn cwd",
     );
 
@@ -558,8 +562,8 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
     .await;
 
     assert_eq!(
-        begin_event.cwd.as_path(),
-        workdir.as_path(),
+        (begin_event.cwd, begin_event.path_convention),
+        (PathUri::from_path(&workdir)?, PathConvention::native(),),
         "exec_command cwd should reflect the requested workdir override"
     );
 

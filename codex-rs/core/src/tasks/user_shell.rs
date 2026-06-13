@@ -6,6 +6,8 @@ use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use uuid::Uuid;
@@ -150,6 +152,7 @@ pub(crate) async fn execute_user_shell_command(
     let raw_command = command;
     #[allow(deprecated)]
     let cwd = turn_context.cwd.clone();
+    let cwd_uri = PathUri::from_abs_path(&cwd);
 
     let parsed_cmd = parse_command(&display_command);
     session
@@ -161,7 +164,8 @@ pub(crate) async fn execute_user_shell_command(
                 turn_id: turn_context.sub_id.clone(),
                 started_at_ms: now_unix_timestamp_ms(),
                 command: display_command.clone(),
-                cwd: cwd.clone(),
+                cwd: cwd_uri.clone(),
+                path_convention: PathConvention::native(),
                 parsed_cmd: parsed_cmd.clone(),
                 source: ExecCommandSource::UserShell,
                 interaction_input: None,
@@ -235,7 +239,8 @@ pub(crate) async fn execute_user_shell_command(
                         turn_id: turn_context.sub_id.clone(),
                         completed_at_ms: now_unix_timestamp_ms(),
                         command: display_command.clone(),
-                        cwd: cwd.clone(),
+                        cwd: cwd_uri.clone(),
+                        path_convention: PathConvention::native(),
                         parsed_cmd: parsed_cmd.clone(),
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
@@ -260,7 +265,8 @@ pub(crate) async fn execute_user_shell_command(
                         turn_id: turn_context.sub_id.clone(),
                         completed_at_ms: now_unix_timestamp_ms(),
                         command: display_command.clone(),
-                        cwd: cwd.clone(),
+                        cwd: cwd_uri.clone(),
+                        path_convention: PathConvention::native(),
                         parsed_cmd: parsed_cmd.clone(),
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
@@ -305,7 +311,8 @@ pub(crate) async fn execute_user_shell_command(
                         turn_id: turn_context.sub_id.clone(),
                         completed_at_ms: now_unix_timestamp_ms(),
                         command: display_command,
-                        cwd,
+                        cwd: cwd_uri,
+                        path_convention: PathConvention::native(),
                         parsed_cmd,
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
