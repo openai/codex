@@ -26,6 +26,8 @@ use codex_thread_store::UpdateThreadMetadataParams;
 use futures::StreamExt;
 use tokio::sync::Semaphore;
 
+use crate::config::external_agent_config::ExternalAgentConfigImportItemResult;
+use crate::config::external_agent_config::record_import_error;
 use crate::config_manager::ConfigManager;
 
 const SESSION_IMPORT_CONCURRENCY: usize = 5;
@@ -58,12 +60,22 @@ impl ExternalAgentSessionImporter {
         }
     }
 
-    pub(super) async fn import_sessions(&self, sessions: Vec<ExternalAgentSessionMigration>) {
+    pub(super) async fn import_sessions(
+        &self,
+        sessions: Vec<ExternalAgentSessionMigration>,
+        mut item_result: ExternalAgentConfigImportItemResult,
+    ) -> ExternalAgentConfigImportItemResult {
         if sessions.is_empty() {
-            return;
+            return item_result;
         }
         let Ok(_permit) = self.permits.acquire().await else {
-            return;
+            record_import_error(
+                &mut item_result,
+                "session_permit",
+                "external agent session import permit could not be acquired",
+                None,
+            );
+            return item_result;
         };
         let import_results = futures::stream::iter(sessions)
             .map(|session| {
@@ -76,23 +88,30 @@ impl ExternalAgentSessionImporter {
         let mut completed_imports = Vec::new();
         while let Some(result) = import_results.next().await {
             match result {
-                Ok(Some(completed_import)) => completed_imports.push(completed_import),
+                Ok(Some(completed_import)) => {
+                    item_result.record_successes(1);
+                    completed_imports.push(completed_import);
+                }
                 Ok(None) => {}
                 Err(failure) => {
-                    tracing::warn!(
-                        error = %failure.message,
-                        path = %failure.source_path.display(),
-                        "external agent session import failed"
+                    record_import_error(
+                        &mut item_result,
+                        failure.stage,
+                        failure.message.clone(),
+                        Some(failure.source_path.display().to_string()),
                     );
                 }
             }
         }
         if let Err(err) = record_completed_session_imports(&self.codex_home, completed_imports) {
-            tracing::warn!(
-                error = %err,
-                "external agent session import ledger update failed"
+            record_import_error(
+                &mut item_result,
+                "session_ledger_update",
+                err.to_string(),
+                None,
             );
         }
+        item_result
     }
 
     async fn import_requested_session(
@@ -106,6 +125,7 @@ impl ExternalAgentSessionImporter {
                 .map_err(|message| SessionImportFailure {
                     source_path: source_path.clone(),
                     message,
+                    stage: "session_prepare",
                 })?
         else {
             return Ok(None);
@@ -116,6 +136,7 @@ impl ExternalAgentSessionImporter {
                 .map_err(|message| SessionImportFailure {
                     source_path: pending_import.source_path.clone(),
                     message,
+                    stage: "session_persist",
                 })?;
         Ok(Some(CompletedExternalAgentSessionImport {
             source_path: pending_import.source_path,
@@ -258,4 +279,5 @@ impl ExternalAgentSessionImporter {
 struct SessionImportFailure {
     source_path: PathBuf,
     message: String,
+    stage: &'static str,
 }

@@ -4814,6 +4814,26 @@
           "properties": {
             "method": {
               "enum": [
+                "externalAgentConfig/import/progress"
+              ],
+              "title": "ExternalAgentConfig/import/progressNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportProgressNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "ExternalAgentConfig/import/progressNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "externalAgentConfig/import/completed"
               ],
               "title": "ExternalAgentConfig/import/completedNotificationMethod",
@@ -8862,7 +8882,62 @@
       },
       "ExternalAgentConfigImportCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "importId": {
+            "type": "string"
+          },
+          "itemResults": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportTypeResult"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "importId",
+          "itemResults"
+        ],
         "title": "ExternalAgentConfigImportCompletedNotification",
+        "type": "object"
+      },
+      "ExternalAgentConfigImportItemResult": {
+        "properties": {
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "errorCount": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "itemType": {
+            "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItemType"
+          },
+          "rawErrors": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportRawError"
+            },
+            "type": "array"
+          },
+          "successCount": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "description",
+          "errorCount",
+          "itemType",
+          "rawErrors",
+          "successCount"
+        ],
         "type": "object"
       },
       "ExternalAgentConfigImportParams": {
@@ -8881,9 +8956,95 @@
         "title": "ExternalAgentConfigImportParams",
         "type": "object"
       },
+      "ExternalAgentConfigImportProgressNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "importId": {
+            "type": "string"
+          },
+          "itemResult": {
+            "$ref": "#/definitions/v2/ExternalAgentConfigImportItemResult"
+          }
+        },
+        "required": [
+          "importId",
+          "itemResult"
+        ],
+        "title": "ExternalAgentConfigImportProgressNotification",
+        "type": "object"
+      },
+      "ExternalAgentConfigImportRawError": {
+        "properties": {
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failureStage": {
+            "type": "string"
+          },
+          "itemType": {
+            "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItemType"
+          },
+          "message": {
+            "type": "string"
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "failureStage",
+          "itemType",
+          "message"
+        ],
+        "type": "object"
+      },
       "ExternalAgentConfigImportResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "importId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "importId"
+        ],
         "title": "ExternalAgentConfigImportResponse",
+        "type": "object"
+      },
+      "ExternalAgentConfigImportTypeResult": {
+        "properties": {
+          "errorCount": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "itemType": {
+            "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItemType"
+          },
+          "rawErrors": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportRawError"
+            },
+            "type": "array"
+          },
+          "successCount": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "errorCount",
+          "itemType",
+          "rawErrors",
+          "successCount"
+        ],
         "type": "object"
       },
       "ExternalAgentConfigMigrationItem": {

@@ -2148,7 +2148,29 @@ mod tests {
         assert!(event_requires_delivery(
             &InProcessServerEvent::ServerNotification(
                 codex_app_server_protocol::ServerNotification::ExternalAgentConfigImportCompleted(
-                    codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification {},
+                    codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification {
+                        import_id: "import".to_string(),
+                        item_results: Vec::new(),
+                    },
+                )
+            )
+        ));
+        assert!(!event_requires_delivery(
+            &InProcessServerEvent::ServerNotification(
+                codex_app_server_protocol::ServerNotification::ExternalAgentConfigImportProgress(
+                    codex_app_server_protocol::ExternalAgentConfigImportProgressNotification {
+                        import_id: "import".to_string(),
+                        item_result:
+                            codex_app_server_protocol::ExternalAgentConfigImportItemResult {
+                                item_type:
+                                    codex_app_server_protocol::ExternalAgentConfigMigrationItemType::Config,
+                                description: "Import config".to_string(),
+                                cwd: None,
+                                success_count: 1,
+                                error_count: 0,
+                                raw_errors: Vec::new(),
+                            },
+                    },
                 )
             )
         ));

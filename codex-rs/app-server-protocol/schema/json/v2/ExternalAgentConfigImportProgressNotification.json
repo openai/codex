@@ -1,6 +1,46 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "ExternalAgentConfigImportItemResult": {
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "errorCount": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "itemType": {
+          "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
+        },
+        "rawErrors": {
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportRawError"
+          },
+          "type": "array"
+        },
+        "successCount": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "description",
+        "errorCount",
+        "itemType",
+        "rawErrors",
+        "successCount"
+      ],
+      "type": "object"
+    },
     "ExternalAgentConfigImportRawError": {
       "properties": {
         "cwd": {
@@ -32,36 +72,6 @@
       ],
       "type": "object"
     },
-    "ExternalAgentConfigImportTypeResult": {
-      "properties": {
-        "errorCount": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "itemType": {
-          "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
-        },
-        "rawErrors": {
-          "items": {
-            "$ref": "#/definitions/ExternalAgentConfigImportRawError"
-          },
-          "type": "array"
-        },
-        "successCount": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "errorCount",
-        "itemType",
-        "rawErrors",
-        "successCount"
-      ],
-      "type": "object"
-    },
     "ExternalAgentConfigMigrationItemType": {
       "enum": [
         "AGENTS_MD",
@@ -81,17 +91,14 @@
     "importId": {
       "type": "string"
     },
-    "itemResults": {
-      "items": {
-        "$ref": "#/definitions/ExternalAgentConfigImportTypeResult"
-      },
-      "type": "array"
+    "itemResult": {
+      "$ref": "#/definitions/ExternalAgentConfigImportItemResult"
     }
   },
   "required": [
     "importId",
-    "itemResults"
+    "itemResult"
   ],
-  "title": "ExternalAgentConfigImportCompletedNotification",
+  "title": "ExternalAgentConfigImportProgressNotification",
   "type": "object"
 }
