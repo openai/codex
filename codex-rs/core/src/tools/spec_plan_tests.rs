@@ -573,8 +573,8 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
             .environments
             .primary()
             .expect("primary environment")
-            .cwd()
-            .clone();
+            .compatible_cwd()
+            .expect("host-compatible test cwd");
         turn.environments.turn_environments.push(
             crate::session::turn_context::TurnEnvironment::new(
                 "remote".to_string(),
@@ -585,7 +585,7 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
                     .expect("remote test environment"),
                 ),
                 remote_cwd,
-                /*shell*/ None,
+                crate::shell::default_user_shell(),
             ),
         );
     })

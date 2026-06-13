@@ -90,11 +90,12 @@ async fn windows_exec_server_records_host_shell_mismatch() -> Result<()> {
             let test = builder.build(&server).await?;
             let (sandbox_policy, permission_profile) =
                 turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
+            let selected_cwd = PathUri::parse("file:///C:/workspace")?;
             let environments = TurnEnvironmentSelections::new(
                 test.config.cwd.clone(),
                 vec![TurnEnvironmentSelection {
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                    cwd: PathUri::from_abs_path(&test.config.cwd),
+                    cwd: selected_cwd.clone(),
                 }],
             );
 

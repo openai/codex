@@ -359,7 +359,11 @@ impl ApplyPatchHandler {
                 "apply_patch is unavailable in this session".to_string(),
             ));
         };
-        let cwd = turn_environment.cwd().clone();
+        let cwd = turn_environment.compatible_cwd().ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "apply_patch is not supported for a foreign-path environment".to_string(),
+            )
+        })?;
         let fs = turn_environment.environment.get_filesystem();
         let sandbox = turn.file_system_sandbox_context(
             /*additional_permissions*/ None,

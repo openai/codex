@@ -266,7 +266,7 @@ fn resolved_local_environments<const N: usize>(
                             .expect("local environment"),
                     ),
                     cwd,
-                    /*shell*/ None,
+                    crate::shell::default_user_shell(),
                 )
             })
             .collect(),

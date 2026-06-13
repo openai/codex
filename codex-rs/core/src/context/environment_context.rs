@@ -7,9 +7,11 @@ use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::protocol::TurnContextEnvironment;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::ApiPathString;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -28,7 +30,7 @@ pub(crate) struct EnvironmentContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EnvironmentContextEnvironment {
     pub(crate) id: String,
-    pub(crate) cwd: AbsolutePathBuf,
+    pub(crate) cwd: ApiPathString,
     pub(crate) shell: String,
 }
 
@@ -36,24 +38,29 @@ impl EnvironmentContextEnvironment {
     fn legacy(cwd: AbsolutePathBuf, shell: String) -> Self {
         Self {
             id: String::new(),
-            cwd,
+            cwd: ApiPathString::new(cwd.to_string_lossy()),
             shell,
         }
     }
 
-    fn from_turn_environments(environments: &[TurnEnvironment], shell: &Shell) -> Vec<Self> {
+    fn from_turn_environments(environments: &[TurnEnvironment]) -> Vec<Self> {
         environments
             .iter()
             .map(|environment| Self {
                 id: environment.environment_id.clone(),
-                cwd: environment.cwd().clone(),
-                shell: environment
-                    .shell
-                    .as_ref()
-                    .map(|shell| shell.name().to_string())
-                    .unwrap_or_else(|| shell.name().to_string()),
+                cwd: environment.native_cwd(),
+                shell: environment.shell.name().to_string(),
             })
             .collect()
+    }
+
+    fn from_turn_context_environment(environment: &TurnContextEnvironment) -> Option<Self> {
+        Some(Self {
+            id: environment.environment_id.clone(),
+            cwd: ApiPathString::from_path_uri(&environment.cwd, environment.path_convention)
+                .ok()?,
+            shell: environment.shell.clone(),
+        })
     }
 }
 
@@ -382,21 +389,24 @@ impl EnvironmentContext {
     ) -> Self {
         let before_network = Self::network_from_turn_context_item(before);
         let before_filesystem = Self::filesystem_from_turn_context_item(before);
-        let environments = match &after.environments {
-            EnvironmentContextEnvironments::Single(environment) => {
-                if before.cwd.as_path() != environment.cwd.as_path() {
-                    EnvironmentContextEnvironments::Single(EnvironmentContextEnvironment::legacy(
-                        environment.cwd.clone(),
-                        environment.shell.clone(),
-                    ))
-                } else {
-                    EnvironmentContextEnvironments::None
-                }
-            }
-            EnvironmentContextEnvironments::Multiple(environments) => {
-                EnvironmentContextEnvironments::Multiple(environments.clone())
-            }
-            EnvironmentContextEnvironments::None => EnvironmentContextEnvironments::None,
+        let fallback_shell = match &after.environments {
+            EnvironmentContextEnvironments::Single(environment) => environment.shell.clone(),
+            EnvironmentContextEnvironments::Multiple(environments) => environments
+                .first()
+                .map(|environment| environment.shell.clone())
+                .unwrap_or_default(),
+            EnvironmentContextEnvironments::None => String::new(),
+        };
+        let before_environments = Self::from_turn_context_item(before, fallback_shell).environments;
+        let environments_match = if before.environments.is_some() {
+            before_environments == after.environments
+        } else {
+            before_environments.equals_except_shell(&after.environments)
+        };
+        let environments = if environments_match {
+            EnvironmentContextEnvironments::None
+        } else {
+            after.environments.clone()
         };
         let network = if before_network != after.network {
             after.network.clone()
@@ -418,11 +428,10 @@ impl EnvironmentContext {
         )
     }
 
-    pub(crate) fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
+    pub(crate) fn from_turn_context(turn_context: &TurnContext, _shell: &Shell) -> Self {
         let mut context = Self::new(
             EnvironmentContextEnvironment::from_turn_environments(
                 &turn_context.environments.turn_environments,
-                shell,
             ),
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
@@ -440,14 +449,27 @@ impl EnvironmentContext {
         turn_context_item: &TurnContextItem,
         shell: String,
     ) -> Self {
-        let cwd = match AbsolutePathBuf::try_from(turn_context_item.cwd.clone()) {
-            Ok(cwd) => cwd,
-            Err(_) => AbsolutePathBuf::resolve_path_against_base(&turn_context_item.cwd, "/"),
+        let environments = match turn_context_item.environments.as_ref() {
+            Some(environments) => EnvironmentContextEnvironments::from_vec(
+                environments
+                    .iter()
+                    .filter_map(EnvironmentContextEnvironment::from_turn_context_environment)
+                    .collect(),
+            ),
+            None => {
+                let cwd = match AbsolutePathBuf::try_from(turn_context_item.cwd.clone()) {
+                    Ok(cwd) => cwd,
+                    Err(_) => {
+                        AbsolutePathBuf::resolve_path_against_base(&turn_context_item.cwd, "/")
+                    }
+                };
+                EnvironmentContextEnvironments::from_vec(vec![
+                    EnvironmentContextEnvironment::legacy(cwd, shell),
+                ])
+            }
         };
         Self::new_with_environments(
-            EnvironmentContextEnvironments::from_vec(vec![EnvironmentContextEnvironment::legacy(
-                cwd, shell,
-            )]),
+            environments,
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
             Self::network_from_turn_context_item(turn_context_item),
@@ -543,20 +565,14 @@ impl ContextualUserFragment for EnvironmentContext {
         let mut lines = Vec::new();
         match &self.environments {
             EnvironmentContextEnvironments::Single(environment) => {
-                lines.push(format!(
-                    "  <cwd>{}</cwd>",
-                    environment.cwd.to_string_lossy()
-                ));
+                lines.push(format!("  <cwd>{}</cwd>", environment.cwd));
                 lines.push(format!("  <shell>{}</shell>", environment.shell));
             }
             EnvironmentContextEnvironments::Multiple(environments) => {
                 lines.push("  <environments>".to_string());
                 for environment in environments {
                     lines.push(format!("    <environment id=\"{}\">", environment.id));
-                    lines.push(format!(
-                        "      <cwd>{}</cwd>",
-                        environment.cwd.to_string_lossy()
-                    ));
+                    lines.push(format!("      <cwd>{}</cwd>", environment.cwd));
                     lines.push(format!("      <shell>{}</shell>", environment.shell));
                     lines.push("    </environment>".to_string());
                 }

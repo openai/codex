@@ -143,7 +143,11 @@ impl ViewImageHandler {
                 "view_image is unavailable in this session".to_string(),
             ));
         };
-        let cwd = turn_environment.cwd().clone();
+        let cwd = turn_environment.compatible_cwd().ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "view_image is not supported for a foreign-path environment".to_string(),
+            )
+        })?;
         let abs_path = cwd.join(path);
         let sandbox = turn.file_system_sandbox_context(
             /*additional_permissions*/ None,

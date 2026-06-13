@@ -299,7 +299,7 @@ pub async fn handle(
     Ok(FunctionToolOutput::from_text(content, Some(true)))
 }
 
-fn single_local_environment_cwd(turn: &TurnContext) -> Result<&AbsolutePathBuf, FunctionCallError> {
+fn single_local_environment_cwd(turn: &TurnContext) -> Result<AbsolutePathBuf, FunctionCallError> {
     let [turn_environment] = turn.environments.turn_environments.as_slice() else {
         return Err(FunctionCallError::RespondToModel(
             "spawn_agents_on_csv requires exactly one local environment".to_string(),
@@ -312,5 +312,9 @@ fn single_local_environment_cwd(turn: &TurnContext) -> Result<&AbsolutePathBuf, 
         ));
     }
 
-    Ok(turn_environment.cwd())
+    turn_environment.compatible_cwd().ok_or_else(|| {
+        FunctionCallError::RespondToModel(
+            "spawn_agents_on_csv requires a host-compatible cwd".to_string(),
+        )
+    })
 }

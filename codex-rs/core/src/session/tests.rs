@@ -131,10 +131,12 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnContextEnvironment;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rmcp_client::ElicitationAction;
+use codex_utils_path_uri::PathConvention;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::context_snapshot;
@@ -2656,6 +2658,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         turn_id: Some(turn_context.sub_id.clone()),
         #[allow(deprecated)]
         cwd: turn_context.cwd.to_path_buf(),
+        environments: None,
         workspace_roots: None,
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
@@ -4039,7 +4042,7 @@ fn turn_environments_for_tests(
             codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
             Arc::clone(environment),
             cwd.clone(),
-            /*shell*/ None,
+            crate::shell::default_user_shell(),
         )],
     }
 }
@@ -6218,7 +6221,10 @@ async fn default_turn_keeps_legacy_fallback_cwd_separate_from_stored_thread_envi
         &turn_environment.environment,
         &turn_environments.turn_environments[0].environment
     ));
-    assert_eq!(turn_environment.cwd(), &selected_cwd);
+    assert_eq!(
+        turn_environment.cwd(),
+        &PathUri::from_abs_path(&selected_cwd)
+    );
     #[allow(deprecated)]
     let turn_cwd = turn_context.cwd.clone();
     assert_eq!(turn_cwd, session_cwd);
@@ -6259,7 +6265,7 @@ async fn primary_environment_uses_first_turn_environment() {
             "second".to_string(),
             Arc::clone(&first_environment.environment),
             second_cwd.clone(),
-            /*shell*/ None,
+            crate::shell::default_user_shell(),
         ));
 
     assert_eq!(
@@ -6278,12 +6284,12 @@ async fn primary_environment_uses_first_turn_environment() {
             .find(|environment| environment.environment_id == "second")
             .expect("second environment")
             .cwd(),
-        &second_cwd
+        &PathUri::from_abs_path(&second_cwd)
     );
     assert_eq!(turn_context.environments.turn_environments.len(), 2);
     assert_eq!(
         turn_context.environments.turn_environments[1].cwd(),
-        &second_cwd
+        &PathUri::from_abs_path(&second_cwd)
     );
 }
 
@@ -7230,39 +7236,25 @@ async fn build_settings_update_items_emits_environment_item_for_network_changes(
 }
 
 #[tokio::test]
-async fn environment_context_uses_session_shell_when_environment_shell_is_absent() {
+async fn environment_context_uses_selected_environment_shell() {
     let (mut session, mut turn_context) = make_session_and_context().await;
     session.services.user_shell = Arc::new(crate::shell::Shell {
         shell_type: crate::shell::ShellType::PowerShell,
         shell_path: PathBuf::from("powershell"),
         shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     });
-    for environment in &mut turn_context.environments.turn_environments {
-        environment.shell = None;
-    }
-
-    let session_shell = session.user_shell();
-    let environment_context = crate::context::EnvironmentContext::from_turn_context(
-        &turn_context,
-        session_shell.as_ref(),
-    )
-    .render();
-    assert!(
-        environment_context.contains("<shell>powershell</shell>"),
-        "{environment_context}"
-    );
-
     let primary_environment = turn_context
         .environments
         .turn_environments
         .first_mut()
         .expect("primary environment");
-    primary_environment.shell = Some(crate::shell::Shell {
+    primary_environment.shell = crate::shell::Shell {
         shell_type: crate::shell::ShellType::Cmd,
         shell_path: PathBuf::from("cmd"),
         shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
-    });
+    };
 
+    let session_shell = session.user_shell();
     let environment_context = crate::context::EnvironmentContext::from_turn_context(
         &turn_context,
         session_shell.as_ref(),
@@ -7272,6 +7264,75 @@ async fn environment_context_uses_session_shell_when_environment_shell_is_absent
         environment_context.contains("<shell>cmd</shell>"),
         "{environment_context}"
     );
+    assert!(!environment_context.contains("<shell>powershell</shell>"));
+}
+
+#[tokio::test]
+async fn windows_environment_context_persists_native_identity_without_redundant_update() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let current_environment = turn_context.environments.turn_environments[0].clone();
+    let windows_cwd = PathUri::parse("file:///C:/workspace").expect("Windows cwd URI");
+    let windows_shell = crate::shell::Shell {
+        shell_type: crate::shell::ShellType::PowerShell,
+        shell_path: PathBuf::from(r"C:\Program Files\PowerShell\7\pwsh.exe"),
+        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+    };
+    turn_context.environments.turn_environments[0] = TurnEnvironment::new_with_uri(
+        "windows".to_string(),
+        current_environment.environment,
+        windows_cwd.clone(),
+        PathConvention::Windows,
+        windows_shell,
+    )
+    .expect("Windows environment");
+
+    let rendered = crate::context::EnvironmentContext::from_turn_context(
+        &turn_context,
+        session.user_shell().as_ref(),
+    )
+    .render();
+    assert!(rendered.contains(r"<cwd>C:\workspace</cwd>"), "{rendered}");
+    assert!(rendered.contains("<shell>powershell</shell>"), "{rendered}");
+    assert!(!rendered.contains("/C:/workspace"), "{rendered}");
+
+    let persisted = turn_context.to_turn_context_item();
+    assert_eq!(
+        persisted.environments,
+        Some(vec![TurnContextEnvironment {
+            environment_id: "windows".to_string(),
+            cwd: windows_cwd,
+            path_convention: PathConvention::Windows,
+            shell: "powershell".to_string(),
+        }])
+    );
+    assert_eq!(
+        crate::context::EnvironmentContext::from_turn_context_item(&persisted, "bash".to_string(),)
+            .render(),
+        rendered
+    );
+
+    let update_items = session
+        .build_settings_update_items(Some(&persisted), &turn_context)
+        .await;
+    assert!(
+        user_input_texts(&update_items)
+            .iter()
+            .all(|text| !text.contains("<environment_context>"))
+    );
+
+    turn_context.environments.turn_environments[0].shell = crate::shell::Shell {
+        shell_type: crate::shell::ShellType::Cmd,
+        shell_path: PathBuf::from("cmd.exe"),
+        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+    };
+    let changed_shell_items = session
+        .build_settings_update_items(Some(&persisted), &turn_context)
+        .await;
+    let changed_environment = user_input_texts(&changed_shell_items)
+        .into_iter()
+        .find(|text| text.contains("<environment_context>"))
+        .expect("changed executor shell should update model context");
+    assert!(changed_environment.contains("<shell>cmd</shell>"));
 }
 
 #[tokio::test]

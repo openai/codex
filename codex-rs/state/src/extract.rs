@@ -349,6 +349,7 @@ mod tests {
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 cwd: PathBuf::from("/parent/workspace"),
+                environments: None,
                 workspace_roots: None,
                 current_date: None,
                 timezone: None,
@@ -388,6 +389,7 @@ mod tests {
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 cwd: PathBuf::from("/workspace"),
+                environments: None,
                 workspace_roots: None,
                 current_date: None,
                 timezone: None,
@@ -424,6 +426,7 @@ mod tests {
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 cwd: PathBuf::from("/fallback/workspace"),
+                environments: None,
                 workspace_roots: None,
                 current_date: None,
                 timezone: None,
@@ -456,6 +459,7 @@ mod tests {
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 cwd: PathBuf::from("/fallback/workspace"),
+                environments: None,
                 workspace_roots: None,
                 current_date: None,
                 timezone: None,

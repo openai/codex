@@ -6,6 +6,9 @@ wine_rust_test(
     srcs = ["remote_env_windows_test.rs"],
     crate_name = "remote_env_windows_test",
     crate_root = "remote_env_windows_test.rs",
+    # Environment identity validation ends this fixture's host-shell-mismatch premise.
+    # A hermetic target-shell smoke test replaces it once remote shell routing lands.
+    target_compatible_with = ["@platforms//:incompatible"],
     windows_binaries = {
         "wine-windows-exec-server": "//codex-rs/exec-server/testing:windows-exec-server",
     },

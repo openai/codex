@@ -754,7 +754,7 @@ async fn run_review_on_session(
         .parent_turn
         .environments
         .primary()
-        .map(|environment| environment.cwd().clone())
+        .and_then(super::super::session::turn_context::TurnEnvironment::compatible_cwd)
         .unwrap_or_else(|| params.parent_turn.config.cwd.clone());
 
     let submit_result = run_before_review_deadline(

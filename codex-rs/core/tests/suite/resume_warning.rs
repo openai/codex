@@ -28,6 +28,7 @@ fn resume_history(
     let turn_ctx = TurnContextItem {
         turn_id: Some(turn_id.clone()),
         cwd: config.cwd.to_path_buf(),
+        environments: None,
         workspace_roots: None,
         current_date: None,
         timezone: None,

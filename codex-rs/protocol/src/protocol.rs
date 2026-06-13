@@ -52,6 +52,7 @@ use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -2936,6 +2937,14 @@ pub struct TurnContextNetworkItem {
     pub denied_domains: Vec<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+pub struct TurnContextEnvironment {
+    pub environment_id: String,
+    pub cwd: PathUri,
+    pub path_convention: PathConvention,
+    pub shell: String,
+}
+
 /// Persist once per real user turn after computing that turn's model-visible
 /// context updates, and again after mid-turn compaction when replacement
 /// history re-establishes full context, so resume/fork replay can recover the
@@ -2945,6 +2954,10 @@ pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
     pub cwd: PathBuf,
+    /// Selected executor environments for this turn. `None` identifies legacy
+    /// rollout items that only persisted the app-host `cwd`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environments: Option<Vec<TurnContextEnvironment>>,
     /// Effective workspace roots used to materialize symbolic
     /// `:workspace_roots` filesystem permissions in `permission_profile`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5183,6 +5196,7 @@ mod tests {
             "summary": "auto",
         }))?;
 
+        assert_eq!(item.environments, None);
         assert_eq!(item.network, None);
         assert_eq!(item.file_system_sandbox_policy, None);
         assert_eq!(item.comp_hash, None);
@@ -5227,6 +5241,7 @@ mod tests {
         let item = TurnContextItem {
             turn_id: None,
             cwd: test_path_buf("/tmp"),
+            environments: None,
             workspace_roots: None,
             current_date: None,
             timezone: None,

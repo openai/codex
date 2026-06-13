@@ -52,12 +52,15 @@ pub(crate) async fn load_project_instructions(
 ) -> Option<LoadedAgentsMd> {
     let mut loaded = LoadedAgentsMd::from_user_instructions(user_instructions);
     for turn_environment in &environments.turn_environments {
+        let Some(cwd) = turn_environment.compatible_cwd() else {
+            continue;
+        };
         let filesystem = turn_environment.environment.get_filesystem();
         match read_agents_md(
             config,
             filesystem.as_ref(),
             &turn_environment.environment_id,
-            turn_environment.cwd(),
+            &cwd,
         )
         .await
         {

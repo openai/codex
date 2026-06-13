@@ -114,10 +114,13 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
         ConversationHistory::new(invocation.session.clone_history().await.into_raw_items());
     let mut environments = Vec::with_capacity(invocation.turn.environments.turn_environments.len());
     for environment in &invocation.turn.environments.turn_environments {
+        let Some(cwd) = environment.compatible_cwd() else {
+            continue;
+        };
         let additional_permissions = apply_granted_turn_permissions(
             invocation.session.as_ref(),
             &environment.environment_id,
-            environment.cwd().as_path(),
+            cwd.as_path(),
             SandboxPermissions::UseDefault,
             /*additional_permissions*/ None,
         )
@@ -128,7 +131,7 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
             .file_system_sandbox_context(additional_permissions, environment.cwd_uri());
         environments.push(ToolEnvironment {
             environment_id: environment.environment_id.clone(),
-            cwd: environment.cwd().clone(),
+            cwd,
             file_system: environment.environment.get_filesystem(),
             file_system_sandbox_context,
         });

@@ -54,12 +54,14 @@ impl ResolvedTurnEnvironments {
             .map(|environment| environment.environment.get_filesystem())
     }
 
-    pub(crate) fn single_local_environment_cwd(&self) -> Option<&AbsolutePathBuf> {
+    pub(crate) fn single_local_environment_cwd(&self) -> Option<AbsolutePathBuf> {
         let [environment] = self.turn_environments.as_slice() else {
             return None;
         };
 
-        (!environment.environment.is_remote()).then_some(environment.cwd())
+        (!environment.environment.is_remote())
+            .then(|| environment.compatible_cwd())
+            .flatten()
     }
 }
 
@@ -87,6 +89,7 @@ pub(crate) async fn resolve_environment_selections(
                 "failed to get info for environment `{environment_id}`: {err}"
             ))
         })?;
+        let path_convention = info.path_convention;
         let shell = Shell::from_environment_shell_info(info.shell).map_err(|err| {
             CodexErr::InvalidRequest(format!(
                 "failed to resolve shell for environment `{environment_id}`: {err}"
@@ -96,7 +99,8 @@ pub(crate) async fn resolve_environment_selections(
             environment_id,
             environment,
             selected_environment.cwd.clone(),
-            Some(shell),
+            path_convention,
+            shell,
         )?);
     }
     Ok(ResolvedTurnEnvironments { turn_environments })
@@ -233,18 +237,16 @@ url = "ws://127.0.0.1:8765"
         );
         assert_eq!(
             resolved.primary().expect("primary environment").shell,
-            Some(
-                Shell::from_environment_shell_info(
-                    manager
-                        .get_environment("local")
-                        .expect("local environment")
-                        .info()
-                        .await
-                        .expect("local environment info")
-                        .shell
-                )
-                .expect("resolved shell")
+            Shell::from_environment_shell_info(
+                manager
+                    .get_environment("local")
+                    .expect("local environment")
+                    .info()
+                    .await
+                    .expect("local environment info")
+                    .shell
             )
+            .expect("resolved shell")
         );
     }
 
@@ -270,7 +272,7 @@ url = "ws://127.0.0.1:8765"
                 REMOTE_ENVIRONMENT_ID.to_string(),
                 remote_environment.clone(),
                 cwd.clone(),
-                /*shell*/ None,
+                crate::shell::default_user_shell(),
             )],
         };
         let multiple = ResolvedTurnEnvironments {
@@ -280,12 +282,12 @@ url = "ws://127.0.0.1:8765"
                     REMOTE_ENVIRONMENT_ID.to_string(),
                     remote_environment,
                     cwd.clone(),
-                    /*shell*/ None,
+                    crate::shell::default_user_shell(),
                 ),
             ],
         };
 
-        assert_eq!(local.single_local_environment_cwd(), Some(&cwd));
+        assert_eq!(local.single_local_environment_cwd(), Some(cwd.clone()));
         assert_eq!(remote.single_local_environment_cwd(), None);
         assert_eq!(multiple.single_local_environment_cwd(), None);
     }

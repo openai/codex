@@ -101,6 +101,31 @@ fn should_use_test_thread_manager_behavior() -> bool {
     FORCE_TEST_THREAD_MANAGER_BEHAVIOR.load(Ordering::Relaxed)
 }
 
+fn environment_selections_from_history(
+    history: &InitialHistory,
+) -> Option<Vec<TurnEnvironmentSelection>> {
+    let items = history.get_rollout_items();
+    let context = items.iter().rev().find_map(|item| match item {
+        RolloutItem::TurnContext(context) => Some(context),
+        RolloutItem::SessionMeta(_)
+        | RolloutItem::ResponseItem(_)
+        | RolloutItem::InterAgentCommunication(_)
+        | RolloutItem::Compacted(_)
+        | RolloutItem::EventMsg(_) => None,
+    })?;
+    Some(
+        context
+            .environments
+            .as_ref()?
+            .iter()
+            .map(|environment| TurnEnvironmentSelection {
+                environment_id: environment.environment_id.clone(),
+                cwd: environment.cwd.clone(),
+            })
+            .collect(),
+    )
+}
+
 struct TempCodexHomeGuard {
     path: PathBuf,
 }
@@ -758,10 +783,13 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
-        let environments = default_thread_environment_selections(
-            self.state.environment_manager.as_ref(),
-            &config.cwd,
-        );
+        let environments =
+            environment_selections_from_history(&initial_history).unwrap_or_else(|| {
+                default_thread_environment_selections(
+                    self.state.environment_manager.as_ref(),
+                    &config.cwd,
+                )
+            });
         let (session_source, thread_source) = initial_history
             .get_resumed_session_sources()
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
@@ -821,10 +849,13 @@ impl ThreadManager {
         user_shell_override: crate::shell::Shell,
     ) -> CodexResult<NewThread> {
         let initial_history = self.initial_history_from_rollout_path(rollout_path).await?;
-        let environments = default_thread_environment_selections(
-            self.state.environment_manager.as_ref(),
-            &config.cwd,
-        );
+        let environments =
+            environment_selections_from_history(&initial_history).unwrap_or_else(|| {
+                default_thread_environment_selections(
+                    self.state.environment_manager.as_ref(),
+                    &config.cwd,
+                )
+            });
         let (session_source, thread_source) = initial_history
             .get_resumed_session_sources()
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
@@ -996,10 +1027,12 @@ impl ThreadManager {
         let interrupted_marker =
             InterruptedTurnHistoryMarker::from_config_and_version(&config, multi_agent_version);
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
-        let environments = default_thread_environment_selections(
-            self.state.environment_manager.as_ref(),
-            &config.cwd,
-        );
+        let environments = environment_selections_from_history(&history).unwrap_or_else(|| {
+            default_thread_environment_selections(
+                self.state.environment_manager.as_ref(),
+                &config.cwd,
+            )
+        });
         Box::pin(self.state.spawn_thread(
             config,
             history,
@@ -1288,7 +1321,12 @@ impl ThreadManagerState {
             inherited_exec_policy,
         } = options;
         let environments =
-            default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd);
+            environment_selections_from_history(&initial_history).unwrap_or_else(|| {
+                default_thread_environment_selections(
+                    self.environment_manager.as_ref(),
+                    &config.cwd,
+                )
+            });
         let thread_source = initial_history.get_resumed_thread_source();
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -1325,9 +1363,14 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
-        let environments = environments.unwrap_or_else(|| {
-            default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd)
-        });
+        let environments = environments
+            .or_else(|| environment_selections_from_history(&initial_history))
+            .unwrap_or_else(|| {
+                default_thread_environment_selections(
+                    self.environment_manager.as_ref(),
+                    &config.cwd,
+                )
+            });
         Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,

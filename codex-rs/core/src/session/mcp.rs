@@ -317,17 +317,18 @@ impl Session {
             auth.as_ref(),
         )
         .await;
-        let mcp_runtime_context = match turn_context.environments.primary() {
-            Some(turn_environment) => McpRuntimeContext::new(
-                Arc::clone(&self.services.environment_manager),
-                turn_environment.cwd().to_path_buf(),
-            ),
-            None => McpRuntimeContext::new(
-                Arc::clone(&self.services.environment_manager),
+        let cwd = turn_context
+            .environments
+            .primary()
+            .and_then(super::turn_context::TurnEnvironment::compatible_cwd)
+            .unwrap_or_else(|| {
                 #[allow(deprecated)]
-                turn_context.cwd.to_path_buf(),
-            ),
-        };
+                turn_context.cwd.clone()
+            });
+        let mcp_runtime_context = McpRuntimeContext::new(
+            Arc::clone(&self.services.environment_manager),
+            cwd.into_path_buf(),
+        );
         let mcp_startup_cancellation_token = {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             guard.cancel();

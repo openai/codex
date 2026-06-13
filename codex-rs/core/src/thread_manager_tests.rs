@@ -643,7 +643,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
 }
 
 #[tokio::test]
-async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
+async fn resume_and_fork_restore_thread_environments_from_rollout() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -689,6 +689,13 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         })
         .await
         .expect("start source thread");
+    let source_turn = source.thread.codex.session.new_default_turn().await;
+    source
+        .thread
+        .codex
+        .session
+        .record_context_updates_and_set_reference_context_item(&source_turn)
+        .await;
     source.thread.ensure_rollout_materialized().await;
     source
         .thread
@@ -725,11 +732,11 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     assert_eq!(resumed_turn.environments.turn_environments.len(), 1);
     assert_eq!(
         resumed_turn.environments.turn_environments[0].cwd(),
-        &default_cwd
+        &PathUri::from_abs_path(&selected_cwd)
     );
     assert_ne!(
         resumed_turn.environments.turn_environments[0].cwd(),
-        &selected_cwd
+        &PathUri::from_abs_path(&default_cwd)
     );
 
     let forked = manager
@@ -752,11 +759,44 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     assert_eq!(forked_turn.environments.turn_environments.len(), 1);
     assert_eq!(
         forked_turn.environments.turn_environments[0].cwd(),
-        &default_cwd
+        &PathUri::from_abs_path(&selected_cwd)
     );
     assert_ne!(
         forked_turn.environments.turn_environments[0].cwd(),
-        &selected_cwd
+        &PathUri::from_abs_path(&default_cwd)
+    );
+}
+
+#[tokio::test]
+async fn environment_selections_from_history_use_latest_context_and_legacy_fallback() {
+    let (_session, turn_context) = make_session_and_context().await;
+    let persisted = turn_context.to_turn_context_item();
+    let expected = persisted
+        .environments
+        .as_ref()
+        .expect("current context persists environments")
+        .iter()
+        .map(|environment| TurnEnvironmentSelection {
+            environment_id: environment.environment_id.clone(),
+            cwd: environment.cwd.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        environment_selections_from_history(&InitialHistory::Forked(vec![
+            RolloutItem::TurnContext(persisted.clone()),
+        ])),
+        Some(expected)
+    );
+
+    let mut legacy = persisted.clone();
+    legacy.environments = None;
+    assert_eq!(
+        environment_selections_from_history(&InitialHistory::Forked(vec![
+            RolloutItem::TurnContext(persisted),
+            RolloutItem::TurnContext(legacy),
+        ])),
+        None
     );
 }
 

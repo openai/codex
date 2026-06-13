@@ -129,14 +129,16 @@ impl ExecCommandHandler {
                 "unified exec is unavailable in this session".to_string(),
             ));
         };
+        let base_cwd = turn_environment.compatible_cwd().ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "cross-platform unified exec requires native remote routing".to_string(),
+            )
+        })?;
         let cwd = environment_args
             .workdir
             .as_deref()
             .filter(|workdir| !workdir.is_empty())
-            .map_or_else(
-                || turn_environment.cwd().clone(),
-                |workdir| turn_environment.cwd().join(workdir),
-            );
+            .map_or_else(|| base_cwd.clone(), |workdir| base_cwd.join(workdir));
         let environment = Arc::clone(&turn_environment.environment);
         let fs = environment.get_filesystem();
         let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
@@ -270,7 +272,7 @@ impl ExecCommandHandler {
                     yield_time_ms,
                     max_output_tokens,
                     cwd,
-                    sandbox_cwd: turn_environment.cwd().clone(),
+                    sandbox_cwd: base_cwd,
                     environment,
                     shell_mode,
                     network: context.turn.network.clone(),

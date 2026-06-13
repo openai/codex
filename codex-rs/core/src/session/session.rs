@@ -1133,16 +1133,13 @@ impl Session {
             })?
             .primary()
             .cloned();
-            let mcp_runtime_context = match turn_environment {
-                Some(turn_environment) => McpRuntimeContext::new(
-                    Arc::clone(&sess.services.environment_manager),
-                    turn_environment.cwd().to_path_buf(),
-                ),
-                None => McpRuntimeContext::new(
-                    Arc::clone(&sess.services.environment_manager),
-                    session_configuration.cwd().to_path_buf(),
-                ),
-            };
+            let cwd = turn_environment
+                .and_then(|environment| environment.compatible_cwd())
+                .unwrap_or_else(|| session_configuration.cwd().clone());
+            let mcp_runtime_context = McpRuntimeContext::new(
+                Arc::clone(&sess.services.environment_manager),
+                cwd.into_path_buf(),
+            );
             let mcp_connection_manager = McpConnectionManager::new(
                 &mcp_servers,
                 config.mcp_oauth_credentials_store_mode,

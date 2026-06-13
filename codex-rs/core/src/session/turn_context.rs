@@ -13,10 +13,13 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::protocol::TurnContextEnvironment;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
+use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -41,14 +44,9 @@ impl TurnSkillsContext {
 pub(crate) struct TurnEnvironment {
     pub(crate) environment_id: String,
     pub(crate) environment: Arc<Environment>,
-    // Keep both representations together while cwd consumers migrate to URI semantics. Keeping
-    // them synchronized means neither representation can be exposed through a mutable reference;
-    // updates must rebuild the validated pair through `TurnEnvironment::new`. Once
-    // `TurnEnvironment::cwd` itself becomes a `PathUri`, convert only at native filesystem and
-    // process-launch boundaries and remove this paired migration state.
-    cwd: AbsolutePathBuf,
-    cwd_uri: PathUri,
-    pub(crate) shell: Option<shell::Shell>,
+    cwd: PathUri,
+    path_convention: PathConvention,
+    pub(crate) shell: shell::Shell,
 }
 
 impl TurnEnvironment {
@@ -57,13 +55,13 @@ impl TurnEnvironment {
         environment_id: String,
         environment: Arc<Environment>,
         cwd: AbsolutePathBuf,
-        shell: Option<shell::Shell>,
+        shell: shell::Shell,
     ) -> Self {
         Self {
             environment_id,
             environment,
-            cwd_uri: PathUri::from_abs_path(&cwd),
-            cwd,
+            cwd: PathUri::from_abs_path(&cwd),
+            path_convention: PathConvention::native(),
             shell,
         }
     }
@@ -71,35 +69,53 @@ impl TurnEnvironment {
     pub(crate) fn new_with_uri(
         environment_id: String,
         environment: Arc<Environment>,
-        cwd_uri: PathUri,
-        shell: Option<shell::Shell>,
+        cwd: PathUri,
+        path_convention: PathConvention,
+        shell: shell::Shell,
     ) -> CodexResult<Self> {
-        let cwd = cwd_uri.to_abs_path().map_err(|err| {
+        ApiPathString::from_path_uri(&cwd, path_convention).map_err(|err| {
             CodexErr::InvalidRequest(format!(
-                "turn environment cwd `{cwd_uri}` cannot be projected onto this host: {err}"
+                "turn environment cwd `{cwd}` cannot be rendered for {path_convention}: {err}"
             ))
         })?;
         Ok(Self {
             environment_id,
             environment,
             cwd,
-            cwd_uri,
+            path_convention,
             shell,
         })
     }
 
-    pub(crate) fn cwd(&self) -> &AbsolutePathBuf {
+    pub(crate) fn cwd(&self) -> &PathUri {
         &self.cwd
     }
 
     pub(crate) fn cwd_uri(&self) -> &PathUri {
-        &self.cwd_uri
+        &self.cwd
+    }
+
+    pub(crate) fn path_convention(&self) -> PathConvention {
+        self.path_convention
+    }
+
+    pub(crate) fn native_cwd(&self) -> ApiPathString {
+        match ApiPathString::from_path_uri(&self.cwd, self.path_convention) {
+            Ok(cwd) => cwd,
+            Err(error) => panic!("turn environment cwd was validated at construction: {error}"),
+        }
+    }
+
+    pub(crate) fn compatible_cwd(&self) -> Option<AbsolutePathBuf> {
+        (self.path_convention == PathConvention::native())
+            .then(|| self.cwd.to_abs_path().ok())
+            .flatten()
     }
 
     pub(crate) fn selection(&self) -> TurnEnvironmentSelection {
         TurnEnvironmentSelection {
             environment_id: self.environment_id.clone(),
-            cwd: self.cwd_uri.clone(),
+            cwd: self.cwd.clone(),
         }
     }
 }
@@ -400,6 +416,18 @@ impl TurnContext {
             turn_id: Some(self.sub_id.clone()),
             #[allow(deprecated)]
             cwd: self.cwd.to_path_buf(),
+            environments: Some(
+                self.environments
+                    .turn_environments
+                    .iter()
+                    .map(|environment| TurnContextEnvironment {
+                        environment_id: environment.environment_id.clone(),
+                        cwd: environment.cwd().clone(),
+                        path_convention: environment.path_convention(),
+                        shell: environment.shell.name().to_string(),
+                    })
+                    .collect(),
+            ),
             workspace_roots: (!workspace_roots.is_empty()).then_some(workspace_roots),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),

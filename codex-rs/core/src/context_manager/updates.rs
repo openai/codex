@@ -30,7 +30,12 @@ fn build_environment_update_item(
     let prev = previous?;
     let prev_context = EnvironmentContext::from_turn_context_item(prev, shell.name().to_string());
     let next_context = EnvironmentContext::from_turn_context(next, shell);
-    if prev_context.equals_except_shell(&next_context) {
+    let contexts_match = if prev.environments.is_some() {
+        prev_context == next_context
+    } else {
+        prev_context.equals_except_shell(&next_context)
+    };
+    if contexts_match {
         return None;
     }
 

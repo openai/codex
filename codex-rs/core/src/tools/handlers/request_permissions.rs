@@ -70,8 +70,12 @@ impl RequestPermissionsHandler {
                 "request_permissions requires a primary environment".to_string(),
             ));
         };
-        let mut args: RequestPermissionsArgs =
-            parse_arguments_with_base_path(&arguments, turn_environment.cwd())?;
+        let cwd = turn_environment.compatible_cwd().ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "request_permissions is not supported for a foreign-path environment".to_string(),
+            )
+        })?;
+        let mut args: RequestPermissionsArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
         args.permissions = normalize_additional_permissions(args.permissions.into())
             .map(codex_protocol::request_permissions::RequestPermissionProfile::from)
             .map_err(FunctionCallError::RespondToModel)?;
