@@ -1,4 +1,4 @@
-# Foreign-OS exec-server tests
+# Windows remote-environment test
 
 This directory cross-builds a small Windows exec-server fixture and runs it
 under a pinned Wine runtime from x86-64 Linux Bazel. A core `test_codex`

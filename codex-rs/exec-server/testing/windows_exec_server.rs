@@ -1,4 +1,4 @@
-//! Minimal Windows exec-server fixture for foreign-OS tests.
+//! Minimal Windows exec-server fixture for cross-platform tests.
 //!
 //! Keeping this wrapper separate avoids depending on the full Codex binary's
 //! Windows cross-build, which is not yet supported by the Bazel graph. Linking
