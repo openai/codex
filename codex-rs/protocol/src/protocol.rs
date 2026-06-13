@@ -137,6 +137,7 @@ impl TurnEnvironmentSelections {
 
     fn sync_primary_environment_cwd(&mut self) {
         let legacy_fallback_cwd = PathUri::from_abs_path(&self.legacy_fallback_cwd);
+        // Keep remote environments' native cwd instead of replacing it with the local fallback.
         if let Some(turn_environment) = self.environments.first_mut()
             && turn_environment.environment_id == LOCAL_ENVIRONMENT_ID
             && turn_environment.cwd != legacy_fallback_cwd
