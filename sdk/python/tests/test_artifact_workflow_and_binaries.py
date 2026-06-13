@@ -219,13 +219,13 @@ def test_root_format_driver_covers_all_formatter_groups(
     check_buildifier_args = checks[2].commands[-1].args
     assert format_buildifier_args[:4] == (
         "dotslash",
-        str(script.BUILDIFIER),
+        str(script.REPO_ROOT / "tools" / "buildifier"),
         "-mode=fix",
         "-lint=off",
     )
     assert check_buildifier_args[:4] == (
         "dotslash",
-        str(script.BUILDIFIER),
+        str(script.REPO_ROOT / "tools" / "buildifier"),
         "-mode=check",
         "-lint=off",
     )
