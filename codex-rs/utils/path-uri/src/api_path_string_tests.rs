@@ -418,3 +418,16 @@ fn serializes_and_deserializes_as_a_string() {
         rendered
     );
 }
+
+#[test]
+fn deserializes_without_applying_host_path_rules() {
+    let rendered: ApiPathString =
+        serde_json::from_str(r#""C:\\workspace\\src""#).expect("path should deserialize");
+
+    assert_eq!(rendered.as_str(), r"C:\workspace\src");
+}
+
+#[test]
+fn rejects_relative_paths_during_deserialization() {
+    assert!(serde_json::from_str::<ApiPathString>(r#""workspace/src""#).is_err());
+}

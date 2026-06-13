@@ -2186,7 +2186,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
                 text: "run python".to_string(),
                 text_elements: Vec::new(),
             }],
-            cwd: Some(workspace.clone()),
+            cwd: Some((workspace.clone()).try_into().expect("absolute cwd")),
             ..Default::default()
         })
         .await?;
@@ -2344,7 +2344,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             }],
             responsesapi_client_metadata: None,
             additional_context: None,
-            cwd: Some(first_cwd.clone()),
+            cwd: Some((first_cwd.clone()).try_into().expect("absolute cwd")),
             runtime_workspace_roots: None,
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             approvals_reviewer: None,
@@ -2388,7 +2388,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             }],
             responsesapi_client_metadata: None,
             additional_context: None,
-            cwd: Some(second_cwd.clone()),
+            cwd: Some((second_cwd.clone()).try_into().expect("absolute cwd")),
             runtime_workspace_roots: None,
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             approvals_reviewer: None,
@@ -2668,7 +2668,7 @@ async fn run_environment_selection_case(
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
-            cwd: Some(workspace.to_string_lossy().into_owned()),
+            cwd: Some(workspace.to_path_buf().try_into()?),
             environments: environment_params(case.sticky, workspace)?,
             ..Default::default()
         })
@@ -2689,7 +2689,7 @@ async fn run_environment_selection_case(
                 text_elements: Vec::new(),
             }],
             environments: environment_params(case.turn, workspace)?,
-            cwd: Some(workspace.to_path_buf()),
+            cwd: Some(workspace.to_path_buf().try_into()?),
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -2785,7 +2785,11 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     let start_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
-            cwd: Some(workspace.to_string_lossy().into_owned()),
+            cwd: Some(
+                (workspace.to_string_lossy().into_owned())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;
@@ -2804,7 +2808,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
                 text: "apply patch".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: Some(workspace.clone()),
+            cwd: Some((workspace.clone()).try_into().expect("absolute cwd")),
             ..Default::default()
         })
         .await?;
@@ -2976,7 +2980,11 @@ async fn turn_start_does_not_stream_apply_patch_change_updates_without_feature_v
     let start_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
-            cwd: Some(workspace.to_string_lossy().into_owned()),
+            cwd: Some(
+                (workspace.to_string_lossy().into_owned())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;
@@ -2995,7 +3003,7 @@ async fn turn_start_does_not_stream_apply_patch_change_updates_without_feature_v
                 text: "apply patch".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: Some(workspace),
+            cwd: Some((workspace).try_into().expect("absolute cwd")),
             ..Default::default()
         })
         .await?;
@@ -3114,7 +3122,11 @@ async fn turn_start_streams_apply_patch_change_updates_v2() -> Result<()> {
     let start_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
-            cwd: Some(workspace.to_string_lossy().into_owned()),
+            cwd: Some(
+                (workspace.to_string_lossy().into_owned())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;
@@ -3133,7 +3145,7 @@ async fn turn_start_streams_apply_patch_change_updates_v2() -> Result<()> {
                 text: "apply patch".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: Some(workspace.clone()),
+            cwd: Some((workspace.clone()).try_into().expect("absolute cwd")),
             ..Default::default()
         })
         .await?;
@@ -3781,7 +3793,11 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
     let start_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
-            cwd: Some(workspace.to_string_lossy().into_owned()),
+            cwd: Some(
+                (workspace.to_string_lossy().into_owned())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;
@@ -3801,7 +3817,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
                 text: "apply patch 1".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: Some(workspace.clone()),
+            cwd: Some((workspace.clone()).try_into().expect("absolute cwd")),
             ..Default::default()
         })
         .await?;
@@ -3874,7 +3890,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
                 text: "apply patch 2".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: Some(workspace.clone()),
+            cwd: Some((workspace.clone()).try_into().expect("absolute cwd")),
             ..Default::default()
         })
         .await?;
@@ -3954,7 +3970,11 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
     let start_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
-            cwd: Some(workspace.to_string_lossy().into_owned()),
+            cwd: Some(
+                (workspace.to_string_lossy().into_owned())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;
@@ -3973,7 +3993,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
                 text: "apply patch".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: Some(workspace.clone()),
+            cwd: Some((workspace.clone()).try_into().expect("absolute cwd")),
             ..Default::default()
         })
         .await?;
@@ -4234,7 +4254,11 @@ async fn turn_start_with_elevated_override_does_not_persist_project_trust() -> R
 
     let thread_request = mcp
         .send_thread_start_request(ThreadStartParams {
-            cwd: Some(workspace.path().display().to_string()),
+            cwd: Some(
+                (workspace.path().display().to_string())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;
@@ -4248,7 +4272,11 @@ async fn turn_start_with_elevated_override_does_not_persist_project_trust() -> R
     let turn_request = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
-            cwd: Some(workspace.path().to_path_buf()),
+            cwd: Some(
+                (workspace.path().to_path_buf())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
             input: vec![V2UserInput::Text {
                 text: "Hello".to_string(),

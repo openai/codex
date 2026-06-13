@@ -135,7 +135,7 @@ fn stdio_command_process(stdio_command: &StdioExecServerCommand) -> Command {
     command.args(&stdio_command.args);
     command.envs(&stdio_command.env);
     if let Some(cwd) = &stdio_command.cwd {
-        command.current_dir(cwd);
+        command.current_dir(cwd.as_str());
     }
     #[cfg(unix)]
     command.process_group(0);

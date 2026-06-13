@@ -47,7 +47,11 @@ fn collect_resume_override_mismatches(
             config_snapshot.service_tier
         ));
     }
-    if let Some(requested_cwd) = request.cwd.as_deref() {
+    if let Some(requested_cwd) = request
+        .cwd
+        .as_ref()
+        .map(codex_utils_path_uri::ApiPathString::as_str)
+    {
         let requested_cwd_path = std::path::PathBuf::from(requested_cwd);
         if requested_cwd_path != config_snapshot.cwd().as_path() {
             mismatch_details.push(format!(
@@ -869,6 +873,7 @@ impl ThreadRequestProcessor {
             thread_source,
             environments,
         } = params;
+        let cwd = cwd.map(codex_utils_path_uri::ApiPathString::into_string);
         if sandbox.is_some() && permissions.is_some() {
             return Err(invalid_request(
                 "`permissions` cannot be combined with `sandbox`",
@@ -1290,12 +1295,20 @@ impl ThreadRequestProcessor {
         let environment_selections = environments.map(|environments| {
             environments
                 .into_iter()
-                .map(|environment| TurnEnvironmentSelection {
-                    environment_id: environment.environment_id,
-                    cwd: environment.cwd,
+                .map(|environment| {
+                    Ok(TurnEnvironmentSelection {
+                        environment_id: environment.environment_id,
+                        cwd: AbsolutePathBuf::from_absolute_path(PathBuf::from(
+                            environment.cwd.into_string(),
+                        ))
+                        .map_err(|err| {
+                            invalid_request(format!("invalid environment cwd: {err}"))
+                        })?,
+                    })
                 })
-                .collect::<Vec<_>>()
+                .collect::<Result<Vec<_>, JSONRPCErrorError>>()
         });
+        let environment_selections = environment_selections.transpose()?;
         if let Some(environment_selections) = environment_selections.as_ref() {
             self.thread_manager
                 .validate_environment_selections(environment_selections)
@@ -2559,6 +2572,7 @@ impl ThreadRequestProcessor {
             exclude_turns,
             initial_turns_page,
         } = params;
+        let cwd = cwd.map(codex_utils_path_uri::ApiPathString::into_string);
         let include_turns = !exclude_turns;
 
         let resume_result = if let Some(history) = history {
@@ -3265,6 +3279,7 @@ impl ThreadRequestProcessor {
             thread_source,
             exclude_turns,
         } = params;
+        let cwd = cwd.map(codex_utils_path_uri::ApiPathString::into_string);
         let include_turns = !exclude_turns;
         if sandbox.is_some() && permissions.is_some() {
             return Err(invalid_request(

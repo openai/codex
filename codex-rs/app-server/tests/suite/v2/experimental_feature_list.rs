@@ -200,7 +200,9 @@ memories = true
 
     let thread_start_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            cwd: Some(workspace.path().display().to_string()),
+            cwd: Some(serde_json::from_value(serde_json::json!(
+                workspace.path().display().to_string()
+            ))?),
             ..Default::default()
         })
         .await?;

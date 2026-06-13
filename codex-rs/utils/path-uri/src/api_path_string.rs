@@ -2,9 +2,11 @@ use crate::PathUri;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
 use std::fmt;
+use std::path::PathBuf;
 use thiserror::Error;
 use ts_rs::TS;
 
@@ -51,7 +53,7 @@ impl fmt::Display for PathConvention {
 /// accidentally applying the current host's path rules. Opaque fallback paths
 /// are decoded using the supplied convention and converted to UTF-8 lossily at
 /// this API boundary because the value is serialized as a JSON string.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, TS)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, TS)]
 #[ts(type = "string")]
 pub struct ApiPathString(String);
 
@@ -190,6 +192,31 @@ fn is_windows_separator_byte(character: u8) -> bool {
     matches!(character, b'\\' | b'/')
 }
 
+impl TryFrom<String> for ApiPathString {
+    type Error = ApiPathStringError;
+
+    fn try_from(path: String) -> Result<Self, Self::Error> {
+        if is_absolute_api_path(&path) {
+            Ok(Self(path))
+        } else {
+            Err(ApiPathStringError::RelativePath { path })
+        }
+    }
+}
+
+impl TryFrom<PathBuf> for ApiPathString {
+    type Error = ApiPathStringError;
+
+    fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
+        let path = AbsolutePathBuf::from_absolute_path(&path).map_err(|_| {
+            ApiPathStringError::RelativePath {
+                path: path.to_string_lossy().into_owned(),
+            }
+        })?;
+        Self::from_abs_path(&path, PathConvention::native())
+    }
+}
+
 fn render_opaque_fallback(
     path: &PathUri,
     path_bytes: &[u8],
@@ -251,6 +278,28 @@ impl Serialize for ApiPathString {
     {
         serializer.serialize_str(&self.0)
     }
+}
+
+impl<'de> Deserialize<'de> for ApiPathString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let path = String::deserialize(deserializer)?;
+        Self::try_from(path).map_err(serde::de::Error::custom)
+    }
+}
+
+fn is_absolute_api_path(path: &str) -> bool {
+    if path.starts_with('/') {
+        return true;
+    }
+    let bytes = path.as_bytes();
+    matches!(
+        bytes,
+        [drive, b':', separator, ..]
+            if drive.is_ascii_alphabetic() && matches!(separator, b'/' | b'\\')
+    ) || matches!(bytes, [b'\\', b'\\', _, ..])
 }
 
 impl JsonSchema for ApiPathString {
@@ -351,6 +400,8 @@ fn incompatible_convention(path: &PathUri, convention: PathConvention) -> ApiPat
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ApiPathStringError {
+    #[error("path `{path}` must be absolute")]
+    RelativePath { path: String },
     #[error("opaque fallback path URI `{path}` cannot be recovered as a native path")]
     OpaqueFallback { path: String },
     #[error("path URI `{path}` cannot be rendered using {convention} path syntax")]

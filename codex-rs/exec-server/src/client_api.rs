@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::time::Duration;
 
+use codex_utils_path_uri::ApiPathString;
 use futures::future::BoxFuture;
 
 use crate::ExecServerError;
@@ -45,7 +45,7 @@ pub(crate) struct StdioExecServerCommand {
     pub program: String,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
-    pub cwd: Option<PathBuf>,
+    pub cwd: Option<ApiPathString>,
 }
 
 /// Parameters used to connect to a remote exec-server environment.

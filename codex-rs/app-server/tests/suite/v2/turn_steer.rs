@@ -160,7 +160,11 @@ async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
                 text: "run sleep".to_string(),
                 text_elements: Vec::new(),
             }],
-            cwd: Some(working_directory.clone()),
+            cwd: Some(
+                (working_directory.clone())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;
@@ -274,7 +278,11 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
                 text: "run sleep".to_string(),
                 text_elements: Vec::new(),
             }],
-            cwd: Some(working_directory.clone()),
+            cwd: Some(
+                (working_directory.clone())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;
@@ -411,7 +419,7 @@ async fn turn_steer_rejects_context_only_input_without_merging_context() -> Resu
                 text: "run sleep".to_string(),
                 text_elements: Vec::new(),
             }],
-            cwd: Some(working_directory),
+            cwd: Some((working_directory).try_into().expect("absolute cwd")),
             ..Default::default()
         })
         .await?;

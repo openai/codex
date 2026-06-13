@@ -1268,7 +1268,7 @@ fn live_elicitation_timeout_pause(
         approval_policy: Some(AskForApproval::Never),
         sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
         effort: Some(ReasoningEffort::High),
-        cwd: Some(workspace),
+        cwd: Some(workspace.try_into()?),
         ..Default::default()
     })?;
     println!("< turn/start response: {turn_response:?}");

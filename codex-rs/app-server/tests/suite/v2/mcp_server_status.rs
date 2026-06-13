@@ -137,7 +137,9 @@ async fn mcp_server_status_list_uses_thread_project_local_config() -> Result<()>
 
     let thread_start_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            cwd: Some(workspace.path().to_string_lossy().into_owned()),
+            cwd: Some(serde_json::from_value(serde_json::json!(
+                workspace.path().to_string_lossy()
+            ))?),
             ..Default::default()
         })
         .await?;

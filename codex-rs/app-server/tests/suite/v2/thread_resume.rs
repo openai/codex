@@ -271,7 +271,11 @@ async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Resul
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            cwd: Some(workspace.path().display().to_string()),
+            cwd: Some(
+                (workspace.path().display().to_string())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;
@@ -2220,7 +2224,11 @@ async fn thread_resume_defers_updated_at_until_turn_start() -> Result<()> {
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: "not-a-valid-thread-id".to_string(),
             path: Some(normalized_existing_path(&rollout.rollout_file_path)?),
-            cwd: Some(codex_home.path().to_string_lossy().to_string()),
+            cwd: Some(
+                (codex_home.path().to_string_lossy().to_string())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;
@@ -2727,7 +2735,7 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id.clone(),
             model: Some("not-the-running-model".to_string()),
-            cwd: Some("/tmp".to_string()),
+            cwd: Some(("/tmp".to_string()).try_into().expect("absolute cwd")),
             initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
                 limit: None,
                 sort_direction: None,
@@ -3020,7 +3028,11 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.4".to_string()),
-            cwd: Some(workspace.to_string_lossy().into_owned()),
+            cwd: Some(
+                (workspace.to_string_lossy().into_owned())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;
@@ -3039,7 +3051,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
                 text: "seed history".to_string(),
                 text_elements: Vec::new(),
             }],
-            cwd: Some(workspace.clone()),
+            cwd: Some((workspace.clone()).try_into().expect("absolute cwd")),
             ..Default::default()
         })
         .await?;
@@ -3063,7 +3075,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
                 text: "apply patch".to_string(),
                 text_elements: Vec::new(),
             }],
-            cwd: Some(workspace.clone()),
+            cwd: Some((workspace.clone()).try_into().expect("absolute cwd")),
             approval_policy: Some(AskForApproval::UnlessTrusted),
             ..Default::default()
         })

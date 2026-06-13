@@ -6111,6 +6111,9 @@
         },
         "type": "object"
       },
+      "ApiPathString": {
+        "type": "string"
+      },
       "AppBranding": {
         "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
         "properties": {
@@ -16263,9 +16266,13 @@
             ]
           },
           "cwd": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ApiPathString"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "developerInstructions": {
@@ -17945,9 +17952,13 @@
             ]
           },
           "cwd": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ApiPathString"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "developerInstructions": {
@@ -18335,9 +18346,13 @@
             ]
           },
           "cwd": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ApiPathString"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "developerInstructions": {
@@ -18912,7 +18927,7 @@
       "TurnEnvironmentParams": {
         "properties": {
           "cwd": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
+            "$ref": "#/definitions/v2/ApiPathString"
           },
           "environmentId": {
             "type": "string"
@@ -19103,11 +19118,15 @@
             ]
           },
           "cwd": {
-            "description": "Override the working directory for this turn and subsequent turns.",
-            "type": [
-              "string",
-              "null"
-            ]
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ApiPathString"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the working directory for this turn and subsequent turns."
           },
           "effort": {
             "anyOf": [

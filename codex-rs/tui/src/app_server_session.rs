@@ -769,7 +769,7 @@ impl AppServerSession {
                     responsesapi_client_metadata: None,
                     additional_context: None,
                     environments: None,
-                    cwd: Some(cwd),
+                    cwd: Some(cwd.try_into()?),
                     runtime_workspace_roots: Some(workspace_roots.to_vec()),
                     approval_policy: Some(approval_policy),
                     approvals_reviewer: Some(approvals_reviewer.into()),
@@ -1384,7 +1384,10 @@ fn thread_start_params_from_config(
         model: config.model.clone(),
         model_provider: thread_params_mode.model_provider_from_config(config),
         service_tier: service_tier_override_from_config(config),
-        cwd: thread_cwd_from_config(config, thread_params_mode, remote_cwd_override),
+        cwd: thread_cwd_from_config(config, thread_params_mode, remote_cwd_override).map(|cwd| {
+            cwd.try_into()
+                .unwrap_or_else(|err| panic!("thread cwd should be absolute: {err}"))
+        }),
         runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
@@ -1422,7 +1425,10 @@ fn thread_resume_params_from_config(
         model: config.model.clone(),
         model_provider: thread_params_mode.model_provider_from_config(&config),
         service_tier: service_tier_override_from_config(&config),
-        cwd: thread_cwd_from_config(&config, thread_params_mode, remote_cwd_override),
+        cwd: thread_cwd_from_config(&config, thread_params_mode, remote_cwd_override).map(|cwd| {
+            cwd.try_into()
+                .unwrap_or_else(|err| panic!("thread cwd should be absolute: {err}"))
+        }),
         runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
@@ -1457,7 +1463,10 @@ fn thread_fork_params_from_config(
         model: config.model.clone(),
         model_provider: thread_params_mode.model_provider_from_config(&config),
         service_tier: service_tier_override_from_config(&config),
-        cwd: thread_cwd_from_config(&config, thread_params_mode, remote_cwd_override),
+        cwd: thread_cwd_from_config(&config, thread_params_mode, remote_cwd_override).map(|cwd| {
+            cwd.try_into()
+                .unwrap_or_else(|err| panic!("thread cwd should be absolute: {err}"))
+        }),
         runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
@@ -1856,7 +1865,16 @@ mod tests {
             /*session_start_source*/ None,
         );
 
-        assert_eq!(params.cwd, Some(config.cwd.to_string_lossy().to_string()));
+        assert_eq!(
+            params.cwd,
+            Some(
+                config
+                    .cwd
+                    .to_path_buf()
+                    .try_into()
+                    .unwrap_or_else(|err| panic!("config cwd should be absolute: {err}"))
+            )
+        );
         assert_eq!(
             params.runtime_workspace_roots,
             Some(config.workspace_roots.clone())
@@ -2090,7 +2108,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let config = build_config(&temp_dir).await;
         let thread_id = ThreadId::new();
-        let remote_cwd = PathBuf::from("repo/on/server");
+        let remote_cwd = PathBuf::from("/repo/on/server");
         let expected_sandbox = sandbox_mode_from_permission_profile(
             &config.permissions.effective_permission_profile(),
             config.cwd.as_path(),
@@ -2115,9 +2133,18 @@ mod tests {
             Some(remote_cwd.as_path()),
         );
 
-        assert_eq!(start.cwd.as_deref(), Some("repo/on/server"));
-        assert_eq!(resume.cwd.as_deref(), Some("repo/on/server"));
-        assert_eq!(fork.cwd.as_deref(), Some("repo/on/server"));
+        let Some(start_cwd) = start.cwd.as_ref() else {
+            panic!("start cwd should be present");
+        };
+        let Some(resume_cwd) = resume.cwd.as_ref() else {
+            panic!("resume cwd should be present");
+        };
+        let Some(fork_cwd) = fork.cwd.as_ref() else {
+            panic!("fork cwd should be present");
+        };
+        assert_eq!(start_cwd.as_str(), "/repo/on/server");
+        assert_eq!(resume_cwd.as_str(), "/repo/on/server");
+        assert_eq!(fork_cwd.as_str(), "/repo/on/server");
         assert_eq!(start.model_provider, None);
         assert_eq!(resume.model_provider, None);
         assert_eq!(fork.model_provider, None);

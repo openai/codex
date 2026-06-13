@@ -117,7 +117,10 @@ impl App {
 
         let params = ThreadSettingsUpdateParams {
             thread_id: thread_id.to_string(),
-            cwd: cwd.clone(),
+            cwd: cwd.clone().map(|cwd| {
+                cwd.try_into()
+                    .unwrap_or_else(|err| panic!("override cwd should be absolute: {err}"))
+            }),
             approval_policy: *approval_policy,
             approvals_reviewer: approvals_reviewer.map(AppServerApprovalsReviewer::from),
             permissions: active_permission_profile

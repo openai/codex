@@ -337,12 +337,20 @@ impl TurnRequestProcessor {
         let environment_selections = environments.map(|environments| {
             environments
                 .into_iter()
-                .map(|environment| TurnEnvironmentSelection {
-                    environment_id: environment.environment_id,
-                    cwd: environment.cwd,
+                .map(|environment| {
+                    Ok(TurnEnvironmentSelection {
+                        environment_id: environment.environment_id,
+                        cwd: AbsolutePathBuf::from_absolute_path(PathBuf::from(
+                            environment.cwd.into_string(),
+                        ))
+                        .map_err(|err| {
+                            invalid_request(format!("invalid environment cwd: {err}"))
+                        })?,
+                    })
                 })
-                .collect::<Vec<_>>()
+                .collect::<Result<Vec<_>, JSONRPCErrorError>>()
         });
+        let environment_selections = environment_selections.transpose()?;
         if let Some(environment_selections) = environment_selections.as_ref() {
             self.thread_manager
                 .validate_environment_selections(environment_selections)
@@ -433,7 +441,7 @@ impl TurnRequestProcessor {
         let client_user_message_id = params.client_user_message_id;
         let additional_context = map_additional_context(params.additional_context);
         let turn_has_input = !mapped_items.is_empty();
-        let cwd = resolve_request_cwd(params.cwd)?;
+        let cwd = resolve_request_cwd(params.cwd.map(|cwd| cwd.into_string().into()))?;
         let environments =
             Self::build_environment_override(thread.as_ref(), cwd, environment_selections).await;
         let thread_settings = self
@@ -692,7 +700,7 @@ impl TurnRequestProcessor {
         params: ThreadSettingsUpdateParams,
     ) -> Result<ThreadSettingsUpdateResponse, JSONRPCErrorError> {
         let (_, thread) = self.load_thread(&params.thread_id).await?;
-        let cwd = resolve_request_cwd(params.cwd)?;
+        let cwd = resolve_request_cwd(params.cwd.map(|cwd| cwd.into_string().into()))?;
         let environments = Self::build_environment_override(
             thread.as_ref(),
             cwd,

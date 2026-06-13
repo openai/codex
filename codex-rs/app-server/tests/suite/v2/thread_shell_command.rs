@@ -274,7 +274,7 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
                 text: "run python".to_string(),
                 text_elements: Vec::new(),
             }],
-            cwd: Some(workspace.clone()),
+            cwd: Some((workspace.clone()).try_into().expect("absolute cwd")),
             ..Default::default()
         })
         .await?;

@@ -876,7 +876,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         responsesapi_client_metadata: None,
                         additional_context: None,
                         environments: None,
-                        cwd: Some(default_cwd),
+                        cwd: Some(default_cwd.try_into()?),
                         runtime_workspace_roots: None,
                         approval_policy: Some(default_approval_policy.into()),
                         approvals_reviewer: None,
@@ -1048,7 +1048,13 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
     ThreadStartParams {
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
-        cwd: Some(config.cwd.to_string_lossy().to_string()),
+        cwd: Some(
+            config
+                .cwd
+                .to_path_buf()
+                .try_into()
+                .unwrap_or_else(|err| panic!("config cwd should be absolute: {err}")),
+        ),
         runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
@@ -1073,7 +1079,13 @@ fn thread_resume_params_from_config(config: &Config, thread_id: String) -> Threa
         thread_id,
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
-        cwd: Some(config.cwd.to_string_lossy().to_string()),
+        cwd: Some(
+            config
+                .cwd
+                .to_path_buf()
+                .try_into()
+                .unwrap_or_else(|err| panic!("config cwd should be absolute: {err}")),
+        ),
         runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),

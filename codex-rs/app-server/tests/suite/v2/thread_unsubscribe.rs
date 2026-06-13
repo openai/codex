@@ -156,7 +156,7 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
                 text: "run deterministic tool".to_string(),
                 text_elements: Vec::new(),
             }],
-            cwd: Some(working_directory),
+            cwd: Some((working_directory).try_into().expect("absolute cwd")),
             ..Default::default()
         })
         .await?;
@@ -319,7 +319,11 @@ async fn thread_unsubscribe_preserves_cached_status_before_idle_unload() -> Resu
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id,
-            cwd: Some(codex_home.path().to_string_lossy().to_string()),
+            cwd: Some(
+                (codex_home.path().to_string_lossy().to_string())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;

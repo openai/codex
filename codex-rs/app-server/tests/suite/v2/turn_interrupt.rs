@@ -83,7 +83,11 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
                 text: "run sleep".to_string(),
                 text_elements: Vec::new(),
             }],
-            cwd: Some(working_directory.clone()),
+            cwd: Some(
+                (working_directory.clone())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;
@@ -260,7 +264,7 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
                 text: "run python".to_string(),
                 text_elements: Vec::new(),
             }],
-            cwd: Some(working_directory),
+            cwd: Some((working_directory).try_into().expect("absolute cwd")),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::UnlessTrusted),
             ..Default::default()
         })

@@ -22,6 +22,7 @@ use codex_protocol::protocol::ThreadGoalStatus as CoreThreadGoalStatus;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::ApiPathString;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -108,7 +109,7 @@ pub struct ThreadStartParams {
     #[ts(optional = nullable)]
     pub service_tier: Option<Option<String>>,
     #[ts(optional = nullable)]
-    pub cwd: Option<String>,
+    pub cwd: Option<ApiPathString>,
     /// Replace the thread's runtime workspace roots. Paths must be absolute.
     #[experimental("thread/start.runtimeWorkspaceRoots")]
     #[ts(optional = nullable)]
@@ -229,7 +230,7 @@ pub struct ThreadSettingsUpdateParams {
     pub thread_id: String,
     /// Override the working directory for subsequent turns.
     #[ts(optional = nullable)]
-    pub cwd: Option<PathBuf>,
+    pub cwd: Option<ApiPathString>,
     /// Override the approval policy for subsequent turns.
     #[experimental(nested)]
     #[ts(optional = nullable)]
@@ -362,7 +363,7 @@ pub struct ThreadResumeParams {
     #[ts(optional = nullable)]
     pub service_tier: Option<Option<String>>,
     #[ts(optional = nullable)]
-    pub cwd: Option<String>,
+    pub cwd: Option<ApiPathString>,
     /// Replace the thread's runtime workspace roots. Paths must be absolute.
     #[experimental("thread/resume.runtimeWorkspaceRoots")]
     #[ts(optional = nullable)]
@@ -512,7 +513,7 @@ pub struct ThreadForkParams {
     #[ts(optional = nullable)]
     pub service_tier: Option<Option<String>>,
     #[ts(optional = nullable)]
-    pub cwd: Option<String>,
+    pub cwd: Option<ApiPathString>,
     /// Replace the thread's runtime workspace roots. Paths must be absolute.
     #[experimental("thread/fork.runtimeWorkspaceRoots")]
     #[ts(optional = nullable)]

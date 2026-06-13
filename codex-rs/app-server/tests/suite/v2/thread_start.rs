@@ -215,7 +215,11 @@ async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
 
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            cwd: Some(cwd.to_string_lossy().to_string()),
+            cwd: Some(
+                (cwd.to_string_lossy().to_string())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             runtime_workspace_roots: Some(vec![extra_root.abs()]),
             ..Default::default()
         })
@@ -256,7 +260,11 @@ async fn thread_start_excludes_profile_workspace_roots_from_runtime_workspace_ro
 
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            cwd: Some(cwd.path().to_string_lossy().to_string()),
+            cwd: Some(
+                (cwd.path().to_string_lossy().to_string())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;
@@ -328,7 +336,11 @@ async fn thread_start_response_includes_loaded_instruction_sources() -> Result<(
 
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            cwd: Some(workspace.path().display().to_string()),
+            cwd: Some(
+                (workspace.path().display().to_string())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;
@@ -375,7 +387,11 @@ async fn thread_start_response_excludes_empty_project_instruction_source() -> Re
 
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            cwd: Some(workspace.path().display().to_string()),
+            cwd: Some(
+                (workspace.path().display().to_string())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;
@@ -418,7 +434,11 @@ async fn thread_start_without_selected_environment_includes_only_global_instruct
 
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            cwd: Some(workspace.path().display().to_string()),
+            cwd: Some(
+                (workspace.path().display().to_string())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             environments: Some(Vec::new()),
             ..Default::default()
         })
@@ -556,7 +576,11 @@ model_reasoning_effort = "high"
 
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            cwd: Some(workspace.path().to_string_lossy().into_owned()),
+            cwd: Some(
+                (workspace.path().to_string_lossy().into_owned())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;
@@ -948,7 +972,11 @@ model_reasoning_effort = "high"
 
     let first_request = mcp
         .send_thread_start_request(ThreadStartParams {
-            cwd: Some(workspace.path().display().to_string()),
+            cwd: Some(
+                (workspace.path().display().to_string())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             sandbox: Some(SandboxMode::WorkspaceWrite),
             ..Default::default()
         })
@@ -961,7 +989,11 @@ model_reasoning_effort = "high"
 
     let second_request = mcp
         .send_thread_start_request(ThreadStartParams {
-            cwd: Some(workspace.path().display().to_string()),
+            cwd: Some(
+                (workspace.path().display().to_string())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;
@@ -1008,7 +1040,11 @@ async fn thread_start_with_nested_git_cwd_trusts_repo_root() -> Result<()> {
 
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            cwd: Some(nested.display().to_string()),
+            cwd: Some(
+                (nested.display().to_string())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             sandbox: Some(SandboxMode::WorkspaceWrite),
             ..Default::default()
         })
@@ -1046,7 +1082,11 @@ async fn thread_start_with_read_only_sandbox_does_not_persist_project_trust() ->
 
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            cwd: Some(workspace.path().display().to_string()),
+            cwd: Some(
+                (workspace.path().display().to_string())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             ..Default::default()
         })
         .await?;
@@ -1084,7 +1124,11 @@ async fn thread_start_preserves_untrusted_project_trust() -> Result<()> {
 
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            cwd: Some(workspace.path().display().to_string()),
+            cwd: Some(
+                (workspace.path().display().to_string())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             sandbox: Some(SandboxMode::WorkspaceWrite),
             ..Default::default()
         })
@@ -1125,7 +1169,11 @@ model_reasoning_effort = "high"
 
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            cwd: Some(workspace.path().display().to_string()),
+            cwd: Some(
+                (workspace.path().display().to_string())
+                    .try_into()
+                    .expect("absolute cwd"),
+            ),
             sandbox: Some(SandboxMode::WorkspaceWrite),
             ..Default::default()
         })

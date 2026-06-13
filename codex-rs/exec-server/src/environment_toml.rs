@@ -4,6 +4,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
 use serde::Deserialize;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -165,7 +168,7 @@ fn parse_environment_toml(
                     "environment `{id}` program cannot be empty"
                 )));
             }
-            let cwd = normalize_stdio_cwd(&id, cwd, config_dir)?;
+            let cwd = resolve_stdio_cwd(&id, cwd, config_dir)?;
             ExecServerTransportParams::StdioCommand {
                 command: StdioExecServerCommand {
                     program,
@@ -186,23 +189,32 @@ fn parse_environment_toml(
     Ok((id, transport_params))
 }
 
-fn normalize_stdio_cwd(
+fn resolve_stdio_cwd(
     id: &str,
     cwd: Option<PathBuf>,
     config_dir: Option<&Path>,
-) -> Result<Option<PathBuf>, ExecServerError> {
+) -> Result<Option<ApiPathString>, ExecServerError> {
     let Some(cwd) = cwd else {
         return Ok(None);
     };
-    if cwd.is_absolute() {
-        return Ok(Some(cwd));
-    }
-    let Some(config_dir) = config_dir else {
-        return Err(ExecServerError::Protocol(format!(
-            "environment `{id}` cwd must be absolute"
-        )));
+    let cwd = if cwd.is_absolute() {
+        cwd
+    } else {
+        let Some(config_dir) = config_dir else {
+            return Err(ExecServerError::Protocol(format!(
+                "environment `{id}` cwd must be absolute"
+            )));
+        };
+        config_dir.join(cwd)
     };
-    Ok(Some(config_dir.join(cwd)))
+    let cwd = AbsolutePathBuf::from_absolute_path(cwd).map_err(|err| {
+        ExecServerError::Protocol(format!("environment `{id}` cwd must be absolute: {err}"))
+    })?;
+    ApiPathString::from_abs_path(&cwd, PathConvention::native())
+        .map(Some)
+        .map_err(|err| {
+            ExecServerError::Protocol(format!("environment `{id}` cwd cannot be rendered: {err}"))
+        })
 }
 
 pub(crate) fn environment_provider_from_codex_home(
@@ -579,6 +591,10 @@ mod tests {
             Some(config_dir.path()),
         )
         .expect("provider");
+        let expected_cwd = AbsolutePathBuf::from_absolute_path(config_dir.path().join("workspace"))
+            .expect("absolute cwd");
+        let expected_cwd = ApiPathString::from_abs_path(&expected_cwd, PathConvention::native())
+            .expect("rendered cwd");
 
         assert_eq!(
             provider.environments[0].1,
@@ -587,7 +603,7 @@ mod tests {
                     program: "ssh".to_string(),
                     args: Vec::new(),
                     env: HashMap::new(),
-                    cwd: Some(config_dir.path().join("workspace")),
+                    cwd: Some(expected_cwd),
                 },
                 initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
             }
