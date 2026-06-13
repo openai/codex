@@ -121,6 +121,70 @@ async fn process_spawn_rejects_duplicate_active_handle_without_replacing_origina
 }
 
 #[tokio::test]
+async fn process_spawn_failure_releases_process_handle() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let (_server, mut mcp) = initialized_mcp(codex_home.path()).await?;
+
+    let process_handle = "spawn-failure-1".to_string();
+    let missing_program = codex_home.path().join("missing-process-executable");
+    let failed_request_id = mcp
+        .send_process_spawn_request(process_spawn_params(
+            process_handle.clone(),
+            codex_home.path(),
+            vec![missing_program.display().to_string()],
+        )?)
+        .await?;
+    let error = mcp
+        .read_stream_until_error_message(RequestId::Integer(failed_request_id))
+        .await?;
+    assert_eq!(error.error.code, -32603);
+    assert!(
+        error.error.message.starts_with("failed to spawn process:"),
+        "unexpected spawn error: {}",
+        error.error.message
+    );
+
+    let command = if cfg!(windows) {
+        vec![
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-NonInteractive".to_string(),
+            "-Command".to_string(),
+            "[Console]::Out.Write('retry-out')".to_string(),
+        ]
+    } else {
+        vec![
+            "sh".to_string(),
+            "-lc".to_string(),
+            "printf retry-out".to_string(),
+        ]
+    };
+    let retry_request_id = mcp
+        .send_process_spawn_request(process_spawn_params(
+            process_handle.clone(),
+            codex_home.path(),
+            command,
+        )?)
+        .await?;
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(retry_request_id))
+        .await?;
+    assert_eq!(response.result, serde_json::json!({}));
+    assert_eq!(
+        read_process_exited(&mut mcp).await?,
+        ProcessExitedNotification {
+            process_handle,
+            exit_code: 0,
+            stdout: "retry-out".to_string(),
+            stdout_cap_reached: false,
+            stderr: String::new(),
+            stderr_cap_reached: false,
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn process_spawn_returns_error_when_local_environment_is_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
