@@ -198,18 +198,24 @@ def test_root_format_driver_covers_all_formatter_groups() -> None:
         "imports_granularity=Item",
         "--check",
     )
-    assert formatters[2].commands[-1].args[-4:] == (
+    format_buildifier_args = formatters[2].commands[-1].args
+    check_buildifier_args = checks[2].commands[-1].args
+    assert format_buildifier_args[:4] == (
+        "dotslash",
+        str(script.BUILDIFIER),
         "-mode=fix",
         "-lint=off",
-        "-r",
-        ".",
     )
-    assert checks[2].commands[-1].args[-4:] == (
+    assert check_buildifier_args[:4] == (
+        "dotslash",
+        str(script.BUILDIFIER),
         "-mode=check",
         "-lint=off",
-        "-r",
-        ".",
     )
+    assert format_buildifier_args[4:] == check_buildifier_args[4:]
+    assert "MODULE.bazel" in format_buildifier_args[4:]
+    assert "third_party/v8/libcxx.BUILD.bazel" in format_buildifier_args[4:]
+    assert not any(path.startswith("codex-rs/target/") for path in format_buildifier_args[4:])
     assert [group.commands[-1].args[-3:] for group in formatters[3:]] == [
         ("ruff", "format", "sdk/python"),
         ("ruff", "format", "scripts"),

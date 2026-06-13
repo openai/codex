@@ -2,6 +2,7 @@
 """Format repository sources or check that they are already formatted."""
 
 import argparse
+import os
 import shlex
 import subprocess
 import sys
@@ -38,14 +39,33 @@ class FormatterResult:
 def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
     just_args = ["just", "--unstable", "--fmt"]
     cargo_args = ["cargo", "fmt", "--", "--config", "imports_granularity=Item"]
+    repository_files = subprocess.check_output(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=REPO_ROOT,
+    ).split(b"\0")
+    buildifier_files: list[str] = []
+    for encoded_path in repository_files:
+        if not encoded_path:
+            continue
+        path = Path(os.fsdecode(encoded_path))
+        name = path.name
+        if (
+            name in {"BUILD", "WORKSPACE", "MODULE.bazel"}
+            or name.startswith(("BUILD.", "WORKSPACE."))
+            or name.endswith((".BUILD.bazel", ".MODULE.bazel", ".bzl", ".sky"))
+            or ".bzl." in name
+            or ".sky." in name
+        ):
+            buildifier_files.append(path.as_posix())
+    buildifier_files.sort()
+
     # Invoke DotSlash explicitly because Windows does not honor shebangs.
     buildifier_args = [
         "dotslash",
         str(BUILDIFIER),
         "-mode=check" if check else "-mode=fix",
         "-lint=off",
-        "-r",
-        ".",
+        *buildifier_files,
     ]
     # Each `--project` retains its local dependency and Ruff configuration context.
     sdk_uv_run_args = [
