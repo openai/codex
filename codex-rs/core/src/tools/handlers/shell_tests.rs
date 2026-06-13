@@ -2,6 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_protocol::models::ShellCommandToolCallParams;
+use codex_tools::ToolExecutor;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
@@ -9,6 +12,7 @@ use pretty_assertions::assert_eq;
 use crate::exec_env::create_env;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::tests::make_session_and_context;
+use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::shell_snapshot::ShellSnapshot;
@@ -188,6 +192,72 @@ async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
             .user_shell()
             .derive_exec_args("echo hello", /*use_login_shell*/ false)
     );
+}
+
+#[tokio::test]
+async fn shell_command_handler_rejects_foreign_environment_before_host_execution() {
+    let (session, mut turn) = make_session_and_context().await;
+    let selected = turn.environments.turn_environments[0].clone();
+    let (environment_id, cwd, path_convention, shell) = match PathConvention::native() {
+        PathConvention::Posix => (
+            "windows",
+            PathUri::parse("file:///C:/workspace").expect("Windows cwd URI"),
+            PathConvention::Windows,
+            Shell {
+                shell_type: ShellType::PowerShell,
+                shell_path: PathBuf::from(r"C:\Program Files\PowerShell\7\pwsh.exe"),
+                shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+            },
+        ),
+        PathConvention::Windows => (
+            "posix",
+            PathUri::parse("file:///workspace").expect("POSIX cwd URI"),
+            PathConvention::Posix,
+            Shell {
+                shell_type: ShellType::Sh,
+                shell_path: PathBuf::from("/bin/sh"),
+                shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+            },
+        ),
+    };
+    turn.environments.turn_environments[0] = TurnEnvironment::new_with_uri(
+        environment_id.to_string(),
+        selected.environment,
+        cwd,
+        path_convention,
+        shell,
+    )
+    .expect("foreign environment");
+    let marker_dir = tempfile::tempdir().expect("marker directory");
+    let marker = marker_dir.path().join("should-not-exist");
+    let handler = ShellCommandHandler::from(codex_tools::ShellCommandBackendConfig::Classic);
+
+    let result = handler
+        .handle(ToolInvocation {
+            session: Arc::new(session),
+            turn: Arc::new(turn),
+            cancellation_token: tokio_util::sync::CancellationToken::new(),
+            tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+            call_id: "foreign-shell".to_string(),
+            tool_name: codex_tools::ToolName::plain("shell_command"),
+            source: ToolCallSource::Direct,
+            payload: ToolPayload::Function {
+                arguments: json!({
+                    "command": format!("touch {}", marker.display()),
+                })
+                .to_string(),
+            },
+        })
+        .await;
+
+    let Err(crate::function_tool::FunctionCallError::RespondToModel(message)) = result else {
+        panic!("expected cross-platform shell rejection");
+    };
+    assert_eq!(
+        message,
+        "shell_command does not support cross-platform execution environments"
+    );
+    assert!(!marker.exists());
 }
 
 #[test]

@@ -166,6 +166,15 @@ impl ShellCommandHandler {
                 "unsupported payload for shell_command handler: {tool_name}"
             )));
         };
+        if turn
+            .environments
+            .primary()
+            .is_some_and(|environment| environment.compatible_cwd().is_none())
+        {
+            return Err(FunctionCallError::RespondToModel(
+                "shell_command does not support cross-platform execution environments".to_string(),
+            ));
+        }
 
         #[allow(deprecated)]
         let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
