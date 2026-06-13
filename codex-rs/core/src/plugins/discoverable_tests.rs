@@ -81,7 +81,7 @@ async fn list_tool_suggest_discoverable_plugins_returns_fallback_plugins_without
 }
 
 #[tokio::test]
-async fn list_tool_suggest_discoverable_plugins_filters_non_fallback_by_installed_apps() {
+async fn list_tool_suggest_discoverable_plugins_does_not_expand_local_plugins_by_installed_apps() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());
     write_openai_curated_marketplace(&curated_root, &["sample", "slack", "hubspot"]);
@@ -92,42 +92,49 @@ async fn list_tool_suggest_discoverable_plugins_filters_non_fallback_by_installe
     let config = load_plugins_config(codex_home.path()).await;
     let discoverable_plugins = list_discoverable_plugins(&config, &[]).await.unwrap();
 
-    assert_eq!(
-        discoverable_plugins
-            .into_iter()
-            .map(|plugin| plugin.id)
-            .collect::<Vec<_>>(),
-        vec!["hubspot@openai-curated".to_string()]
-    );
+    assert_eq!(discoverable_plugins, Vec::<DiscoverablePluginInfo>::new());
 }
 
 #[tokio::test]
-async fn list_tool_suggest_discoverable_plugins_filters_by_loaded_plugin_apps() {
+async fn list_tool_suggest_discoverable_plugins_does_not_read_local_plugins_for_loaded_apps() {
     let hubspot_app_id = "asdk_app_697acb8e53d88191bf7a79e62012ae14";
     let granola_app_id = "asdk_app_697761cab6f48191b5ed345919a3ce8b";
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());
-    write_openai_curated_marketplace(&curated_root, &["hubspot", "granola"]);
+    write_openai_curated_marketplace(&curated_root, &["hubspot", "granola", "sample"]);
     write_plugin_app(&curated_root, "hubspot", "hubspot", hubspot_app_id);
     write_plugin_app(&curated_root, "granola", "granola", granola_app_id);
+    write_file(
+        &curated_root.join("plugins/sample/.app.json"),
+        "invalid json",
+    );
     write_plugins_feature_config(codex_home.path());
 
     let config = load_plugins_config(codex_home.path()).await;
+    let buffer: &'static std::sync::Mutex<Vec<u8>> =
+        Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_level(true)
+        .with_ansi(false)
+        .with_max_level(Level::WARN)
+        .with_span_events(FmtSpan::NONE)
+        .with_writer(MockWriter::new(buffer))
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
     let discoverable_plugins = list_discoverable_plugins(&config, &[hubspot_app_id.to_string()])
         .await
         .unwrap();
 
-    assert_eq!(
-        discoverable_plugins
-            .into_iter()
-            .map(|plugin| plugin.id)
-            .collect::<Vec<_>>(),
-        vec!["hubspot@openai-curated".to_string()]
-    );
+    assert_eq!(discoverable_plugins, Vec::<DiscoverablePluginInfo>::new());
+    let logs = String::from_utf8(buffer.lock().expect("buffer lock").clone())
+        .expect("utf8 logs")
+        .replace('\\', "/");
+    assert_eq!(logs.matches("plugins/sample/.app.json").count(), 0);
 }
 
 #[tokio::test]
-async fn list_tool_suggest_discoverable_plugins_filters_microsoft_by_installed_apps() {
+async fn list_tool_suggest_discoverable_plugins_returns_microsoft_fallback_plugins() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());
     write_openai_curated_marketplace(
@@ -224,7 +231,7 @@ remote_plugin = true
                     "release": {
                         "display_name": "Remote Unlisted",
                         "description": "Remote Unlisted long",
-                        "app_ids": [],
+                        "app_ids": ["remote-unlisted-app"],
                         "interface": {
                             "short_description": "Remote Unlisted short",
                             "long_description": null,
@@ -372,7 +379,7 @@ remote_plugin = true
         &config,
         &plugins_manager,
         Some(&auth),
-        &[],
+        &["remote-unlisted-app".to_string()],
     )
     .await
     .unwrap();
@@ -382,7 +389,10 @@ remote_plugin = true
             .filter(|plugin| plugin.id.ends_with("@openai-curated-remote"))
             .map(|plugin| plugin.id.as_str())
             .collect::<Vec<_>>(),
-        vec!["github@openai-curated-remote"]
+        vec![
+            "github@openai-curated-remote",
+            "remote-unlisted@openai-curated-remote",
+        ]
     );
     let remote_plugins = discoverable_plugins
         .into_iter()
@@ -432,7 +442,7 @@ disabled_tools = [
 }
 
 #[tokio::test]
-async fn list_tool_suggest_discoverable_plugins_filters_sales_apps_by_marketplace() {
+async fn list_tool_suggest_discoverable_plugins_does_not_expand_local_sales_apps() {
     let hubspot_app_id = "asdk_app_697acb8e53d88191bf7a79e62012ae14";
     let granola_app_id = "asdk_app_697761cab6f48191b5ed345919a3ce8b";
     let test_app_id = "asdk_app_test_source";
@@ -493,16 +503,7 @@ source = "/tmp/{sales_marketplace_name}"
     let config = load_plugins_config(codex_home.path()).await;
     let discoverable_plugins = list_discoverable_plugins(&config, &[]).await.unwrap();
 
-    assert_eq!(
-        discoverable_plugins
-            .into_iter()
-            .map(|plugin| plugin.id)
-            .collect::<Vec<_>>(),
-        vec![
-            "granola@openai-curated".to_string(),
-            "hubspot@openai-curated".to_string(),
-        ]
-    );
+    assert_eq!(discoverable_plugins, Vec::<DiscoverablePluginInfo>::new());
 }
 
 #[tokio::test]
