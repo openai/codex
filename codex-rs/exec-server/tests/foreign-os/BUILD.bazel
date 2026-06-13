@@ -18,27 +18,19 @@ rust_binary(
 wine_rust_test(
     name = "smoke-test",
     timeout = "short",
-    srcs = ["wine_windows_exec_server_test.rs"],
-    crate_name = "wine_windows_exec_server_test",
-    crate_root = "wine_windows_exec_server_test.rs",
+    srcs = ["wine_core_test_driver.rs"],
+    crate_name = "wine_core_test_driver",
+    crate_root = "wine_core_test_driver.rs",
     host_binaries = {
-        "codex-app-server": "//codex-rs/app-server:codex-app-server",
+        "codex-core-tests": "//codex-rs/core:wine-remote-env-test-driver",
     },
     windows_binaries = {
         "wine-windows-exec-server": ":windows-exec-server",
     },
     deps = [
         "//bazel/rules/testing/wine:wine_test_support",
-        "//codex-rs/app-server-protocol",
-        "//codex-rs/app-server/tests/common",
-        "//codex-rs/core/tests/common",
-        "//codex-rs/exec-server",
-        "//codex-rs/features",
         "//codex-rs/utils/cargo-bin",
         "@crates//:anyhow",
-        "@crates//:pretty_assertions",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
         "@crates//:tokio",
     ],
 )

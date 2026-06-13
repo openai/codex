@@ -85,6 +85,7 @@ mod prompt_debug_tests;
 mod quota_exceeded;
 mod realtime_conversation;
 mod remote_env;
+mod remote_env_windows;
 mod remote_models;
 mod request_compression;
 #[cfg(not(target_os = "windows"))]
