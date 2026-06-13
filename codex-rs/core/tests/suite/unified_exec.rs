@@ -526,7 +526,6 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "flaky"]
 async fn unified_exec_respects_workdir_override() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -544,10 +543,18 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
     let test = builder.build_with_remote_env(&server).await?;
 
     let workdir = create_workspace_directory(&test, "uexec_workdir_test").await?;
+    let marker_uri = PathUri::from_path(workdir.join("cwd-marker.txt"))?;
+    test.fs()
+        .write_file(
+            &marker_uri,
+            b"resolved-absolute-workdir".to_vec(),
+            /*sandbox*/ None,
+        )
+        .await?;
 
     let call_id = "uexec-workdir";
     let args = json!({
-        "cmd": "pwd",
+        "cmd": "cat cwd-marker.txt",
         "yield_time_ms": 250,
         "workdir": workdir.to_string_lossy().to_string(),
     });
@@ -585,8 +592,14 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
     })
     .await;
 
-    let requests = request_log.requests();
-    assert!(!requests.is_empty(), "expected at least one POST request");
+    let output = request_log
+        .function_call_output_text(call_id)
+        .expect("missing absolute workdir exec output");
+    let output = parse_unified_exec_output(&output)?;
+    assert_eq!(
+        (output.exit_code, output.output),
+        (Some(0), "resolved-absolute-workdir".to_string())
+    );
 
     Ok(())
 }
