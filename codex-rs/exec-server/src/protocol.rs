@@ -3,9 +3,6 @@ use std::collections::HashMap;
 use crate::FileSystemSandboxContext;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
-use codex_utils_path_uri::ApiPathString;
-use codex_utils_path_uri::ApiPathStringError;
-use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use serde::Serialize;
@@ -71,18 +68,6 @@ pub struct InitializeResponse {
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentInfo {
     pub shell: ShellInfo,
-    /// Native path syntax used by this environment.
-    pub path_convention: PathConvention,
-}
-
-impl EnvironmentInfo {
-    /// Renders a path using this environment's native path syntax.
-    ///
-    /// TODO(anp): Once `PathUri` carries an environment identifier, invert this
-    /// relationship and use the URI to resolve the environment information.
-    pub fn render_path(&self, path: &PathUri) -> Result<ApiPathString, ApiPathStringError> {
-        ApiPathString::from_path_uri(path, self.path_convention)
-    }
 }
 
 /// Shell detected for an execution/filesystem environment.
@@ -467,13 +452,10 @@ mod base64_bytes {
 
 #[cfg(test)]
 mod tests {
-    use super::EnvironmentInfo;
     use super::FsReadFileParams;
     use super::HttpRequestParams;
-    use super::ShellInfo;
     use crate::FileSystemSandboxContext;
     use codex_protocol::models::PermissionProfile;
-    use codex_utils_path_uri::PathConvention;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
 
@@ -507,27 +489,6 @@ mod tests {
                 "path": expected.path.to_string(),
                 "sandbox": serde_json::to_value(expected_sandbox)
                     .expect("sandbox should serialize"),
-            })
-        );
-    }
-
-    #[test]
-    fn environment_info_serializes_path_convention() {
-        let current = EnvironmentInfo {
-            shell: ShellInfo {
-                name: "powershell".to_string(),
-                path: "powershell.exe".to_string(),
-            },
-            path_convention: PathConvention::Windows,
-        };
-        assert_eq!(
-            serde_json::to_value(current).expect("environment info should serialize"),
-            serde_json::json!({
-                "shell": {
-                    "name": "powershell",
-                    "path": "powershell.exe",
-                },
-                "pathConvention": "windows",
             })
         );
     }

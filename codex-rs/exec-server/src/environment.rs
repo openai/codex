@@ -26,7 +26,6 @@ use crate::protocol::ShellInfo;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
 use codex_shell_command::shell_detect::DetectedShell;
-use codex_utils_path_uri::PathConvention;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 
@@ -474,7 +473,6 @@ impl EnvironmentInfo {
     pub(crate) fn local() -> Self {
         Self {
             shell: codex_shell_command::shell_detect::default_user_shell().into(),
-            path_convention: PathConvention::native(),
         }
     }
 }
@@ -496,14 +494,10 @@ mod tests {
     use super::EnvironmentManager;
     use super::LOCAL_ENVIRONMENT_ID;
     use super::REMOTE_ENVIRONMENT_ID;
-    use crate::EnvironmentInfo;
     use crate::ExecServerRuntimePaths;
     use crate::ProcessId;
-    use crate::ShellInfo;
     use crate::environment_provider::EnvironmentDefault;
     use crate::environment_provider::EnvironmentProviderSnapshot;
-    use codex_utils_path_uri::PathConvention;
-    use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
 
     fn test_runtime_paths() -> ExecServerRuntimePaths {
@@ -516,25 +510,6 @@ mod tests {
 
     fn assert_local_environment_unavailable(manager: &EnvironmentManager) {
         assert!(manager.try_local_environment().is_none());
-    }
-
-    #[test]
-    fn environment_info_renders_paths_using_its_convention() {
-        let info = EnvironmentInfo {
-            shell: ShellInfo {
-                name: "powershell".to_string(),
-                path: "powershell.exe".to_string(),
-            },
-            path_convention: PathConvention::Windows,
-        };
-        let path = PathUri::parse("file:///C:/workspace/src/main.rs").expect("valid file URI");
-
-        assert_eq!(
-            info.render_path(&path)
-                .expect("Windows path should render")
-                .into_string(),
-            r"C:\workspace\src\main.rs"
-        );
     }
 
     #[tokio::test]

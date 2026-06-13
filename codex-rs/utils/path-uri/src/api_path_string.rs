@@ -51,7 +51,12 @@ impl fmt::Display for PathConvention {
 /// accidentally applying the current host's path rules. Opaque fallback paths
 /// are decoded using the supplied convention and converted to UTF-8 lossily at
 /// this API boundary because the value is serialized as a JSON string.
+///
+/// Deserialization accepts any UTF-8 string without interpreting or validating
+/// it. Relative path text remains valid until an operation such as
+/// [`Self::to_path_uri`] requires an absolute path.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, TS)]
+#[serde(transparent)]
 #[ts(type = "string")]
 pub struct ApiPathString(String);
 
@@ -97,6 +102,27 @@ impl ApiPathString {
             path: self.0.clone(),
             convention,
         })
+    }
+
+    /// Infers the path convention of an absolute API path from its spelling.
+    ///
+    /// Relative paths and ambiguous spellings return `None`. In particular,
+    /// slash-prefixed paths are treated as POSIX even when they could also be
+    /// interpreted as slash-delimited Windows UNC paths.
+    pub fn infer_absolute_path_convention(&self) -> Option<PathConvention> {
+        let bytes = self.0.as_bytes();
+        let has_windows_drive_root = matches!(
+            bytes,
+            [drive, b':', separator, ..]
+                if drive.is_ascii_alphabetic() && is_windows_separator_byte(*separator)
+        );
+        if has_windows_drive_root || self.0.starts_with(r"\\") {
+            Some(PathConvention::Windows)
+        } else if self.0.starts_with('/') {
+            Some(PathConvention::Posix)
+        } else {
+            None
+        }
     }
 
     pub fn as_str(&self) -> &str {
