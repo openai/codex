@@ -73,11 +73,19 @@ impl TurnEnvironment {
         path_convention: PathConvention,
         shell: shell::Shell,
     ) -> CodexResult<Self> {
-        ApiPathString::from_path_uri(&cwd, path_convention).map_err(|err| {
-            CodexErr::InvalidRequest(format!(
-                "turn environment cwd `{cwd}` cannot be rendered for {path_convention}: {err}"
-            ))
-        })?;
+        match ApiPathString::from_path_uri(&cwd, path_convention) {
+            Ok(_) => {}
+            Err(_) if environment.is_remote() && path_convention != PathConvention::native() => {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "explicit environment cwd required for foreign environment `{environment_id}` using {path_convention} path syntax"
+                )));
+            }
+            Err(err) => {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "turn environment cwd `{cwd}` cannot be rendered for {path_convention}: {err}"
+                )));
+            }
+        }
         Ok(Self {
             environment_id,
             environment,

@@ -163,6 +163,30 @@ async fn exercise_app_server(websocket_url: String) -> Result<()> {
         "invalid environment cwd must fail before model inference"
     );
 
+    let default_request_id = app_server
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let default_response: JSONRPCError = timeout(
+        APP_SERVER_TIMEOUT,
+        app_server.read_stream_until_error_message(RequestId::Integer(default_request_id)),
+    )
+    .await??;
+    assert_eq!(default_response.id, RequestId::Integer(default_request_id));
+    assert_eq!(default_response.error.code, -32600);
+    assert_eq!(
+        default_response.error.message,
+        format!(
+            "explicit environment cwd required for foreign environment `{REMOTE_ENVIRONMENT_ID}` using Windows path syntax"
+        )
+    );
+    assert!(
+        response_mock.requests().is_empty(),
+        "foreign default cwd must fail before model inference"
+    );
+
     let environment = remote_windows_environment();
     let thread_request_id = app_server
         .send_thread_start_request(ThreadStartParams {

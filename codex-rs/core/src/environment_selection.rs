@@ -212,6 +212,28 @@ url = "ws://127.0.0.1:8765"
         assert!(err.to_string().contains("duplicate"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn foreign_remote_environment_requires_explicit_native_cwd() {
+        let environment = Arc::new(
+            Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
+                .expect("remote environment"),
+        );
+        let error = TurnEnvironment::new_with_uri(
+            REMOTE_ENVIRONMENT_ID.to_string(),
+            environment,
+            PathUri::parse("file:///workspace").expect("POSIX cwd URI"),
+            codex_utils_path_uri::PathConvention::Windows,
+            crate::shell::default_user_shell(),
+        )
+        .expect_err("host cwd must not be projected into a foreign environment");
+
+        assert_eq!(
+            error.to_string(),
+            "explicit environment cwd required for foreign environment `remote` using Windows path syntax"
+        );
+    }
+
     #[tokio::test]
     async fn resolved_environment_selections_use_first_selection_as_primary() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
