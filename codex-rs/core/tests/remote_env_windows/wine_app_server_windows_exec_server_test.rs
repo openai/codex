@@ -22,8 +22,11 @@ use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnEnvironmentParams;
 use codex_app_server_protocol::TurnStartParams;
@@ -47,8 +50,10 @@ const APP_SERVER_TIMEOUT: Duration = Duration::from_secs(90);
 const TEST_TIMEOUT: Duration = Duration::from_secs(240);
 const FIRST_EXEC_CALL_ID: &str = "wine-app-server-pwsh-default";
 const STICKY_EXEC_CALL_ID: &str = "wine-app-server-pwsh-explicit";
+const RESUMED_EXEC_CALL_ID: &str = "wine-app-server-pwsh-resumed";
 const FIRST_OUTPUT_MARKER: &str = "WINE_APP_SERVER_DEFAULT";
 const STICKY_OUTPUT_MARKER: &str = "WINE_APP_SERVER_STICKY";
+const RESUMED_OUTPUT_MARKER: &str = "WINE_APP_SERVER_RESUMED";
 const RELATIVE_WORKDIR: &str = "relative";
 const FIRST_WINDOWS_CWD: &str = r"C:\workspace\relative";
 const ABSOLUTE_WINDOWS_CWD: &str = r"C:\workspace\absolute";
@@ -85,6 +90,13 @@ async fn exercise_app_server(websocket_url: String) -> Result<()> {
         "max_output_tokens": 2_000,
     })
     .to_string();
+    let resumed_exec_arguments = json!({
+        "cmd": powershell_probe(RESUMED_OUTPUT_MARKER),
+        "tty": false,
+        "yield_time_ms": 30_000,
+        "max_output_tokens": 2_000,
+    })
+    .to_string();
     let response_mock = responses::mount_sse_sequence(
         &model_server,
         vec![
@@ -115,6 +127,20 @@ async fn exercise_app_server(websocket_url: String) -> Result<()> {
                 responses::ev_response_created("wine-app-server-response-4"),
                 responses::ev_assistant_message("wine-app-server-message-2", "sticky done"),
                 responses::ev_completed("wine-app-server-response-4"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("wine-app-server-response-5"),
+                responses::ev_function_call(
+                    RESUMED_EXEC_CALL_ID,
+                    "exec_command",
+                    &resumed_exec_arguments,
+                ),
+                responses::ev_completed("wine-app-server-response-5"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("wine-app-server-response-6"),
+                responses::ev_assistant_message("wine-app-server-message-3", "resume done"),
+                responses::ev_completed("wine-app-server-response-6"),
             ]),
         ],
     )
@@ -260,6 +286,45 @@ async fn exercise_app_server(websocket_url: String) -> Result<()> {
     )
     .await?;
     timeout(APP_SERVER_TIMEOUT, app_server.initialize()).await??;
+    let resume_request_id = app_server
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread_id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let resume_response: JSONRPCResponse = timeout(
+        APP_SERVER_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(resume_request_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed_thread,
+        ..
+    } = to_response(resume_response)?;
+    assert_eq!(resumed_thread.id, thread_id);
+    assert_eq!(resumed_thread.status, ThreadStatus::Idle);
+
+    let resumed_items = submit_turn_and_collect_command(
+        &mut app_server,
+        TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![UserInput::Text {
+                text: "Run the resumed Windows environment without overrides.".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        },
+        RESUMED_EXEC_CALL_ID,
+    )
+    .await?;
+    assert_command_items(
+        &resumed_items,
+        RESUMED_EXEC_CALL_ID,
+        WINDOWS_WORKSPACE,
+        RESUMED_OUTPUT_MARKER,
+        POWERSHELL_PATH,
+    );
+
     let read_request_id = app_server
         .send_thread_read_request(ThreadReadParams {
             thread_id,
@@ -289,7 +354,11 @@ async fn exercise_app_server(websocket_url: String) -> Result<()> {
         .collect::<Vec<_>>();
     assert_eq!(
         persisted_command_ids,
-        vec![vec![FIRST_EXEC_CALL_ID], vec![STICKY_EXEC_CALL_ID]]
+        vec![
+            vec![FIRST_EXEC_CALL_ID],
+            vec![STICKY_EXEC_CALL_ID],
+            vec![RESUMED_EXEC_CALL_ID],
+        ]
     );
     let persisted_first = persisted_thread.turns[0]
         .items
@@ -313,9 +382,20 @@ async fn exercise_app_server(websocket_url: String) -> Result<()> {
         ABSOLUTE_WINDOWS_CWD,
         STICKY_OUTPUT_MARKER,
     );
+    let persisted_resumed = persisted_thread.turns[2]
+        .items
+        .iter()
+        .find(|item| matches!(item, ThreadItem::CommandExecution { id, .. } if id == RESUMED_EXEC_CALL_ID))
+        .context("persisted resumed command should be present")?;
+    assert_completed_command_item(
+        persisted_resumed,
+        RESUMED_EXEC_CALL_ID,
+        WINDOWS_WORKSPACE,
+        RESUMED_OUTPUT_MARKER,
+    );
 
     let requests = response_mock.requests();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 6);
     let first_environment_context = requests[0]
         .message_input_texts("user")
         .into_iter()
@@ -335,6 +415,12 @@ async fn exercise_app_server(websocket_url: String) -> Result<()> {
         STICKY_OUTPUT_MARKER,
         ABSOLUTE_WINDOWS_CWD,
     )?;
+    assert_function_output(
+        &requests[5],
+        RESUMED_EXEC_CALL_ID,
+        RESUMED_OUTPUT_MARKER,
+        WINDOWS_WORKSPACE,
+    )?;
 
     let sticky_contexts = requests[2]
         .message_input_texts("user")
@@ -350,11 +436,28 @@ async fn exercise_app_server(websocket_url: String) -> Result<()> {
         assert_windows_environment_context(&environment_context);
     }
 
+    let resumed_contexts = requests[4]
+        .message_input_texts("user")
+        .into_iter()
+        .filter(|text| text.starts_with("<environment_context>") && text.contains("<cwd>"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        resumed_contexts.len(),
+        1,
+        "resumed turn should restore one environment context without redundant updates"
+    );
+    for environment_context in resumed_contexts {
+        assert_windows_environment_context(&environment_context);
+    }
+
     let linux_cwd = codex_home.path().to_string_lossy();
     for request in requests {
         assert_no_linux_execution_artifacts(&request.body_json().to_string(), &linux_cwd);
     }
-    assert_no_linux_execution_artifacts(&format!("{first_items:?}{sticky_items:?}"), &linux_cwd);
+    assert_no_linux_execution_artifacts(
+        &format!("{first_items:?}{sticky_items:?}{resumed_items:?}"),
+        &linux_cwd,
+    );
     assert_no_linux_execution_artifacts(&format!("{persisted_thread:?}"), &linux_cwd);
 
     Ok(())
@@ -560,6 +663,8 @@ fn assert_no_linux_execution_artifacts(value: &str, linux_cwd: &str) {
     for unexpected in [
         "/bin/bash",
         "/bin/sh",
+        "<shell>bash</shell>",
+        "<shell>sh</shell>",
         "codex-linux-sandbox",
         "codex-execve-wrapper",
     ] {
