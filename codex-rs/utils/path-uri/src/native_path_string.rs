@@ -33,9 +33,6 @@ impl PathConvention {
     }
 }
 
-#[cfg(not(any(windows, unix)))]
-compile_error!("PathConvention::native() requires a Windows or Unix target");
-
 impl fmt::Display for PathConvention {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -123,10 +120,15 @@ impl JsonSchema for NativePathString {
 
 fn render_posix_path(path: &PathUri) -> Result<String, NativePathStringError> {
     let url = path.to_url();
+    // POSIX file paths do not have a UNC authority, so `file://server/share`
+    // cannot be represented as `/share` without losing the server identity.
     if url.host_str().is_some() {
         return Err(incompatible_convention(path, PathConvention::Posix));
     }
 
+    // URI segments are already separated with `/` on every host. Decode each
+    // one independently so `file:///a%20dir/file` becomes `/a dir/file` while
+    // an encoded separator cannot silently introduce another path component.
     let mut rendered = String::new();
     for segment in path_segments(&url) {
         rendered.push('/');
@@ -144,6 +146,9 @@ fn render_windows_path(path: &PathUri) -> Result<String, NativePathStringError> 
     let mut segments = path_segments(&url);
     let mut rendered = String::new();
     if let Some(host) = url.host_str() {
+        // A URI authority selects the UNC form: `file://server/share/file`
+        // becomes `\\server\share\file`. The first segment is the share name,
+        // which must be present and valid as a Windows path component.
         let Some(share) = segments.next() else {
             return Err(incompatible_convention(path, PathConvention::Windows));
         };
@@ -157,6 +162,9 @@ fn render_windows_path(path: &PathUri) -> Result<String, NativePathStringError> 
         rendered.push('\\');
         rendered.push_str(&share);
     } else {
+        // Without an authority, Windows requires a drive root. For example,
+        // `file:///C:/src/main.rs` begins with the `C:` URI segment and renders
+        // as `C:\src\main.rs`; a POSIX URI such as `file:///usr/bin` is rejected.
         let Some(drive) = segments.next() else {
             return Err(incompatible_convention(path, PathConvention::Windows));
         };
@@ -169,6 +177,8 @@ fn render_windows_path(path: &PathUri) -> Result<String, NativePathStringError> 
     }
 
     for segment in segments {
+        // URL path separators become Windows separators after each component
+        // has been decoded and checked using Windows filename rules.
         let segment = decode_native_segment(path, segment, PathConvention::Windows)?;
         if !segment.is_empty() {
             validate_windows_component(path, &segment)?;
@@ -176,6 +186,8 @@ fn render_windows_path(path: &PathUri) -> Result<String, NativePathStringError> 
         rendered.push('\\');
         rendered.push_str(&segment);
     }
+    // `file:///C:` and `file:///C:/` both identify the drive root, never the
+    // drive-relative path `C:`.
     if rendered.len() == 2 && rendered.as_bytes()[1] == b':' {
         rendered.push('\\');
     }
@@ -192,7 +204,11 @@ fn decode_native_segment(
     segment: &str,
     convention: PathConvention,
 ) -> Result<String, NativePathStringError> {
+    // Decode exactly once. Thus `%20` becomes a space and `%252F` becomes the
+    // literal text `%2F`, rather than being decoded a second time into `/`.
     let bytes = urlencoding::decode_binary(segment.as_bytes());
+    // A separator encoded inside one URI segment would change path structure:
+    // reject `%2F` for both conventions and `%5C` for Windows.
     let contains_separator =
         bytes.contains(&b'/') || (convention == PathConvention::Windows && bytes.contains(&b'\\'));
     if contains_separator {
@@ -212,6 +228,9 @@ fn validate_windows_component(
     path: &PathUri,
     component: &str,
 ) -> Result<(), NativePathStringError> {
+    // Windows forbids control characters and `<>:"/\|?*` in components. It
+    // also aliases trailing spaces and dots, so names such as `report?.txt`,
+    // `trailing.`, and `trailing ` are rejected instead of being rewritten.
     let contains_invalid_character = component
         .chars()
         .any(|character| character <= '\u{1f}' || r#"<>:"/\|?*"#.contains(character));
