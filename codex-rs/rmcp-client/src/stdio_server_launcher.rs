@@ -35,6 +35,7 @@ use codex_exec_server::ExecEnvPolicy;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcess;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+use codex_utils_path_uri::PathUri;
 #[cfg(unix)]
 use codex_utils_pty::process_group::kill_process_group;
 #[cfg(unix)]
@@ -487,6 +488,7 @@ impl ExecutorStdioServerLauncher {
         // before sending an executor request.
         let argv = Self::process_api_argv(&program, &args).map_err(io::Error::other)?;
         let env = Self::process_api_env(envs).map_err(io::Error::other)?;
+        let cwd = PathUri::from_path(cwd)?;
         let process_id = ExecutorProcessTransport::next_process_id();
         // Start the MCP server process on the executor with raw pipes. `tty=false`
         // keeps stdout as a clean protocol stream, while `pipe_stdin=true` lets

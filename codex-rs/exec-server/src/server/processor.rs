@@ -195,6 +195,7 @@ mod tests {
     use codex_app_server_protocol::JSONRPCRequest;
     use codex_app_server_protocol::JSONRPCResponse;
     use codex_app_server_protocol::RequestId;
+    use codex_utils_path_uri::PathUri;
     use serde::Serialize;
     use serde::de::DeserializeOwned;
     use tokio::io::AsyncBufReadExt;
@@ -396,7 +397,7 @@ mod tests {
         ExecParams {
             process_id,
             argv: sleep_then_print_argv(),
-            cwd: std::env::current_dir().expect("cwd"),
+            cwd: PathUri::from_path(std::env::current_dir().expect("cwd")).expect("cwd URI"),
             env_policy: None,
             env,
             tty: false,

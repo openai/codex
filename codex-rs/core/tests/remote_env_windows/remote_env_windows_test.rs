@@ -7,8 +7,6 @@ use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ExecCommandSource;
-use codex_protocol::protocol::ExecCommandStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
@@ -23,7 +21,6 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
-use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
@@ -33,7 +30,7 @@ const CALL_ID: &str = "wine-cmd-smoke";
 const COMMAND: &str = "echo WINE_BAZEL_OK&&cd";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn windows_exec_server_records_host_shell_mismatch() -> Result<()> {
+async fn windows_exec_server_rejects_non_native_cwd_uri() -> Result<()> {
     let executable = codex_utils_cargo_bin::cargo_bin("wine-windows-exec-server")?;
     let mut exec_server = WineTestCommand::new(executable)
         .env("CODEX_HOME", r"C:\codex-home")
@@ -124,79 +121,36 @@ async fn windows_exec_server_records_host_shell_mismatch() -> Result<()> {
                 })
                 .await?;
 
-            let mut begin = None;
-            let mut end = None;
+            let mut saw_exec_event = false;
             loop {
                 match wait_for_event(&test.codex, |_| true).await {
                     EventMsg::ExecCommandBegin(event) if event.call_id == CALL_ID => {
-                        begin = Some(event)
+                        saw_exec_event = true
                     }
                     EventMsg::ExecCommandEnd(event) if event.call_id == CALL_ID => {
-                        end = Some(event)
+                        saw_exec_event = true
                     }
                     EventMsg::TurnComplete(_) => break,
                     _ => {}
                 }
             }
 
-            let begin = begin.context("exec_command should emit a begin event")?;
-            let expected_commands = [
-                vec![
-                    "/bin/bash".to_string(),
-                    "-c".to_string(),
-                    COMMAND.to_string(),
-                ],
-                vec!["/bin/sh".to_string(), "-c".to_string(), COMMAND.to_string()],
-            ];
-            // This intentionally records the current cross-OS failure mode: the Linux
-            // orchestrator resolves its own shell before sending the command to the
-            // Windows exec-server, where that Unix shell cannot start.
             assert!(
-                expected_commands.contains(&begin.command),
-                "unexpected command: {:?}",
-                begin.command,
-            );
-            assert_eq!(
-                (begin.cwd.clone(), begin.source),
-                (
-                    test.config.cwd.clone(),
-                    ExecCommandSource::UnifiedExecStartup,
-                ),
-            );
-
-            let end = end.context("exec_command should emit an end event")?;
-            assert_eq!(
-                (
-                    end.command,
-                    end.cwd,
-                    end.source,
-                    end.stdout,
-                    end.stderr,
-                    end.aggregated_output,
-                    end.exit_code,
-                    end.status,
-                ),
-                (
-                    begin.command,
-                    test.config.cwd.clone(),
-                    ExecCommandSource::UnifiedExecStartup,
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    -1,
-                    ExecCommandStatus::Failed,
-                ),
+                !saw_exec_event,
+                "a non-native cwd should be rejected before process lifecycle events",
             );
 
             let request = response_mock
                 .last_request()
-                .context("model should receive the failed command output")?;
+                .context("model should receive the rejected command output")?;
             let (output, success) = request
                 .function_call_output_content_and_success(CALL_ID)
-                .context("failed command output should be present")?;
-            let output = output.context("failed command output should contain text")?;
+                .context("rejected command output should be present")?;
+            let output = output.context("rejected command output should contain text")?;
             assert!(
-                output.contains("Process exited with code -1"),
+                output.contains("exec-server rejected request (-32602)")
+                    && output.contains("cwd URI")
+                    && output.contains("is not valid on this exec-server host"),
                 "unexpected command output: {output:?}",
             );
             assert_ne!(success, Some(true));

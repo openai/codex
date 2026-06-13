@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use crate::FileSystemSandboxContext;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -77,7 +76,8 @@ pub struct EnvironmentInfo {
 pub struct ShellInfo {
     /// Stable shell name, for example `zsh`, `bash`, `powershell`, `sh`, or `cmd`.
     pub name: String,
-    /// Path the exec server would use for that shell.
+    /// Target-native shell executable path or command name. Fallbacks such as `cmd.exe` need not
+    /// be absolute, so this is not a [`PathUri`].
     pub path: String,
 }
 
@@ -88,7 +88,8 @@ pub struct ExecParams {
     /// This is a protocol key, not an OS pid.
     pub process_id: ProcessId,
     pub argv: Vec<String>,
-    pub cwd: PathBuf,
+    /// Working directory URI, interpreted using the exec-server host's path rules at launch time.
+    pub cwd: PathUri,
     #[serde(default)]
     pub env_policy: Option<ExecEnvPolicy>,
     pub env: HashMap<String, String>,
@@ -96,6 +97,8 @@ pub struct ExecParams {
     /// Keep non-tty stdin writable through `process/write`.
     #[serde(default)]
     pub pipe_stdin: bool,
+    /// Optional process-visible argv0 override. Values such as `codex-linux-sandbox` are command
+    /// names rather than paths, so this is not a [`PathUri`].
     pub arg0: Option<String>,
 }
 
