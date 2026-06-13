@@ -108,15 +108,120 @@ pub(crate) async fn resolve_environment_selections(
 
 #[cfg(test)]
 mod tests {
+    use codex_app_server_protocol::JSONRPCMessage;
+    use codex_app_server_protocol::JSONRPCResponse;
     use codex_exec_server::Environment;
+    use codex_exec_server::EnvironmentInfo;
     use codex_exec_server::ExecServerRuntimePaths;
+    use codex_exec_server::InitializeResponse;
     use codex_exec_server::LOCAL_ENVIRONMENT_ID;
     use codex_exec_server::REMOTE_ENVIRONMENT_ID;
+    use codex_exec_server::ShellInfo;
     use codex_protocol::protocol::TurnEnvironmentSelection;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_path_uri::PathConvention;
+    use futures::SinkExt;
+    use futures::StreamExt;
     use pretty_assertions::assert_eq;
+    use tokio::net::TcpListener;
+    use tokio::net::TcpStream;
+    use tokio::task::JoinHandle;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
+    use tokio_tungstenite::WebSocketStream;
+    use tokio_tungstenite::accept_async;
+    use tokio_tungstenite::tungstenite::Message;
 
     use super::*;
+
+    async fn spawn_environment_info_server(info: EnvironmentInfo) -> (String, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("environment info server should bind");
+        let websocket_url = format!(
+            "ws://{}",
+            listener.local_addr().expect("environment info address")
+        );
+        let server = tokio::spawn(async move {
+            let (stream, _) = timeout(Duration::from_secs(1), listener.accept())
+                .await
+                .expect("environment info connection should not time out")
+                .expect("environment info connection should succeed");
+            let mut websocket = accept_async(stream)
+                .await
+                .expect("environment info websocket handshake should succeed");
+
+            let initialize = match read_jsonrpc_websocket(&mut websocket).await {
+                JSONRPCMessage::Request(request) if request.method == "initialize" => request,
+                other => panic!("expected initialize request, got {other:?}"),
+            };
+            write_jsonrpc_websocket(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: initialize.id,
+                    result: serde_json::to_value(InitializeResponse {
+                        session_id: "session-1".to_string(),
+                    })
+                    .expect("initialize response should serialize"),
+                }),
+            )
+            .await;
+
+            match read_jsonrpc_websocket(&mut websocket).await {
+                JSONRPCMessage::Notification(notification)
+                    if notification.method == "initialized" => {}
+                other => panic!("expected initialized notification, got {other:?}"),
+            }
+            let environment_info = match read_jsonrpc_websocket(&mut websocket).await {
+                JSONRPCMessage::Request(request) if request.method == "environment/info" => request,
+                other => panic!("expected environment/info request, got {other:?}"),
+            };
+            write_jsonrpc_websocket(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: environment_info.id,
+                    result: serde_json::to_value(info)
+                        .expect("environment info response should serialize"),
+                }),
+            )
+            .await;
+        });
+
+        (websocket_url, server)
+    }
+
+    async fn read_jsonrpc_websocket(websocket: &mut WebSocketStream<TcpStream>) -> JSONRPCMessage {
+        loop {
+            match timeout(Duration::from_secs(1), websocket.next())
+                .await
+                .expect("environment info read should not time out")
+                .expect("environment info websocket should stay open")
+                .expect("environment info frame should read")
+            {
+                Message::Text(text) => {
+                    return serde_json::from_str(text.as_ref())
+                        .expect("environment info text frame should parse");
+                }
+                Message::Binary(bytes) => {
+                    return serde_json::from_slice(bytes.as_ref())
+                        .expect("environment info binary frame should parse");
+                }
+                Message::Ping(_) | Message::Pong(_) => {}
+                other => panic!("expected environment info JSON-RPC frame, got {other:?}"),
+            }
+        }
+    }
+
+    async fn write_jsonrpc_websocket(
+        websocket: &mut WebSocketStream<TcpStream>,
+        message: JSONRPCMessage,
+    ) {
+        let encoded = serde_json::to_string(&message).expect("JSON-RPC response should serialize");
+        websocket
+            .send(Message::Text(encoded.into()))
+            .await
+            .expect("environment info response should write");
+    }
 
     fn test_runtime_paths() -> ExecServerRuntimePaths {
         ExecServerRuntimePaths::new(
@@ -210,6 +315,39 @@ url = "ws://127.0.0.1:8765"
         .expect_err("duplicate environment id should fail");
 
         assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[tokio::test]
+    async fn resolve_environment_selections_rejects_unknown_shell_metadata() {
+        let (websocket_url, server) = spawn_environment_info_server(EnvironmentInfo {
+            shell: ShellInfo {
+                name: "fish".to_string(),
+                path: "/usr/bin/fish".to_string(),
+            },
+            path_convention: PathConvention::native(),
+        })
+        .await;
+        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let manager = EnvironmentManager::default_for_tests();
+        manager
+            .upsert_environment("malformed".to_string(), websocket_url)
+            .expect("malformed metadata environment should register");
+
+        let error = resolve_environment_selections(
+            &manager,
+            &[TurnEnvironmentSelection {
+                environment_id: "malformed".to_string(),
+                cwd: PathUri::from_abs_path(&cwd),
+            }],
+        )
+        .await
+        .expect_err("unknown shell metadata must reject the selected environment");
+
+        assert_eq!(
+            error.to_string(),
+            "failed to resolve shell for environment `malformed`: unknown environment shell `fish`"
+        );
+        server.await.expect("environment info server should finish");
     }
 
     #[cfg(unix)]
