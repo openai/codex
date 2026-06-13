@@ -272,6 +272,9 @@ async fn run_lifecycle_fixture(
         &config_path,
         format!(
             r#"{config}
+[shell_environment_policy.set]
+PATH = "/usr/bin:/bin"
+
 [features]
 plugins = true
 plugin_script_lifecycle = true
