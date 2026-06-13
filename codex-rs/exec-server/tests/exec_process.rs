@@ -92,53 +92,6 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
     Ok(())
 }
 
-async fn assert_exec_process_reuses_id_after_spawn_failure(use_remote: bool) -> Result<()> {
-    let context = create_process_context(use_remote).await?;
-    let process_id = ProcessId::from("proc-spawn-failure");
-    let cwd = PathUri::from_path(std::env::current_dir()?)?;
-    let error = match context
-        .backend
-        .start(ExecParams {
-            process_id: process_id.clone(),
-            argv: vec!["/codex-exec-server-test/definitely-missing".to_string()],
-            cwd: cwd.clone(),
-            env_policy: /*env_policy*/ None,
-            env: Default::default(),
-            tty: false,
-            pipe_stdin: false,
-            arg0: None,
-        })
-        .await
-    {
-        Ok(_) => anyhow::bail!("missing executable should fail during process launch"),
-        Err(error) => error,
-    };
-    let ExecServerError::Server { code, .. } = error else {
-        anyhow::bail!("unexpected process launch error: {error}");
-    };
-    assert_eq!(code, -32603);
-
-    let session = context
-        .backend
-        .start(ExecParams {
-            process_id,
-            argv: vec!["true".to_string()],
-            cwd,
-            env_policy: /*env_policy*/ None,
-            env: Default::default(),
-            tty: false,
-            pipe_stdin: false,
-            arg0: None,
-        })
-        .await?;
-    let wake_rx = session.process.subscribe_wake();
-    assert_eq!(
-        collect_process_output_from_reads(session.process, wake_rx).await?,
-        (String::new(), Some(0), true)
-    );
-    Ok(())
-}
-
 async fn read_process_until_change(
     session: Arc<dyn ExecProcess>,
     wake_rx: &mut watch::Receiver<u64>,
@@ -902,12 +855,69 @@ async fn exec_process_rejects_non_native_cwd_without_reserving_process_id(
 
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
-#[cfg_attr(not(unix), ignore = "Unix-only exec-server process test")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 // Serialize tests that launch a real exec-server process through the full CLI.
 #[serial_test::serial(remote_exec_server)]
 async fn exec_process_reuses_id_after_spawn_failure(use_remote: bool) -> Result<()> {
-    assert_exec_process_reuses_id_after_spawn_failure(use_remote).await
+    let context = create_process_context(use_remote).await?;
+    let process_id = ProcessId::from("proc-spawn-failure");
+    let cwd = PathUri::from_path(std::env::current_dir()?)?;
+    let missing_executable = if cfg!(windows) {
+        r"C:\codex-exec-server-test\definitely-missing.exe"
+    } else {
+        "/codex-exec-server-test/definitely-missing"
+    };
+    let error = match context
+        .backend
+        .start(ExecParams {
+            process_id: process_id.clone(),
+            argv: vec![missing_executable.to_string()],
+            cwd: cwd.clone(),
+            env_policy: /*env_policy*/ None,
+            env: Default::default(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+        })
+        .await
+    {
+        Ok(_) => anyhow::bail!("missing executable should fail during process launch"),
+        Err(error) => error,
+    };
+    let ExecServerError::Server { code, .. } = error else {
+        anyhow::bail!("unexpected process launch error: {error}");
+    };
+    assert_eq!(code, -32603);
+
+    let success_argv = if cfg!(windows) {
+        vec![
+            "cmd.exe".to_string(),
+            "/D".to_string(),
+            "/C".to_string(),
+            "exit 0".to_string(),
+        ]
+    } else {
+        vec!["true".to_string()]
+    };
+    let session = context
+        .backend
+        .start(ExecParams {
+            process_id,
+            argv: success_argv,
+            cwd,
+            env_policy: /*env_policy*/ None,
+            env: Default::default(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+        })
+        .await?;
+    let wake_rx = session.process.subscribe_wake();
+    assert_eq!(
+        collect_process_output_from_reads(session.process, wake_rx).await?,
+        (String::new(), Some(0), true)
+    );
+    Ok(())
 }
 
 #[test_case(false ; "local")]
