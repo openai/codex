@@ -415,8 +415,9 @@ impl TurnRequestProcessor {
         let additional_context = map_additional_context(params.additional_context);
         let turn_has_input = !mapped_items.is_empty();
         let cwd = resolve_request_cwd(params.cwd)?;
-        let environments =
-            Self::build_environment_override(thread.as_ref(), cwd, environment_selections).await;
+        let environments = self
+            .build_environment_override(thread.as_ref(), cwd, environment_selections)
+            .await;
         let thread_settings = self
             .build_thread_settings_overrides(
                 thread.as_ref(),
@@ -489,6 +490,7 @@ impl TurnRequestProcessor {
     }
 
     async fn build_environment_override(
+        &self,
         thread: &CodexThread,
         cwd: Option<AbsolutePathBuf>,
         environment_selections: Option<Vec<TurnEnvironmentSelection>>,
@@ -498,8 +500,27 @@ impl TurnRequestProcessor {
         }
 
         let snapshot = thread.config_snapshot().await;
-        let environment_selections =
-            environment_selections.unwrap_or_else(|| snapshot.environment_selections().to_vec());
+        let generated_defaults = self
+            .thread_manager
+            .default_environment_selections(snapshot.cwd());
+        let selections_are_generated_local_default = environment_selections.is_none()
+            && snapshot.environment_selections() == generated_defaults
+            && matches!(
+                generated_defaults.as_slice(),
+                [selection]
+                    if self
+                        .thread_manager
+                        .environment_manager()
+                        .get_environment(&selection.environment_id)
+                        .is_some_and(|environment| !environment.is_remote())
+            );
+        let environment_selections = match (environment_selections, cwd.as_ref()) {
+            (None, Some(cwd)) if selections_are_generated_local_default => {
+                self.thread_manager.default_environment_selections(cwd)
+            }
+            (Some(environment_selections), _) => environment_selections,
+            (None, _) => snapshot.environment_selections().to_vec(),
+        };
         let legacy_fallback_cwd = cwd.unwrap_or_else(|| snapshot.cwd().clone());
         Some(TurnEnvironmentSelections::new(
             legacy_fallback_cwd,
@@ -668,12 +689,9 @@ impl TurnRequestProcessor {
     ) -> Result<ThreadSettingsUpdateResponse, JSONRPCErrorError> {
         let (_, thread) = self.load_thread(&params.thread_id).await?;
         let cwd = resolve_request_cwd(params.cwd)?;
-        let environments = Self::build_environment_override(
-            thread.as_ref(),
-            cwd,
-            /*environment_selections*/ None,
-        )
-        .await;
+        let environments = self
+            .build_environment_override(thread.as_ref(), cwd, /*environment_selections*/ None)
+            .await;
         let thread_settings = self
             .build_thread_settings_overrides(
                 thread.as_ref(),

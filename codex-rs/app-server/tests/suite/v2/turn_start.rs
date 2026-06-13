@@ -2447,6 +2447,32 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     )
     .await??;
 
+    let requests = server
+        .received_requests()
+        .await
+        .context("failed to fetch received requests")?;
+    let second_turn_request = requests
+        .iter()
+        .filter(|request| request.url.path().ends_with("/responses"))
+        .nth(2)
+        .context("expected the second turn model request")?;
+    let body = second_turn_request
+        .body_json::<Value>()
+        .context("request body should be JSON")?;
+    let context_mentions_second_cwd = body
+        .get("input")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|content| content.get("text").and_then(Value::as_str))
+        .any(|text| text.contains(second_cwd.to_string_lossy().as_ref()));
+    assert!(
+        context_mentions_second_cwd,
+        "second turn model context should use the overridden local cwd: {body}"
+    );
+
     Ok(())
 }
 
