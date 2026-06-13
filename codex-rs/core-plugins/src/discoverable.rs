@@ -202,3 +202,7 @@ impl PluginsManager {
         Ok(discoverable_plugins)
     }
 }
+
+#[cfg(test)]
+#[path = "discoverable_tests.rs"]
+mod tests;
