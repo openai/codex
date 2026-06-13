@@ -3665,6 +3665,7 @@ dependencies = [
  "codex-secrets",
  "codex-utils-cargo-bin",
  "codex-utils-home-dir",
+ "codex-utils-path-uri",
  "codex-utils-pty",
  "futures",
  "keyring",

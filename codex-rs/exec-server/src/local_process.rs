@@ -156,6 +156,12 @@ impl LocalProcess {
             .argv
             .split_first()
             .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
+        let native_cwd = params.cwd.to_abs_path().map_err(|err| {
+            invalid_params(format!(
+                "cwd URI `{}` is not valid on this exec-server host: {err}",
+                params.cwd
+            ))
+        })?;
 
         {
             let mut process_map = self.inner.processes.lock().await;
@@ -172,7 +178,7 @@ impl LocalProcess {
             codex_utils_pty::spawn_pty_process(
                 program,
                 args,
-                params.cwd.as_path(),
+                native_cwd.as_path(),
                 &env,
                 &params.arg0,
                 TerminalSize::default(),
@@ -182,7 +188,7 @@ impl LocalProcess {
             codex_utils_pty::spawn_pipe_process(
                 program,
                 args,
-                params.cwd.as_path(),
+                native_cwd.as_path(),
                 &env,
                 &params.arg0,
             )
@@ -191,7 +197,7 @@ impl LocalProcess {
             codex_utils_pty::spawn_pipe_process_no_stdin(
                 program,
                 args,
-                params.cwd.as_path(),
+                native_cwd.as_path(),
                 &env,
                 &params.arg0,
             )
@@ -783,6 +789,7 @@ fn notification_sender(inner: &Inner) -> Option<RpcNotificationSender> {
 mod tests {
     use super::*;
     use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+    use codex_utils_path_uri::PathUri;
     use codex_utils_pty::ProcessDriver;
     use pretty_assertions::assert_eq;
     use tokio::sync::oneshot;
@@ -792,13 +799,37 @@ mod tests {
         ExecParams {
             process_id: ProcessId::from("env-test"),
             argv: vec!["true".to_string()],
-            cwd: std::path::PathBuf::from("/tmp"),
+            cwd: PathUri::from_path(std::env::current_dir().expect("cwd")).expect("cwd URI"),
             env_policy: None,
             env,
             tty: false,
             pipe_stdin: false,
             arg0: None,
         }
+    }
+
+    #[tokio::test]
+    async fn start_process_rejects_non_native_cwd_before_launch() {
+        #[cfg(unix)]
+        let uri = "file://server/share/checkout";
+        #[cfg(windows)]
+        let uri = "file:///usr/local/checkout";
+        let cwd = PathUri::parse(uri).expect("non-native cwd URI");
+        let source = cwd
+            .to_abs_path()
+            .expect_err("cwd should not be native to this host");
+        let expected = invalid_params(format!(
+            "cwd URI `{cwd}` is not valid on this exec-server host: {source}"
+        ));
+        let mut params = test_exec_params(HashMap::new());
+        params.cwd = cwd;
+
+        let result = LocalProcess::default().start_process(params).await;
+        let Err(error) = result else {
+            panic!("non-native cwd should be rejected");
+        };
+
+        assert_eq!(error, expected);
     }
 
     #[test]
