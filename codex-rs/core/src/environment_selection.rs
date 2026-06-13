@@ -7,6 +7,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
@@ -20,7 +21,7 @@ pub(crate) fn default_thread_environment_selections(
         .into_iter()
         .map(|environment_id| TurnEnvironmentSelection {
             environment_id,
-            cwd: cwd.clone(),
+            cwd: PathUri::from_abs_path(cwd),
         })
         .collect()
 }
@@ -81,27 +82,22 @@ pub(crate) async fn resolve_environment_selections(
             .ok_or_else(|| {
                 CodexErr::InvalidRequest(format!("unknown turn environment id `{environment_id}`"))
             })?;
-        let shell = match environment.info().await {
-            Ok(info) => match Shell::from_environment_shell_info(info.shell) {
-                Ok(shell) => Some(shell),
-                Err(err) => {
-                    tracing::warn!(
-                        "failed to resolve shell for environment `{environment_id}`: {err}"
-                    );
-                    None
-                }
-            },
-            Err(err) => {
-                tracing::warn!("failed to get info for environment `{environment_id}`: {err}");
-                None
-            }
-        };
-        turn_environments.push(TurnEnvironment::new(
+        let info = environment.info().await.map_err(|err| {
+            CodexErr::InvalidRequest(format!(
+                "failed to get info for environment `{environment_id}`: {err}"
+            ))
+        })?;
+        let shell = Shell::from_environment_shell_info(info.shell).map_err(|err| {
+            CodexErr::InvalidRequest(format!(
+                "failed to resolve shell for environment `{environment_id}`: {err}"
+            ))
+        })?;
+        turn_environments.push(TurnEnvironment::new_with_uri(
             environment_id,
             environment,
             selected_environment.cwd.clone(),
-            shell,
-        ));
+            Some(shell),
+        )?);
     }
     Ok(ResolvedTurnEnvironments { turn_environments })
 }
@@ -139,7 +135,7 @@ mod tests {
             default_thread_environment_selections(&manager, &cwd),
             vec![TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                cwd,
+                cwd: PathUri::from_abs_path(&cwd),
             }]
         );
     }
@@ -167,11 +163,11 @@ url = "ws://127.0.0.1:8765"
             vec![
                 TurnEnvironmentSelection {
                     environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                    cwd: cwd.clone(),
+                    cwd: PathUri::from_abs_path(&cwd),
                 },
                 TurnEnvironmentSelection {
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                    cwd,
+                    cwd: PathUri::from_abs_path(&cwd),
                 },
             ]
         );
@@ -198,11 +194,11 @@ url = "ws://127.0.0.1:8765"
             &[
                 TurnEnvironmentSelection {
                     environment_id: "local".to_string(),
-                    cwd: cwd.clone(),
+                    cwd: PathUri::from_abs_path(&cwd),
                 },
                 TurnEnvironmentSelection {
                     environment_id: "local".to_string(),
-                    cwd: cwd.join("other"),
+                    cwd: PathUri::from_abs_path(&cwd.join("other")),
                 },
             ],
         )
@@ -222,7 +218,7 @@ url = "ws://127.0.0.1:8765"
             &manager,
             &[TurnEnvironmentSelection {
                 environment_id: "local".to_string(),
-                cwd: selected_cwd,
+                cwd: PathUri::from_abs_path(&selected_cwd),
             }],
         )
         .await
@@ -260,7 +256,7 @@ url = "ws://127.0.0.1:8765"
             &local_manager,
             &[TurnEnvironmentSelection {
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                cwd: cwd.clone(),
+                cwd: PathUri::from_abs_path(&cwd),
             }],
         )
         .await

@@ -52,6 +52,7 @@ use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -109,7 +110,7 @@ pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 #[derive(Debug, Clone, PartialEq)]
 pub struct TurnEnvironmentSelection {
     pub environment_id: String,
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -123,19 +124,9 @@ impl TurnEnvironmentSelections {
         legacy_fallback_cwd: AbsolutePathBuf,
         environments: Vec<TurnEnvironmentSelection>,
     ) -> Self {
-        let mut settings = Self {
+        Self {
             legacy_fallback_cwd,
             environments,
-        };
-        settings.sync_primary_environment_cwd();
-        settings
-    }
-
-    fn sync_primary_environment_cwd(&mut self) {
-        if let Some(turn_environment) = self.environments.first_mut()
-            && turn_environment.cwd != self.legacy_fallback_cwd
-        {
-            turn_environment.cwd = self.legacy_fallback_cwd.clone();
         }
     }
 }
@@ -5463,5 +5454,19 @@ mod tests {
                 .expect("new_or_append should return info");
 
         assert_eq!(info.model_context_window, Some(258_400));
+    }
+
+    #[test]
+    fn legacy_fallback_cwd_does_not_replace_selected_environment_cwd() {
+        let selected_cwd = PathUri::parse("file:///C:/workspace/project").expect("selected cwd");
+        let settings = TurnEnvironmentSelections::new(
+            AbsolutePathBuf::current_dir().expect("legacy cwd"),
+            vec![TurnEnvironmentSelection {
+                environment_id: "windows".to_string(),
+                cwd: selected_cwd.clone(),
+            }],
+        );
+
+        assert_eq!(settings.environments[0].cwd, selected_cwd);
     }
 }

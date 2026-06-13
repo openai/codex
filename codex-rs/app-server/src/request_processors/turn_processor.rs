@@ -339,7 +339,7 @@ impl TurnRequestProcessor {
                 .into_iter()
                 .map(|environment| TurnEnvironmentSelection {
                     environment_id: environment.environment_id,
-                    cwd: environment.cwd,
+                    cwd: codex_utils_path_uri::PathUri::from_abs_path(&environment.cwd),
                 })
                 .collect::<Vec<_>>()
         });
@@ -519,13 +519,7 @@ impl TurnRequestProcessor {
         let snapshot = thread.config_snapshot().await;
         let environment_selections =
             environment_selections.unwrap_or_else(|| snapshot.environment_selections().to_vec());
-        let legacy_fallback_cwd = cwd.unwrap_or_else(|| {
-            environment_selections
-                .iter()
-                .find(|selection| selection.environment_id == LOCAL_ENVIRONMENT_ID)
-                .map(|selection| selection.cwd.clone())
-                .unwrap_or_else(|| snapshot.cwd().clone())
-        });
+        let legacy_fallback_cwd = cwd.unwrap_or_else(|| snapshot.cwd().clone());
         Some(TurnEnvironmentSelections::new(
             legacy_fallback_cwd,
             environment_selections,

@@ -52,20 +52,40 @@ pub(crate) struct TurnEnvironment {
 }
 
 impl TurnEnvironment {
+    #[cfg(test)]
     pub(crate) fn new(
         environment_id: String,
         environment: Arc<Environment>,
         cwd: AbsolutePathBuf,
         shell: Option<shell::Shell>,
     ) -> Self {
-        let cwd_uri = PathUri::from_abs_path(&cwd);
         Self {
+            environment_id,
+            environment,
+            cwd_uri: PathUri::from_abs_path(&cwd),
+            cwd,
+            shell,
+        }
+    }
+
+    pub(crate) fn new_with_uri(
+        environment_id: String,
+        environment: Arc<Environment>,
+        cwd_uri: PathUri,
+        shell: Option<shell::Shell>,
+    ) -> CodexResult<Self> {
+        let cwd = cwd_uri.to_abs_path().map_err(|err| {
+            CodexErr::InvalidRequest(format!(
+                "turn environment cwd `{cwd_uri}` cannot be projected onto this host: {err}"
+            ))
+        })?;
+        Ok(Self {
             environment_id,
             environment,
             cwd,
             cwd_uri,
             shell,
-        }
+        })
     }
 
     pub(crate) fn cwd(&self) -> &AbsolutePathBuf {
@@ -79,7 +99,7 @@ impl TurnEnvironment {
     pub(crate) fn selection(&self) -> TurnEnvironmentSelection {
         TurnEnvironmentSelection {
             environment_id: self.environment_id.clone(),
-            cwd: self.cwd.clone(),
+            cwd: self.cwd_uri.clone(),
         }
     }
 }
@@ -743,10 +763,7 @@ impl Session {
             ResolvedTurnEnvironments::default()
         });
         let primary_turn_environment = turn_environments.primary().cloned();
-        let cwd = primary_turn_environment
-            .as_ref()
-            .map(|turn_environment| turn_environment.cwd().clone())
-            .unwrap_or_else(|| session_configuration.cwd().clone());
+        let cwd = session_configuration.cwd().clone();
         let per_turn_config = Self::build_per_turn_config(&session_configuration, cwd.clone());
         {
             let mcp_connection_manager = self.services.mcp_connection_manager.load_full();

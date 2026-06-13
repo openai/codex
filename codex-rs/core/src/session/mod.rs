@@ -149,6 +149,7 @@ use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
 use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use futures::future::Shared;
 use futures::prelude::*;
@@ -2205,6 +2206,21 @@ impl Session {
             | AskForApproval::Granular(_) => {}
         }
 
+        let compatibility_cwd = match environment.cwd.to_abs_path() {
+            Ok(cwd) => cwd,
+            Err(err) => {
+                warn!(
+                    "request_permissions cwd for environment `{}` cannot be projected onto this host: {err}",
+                    environment.environment_id
+                );
+                return Some(RequestPermissionsResponse {
+                    permissions: RequestPermissionProfile::default(),
+                    scope: PermissionGrantScope::Turn,
+                    strict_auto_review: false,
+                });
+            }
+        };
+
         let requested_permissions = args.permissions;
 
         if crate::guardian::routes_approval_to_guardian(turn_context.as_ref()) {
@@ -2273,7 +2289,7 @@ impl Session {
             let response = Self::normalize_request_permissions_response(
                 requested_permissions,
                 response,
-                environment.cwd.as_path(),
+                compatibility_cwd.as_path(),
             );
             self.record_granted_request_permissions_for_turn(
                 &response,
@@ -2296,6 +2312,7 @@ impl Session {
                             tx_response,
                             requested_permissions: requested_permissions.clone(),
                             environment: environment.clone(),
+                            compatibility_cwd: compatibility_cwd.clone(),
                         },
                     )
                 }
@@ -2313,7 +2330,7 @@ impl Session {
             started_at_ms: now_unix_timestamp_ms(),
             reason: args.reason,
             permissions: requested_permissions,
-            cwd: Some(environment.cwd),
+            cwd: Some(compatibility_cwd),
         });
         self.send_event(turn_context.as_ref(), event).await;
         tokio::select! {
@@ -2354,7 +2371,7 @@ impl Session {
             });
         };
         let mut environment = turn_environment.selection();
-        environment.cwd = cwd;
+        environment.cwd = PathUri::from_abs_path(&cwd);
         self.request_permissions_for_environment(
             turn_context,
             call_id,
@@ -2460,7 +2477,7 @@ impl Session {
                 let response = Self::normalize_request_permissions_response(
                     entry.requested_permissions,
                     response,
-                    entry.environment.cwd.as_path(),
+                    entry.compatibility_cwd.as_path(),
                 );
                 self.record_granted_request_permissions_for_turn(
                     &response,

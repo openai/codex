@@ -13,6 +13,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::user_input::UserInput;
+use codex_utils_path_uri::PathUri;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -93,7 +94,7 @@ async fn windows_exec_server_records_host_shell_mismatch() -> Result<()> {
                 test.config.cwd.clone(),
                 vec![TurnEnvironmentSelection {
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                    cwd: test.config.cwd.clone(),
+                    cwd: PathUri::from_abs_path(&test.config.cwd),
                 }],
             );
 

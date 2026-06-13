@@ -2609,14 +2609,6 @@ async fn turn_start_resolves_sticky_thread_local_environment_and_turn_overrides(
 
     let server = create_mock_responses_server_repeating_assistant("done").await;
     create_config_toml(&codex_home, &server.uri(), "never", &BTreeMap::default())?;
-    std::fs::write(
-        codex_home.join("environments.toml"),
-        r#"
-[[environments]]
-id = "remote"
-url = "ws://127.0.0.1:1"
-"#,
-    )?;
 
     let mut mcp = TestAppServer::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;

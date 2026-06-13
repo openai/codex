@@ -624,7 +624,7 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
         .await?;
     let remote_selection = TurnEnvironmentSelection {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-        cwd: remote_cwd.clone(),
+        cwd: PathUri::from_abs_path(&remote_cwd),
     };
     let call_id = "call-view-image-multi-env";
     let response_mock = mount_sse_sequence(
