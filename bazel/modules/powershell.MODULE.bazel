@@ -1,0 +1,14 @@
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+# Pin the self-contained Windows distribution so Wine tests need neither a
+# system PowerShell installation nor a separate .NET runtime. This intentionally
+# stays on 7.2.24 for the test fixture: 7.4.16 and 7.6.2 currently fail during
+# CLR startup under the pinned Wine 11 runtime, while 7.2.24 runs successfully.
+http_archive(
+    name = "powershell_windows_x86_64",
+    build_file = "//third_party/powershell:BUILD.bazel",
+    sha256 = "a1ccb6d8ad52f917470a136c3752af4465f261bcbe570cf44f52aa69ae6e867e",
+    urls = [
+        "https://github.com/PowerShell/PowerShell/releases/download/v7.2.24/PowerShell-7.2.24-win-x64.zip",
+    ],
+)
