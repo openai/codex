@@ -1632,6 +1632,28 @@ fn migration_metric_tags_for_skills_include_skills_count() {
     );
 }
 
+#[test]
+fn plugin_install_failure_stage_reports_plugin_manifest_problems() {
+    assert_eq!(
+        plugin_install_failure_stage(&PluginInstallError::Store(PluginStoreError::Invalid(
+            "missing plugin.json".to_string()
+        ))),
+        "plugin_json_missing"
+    );
+    assert_eq!(
+        plugin_install_failure_stage(&PluginInstallError::Store(PluginStoreError::Invalid(
+            "plugin.json name `wrong` does not match marketplace plugin name `right`".to_string()
+        ))),
+        "plugin_json_name_mismatch"
+    );
+    assert_eq!(
+        plugin_install_failure_stage(&PluginInstallError::Store(PluginStoreError::Invalid(
+            "failed to parse plugin.json: expected ident".to_string()
+        ))),
+        "plugin_json_parse"
+    );
+}
+
 #[tokio::test]
 async fn detect_home_lists_enabled_plugins_from_settings() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
@@ -2190,6 +2212,11 @@ async fn import_plugins_requires_source_marketplace_details() {
         outcome.failed_plugin_ids,
         vec!["formatter@other-tools".to_string()]
     );
+    assert_eq!(outcome.raw_errors.len(), 1);
+    assert_eq!(
+        outcome.raw_errors[0].failure_stage,
+        "marketplace_source_missing"
+    );
 }
 
 #[tokio::test]
@@ -2223,6 +2250,11 @@ async fn import_plugins_defers_marketplace_source_validation_to_add_marketplace(
     assert_eq!(
         outcome.failed_plugin_ids,
         vec!["formatter@acme-tools".to_string()]
+    );
+    assert_eq!(outcome.raw_errors.len(), 1);
+    assert_eq!(
+        outcome.raw_errors[0].failure_stage,
+        "marketplace_source_missing"
     );
 }
 
@@ -2539,6 +2571,7 @@ async fn import_plugins_infers_external_official_marketplace_when_missing_from_s
         outcome.failed_plugin_ids,
         vec![format!("sample@{EXTERNAL_OFFICIAL_MARKETPLACE_NAME}")]
     );
+    assert_eq!(outcome.raw_errors.len(), 1);
 }
 
 #[tokio::test]

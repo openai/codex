@@ -75,6 +75,7 @@ impl ExternalAgentSessionImporter {
                 "external agent session import permit could not be acquired",
                 None,
             );
+            tracing::warn!("external agent session import permit could not be acquired");
             return item_result;
         };
         let import_results = futures::stream::iter(sessions)
@@ -100,6 +101,11 @@ impl ExternalAgentSessionImporter {
                         failure.message.clone(),
                         Some(failure.source_path.display().to_string()),
                     );
+                    tracing::warn!(
+                        error = %failure.message,
+                        path = %failure.source_path.display(),
+                        "external agent session import failed"
+                    );
                 }
             }
         }
@@ -109,6 +115,10 @@ impl ExternalAgentSessionImporter {
                 "session_ledger_update",
                 err.to_string(),
                 None,
+            );
+            tracing::warn!(
+                error = %err,
+                "external agent session import ledger update failed"
             );
         }
         item_result

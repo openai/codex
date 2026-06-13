@@ -7,6 +7,7 @@ use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
+use codex_app_server_protocol::ExternalAgentConfigImportProgressNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportTypeResult;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
@@ -936,6 +937,25 @@ async fn external_agent_config_import_skips_undetected_session_paths() -> Result
     .await??;
     let response: ExternalAgentConfigImportResponse = to_response(response)?;
     let import_id = assert_import_response(response);
+    let progress = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("externalAgentConfig/import/progress"),
+    )
+    .await??;
+    let progress: ExternalAgentConfigImportProgressNotification =
+        serde_json::from_value(progress.params.expect("progress params"))?;
+    assert_eq!(progress.import_id, import_id);
+    assert_eq!(
+        progress.item_result.item_type,
+        ExternalAgentConfigMigrationItemType::Sessions
+    );
+    assert_eq!(progress.item_result.success_count, 0);
+    assert_eq!(progress.item_result.error_count, 1);
+    assert_eq!(progress.item_result.raw_errors.len(), 1);
+    assert_eq!(
+        progress.item_result.raw_errors[0].failure_stage,
+        "session_missing"
+    );
     let notification = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
@@ -945,18 +965,15 @@ async fn external_agent_config_import_skips_undetected_session_paths() -> Result
     let completed: ExternalAgentConfigImportCompletedNotification =
         serde_json::from_value(notification.params.expect("completed params"))?;
     assert_eq!(completed.import_id, import_id);
-    let raw_errors = completed.item_results[0].raw_errors.clone();
     assert_eq!(
         completed.item_results,
         vec![ExternalAgentConfigImportTypeResult {
             item_type: ExternalAgentConfigMigrationItemType::Sessions,
             success_count: 1,
             error_count: 1,
-            raw_errors: raw_errors.clone(),
+            raw_errors: progress.item_result.raw_errors,
         }]
     );
-    assert_eq!(raw_errors.len(), 1);
-    assert_eq!(raw_errors[0].failure_stage, "session_missing");
 
     let request_id = mcp
         .send_thread_list_request(ThreadListParams {

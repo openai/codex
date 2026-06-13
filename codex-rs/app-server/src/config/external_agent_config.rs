@@ -1,13 +1,17 @@
 use codex_config::types::PluginConfig;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
+use codex_core_plugins::PluginInstallError;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::PluginsManager;
+use codex_core_plugins::marketplace::MarketplaceError;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
 use codex_core_plugins::marketplace::find_marketplace_manifest_path;
+use codex_core_plugins::marketplace_add::MarketplaceAddError;
 use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
 use codex_core_plugins::marketplace_add::add_marketplace;
 use codex_core_plugins::marketplace_add::is_local_marketplace_source;
+use codex_core_plugins::store::PluginStoreError;
 use codex_external_agent_migration::build_mcp_config_from_external;
 use codex_external_agent_migration::count_missing_commands;
 use codex_external_agent_migration::count_missing_subagents;
@@ -34,6 +38,7 @@ use toml::Value as TomlValue;
 
 const EXTERNAL_AGENT_CONFIG_DETECT_METRIC: &str = "codex.external_agent_config.detect";
 const EXTERNAL_AGENT_CONFIG_IMPORT_METRIC: &str = "codex.external_agent_config.import";
+const EXTERNAL_AGENT_CONFIG_IMPORT_ERROR_METRIC: &str = "codex.external_agent_config.import_error";
 const EXTERNAL_AGENT_DIR: &str = ".claude";
 const EXTERNAL_AGENT_CONFIG_MD: &str = "CLAUDE.md";
 const EXTERNAL_OFFICIAL_MARKETPLACE_NAME: &str = "claude-plugins-official";
@@ -380,6 +385,17 @@ impl ExternalAgentConfigService {
                 if item_type != ExternalAgentConfigMigrationItemType::Plugins {
                     record_import_error(&mut item_result, "item_import", err.to_string(), None);
                 }
+                let cwd = cwd_for_log
+                    .as_deref()
+                    .map(|cwd| cwd.display().to_string())
+                    .unwrap_or_else(|| "<home>".to_string());
+                tracing::warn!(
+                    migration_type = migration_item_type_label(item_type),
+                    description = %description,
+                    cwd = %cwd,
+                    error = %err,
+                    "external agent config migration item failed"
+                );
                 outcome.item_results.push(item_result);
                 continue;
             }
@@ -825,9 +841,16 @@ impl ExternalAgentConfigService {
         details: Option<MigrationDetails>,
     ) -> io::Result<PluginImportOutcome> {
         let Some(MigrationDetails { plugins, .. }) = details else {
-            return Err(invalid_data_error(
-                "plugins migration item is missing details".to_string(),
-            ));
+            let err = invalid_data_error("plugins migration item is missing details".to_string());
+            emit_migration_error_metric(
+                ExternalAgentConfigMigrationItemType::Plugins,
+                "missing_details",
+            );
+            tracing::warn!(
+                error = %err,
+                "external agent plugin import failed"
+            );
+            return Err(err);
         };
         let mut outcome = PluginImportOutcome::default();
         let plugins_manager = PluginsManager::new(self.codex_home.clone());
@@ -843,12 +866,46 @@ impl ExternalAgentConfigService {
                 |cwd| cwd.join(EXTERNAL_AGENT_DIR).join("settings.json"),
             );
             let source_root = cwd.unwrap_or(self.external_agent_home.as_path());
-            let import_source =
-                effective_external_settings(&source_settings)?.and_then(|settings| {
-                    collect_marketplace_import_sources(&settings, source_root)
-                        .remove(&marketplace_name)
-                });
+            let settings = match effective_external_settings(&source_settings) {
+                Ok(settings) => settings,
+                Err(err) => {
+                    record_plugin_import_error(
+                        &mut outcome,
+                        cwd,
+                        "settings_load",
+                        err.to_string(),
+                        Some(source_settings.display().to_string()),
+                    );
+                    tracing::warn!(
+                        marketplace = %marketplace_name,
+                        source_settings = %source_settings.display(),
+                        error = %err,
+                        "failed to load external agent marketplace source settings during plugin import"
+                    );
+                    outcome.failed_marketplaces.push(marketplace_name);
+                    outcome.failed_plugin_ids.extend(plugin_ids);
+                    continue;
+                }
+            };
+            let import_source = settings.and_then(|settings| {
+                collect_marketplace_import_sources(&settings, source_root).remove(&marketplace_name)
+            });
             let Some(import_source) = import_source else {
+                record_plugin_import_error(
+                    &mut outcome,
+                    cwd,
+                    "marketplace_source_missing",
+                    format!(
+                        "external agent plugin import source was not found for marketplace `{marketplace_name}`"
+                    ),
+                    Some(source_settings.display().to_string()),
+                );
+                tracing::warn!(
+                    marketplace = %marketplace_name,
+                    source_settings = %source_settings.display(),
+                    plugin_ids = ?plugin_ids,
+                    "external agent plugin import source was not found"
+                );
                 outcome.failed_marketplaces.push(marketplace_name);
                 outcome.failed_plugin_ids.extend(plugin_ids);
                 continue;
@@ -861,9 +918,23 @@ impl ExternalAgentConfigService {
             let add_marketplace_outcome = add_marketplace(self.codex_home.clone(), request).await;
             let marketplace_path = match add_marketplace_outcome {
                 Ok(add_marketplace_outcome) => {
-                    let Some(marketplace_path) = find_marketplace_manifest_path(
-                        add_marketplace_outcome.installed_root.as_path(),
-                    ) else {
+                    let installed_root = add_marketplace_outcome.installed_root;
+                    let Some(marketplace_path) =
+                        find_marketplace_manifest_path(installed_root.as_path())
+                    else {
+                        record_plugin_import_error(
+                            &mut outcome,
+                            cwd,
+                            "marketplace_manifest_missing",
+                            "external agent marketplace import did not contain a supported marketplace manifest",
+                            Some(installed_root.as_path().display().to_string()),
+                        );
+                        tracing::warn!(
+                            marketplace = %marketplace_name,
+                            installed_root = %installed_root.as_path().display(),
+                            plugin_ids = ?plugin_ids,
+                            "external agent marketplace import did not contain a supported marketplace manifest"
+                        );
                         outcome.failed_marketplaces.push(marketplace_name);
                         outcome.failed_plugin_ids.extend(plugin_ids);
                         continue;
@@ -873,13 +944,28 @@ impl ExternalAgentConfigService {
                         .push(marketplace_name.clone());
                     marketplace_path
                 }
-                Err(_) => {
+                Err(err) => {
+                    let problem = marketplace_add_failure_stage(&err);
+                    record_plugin_import_error(
+                        &mut outcome,
+                        cwd,
+                        problem,
+                        err.to_string(),
+                        Some(marketplace_name.clone()),
+                    );
+                    tracing::warn!(
+                        marketplace = %marketplace_name,
+                        plugin_ids = ?plugin_ids,
+                        error = %err,
+                        "failed to import external agent plugin marketplace"
+                    );
                     outcome.failed_marketplaces.push(marketplace_name);
                     outcome.failed_plugin_ids.extend(plugin_ids);
                     continue;
                 }
             };
             for plugin_name in plugin_names {
+                let plugin_id = format!("{plugin_name}@{marketplace_name}");
                 match plugins_manager
                     .install_plugin(PluginInstallRequest {
                         plugin_name: plugin_name.clone(),
@@ -887,12 +973,26 @@ impl ExternalAgentConfigService {
                     })
                     .await
                 {
-                    Ok(_) => outcome
-                        .succeeded_plugin_ids
-                        .push(format!("{plugin_name}@{marketplace_name}")),
-                    Err(_) => outcome
-                        .failed_plugin_ids
-                        .push(format!("{plugin_name}@{marketplace_name}")),
+                    Ok(_) => outcome.succeeded_plugin_ids.push(plugin_id),
+                    Err(err) => {
+                        let problem = plugin_install_failure_stage(&err);
+                        record_plugin_import_error(
+                            &mut outcome,
+                            cwd,
+                            problem,
+                            err.to_string(),
+                            Some(plugin_id.clone()),
+                        );
+                        tracing::warn!(
+                            marketplace = %marketplace_name,
+                            plugin = %plugin_name,
+                            marketplace_path = %marketplace_path.as_path().display(),
+                            problem,
+                            error = %err,
+                            "failed to install external agent plugin"
+                        );
+                        outcome.failed_plugin_ids.push(plugin_id);
+                    }
                 }
             }
         }
@@ -1767,11 +1867,29 @@ pub(crate) fn record_import_error(
     message: impl Into<String>,
     source: Option<String>,
 ) {
+    emit_migration_error_metric(result.item_type, failure_stage);
     result.record_error(ExternalAgentConfigImportRawError {
         item_type: result.item_type,
         failure_stage: failure_stage.to_string(),
         message: message.into(),
         cwd: result.cwd.clone(),
+        source,
+    });
+}
+
+fn record_plugin_import_error(
+    outcome: &mut PluginImportOutcome,
+    cwd: Option<&Path>,
+    failure_stage: &'static str,
+    message: impl Into<String>,
+    source: Option<String>,
+) {
+    emit_migration_error_metric(ExternalAgentConfigMigrationItemType::Plugins, failure_stage);
+    outcome.raw_errors.push(ExternalAgentConfigImportRawError {
+        item_type: ExternalAgentConfigMigrationItemType::Plugins,
+        failure_stage: failure_stage.to_string(),
+        message: message.into(),
+        cwd: cwd.map(Path::to_path_buf),
         source,
     });
 }
@@ -1793,6 +1911,123 @@ fn migration_metric_tags(
         tags.push(("skills_count", skills_count.unwrap_or(0).to_string()));
     }
     tags
+}
+
+fn plugin_install_failure_stage(error: &PluginInstallError) -> &'static str {
+    match error {
+        PluginInstallError::Marketplace(MarketplaceError::MarketplaceNotFound { .. }) => {
+            "marketplace_not_found"
+        }
+        PluginInstallError::Marketplace(MarketplaceError::InvalidMarketplaceFile { .. }) => {
+            "marketplace_invalid_file"
+        }
+        PluginInstallError::Marketplace(MarketplaceError::Io { .. }) => "marketplace_io",
+        PluginInstallError::Marketplace(MarketplaceError::PluginNotFound { .. }) => {
+            "plugin_not_found"
+        }
+        PluginInstallError::Marketplace(MarketplaceError::PluginNotAvailable { .. }) => {
+            "plugin_not_available"
+        }
+        PluginInstallError::Marketplace(MarketplaceError::PluginsDisabled) => "plugins_disabled",
+        PluginInstallError::Marketplace(MarketplaceError::InvalidPlugin(message)) => {
+            plugin_invalid_failure_stage(message)
+        }
+        PluginInstallError::Remote(_) => "plugin_remote_sync",
+        PluginInstallError::Store(PluginStoreError::Io { .. }) => "plugin_store_io",
+        PluginInstallError::Store(PluginStoreError::Invalid(message)) => {
+            plugin_store_invalid_failure_stage(message)
+        }
+        PluginInstallError::Config(_) => "plugin_config",
+        PluginInstallError::Join(_) => "plugin_install_join",
+    }
+}
+
+fn marketplace_add_failure_stage(error: &MarketplaceAddError) -> &'static str {
+    match error {
+        MarketplaceAddError::InvalidRequest(message) => {
+            if message.contains("path does not exist or is not a directory")
+                || message.contains("failed to resolve local marketplace source path")
+            {
+                "marketplace_source_missing"
+            } else if message.contains("invalid marketplace")
+                || message.contains("does not expose")
+                || message.contains("marketplace file")
+            {
+                "marketplace_invalid"
+            } else {
+                "marketplace_add_invalid_request"
+            }
+        }
+        MarketplaceAddError::Internal(message) => {
+            if message.contains(" git ") || message.contains("git clone") {
+                "git_materialization"
+            } else {
+                "marketplace_add_internal"
+            }
+        }
+    }
+}
+
+fn plugin_invalid_failure_stage(message: &str) -> &'static str {
+    if message == "missing or invalid plugin.json" {
+        "plugin_json_missing_or_invalid"
+    } else if message == "path does not exist or is not a directory" {
+        "plugin_source_not_directory"
+    } else if message.starts_with("failed to materialize plugin source") {
+        "git_materialization"
+    } else if message.starts_with("invalid plugin name") {
+        "plugin_json_invalid_name"
+    } else {
+        "plugin_invalid"
+    }
+}
+
+fn plugin_store_invalid_failure_stage(message: &str) -> &'static str {
+    if message == "missing plugin.json" {
+        "plugin_json_missing"
+    } else if message == "missing or invalid plugin.json" {
+        "plugin_json_missing_or_invalid"
+    } else if message.starts_with("failed to parse plugin.json") {
+        "plugin_json_parse"
+    } else if message.starts_with("invalid plugin version in plugin.json") {
+        "plugin_json_invalid_version"
+    } else if message.starts_with("plugin.json name `") {
+        "plugin_json_name_mismatch"
+    } else if message.starts_with("invalid plugin name") {
+        "plugin_json_invalid_name"
+    } else if message.starts_with("invalid plugin version") {
+        "plugin_json_invalid_version"
+    } else if message.starts_with("plugin source path is not a directory") {
+        "plugin_source_not_directory"
+    } else if message.starts_with("failed to materialize plugin source") {
+        "git_materialization"
+    } else if message == "path does not exist or is not a directory" {
+        "plugin_source_not_directory"
+    } else {
+        "plugin_store_invalid"
+    }
+}
+
+pub(crate) fn emit_migration_error_metric(
+    item_type: ExternalAgentConfigMigrationItemType,
+    failure_stage: &'static str,
+) {
+    let Some(metrics) = codex_otel::global() else {
+        return;
+    };
+    let tags = [
+        ("migration_type", migration_item_type_label(item_type)),
+        ("failure_stage", failure_stage),
+    ];
+    let tag_refs = tags
+        .iter()
+        .map(|(key, value)| (*key, *value))
+        .collect::<Vec<_>>();
+    let _ = metrics.counter(
+        EXTERNAL_AGENT_CONFIG_IMPORT_ERROR_METRIC,
+        /*inc*/ 1,
+        &tag_refs,
+    );
 }
 
 fn emit_migration_metric(

@@ -19,7 +19,9 @@ use codex_app_server_protocol::CommandMigration;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
+use codex_app_server_protocol::ExternalAgentConfigImportItemResult as ProtocolImportItemResult;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
+use codex_app_server_protocol::ExternalAgentConfigImportProgressNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportRawError as ProtocolImportRawError;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportTypeResult as ProtocolImportTypeResult;
@@ -187,7 +189,15 @@ impl ExternalAgentConfigRequestProcessor {
         });
         let (pending_session_imports, session_validation_result) =
             self.validate_pending_session_imports(&params);
-        let import_outcome = self.import_external_agent_config(params).await?;
+        let import_outcome = self
+            .import_external_agent_config(params)
+            .await
+            .inspect_err(|error| {
+                tracing::warn!(
+                    error = %error.message.as_str(),
+                    "external agent config import failed"
+                );
+            })?;
         if needs_runtime_refresh {
             self.config_processor.handle_config_mutation().await;
         }
@@ -206,9 +216,11 @@ impl ExternalAgentConfigRequestProcessor {
 
         let mut completed_item_results = Vec::new();
         if let Some(session_validation_result) = session_validation_result {
+            send_import_progress(&self.outgoing, &import_id, &session_validation_result).await;
             completed_item_results.push(session_validation_result);
         }
         for item_result in import_outcome.item_results {
+            send_import_progress(&self.outgoing, &import_id, &item_result).await;
             completed_item_results.push(item_result);
         }
 
@@ -236,13 +248,19 @@ impl ExternalAgentConfigRequestProcessor {
         });
         let pending_plugin_imports = import_outcome.pending_plugin_imports;
         tokio::spawn(async move {
+            let session_progress_outgoing = Arc::clone(&outgoing);
+            let session_import_id = import_id.clone();
             let session_imports = async move {
                 let session_import_result = session_import_result?;
                 let item_result = session_importer
                     .import_sessions(pending_session_imports, session_import_result)
                     .await;
+                send_import_progress(&session_progress_outgoing, &session_import_id, &item_result)
+                    .await;
                 Some(item_result)
             };
+            let plugin_progress_outgoing = Arc::clone(&outgoing);
+            let plugin_import_id = import_id.clone();
             let plugin_imports = async move {
                 let mut item_results = Vec::new();
                 for pending_plugin_import in pending_plugin_imports {
@@ -265,8 +283,18 @@ impl ExternalAgentConfigRequestProcessor {
                                 error.message.clone(),
                                 None,
                             );
+                            tracing::warn!(
+                                error = %error.message,
+                                "external agent config plugin import failed"
+                            );
                         }
                     }
+                    send_import_progress(
+                        &plugin_progress_outgoing,
+                        &plugin_import_id,
+                        &item_result,
+                    )
+                    .await;
                     item_results.push(item_result);
                 }
                 item_results
@@ -337,6 +365,10 @@ impl ExternalAgentConfigRequestProcessor {
                         ),
                         Some(session.path.display().to_string()),
                     );
+                    tracing::warn!(
+                        path = %session.path.display(),
+                        "skipping external agent session import because the session was not detected"
+                    );
                     continue;
                 }
                 Err(err) => {
@@ -345,6 +377,11 @@ impl ExternalAgentConfigRequestProcessor {
                         "session_source_path",
                         err.to_string(),
                         Some(session.path.display().to_string()),
+                    );
+                    tracing::warn!(
+                        path = %session.path.display(),
+                        error = %err,
+                        "skipping external agent session import because the source path could not be validated"
                     );
                     continue;
                 }
@@ -471,6 +508,21 @@ impl ExternalAgentConfigRequestProcessor {
     }
 }
 
+async fn send_import_progress(
+    outgoing: &OutgoingMessageSender,
+    import_id: &str,
+    item_result: &CoreImportItemResult,
+) {
+    outgoing
+        .send_server_notification(ServerNotification::ExternalAgentConfigImportProgress(
+            ExternalAgentConfigImportProgressNotification {
+                import_id: import_id.to_string(),
+                item_result: protocol_import_item_result(item_result),
+            },
+        ))
+        .await;
+}
+
 fn completed_notification(
     import_id: String,
     item_results: &[CoreImportItemResult],
@@ -518,6 +570,21 @@ fn completed_notification(
     ExternalAgentConfigImportCompletedNotification {
         import_id,
         item_results: protocol_type_results,
+    }
+}
+
+fn protocol_import_item_result(item_result: &CoreImportItemResult) -> ProtocolImportItemResult {
+    ProtocolImportItemResult {
+        item_type: protocol_migration_item_type(item_result.item_type),
+        description: item_result.description.clone(),
+        cwd: item_result.cwd.clone(),
+        success_count: item_result.success_count,
+        error_count: item_result.error_count,
+        raw_errors: item_result
+            .raw_errors
+            .iter()
+            .map(protocol_import_raw_error)
+            .collect(),
     }
 }
 
