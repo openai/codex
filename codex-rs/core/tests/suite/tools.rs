@@ -16,6 +16,12 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentSelections;
+use codex_protocol::user_input::UserInput;
+use codex_utils_path_uri::PathUri;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -30,6 +36,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
@@ -125,6 +132,66 @@ async fn turn_environment_selection_keeps_environment_backed_tools() -> Result<(
     assert!(
         tools.contains(&"exec_command".to_string()),
         "environment tool should remain available with selected local environment; got {tools:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_environment_metadata_failure_stops_before_model_inference() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "should not run"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let test = test_codex().build(&server).await?;
+    test.thread_manager
+        .environment_manager()
+        .upsert_environment("unreachable".to_string(), "ws://127.0.0.1:1".to_string())?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "do not send this to the model".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    vec![TurnEnvironmentSelection {
+                        environment_id: "unreachable".to_string(),
+                        cwd: PathUri::from_abs_path(&test.config.cwd),
+                    }],
+                )),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let event = wait_for_event(&test.codex, |event| matches!(event, EventMsg::Error(_))).await;
+    let EventMsg::Error(error) = event else {
+        unreachable!("wait predicate only accepts error events");
+    };
+    assert!(
+        error
+            .message
+            .contains("failed to get info for environment `unreachable`"),
+        "unexpected environment metadata error: {}",
+        error.message
+    );
+    assert!(
+        response_mock.requests().is_empty(),
+        "environment metadata failure must stop before model inference"
     );
 
     Ok(())

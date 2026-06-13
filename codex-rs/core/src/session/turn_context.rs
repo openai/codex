@@ -709,16 +709,19 @@ impl Session {
         ) = match update_result {
             Ok(update) => update,
             Err(err) => {
-                let message = err.to_string();
-                self.send_event_raw(Event {
-                    id: sub_id.clone(),
-                    msg: EventMsg::Error(ErrorEvent {
-                        message: message.clone(),
-                        codex_error_info: Some(CodexErrorInfo::BadRequest),
-                    }),
-                })
-                .await;
-                return Err(CodexErr::InvalidRequest(message));
+                return Err(self.emit_turn_configuration_error(&sub_id, err).await);
+            }
+        };
+
+        let turn_environments = match crate::environment_selection::resolve_environment_selections(
+            self.services.environment_manager.as_ref(),
+            session_configuration.environment_selections(),
+        )
+        .await
+        {
+            Ok(turn_environments) => turn_environments,
+            Err(err) => {
+                return Err(self.emit_turn_configuration_error(&sub_id, err).await);
             }
         };
 
@@ -740,8 +743,22 @@ impl Session {
                 sub_id,
                 session_configuration,
                 updates.final_output_json_schema,
+                turn_environments,
             )
             .await)
+    }
+
+    async fn emit_turn_configuration_error(&self, sub_id: &str, err: CodexErr) -> CodexErr {
+        let message = err.to_string();
+        self.send_event_raw(Event {
+            id: sub_id.to_string(),
+            msg: EventMsg::Error(ErrorEvent {
+                message: message.clone(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            }),
+        })
+        .await;
+        CodexErr::InvalidRequest(message)
     }
 
     async fn new_turn_from_configuration(
@@ -749,12 +766,14 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
+        turn_environments: ResolvedTurnEnvironments,
     ) -> Arc<TurnContext> {
         self.new_turn_context_from_configuration(
             sub_id,
             session_configuration,
             final_output_json_schema,
             TurnMultiAgentRuntime::ResolveAndStore,
+            turn_environments,
         )
         .await
     }
@@ -763,12 +782,14 @@ impl Session {
         &self,
         sub_id: String,
         session_configuration: SessionConfiguration,
+        turn_environments: ResolvedTurnEnvironments,
     ) -> Arc<TurnContext> {
         self.new_turn_context_from_configuration(
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
             TurnMultiAgentRuntime::Preview,
+            turn_environments,
         )
         .await
     }
@@ -780,16 +801,8 @@ impl Session {
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
         multi_agent_runtime: TurnMultiAgentRuntime,
+        turn_environments: ResolvedTurnEnvironments,
     ) -> Arc<TurnContext> {
-        let turn_environments = crate::environment_selection::resolve_environment_selections(
-            self.services.environment_manager.as_ref(),
-            session_configuration.environment_selections(),
-        )
-        .await
-        .unwrap_or_else(|err| {
-            warn!("failed to resolve turn environments: {err}");
-            ResolvedTurnEnvironments::default()
-        });
         let primary_turn_environment = turn_environments.primary().cloned();
         let cwd = session_configuration.cwd().clone();
         let per_turn_config = Self::build_per_turn_config(&session_configuration, cwd.clone());
@@ -900,10 +913,14 @@ impl Session {
 
     pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {
         let session_configuration = self.default_turn_configuration().await;
+        let turn_environments = self
+            .resolve_turn_environments_or_default(&session_configuration)
+            .await;
         self.new_turn_from_configuration(
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
+            turn_environments,
         )
         .await
     }
@@ -913,8 +930,30 @@ impl Session {
         sub_id: String,
     ) -> Arc<TurnContext> {
         let session_configuration = self.default_turn_configuration().await;
-        self.new_startup_prewarm_turn_from_configuration(sub_id, session_configuration)
-            .await
+        let turn_environments = self
+            .resolve_turn_environments_or_default(&session_configuration)
+            .await;
+        self.new_startup_prewarm_turn_from_configuration(
+            sub_id,
+            session_configuration,
+            turn_environments,
+        )
+        .await
+    }
+
+    async fn resolve_turn_environments_or_default(
+        &self,
+        session_configuration: &SessionConfiguration,
+    ) -> ResolvedTurnEnvironments {
+        crate::environment_selection::resolve_environment_selections(
+            self.services.environment_manager.as_ref(),
+            session_configuration.environment_selections(),
+        )
+        .await
+        .unwrap_or_else(|err| {
+            warn!("failed to resolve turn environments: {err}");
+            ResolvedTurnEnvironments::default()
+        })
     }
 
     async fn default_turn_configuration(&self) -> SessionConfiguration {
