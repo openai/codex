@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use crate::Prompt;
 use crate::client::CompactConversationRequestSettings;
@@ -43,6 +44,7 @@ const CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE: &str =
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    turn_state: Arc<OnceLock<String>>,
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
     phase: CompactionPhase,
@@ -50,6 +52,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     run_remote_compact_task_inner(
         &sess,
         &turn_context,
+        Some(turn_state),
         initial_context_injection,
         CompactionTrigger::Auto,
         reason,
@@ -75,6 +78,7 @@ pub(crate) async fn run_remote_compact_task(
     run_remote_compact_task_inner(
         &sess,
         &turn_context,
+        /*turn_state*/ None,
         InitialContextInjection::DoNotInject,
         CompactionTrigger::Manual,
         CompactionReason::UserRequested,
@@ -87,6 +91,7 @@ pub(crate) async fn run_remote_compact_task(
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    turn_state: Option<Arc<OnceLock<String>>>,
     initial_context_injection: InitialContextInjection,
     trigger: CompactionTrigger,
     reason: CompactionReason,
@@ -130,6 +135,7 @@ async fn run_remote_compact_task_inner(
     let result = run_remote_compact_task_inner_impl(
         sess,
         turn_context,
+        turn_state,
         initial_context_injection,
         compaction_metadata,
         &mut analytics_details,
@@ -163,6 +169,7 @@ async fn run_remote_compact_task_inner(
 async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    turn_state: Option<Arc<OnceLock<String>>>,
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
     analytics_details: &mut CompactionAnalyticsDetails,
@@ -237,6 +244,7 @@ async fn run_remote_compact_task_inner_impl(
         .compact_conversation_history(
             &prompt,
             &turn_context.model_info,
+            turn_state,
             CompactConversationRequestSettings {
                 effort: turn_context.reasoning_effort.clone(),
                 summary: turn_context.reasoning_summary,

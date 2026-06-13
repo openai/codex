@@ -11,7 +11,10 @@ use http::Method;
 use serde::Deserialize;
 use serde_json::to_value;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
+
+const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 
 pub struct CompactClient<T: HttpTransport> {
     session: EndpointSession<T>,
@@ -39,6 +42,7 @@ impl<T: HttpTransport> CompactClient<T> {
         body: serde_json::Value,
         extra_headers: HeaderMap,
         request_timeout: Duration,
+        turn_state: Option<&OnceLock<String>>,
     ) -> Result<Vec<ResponseItem>, ApiError> {
         let resp = self
             .session
@@ -52,6 +56,14 @@ impl<T: HttpTransport> CompactClient<T> {
                 },
             )
             .await?;
+        if let Some(turn_state) = turn_state
+            && let Some(header_value) = resp
+                .headers
+                .get(X_CODEX_TURN_STATE_HEADER)
+                .and_then(|value| value.to_str().ok())
+        {
+            let _ = turn_state.set(header_value.to_string());
+        }
         let parsed: CompactHistoryResponse =
             serde_json::from_slice(&resp.body).map_err(|e| ApiError::Stream(e.to_string()))?;
         Ok(parsed.output)
@@ -62,10 +74,12 @@ impl<T: HttpTransport> CompactClient<T> {
         input: &CompactionInput<'_>,
         extra_headers: HeaderMap,
         request_timeout: Duration,
+        turn_state: Option<&OnceLock<String>>,
     ) -> Result<Vec<ResponseItem>, ApiError> {
         let body = to_value(input)
             .map_err(|e| ApiError::Stream(format!("failed to encode compaction input: {e}")))?;
-        self.compact(body, extra_headers, request_timeout).await
+        self.compact(body, extra_headers, request_timeout, turn_state)
+            .await
     }
 }
 
