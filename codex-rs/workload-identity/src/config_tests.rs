@@ -84,7 +84,7 @@ fn every_source_variant_has_a_stable_name() {
             endpoint_socket: None,
             spiffe_id: None,
         },
-        CredentialSourceConfig::Aws {},
+        CredentialSourceConfig::Aws { region: None },
     ];
 
     assert_eq!(

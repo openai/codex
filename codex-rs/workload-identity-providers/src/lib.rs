@@ -5,6 +5,8 @@ use codex_workload_identity::SubjectToken;
 use codex_workload_identity::SubjectTokenError;
 use codex_workload_identity::SubjectTokenProvider;
 use codex_workload_identity::UnavailableSubjectTokenSource;
+#[cfg(feature = "aws")]
+use codex_workload_identity_aws::AwsSubjectTokenProvider;
 #[cfg(feature = "azure")]
 use codex_workload_identity_azure::AzureSubjectTokenProvider;
 #[cfg(feature = "gcp")]
@@ -22,6 +24,8 @@ pub type ConfiguredWorkloadIdentityClient =
 pub enum ConfiguredSubjectTokenProvider {
     Environment(EnvironmentSubjectTokenSource),
     File(FileSubjectTokenSource),
+    #[cfg(feature = "aws")]
+    Aws(AwsSubjectTokenProvider),
     #[cfg(feature = "azure")]
     Azure(AzureSubjectTokenProvider),
     #[cfg(feature = "gcp")]
@@ -34,7 +38,12 @@ pub enum ConfiguredSubjectTokenProvider {
 }
 
 impl ConfiguredSubjectTokenProvider {
-    fn from_config(config: &CredentialSourceConfig, audience: &str, http: reqwest::Client) -> Self {
+    fn from_config(
+        config: &CredentialSourceConfig,
+        identity_provider_id: &str,
+        audience: &str,
+        http: reqwest::Client,
+    ) -> Self {
         match config {
             CredentialSourceConfig::Environment { variable } => {
                 Self::Environment(EnvironmentSubjectTokenSource::capture(variable))
@@ -101,9 +110,21 @@ impl ConfiguredSubjectTokenProvider {
                     Self::Unavailable(UnavailableSubjectTokenSource::new("spiffe"))
                 }
             }
-            CredentialSourceConfig::Aws {} => {
-                let _ = (audience, http);
-                Self::Unavailable(UnavailableSubjectTokenSource::new("aws"))
+            CredentialSourceConfig::Aws { region } => {
+                #[cfg(feature = "aws")]
+                {
+                    let _ = http;
+                    Self::Aws(AwsSubjectTokenProvider::new(
+                        identity_provider_id.to_string(),
+                        audience.to_string(),
+                        region.clone(),
+                    ))
+                }
+                #[cfg(not(feature = "aws"))]
+                {
+                    let _ = (identity_provider_id, audience, region, http);
+                    Self::Unavailable(UnavailableSubjectTokenSource::new("aws"))
+                }
             }
         }
     }
@@ -114,6 +135,8 @@ impl SubjectTokenProvider for ConfiguredSubjectTokenProvider {
         match self {
             Self::Environment(source) => source.subject_token().await,
             Self::File(source) => source.subject_token().await,
+            #[cfg(feature = "aws")]
+            Self::Aws(source) => source.subject_token().await,
             #[cfg(feature = "azure")]
             Self::Azure(source) => source.subject_token().await,
             #[cfg(feature = "gcp")]
@@ -134,6 +157,7 @@ pub fn build_client(
 ) -> ConfiguredWorkloadIdentityClient {
     let source = ConfiguredSubjectTokenProvider::from_config(
         &config.credential_source,
+        &config.identity_provider_id,
         &config.audience,
         http.clone(),
     );
@@ -150,6 +174,7 @@ mod tests {
             &CredentialSourceConfig::Gcp {
                 service_account: None,
             },
+            "idp_example",
             "openai-audience",
             reqwest::Client::new(),
         );

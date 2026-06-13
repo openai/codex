@@ -4429,6 +4429,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-workload-identity-aws"
+version = "0.0.0"
+dependencies = [
+ "aws-config",
+ "aws-credential-types",
+ "aws-types",
+ "bytes",
+ "codex-aws-auth",
+ "codex-workload-identity",
+ "http 1.4.0",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "codex-workload-identity-azure"
 version = "0.0.0"
 dependencies = [
@@ -4473,6 +4490,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-workload-identity",
+ "codex-workload-identity-aws",
  "codex-workload-identity-azure",
  "codex-workload-identity-gcp",
  "codex-workload-identity-github-actions",

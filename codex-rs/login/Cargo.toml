@@ -22,6 +22,7 @@ codex-secrets = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-utils-template = { workspace = true }
 codex-workload-identity-providers = { workspace = true, features = [
+    "aws",
     "azure",
     "gcp",
     "github-actions",

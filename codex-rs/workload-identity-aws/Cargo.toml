@@ -1,0 +1,26 @@
+[package]
+name = "codex-workload-identity-aws"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+aws-config = { workspace = true }
+aws-credential-types = { workspace = true }
+aws-types = { workspace = true }
+bytes = { workspace = true }
+codex-aws-auth = { workspace = true }
+codex-workload-identity = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lib]
+doctest = false

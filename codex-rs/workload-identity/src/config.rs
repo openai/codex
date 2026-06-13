@@ -76,8 +76,12 @@ pub enum CredentialSourceConfig {
         spiffe_id: Option<String>,
     },
 
-    /// Reserved for the approved AWS workload proof contract.
-    Aws {},
+    /// A SigV4-signed AWS STS `GetCallerIdentity` workload proof.
+    Aws {
+        /// AWS region. Defaults to `AWS_REGION`, `AWS_DEFAULT_REGION`, then global STS.
+        #[serde(default)]
+        region: Option<String>,
+    },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -179,7 +183,12 @@ impl WorkloadIdentityConfig {
                 Err(WorkloadIdentityConfigError::InvalidSpiffeId)
             }
             CredentialSourceConfig::Spiffe { .. } => Ok(()),
-            CredentialSourceConfig::Aws {} => Ok(()),
+            CredentialSourceConfig::Aws {
+                region: Some(region),
+            } if region.trim().is_empty() => {
+                Err(WorkloadIdentityConfigError::EmptySourceField("region"))
+            }
+            CredentialSourceConfig::Aws { .. } => Ok(()),
         }
     }
 }
@@ -193,7 +202,7 @@ impl CredentialSourceConfig {
             Self::Gcp { .. } => "gcp",
             Self::GithubActions {} => "github_actions",
             Self::Spiffe { .. } => "spiffe",
-            Self::Aws {} => "aws",
+            Self::Aws { .. } => "aws",
         }
     }
 
@@ -208,7 +217,7 @@ impl CredentialSourceConfig {
             | Self::Azure { .. }
             | Self::Gcp { .. }
             | Self::Spiffe { .. }
-            | Self::Aws {} => Vec::new(),
+            | Self::Aws { .. } => Vec::new(),
         }
     }
 }

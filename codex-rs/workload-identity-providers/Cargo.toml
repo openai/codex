@@ -7,6 +7,7 @@ license.workspace = true
 [features]
 default = []
 azure = ["dep:codex-workload-identity-azure"]
+aws = ["dep:codex-workload-identity-aws"]
 gcp = ["dep:codex-workload-identity-gcp"]
 github-actions = ["dep:codex-workload-identity-github-actions"]
 spiffe = ["dep:codex-workload-identity-spiffe"]
@@ -16,6 +17,7 @@ workspace = true
 
 [dependencies]
 codex-workload-identity = { workspace = true }
+codex-workload-identity-aws = { workspace = true, optional = true }
 codex-workload-identity-azure = { workspace = true, optional = true }
 codex-workload-identity-gcp = { workspace = true, optional = true }
 codex-workload-identity-github-actions = { workspace = true, optional = true }
