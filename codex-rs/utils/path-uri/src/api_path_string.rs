@@ -1,4 +1,5 @@
 use crate::PathUri;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -52,9 +53,18 @@ impl fmt::Display for PathConvention {
 /// this API boundary because the value is serialized as a JSON string.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, TS)]
 #[ts(type = "string")]
-pub struct NativePathString(String);
+pub struct ApiPathString(String);
 
-impl NativePathString {
+impl ApiPathString {
+    /// Converts an absolute path to a [`PathUri`] before rendering it using the
+    /// requested native path convention.
+    pub fn from_abs_path(
+        path: &AbsolutePathBuf,
+        convention: PathConvention,
+    ) -> Result<Self, ApiPathStringError> {
+        Self::from_path_uri(&PathUri::from_abs_path(path), convention)
+    }
+
     /// Renders a path URI using the requested native path convention.
     ///
     /// Rendering fails when the URI shape does not match the convention, such
@@ -65,7 +75,7 @@ impl NativePathString {
     pub fn from_path_uri(
         path: &PathUri,
         convention: PathConvention,
-    ) -> Result<Self, NativePathStringError> {
+    ) -> Result<Self, ApiPathStringError> {
         if let Some(path_bytes) = path.opaque_fallback_bytes() {
             return render_opaque_fallback(path, &path_bytes, convention).map(Self);
         }
@@ -89,7 +99,7 @@ fn render_opaque_fallback(
     path: &PathUri,
     path_bytes: &[u8],
     convention: PathConvention,
-) -> Result<String, NativePathStringError> {
+) -> Result<String, ApiPathStringError> {
     let rendered = match convention {
         PathConvention::Posix if path_bytes.starts_with(b"/") => {
             Some(String::from_utf8_lossy(path_bytes).into_owned())
@@ -97,7 +107,7 @@ fn render_opaque_fallback(
         PathConvention::Windows => render_windows_opaque_fallback(path_bytes),
         PathConvention::Posix => None,
     };
-    rendered.ok_or_else(|| NativePathStringError::OpaqueFallback {
+    rendered.ok_or_else(|| ApiPathStringError::OpaqueFallback {
         path: path.to_string(),
     })
 }
@@ -133,13 +143,13 @@ fn is_windows_separator(character: u16) -> bool {
     character == u16::from(b'\\') || character == u16::from(b'/')
 }
 
-impl fmt::Display for NativePathString {
+impl fmt::Display for ApiPathString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
 }
 
-impl Serialize for NativePathString {
+impl Serialize for ApiPathString {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -148,9 +158,9 @@ impl Serialize for NativePathString {
     }
 }
 
-impl JsonSchema for NativePathString {
+impl JsonSchema for ApiPathString {
     fn schema_name() -> String {
-        "NativePathString".to_string()
+        "ApiPathString".to_string()
     }
 
     fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
@@ -158,7 +168,7 @@ impl JsonSchema for NativePathString {
     }
 }
 
-fn render_posix_path(path: &PathUri) -> Result<String, NativePathStringError> {
+fn render_posix_path(path: &PathUri) -> Result<String, ApiPathStringError> {
     let url = path.to_url();
     // POSIX file paths do not have a UNC authority, so `file://server/share`
     // cannot be represented as `/share` without losing the server identity.
@@ -176,7 +186,7 @@ fn render_posix_path(path: &PathUri) -> Result<String, NativePathStringError> {
     Ok(rendered)
 }
 
-fn render_windows_path(path: &PathUri) -> Result<String, NativePathStringError> {
+fn render_windows_path(path: &PathUri) -> Result<String, ApiPathStringError> {
     let url = path.to_url();
     let mut segments = path_segments(&url);
     let mut rendered = String::new();
@@ -237,15 +247,15 @@ fn decode_native_segment(segment: &str) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-fn incompatible_convention(path: &PathUri, convention: PathConvention) -> NativePathStringError {
-    NativePathStringError::IncompatibleConvention {
+fn incompatible_convention(path: &PathUri, convention: PathConvention) -> ApiPathStringError {
+    ApiPathStringError::IncompatibleConvention {
         path: path.to_string(),
         convention,
     }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
-pub enum NativePathStringError {
+pub enum ApiPathStringError {
     #[error("opaque fallback path URI `{path}` cannot be recovered as a native path")]
     OpaqueFallback { path: String },
     #[error("path URI `{path}` cannot be rendered using {convention} path syntax")]
@@ -256,5 +266,5 @@ pub enum NativePathStringError {
 }
 
 #[cfg(test)]
-#[path = "native_path_string_tests.rs"]
+#[path = "api_path_string_tests.rs"]
 mod tests;

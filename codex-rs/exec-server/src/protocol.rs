@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use crate::FileSystemSandboxContext;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
-use codex_utils_path_uri::NativePathString;
-use codex_utils_path_uri::NativePathStringError;
+use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::ApiPathStringError;
 use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
@@ -81,8 +81,8 @@ impl EnvironmentInfo {
     ///
     /// TODO(anp): Once `PathUri` carries an environment identifier, invert this
     /// relationship and use the URI to resolve the environment information.
-    pub fn render_path(&self, path: &PathUri) -> Result<NativePathString, NativePathStringError> {
-        NativePathString::from_path_uri(path, self.path_convention)
+    pub fn render_path(&self, path: &PathUri) -> Result<ApiPathString, ApiPathStringError> {
+        ApiPathString::from_path_uri(path, self.path_convention)
     }
 }
 
