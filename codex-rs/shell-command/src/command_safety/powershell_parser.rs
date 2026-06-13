@@ -324,4 +324,32 @@ mod tests {
             .unwrap();
         assert_eq!(parsed, PowershellParseOutcome::Unsupported);
     }
+
+    #[test]
+    fn parser_process_rejects_named_blocks() {
+        let Some(powershell) = try_find_powershell_executable_blocking() else {
+            return;
+        };
+        let powershell = powershell.as_path().to_str().unwrap();
+        let mut parser = PowershellParserProcess::spawn(powershell).unwrap();
+
+        let parsed = parser
+            .parse("begin { Set-Content codex_poc.txt pwned } end { Get-Content Cargo.toml }")
+            .unwrap();
+        assert_eq!(parsed, PowershellParseOutcome::Unsupported);
+    }
+
+    #[test]
+    fn parser_process_rejects_using_statements() {
+        let Some(powershell) = try_find_powershell_executable_blocking() else {
+            return;
+        };
+        let powershell = powershell.as_path().to_str().unwrap();
+        let mut parser = PowershellParserProcess::spawn(powershell).unwrap();
+
+        let parsed = parser
+            .parse("using module ./codex_poc.psm1\nGet-Content Cargo.toml")
+            .unwrap();
+        assert_eq!(parsed, PowershellParseOutcome::Unsupported);
+    }
 }

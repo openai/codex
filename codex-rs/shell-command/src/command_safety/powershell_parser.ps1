@@ -42,9 +42,17 @@ function Invoke-ParseRequest {
         return @{ id = $RequestId; status = 'parse_errors' }
     }
 
-    # Script parameter blocks can contain expressions that are evaluated outside
-    # of the end-block statements we flatten below.
-    if ($ast.ParamBlock -ne $null) {
+    # Top-level AST regions outside the end block can execute code that the
+    # command lowering below does not inspect.
+    $cleanBlock = $ast.PSObject.Properties['CleanBlock']
+    if (
+        $ast.ParamBlock -ne $null -or
+        $ast.DynamicParamBlock -ne $null -or
+        $ast.BeginBlock -ne $null -or
+        $ast.ProcessBlock -ne $null -or
+        ($cleanBlock -ne $null -and $cleanBlock.Value -ne $null) -or
+        $ast.UsingStatements.Count -gt 0
+    ) {
         return @{ id = $RequestId; status = 'unsupported' }
     }
 
