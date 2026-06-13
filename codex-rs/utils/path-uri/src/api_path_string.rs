@@ -8,7 +8,11 @@ use std::fmt;
 use thiserror::Error;
 use ts_rs::TS;
 
-/// A UTF-8 path rendered using an explicitly selected native path convention.
+/// A UTF-8 path for preserving raw path compatibility at the app-server API
+/// boundary while Codex migrates to [`PathUri`].
+///
+/// Supports storing arbitrary strings read from the API and converting to and
+/// from [`PathUri`] using an explicitly selected native path convention.
 ///
 /// "Native" refers to the supplied [`PathConvention`], which may be foreign to
 /// the operating system running this process. The inner string is private so
