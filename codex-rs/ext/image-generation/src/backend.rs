@@ -1,11 +1,16 @@
+use codex_api::ApiError;
 use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
 use codex_api::ImageResponse;
 use codex_api::ImagesClient;
 use codex_api::ReqwestTransport;
+use codex_api::TransportError;
 use codex_login::default_client::build_reqwest_client;
 use codex_model_provider::SharedModelProvider;
 use http::HeaderMap;
+use serde::Deserialize;
+
+const MAX_ERROR_MESSAGE_CHARS: usize = 4000;
 
 #[derive(Clone)]
 pub(crate) struct CodexImagesBackend {
@@ -46,7 +51,7 @@ impl CodexImagesBackend {
             .await?
             .generate(&request, HeaderMap::new())
             .await
-            .map_err(|err| err.to_string())
+            .map_err(image_api_error_message)
     }
 
     /// Sends a standalone image edit request through the configured Images client.
@@ -55,6 +60,72 @@ impl CodexImagesBackend {
             .await?
             .edit(&request, HeaderMap::new())
             .await
-            .map_err(|err| err.to_string())
+            .map_err(image_api_error_message)
     }
 }
+
+#[derive(Deserialize)]
+struct ErrorPayload {
+    error: Option<ErrorMessage>,
+    detail: Option<ErrorDetail>,
+}
+
+#[derive(Deserialize)]
+struct ErrorMessage {
+    message: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ErrorDetail {
+    Message(String),
+    Object { message: Option<String> },
+}
+
+fn image_api_error_message(err: ApiError) -> String {
+    let message = if let ApiError::Transport(TransportError::Http {
+        body: Some(body), ..
+    }) = &err
+    {
+        if let Some(message) = parse_error_message(body) {
+            message
+        } else if !body.trim().is_empty() {
+            body.trim().to_string()
+        } else {
+            err.to_string()
+        }
+    } else {
+        err.to_string()
+    };
+
+    truncate_error_message(&message)
+}
+
+fn parse_error_message(body: &str) -> Option<String> {
+    let payload = serde_json::from_str::<ErrorPayload>(body).ok()?;
+    payload
+        .error
+        .and_then(|error| error.message)
+        .or(match payload.detail {
+            Some(ErrorDetail::Message(message)) => Some(message),
+            Some(ErrorDetail::Object { message }) => message,
+            None => None,
+        })
+        .filter(|message| !message.trim().is_empty())
+}
+
+fn truncate_error_message(message: &str) -> String {
+    if message.chars().count() <= MAX_ERROR_MESSAGE_CHARS {
+        return message.to_string();
+    }
+
+    message
+        .chars()
+        .take(MAX_ERROR_MESSAGE_CHARS - 1)
+        .chain(std::iter::once('…'))
+        .collect()
+}
+
+#[cfg(test)]
+#[path = "backend_tests.rs"]
+mod tests;

@@ -603,6 +603,7 @@ impl ThreadHistoryBuilder {
             revised_prompt: None,
             result: String::new(),
             saved_path: None,
+            error: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -614,6 +615,7 @@ impl ThreadHistoryBuilder {
             revised_prompt: payload.revised_prompt.clone(),
             result: payload.result.clone(),
             saved_path: payload.saved_path.clone(),
+            error: payload.error.clone(),
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -1582,10 +1584,11 @@ mod tests {
             })),
             RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(ImageGenerationEndEvent {
                 call_id: "ig_123".into(),
-                status: "completed".into(),
+                status: "failed".into(),
                 revised_prompt: Some("final prompt".into()),
-                result: "Zm9v".into(),
-                saved_path: Some(test_path_buf("/tmp/ig_123.png").abs()),
+                result: String::new(),
+                saved_path: None,
+                error: Some("bad image request".into()),
             })),
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-image".into(),
@@ -1619,10 +1622,11 @@ mod tests {
                     },
                     ThreadItem::ImageGeneration {
                         id: "ig_123".into(),
-                        status: "completed".into(),
+                        status: "failed".into(),
                         revised_prompt: Some("final prompt".into()),
-                        result: "Zm9v".into(),
-                        saved_path: Some(test_path_buf("/tmp/ig_123.png").abs()),
+                        result: String::new(),
+                        saved_path: None,
+                        error: Some("bad image request".into()),
                     },
                 ],
             }

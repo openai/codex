@@ -504,6 +504,7 @@ mod tests {
                         revised_prompt: None,
                         result: String::new(),
                         saved_path: None,
+                        error: None,
                     },
                 ))
                 .await;
@@ -515,6 +516,7 @@ mod tests {
                         revised_prompt: Some("A tiny blue square".to_string()),
                         result: "cG5n".to_string(),
                         saved_path: Some(test_path_buf("/tmp/extension-claimed.png").abs()),
+                        error: None,
                     },
                 ))
                 .await;
@@ -578,6 +580,7 @@ mod tests {
                 revised_prompt: None,
                 result: String::new(),
                 saved_path: None,
+                error: None,
             }
         );
         assert_eq!(
@@ -588,6 +591,7 @@ mod tests {
                 revised_prompt: Some("A tiny blue square".to_string()),
                 result: "cG5n".to_string(),
                 saved_path: Some(expected_path.clone()),
+                error: None,
             }
         );
         assert_eq!(

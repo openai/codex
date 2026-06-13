@@ -32,6 +32,7 @@ impl ChatWidget {
         status: String,
         revised_prompt: Option<String>,
         saved_path: Option<AbsolutePathBuf>,
+        error: Option<String>,
     ) {
         self.flush_answer_stream_with_separator();
         self.add_to_history(history_cell::new_image_generation_call(
@@ -39,6 +40,7 @@ impl ChatWidget {
             &status,
             revised_prompt,
             saved_path,
+            error,
         ));
         self.request_redraw();
     }

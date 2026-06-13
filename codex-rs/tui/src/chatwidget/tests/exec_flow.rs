@@ -867,6 +867,7 @@ async fn image_generation_call_adds_history_cell() {
         "completed",
         Some("A tiny blue square".into()),
         Some(test_path_buf("/tmp/ig-1.png").abs()),
+        None,
     );
 
     let cells = drain_insert_history(&mut rx);
@@ -884,6 +885,7 @@ async fn image_generation_call_adds_history_cell() {
         "failed",
         Some("A tiny blue square".into()),
         /*saved_path*/ None,
+        Some("image backend failed".into()),
     );
 
     let cells = drain_insert_history(&mut rx);

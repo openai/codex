@@ -76,9 +76,18 @@ pub(crate) fn new_image_generation_call(
     status: &str,
     revised_prompt: Option<String>,
     saved_path: Option<AbsolutePathBuf>,
+    error: Option<String>,
 ) -> PlainHistoryCell {
-    let detail = revised_prompt.unwrap_or(call_id);
-    let heading = if status == "failed" {
+    let failed = status == "failed";
+    let detail = if failed {
+        error
+            .map(|error| format!("Error: {}", truncate_text(error.trim(), 1000)))
+            .or(revised_prompt)
+            .unwrap_or(call_id)
+    } else {
+        revised_prompt.unwrap_or(call_id)
+    };
+    let heading = if failed {
         vec!["✗ ".red().bold(), "Image generation failed".bold()].into()
     } else {
         vec!["• ".dim(), "Generated Image:".bold()].into()

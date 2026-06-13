@@ -363,6 +363,7 @@ pub enum ThreadItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         saved_path: Option<AbsolutePathBuf>,
+        error: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -840,6 +841,7 @@ impl From<CoreTurnItem> for ThreadItem {
                 revised_prompt: image.revised_prompt,
                 result: image.result,
                 saved_path: image.saved_path,
+                error: image.error,
             },
             CoreTurnItem::FileChange(file_change) => ThreadItem::FileChange {
                 id: file_change.id,

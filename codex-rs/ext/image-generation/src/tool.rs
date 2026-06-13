@@ -115,13 +115,13 @@ impl ImageGenerationTool {
                 revised_prompt: None,
                 result: String::new(),
                 saved_path: None,
+                error: None,
             }))
             .await;
         let result = match request {
             ImageRequest::Generate(request) => self.backend.generate(request).await,
             ImageRequest::Edit(request) => self.backend.edit(request).await,
         }
-        .map_err(|err| format!("image generation failed: {err}"))
         .and_then(|response| {
             response
                 .data
@@ -133,6 +133,7 @@ impl ImageGenerationTool {
         let result = match result {
             Ok(result) => result,
             Err(message) => {
+                let model_message = format!("image generation failed: {message}");
                 call.turn_item_emitter
                     .emit_completed(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
                         id: call.call_id.clone(),
@@ -140,9 +141,10 @@ impl ImageGenerationTool {
                         revised_prompt: Some(args.prompt.clone()),
                         result: String::new(),
                         saved_path: None,
+                        error: Some(message),
                     }))
                     .await;
-                return Err(FunctionCallError::RespondToModel(message));
+                return Err(FunctionCallError::RespondToModel(model_message));
             }
         };
         call.turn_item_emitter
@@ -152,6 +154,7 @@ impl ImageGenerationTool {
                 revised_prompt: Some(args.prompt),
                 result: result.clone(),
                 saved_path: None,
+                error: None,
             }))
             .await;
         let output_path =

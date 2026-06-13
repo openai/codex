@@ -1717,6 +1717,12 @@
         },
         {
           "properties": {
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "id": {
               "type": "string"
             },

@@ -154,9 +154,10 @@ impl ChatWidget {
                 status,
                 revised_prompt,
                 saved_path,
+                error,
                 ..
             } => {
-                self.on_image_generation_end(id, status, revised_prompt, saved_path);
+                self.on_image_generation_end(id, status, revised_prompt, saved_path, error);
             }
             ThreadItem::EnteredReviewMode { review, .. } => {
                 if from_replay {

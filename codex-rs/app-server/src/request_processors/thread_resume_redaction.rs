@@ -97,6 +97,7 @@ mod tests {
                 revised_prompt: Some("revised".to_string()),
                 result: "base64-result".to_string(),
                 saved_path: Some(test_path_buf("/tmp/ig-1.png").abs()),
+                error: None,
             },
         ]);
 

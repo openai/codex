@@ -2358,6 +2358,9 @@ pub struct ImageGenerationEndEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub saved_path: Option<AbsolutePathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
 }
 
 // Conversation kept for backward compatibility.
@@ -4737,6 +4740,7 @@ mod tests {
                 revised_prompt: None,
                 result: String::new(),
                 saved_path: None,
+                error: None,
             }),
             started_at_ms: 0,
         };
@@ -4833,6 +4837,7 @@ mod tests {
                 revised_prompt: Some("A tiny blue square".into()),
                 result: "Zm9v".into(),
                 saved_path: Some(test_path_buf("/tmp/ig-1.png").abs()),
+                error: None,
             }),
             completed_at_ms: 0,
         };

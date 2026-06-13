@@ -697,6 +697,7 @@ pub(super) fn handle_image_generation_end(
     status: impl Into<String>,
     revised_prompt: Option<String>,
     saved_path: Option<AbsolutePathBuf>,
+    error: Option<String>,
 ) {
     chat.handle_server_notification(
         ServerNotification::ItemCompleted(ItemCompletedNotification {
@@ -709,6 +710,7 @@ pub(super) fn handle_image_generation_end(
                 revised_prompt,
                 result: String::new(),
                 saved_path,
+                error,
             },
         }),
         /*replay_kind*/ None,

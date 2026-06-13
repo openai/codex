@@ -203,6 +203,7 @@ async fn standalone_image_generation_failure_emits_terminal_item() -> Result<()>
             revised_prompt: Some("paint a blue whale".to_string()),
             result: String::new(),
             saved_path: None,
+            error: Some("image backend failed".to_string()),
         }
     );
 
