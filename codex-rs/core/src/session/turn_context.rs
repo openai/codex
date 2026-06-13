@@ -20,6 +20,7 @@ use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
 use codex_utils_path_uri::PathUri;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use tracing::instrument;
 
 #[derive(Clone, Debug)]
 pub(crate) struct TurnSkillsContext {
@@ -724,6 +725,7 @@ impl Session {
         .await
     }
 
+    #[instrument(name = "turn_context.build", level = "trace", skip_all)]
     async fn new_turn_context_from_configuration(
         &self,
         sub_id: String,

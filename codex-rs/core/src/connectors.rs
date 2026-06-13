@@ -18,6 +18,7 @@ use codex_tools::DiscoverableTool;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
+use tracing::instrument;
 use tracing::warn;
 
 use crate::config::Config;
@@ -460,6 +461,7 @@ fn tool_suggest_connector_ids(
     connector_ids
 }
 
+#[instrument(level = "trace", skip_all)]
 async fn cached_directory_connectors_for_tool_suggest_with_auth(
     config: &Config,
     auth: Option<&CodexAuth>,

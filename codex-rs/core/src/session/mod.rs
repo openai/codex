@@ -1308,6 +1308,14 @@ impl Session {
         }
     }
 
+    #[instrument(
+        level = "trace",
+        skip_all,
+        fields(
+            thread_id = %self.thread_id(),
+            rollout_item_count = rollout_items.len()
+        )
+    )]
     async fn apply_rollout_reconstruction(
         &self,
         turn_context: &TurnContext,

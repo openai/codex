@@ -78,6 +78,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
+use tracing::instrument;
 use tracing::warn;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
@@ -702,6 +703,7 @@ impl ThreadManager {
         .await
     }
 
+    #[instrument(level = "trace", skip_all)]
     pub async fn resume_thread_with_history(
         &self,
         config: Config,

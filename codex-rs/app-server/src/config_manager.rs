@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 use toml::Value as TomlValue;
+use tracing::instrument;
 use tracing::warn;
 
 /// Shared app-server entry point for loading effective Codex configuration.
@@ -212,6 +213,7 @@ impl ConfigManager {
         .await
     }
 
+    #[instrument(level = "trace", skip_all)]
     pub(crate) async fn load_with_cli_overrides(
         &self,
         cli_overrides: &[(String, TomlValue)],

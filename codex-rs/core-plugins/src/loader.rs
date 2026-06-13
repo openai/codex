@@ -46,6 +46,7 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use tempfile::TempDir;
+use tracing::instrument;
 use tracing::warn;
 
 const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
@@ -111,6 +112,7 @@ struct PluginAppConfig {
     category: Option<String>,
 }
 
+#[instrument(level = "trace", skip_all)]
 pub async fn load_plugins_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
     extra_plugins: HashMap<String, PluginConfig>,
