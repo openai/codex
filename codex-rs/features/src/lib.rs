@@ -159,6 +159,8 @@ pub enum Feature {
     ToolSuggest,
     /// Enable plugins.
     Plugins,
+    /// Emit lifecycle analytics for scripts executed from first-party plugins.
+    PluginScriptLifecycle,
     /// Removed compatibility flag for plugin-bundled lifecycle hooks.
     PluginHooks,
     /// Allow the in-app browser pane in desktop apps.
@@ -1046,6 +1048,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "plugins",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::PluginScriptLifecycle,
+        key: "plugin_script_lifecycle",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::PluginHooks,
