@@ -459,10 +459,18 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
 
     let workdir_rel = std::path::PathBuf::from("uexec_relative_workdir");
     let workdir = create_workspace_directory(&test, &workdir_rel).await?;
+    let marker_uri = PathUri::from_path(workdir.join("cwd-marker.txt"))?;
+    test.fs()
+        .write_file(
+            &marker_uri,
+            b"resolved-relative-workdir".to_vec(),
+            /*sandbox*/ None,
+        )
+        .await?;
 
     let call_id = "uexec-workdir-relative";
     let args = json!({
-        "cmd": "pwd",
+        "cmd": "cat cwd-marker.txt",
         "yield_time_ms": 250,
         "workdir": workdir_rel.to_string_lossy().to_string(),
     });
@@ -479,7 +487,7 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let request_log = mount_sse_sequence(&server, responses).await;
 
     submit_unified_exec_turn(
         &test,
@@ -504,6 +512,15 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+
+    let output = request_log
+        .function_call_output_text(call_id)
+        .expect("missing relative workdir exec output");
+    let output = parse_unified_exec_output(&output)?;
+    assert_eq!(
+        (output.exit_code, output.output),
+        (Some(0), "resolved-relative-workdir".to_string())
+    );
 
     Ok(())
 }
