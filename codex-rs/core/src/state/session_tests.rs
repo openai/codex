@@ -12,9 +12,7 @@ use std::sync::Arc;
 async fn make_session_state() -> SessionState {
     let session_configuration = make_session_configuration_for_tests().await;
     let turn_environments =
-        TurnEnvironments::resolve(Arc::new(EnvironmentManager::default_for_tests()), &[])
-            .await
-            .expect("environment selections should resolve");
+        TurnEnvironments::resolve(Arc::new(EnvironmentManager::default_for_tests()), &[]).await;
     SessionState::new(session_configuration, turn_environments)
 }
 

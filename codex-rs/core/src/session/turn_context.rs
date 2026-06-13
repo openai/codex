@@ -612,34 +612,11 @@ impl Session {
         }
     }
 
-    pub(super) async fn turn_environments_for_update(
-        &self,
-        updates: &SessionSettingsUpdate,
-    ) -> Option<TurnEnvironments> {
-        let selections = updates.environments.as_ref()?.environments.as_slice();
-        let current = {
-            let state = self.state.lock().await;
-            state.turn_environments.clone()
-        };
-        let turn_environments = match current.with_selections(selections).await {
-            Ok(turn_environments) => turn_environments,
-            Err(err) => {
-                warn!("failed to resolve turn environments: {err}");
-                current
-                    .with_selections(&[])
-                    .await
-                    .expect("empty turn environment selections should resolve")
-            }
-        };
-        Some(turn_environments)
-    }
-
     pub(crate) async fn new_turn_with_sub_id(
         &self,
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> CodexResult<Arc<TurnContext>> {
-        let updated_turn_environments = self.turn_environments_for_update(&updates).await;
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let update_result: CodexResult<_> = {
             let mut state = self.state.lock().await;
@@ -658,10 +635,13 @@ impl Session {
                     });
                     let new_config = notify_config_contributors
                         .then(|| Self::build_effective_session_config(&next));
-                    state.session_configuration = next.clone();
-                    if let Some(turn_environments) = updated_turn_environments {
-                        state.turn_environments = turn_environments;
+                    if updates.environments.is_some() {
+                        state
+                            .turn_environments
+                            .update_selections(next.environment_selections())
+                            .await;
                     }
+                    state.session_configuration = next.clone();
                     Ok((
                         next,
                         permission_profile_changed,

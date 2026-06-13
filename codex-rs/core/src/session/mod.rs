@@ -519,8 +519,7 @@ impl Codex {
             attestation_provider,
             inherited_multi_agent_version,
         } = args;
-        let turn_environments =
-            TurnEnvironments::resolve(environment_manager, &environments).await?;
+        let turn_environments = TurnEnvironments::resolve(environment_manager, &environments).await;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
@@ -1432,7 +1431,6 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        let updated_turn_environments = self.turn_environments_for_update(&updates).await;
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let (
             previous_config,
@@ -1464,10 +1462,13 @@ impl Session {
             let next_cwd = updated.cwd().clone();
             let codex_home = updated.codex_home.clone();
             let session_source = updated.session_source.clone();
-            state.session_configuration = updated;
-            if let Some(turn_environments) = updated_turn_environments {
-                state.turn_environments = turn_environments;
+            if updates.environments.is_some() {
+                state
+                    .turn_environments
+                    .update_selections(updated.environment_selections())
+                    .await;
             }
+            state.session_configuration = updated;
             (
                 previous_config,
                 new_config,

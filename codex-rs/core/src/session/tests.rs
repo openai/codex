@@ -4040,7 +4040,6 @@ async fn turn_environments_for_configuration(
         session_configuration.environment_selections(),
     )
     .await
-    .expect("environment selections should resolve")
 }
 
 async fn session_state_for_tests(session_configuration: SessionConfiguration) -> SessionState {
@@ -6231,18 +6230,13 @@ async fn default_turn_does_not_overlay_legacy_fallback_cwd_onto_stored_thread_en
     let session_cwd = session.get_config().await.cwd.clone();
     let selected_cwd =
         AbsolutePathBuf::try_from(session_cwd.as_path().join("selected")).expect("absolute path");
-    let turn_environments = {
-        let state = session.state.lock().await;
-        state.turn_environments.clone()
-    }
-    .with_selections(&[local(selected_cwd.clone())])
-    .await
-    .expect("environment selection should resolve");
-
     {
         let mut state = session.state.lock().await;
+        state
+            .turn_environments
+            .update_selections(&[local(selected_cwd.clone())])
+            .await;
         state.session_configuration.environments.environments = vec![local(selected_cwd.clone())];
-        state.turn_environments = turn_environments;
     }
 
     let turn_context = session.new_default_turn().await;
