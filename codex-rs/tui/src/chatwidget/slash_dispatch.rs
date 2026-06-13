@@ -562,8 +562,8 @@ impl ChatWidget {
                     args,
                     text_elements,
                     pending_pastes: self.bottom_pane.composer_pending_pastes(),
-                    local_images: Vec::new(),
-                    remote_image_urls: Vec::new(),
+                    local_images: self.bottom_pane.composer_local_images(),
+                    remote_image_urls: self.bottom_pane.remote_image_urls(),
                     mention_bindings: Vec::new(),
                     source: SlashCommandDispatchSource::Live,
                 },
@@ -775,6 +775,8 @@ impl ChatWidget {
                     objective: args,
                     text_elements,
                     pending_pastes,
+                    local_images,
+                    remote_image_urls,
                 };
                 let Some(thread_id) = self.thread_id else {
                     if source == SlashCommandDispatchSource::Live {
@@ -792,8 +794,8 @@ impl ChatWidget {
                         self.queue_user_message_with_options(
                             UserMessage {
                                 text: format!("{GOAL_PREFIX}{}", draft.objective),
-                                local_images: Vec::new(),
-                                remote_image_urls: Vec::new(),
+                                local_images: draft.local_images,
+                                remote_image_urls: draft.remote_image_urls,
                                 text_elements,
                                 mention_bindings: Vec::new(),
                             },

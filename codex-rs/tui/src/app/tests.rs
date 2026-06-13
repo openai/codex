@@ -4221,6 +4221,7 @@ async fn set_thread_goal_draft_materializes_long_objective_and_confirms_before_p
             Some(placeholder.to_string()),
         )],
         pending_pastes: vec![(placeholder.to_string(), "hello".to_string())],
+        ..Default::default()
     };
 
     app.set_thread_goal_draft(
@@ -4293,6 +4294,7 @@ async fn set_thread_goal_draft_materializes_long_objective_and_confirms_before_p
                 Some(whitespace_placeholder.to_string()),
             )],
             pending_pastes: vec![(whitespace_placeholder.to_string(), " \n\t".to_string())],
+            ..Default::default()
         },
         crate::app_event::ThreadGoalSetMode::ReplaceExisting,
     )
@@ -4310,6 +4312,48 @@ async fn set_thread_goal_draft_materializes_long_objective_and_confirms_before_p
             .objective,
         "small goal"
     );
+
+    let image_dir = tempfile::tempdir()?;
+    let image_path = image_dir.path().join("local-image.png");
+    std::fs::write(&image_path, b"png bytes")?;
+    let image_placeholder = "[Image #3]";
+    app.set_thread_goal_draft(
+        &mut app_server,
+        thread_id,
+        crate::goal_files::GoalDraft {
+            objective: format!("Describe {image_placeholder}"),
+            text_elements: vec![TextElement::new(
+                (9..9 + image_placeholder.len()).into(),
+                Some(image_placeholder.to_string()),
+            )],
+            local_images: vec![crate::bottom_pane::LocalImageAttachment {
+                placeholder: image_placeholder.to_string(),
+                path: image_path,
+            }],
+            remote_image_urls: vec![
+                "https://example.com/first.png".to_string(),
+                "https://example.com/second.png".to_string(),
+            ],
+            ..Default::default()
+        },
+        crate::app_event::ThreadGoalSetMode::ReplaceExisting,
+    )
+    .await;
+    let objective = app_server
+        .thread_goal_get(thread_id)
+        .await?
+        .goal
+        .expect("image goal should be set")
+        .objective;
+    let copied_image = objective
+        .strip_prefix("Describe image file: ")
+        .and_then(|text| text.split_once("\n\n"))
+        .map(|(path, _)| path)
+        .expect("copied image path");
+    assert_eq!(std::fs::read(copied_image)?, b"png bytes");
+    assert!(objective.contains(
+        "Referenced image URLs:\n- [Image #1]: https://example.com/first.png\n- [Image #2]: https://example.com/second.png"
+    ));
     app_server.shutdown().await?;
     Ok(())
 }
