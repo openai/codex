@@ -106,6 +106,7 @@ pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
 pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
 pub const REALTIME_CONVERSATION_CLOSE_TAG: &str = "</realtime_conversation>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
+const LOCAL_ENVIRONMENT_ID: &str = "local";
 
 // TODO(anp): Replace `TurnEnvironmentSelection` with `PathUri` once path URIs carry environment
 // identifiers.
@@ -137,6 +138,7 @@ impl TurnEnvironmentSelections {
     fn sync_primary_environment_cwd(&mut self) {
         let legacy_fallback_cwd = PathUri::from_abs_path(&self.legacy_fallback_cwd);
         if let Some(turn_environment) = self.environments.first_mut()
+            && turn_environment.environment_id == LOCAL_ENVIRONMENT_ID
             && turn_environment.cwd != legacy_fallback_cwd
         {
             turn_environment.cwd = legacy_fallback_cwd;

@@ -7,6 +7,7 @@ use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
@@ -22,16 +23,17 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use codex_utils_path_uri::PathUri;
+use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use wine_test_support::WineTestCommand;
 
 const CALL_ID: &str = "wine-cmd-smoke";
-const COMMAND: &str = "echo WINE_BAZEL_OK&&cd";
+const COMMAND: &str = r#"if ((Get-Location).Path -ne 'C:\windows') { exit 1 }"#;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn windows_exec_server_rejects_non_native_cwd_uri() -> Result<()> {
+async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
     let executable = codex_utils_cargo_bin::cargo_bin("wine-windows-exec-server")?;
     let mut exec_server = WineTestCommand::new(executable)
         .env("CODEX_HOME", r"C:\codex-home")
@@ -91,7 +93,7 @@ async fn windows_exec_server_rejects_non_native_cwd_uri() -> Result<()> {
                 test.config.cwd.clone(),
                 vec![TurnEnvironmentSelection {
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                    cwd: PathUri::from_abs_path(&test.config.cwd),
+                    cwd: PathUri::parse("file:///C:/windows")?,
                 }],
             );
 
@@ -122,39 +124,44 @@ async fn windows_exec_server_rejects_non_native_cwd_uri() -> Result<()> {
                 })
                 .await?;
 
-            let mut saw_exec_event = false;
+            let mut begin = None;
+            let mut end = None;
             loop {
                 match wait_for_event(&test.codex, |_| true).await {
                     EventMsg::ExecCommandBegin(event) if event.call_id == CALL_ID => {
-                        saw_exec_event = true
+                        begin = Some(event)
                     }
                     EventMsg::ExecCommandEnd(event) if event.call_id == CALL_ID => {
-                        saw_exec_event = true
+                        end = Some(event)
                     }
                     EventMsg::TurnComplete(_) => break,
                     _ => {}
                 }
             }
 
+            let begin = begin.context("exec_command should emit a begin event")?;
             assert!(
-                !saw_exec_event,
-                "a non-native cwd should be rejected before process lifecycle events",
+                begin.command.first().is_some_and(|command| command
+                    .to_ascii_lowercase()
+                    .ends_with("powershell.exe")),
+                "unexpected command: {:?}",
+                begin.command
             );
+            assert_eq!(
+                &begin.command[1..],
+                ["-NoProfile", "-Command", COMMAND]
+            );
+
+            let end = end.context("exec_command should emit an end event")?;
+            assert_eq!((end.exit_code, end.status), (0, ExecCommandStatus::Completed));
 
             let request = response_mock
                 .last_request()
-                .context("model should receive the rejected command output")?;
-            let (output, success) = request
+                .context("model should receive the command output")?;
+            let (_output, success) = request
                 .function_call_output_content_and_success(CALL_ID)
-                .context("rejected command output should be present")?;
-            let output = output.context("rejected command output should contain text")?;
-            assert!(
-                output.contains("exec-server rejected request (-32602)")
-                    && output.contains("cwd URI")
-                    && output.contains("is not valid on this exec-server host"),
-                "unexpected command output: {output:?}",
-            );
-            assert_ne!(success, Some(true));
+                .context("command output should be present")?;
+            assert_ne!(success, Some(false));
 
             Ok(())
         })
