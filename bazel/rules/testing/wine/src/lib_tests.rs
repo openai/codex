@@ -1,147 +1,46 @@
 use std::any::Any;
-use std::collections::HashMap;
 use std::future::Future;
 use std::fs;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_utils_pty::SpawnedProcess;
-use codex_utils_pty::TerminalSize;
 use futures::FutureExt;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command as TokioCommand;
-use tokio::time::timeout;
 
 use super::WineTestCommand;
 use super::WineTestProcess;
-use super::WineRuntimePaths;
 use super::install_powershell_runtime;
+use super::run_powershell;
+use super::run_powershell_with_pty;
 
+// The marker makes the assertion resilient to Wine or PTY startup chatter.
 const POWERSHELL_SMOKE_MARKER: &str = "WINE_PWSH_SMOKE";
+// Besides proving that the pinned runtime starts, report the properties that
+// shell detection and command construction rely on: PowerShell 7 Core running
+// with Windows semantics and a backslash path separator.
 const POWERSHELL_SMOKE_SCRIPT: &str = concat!(
     "$ErrorActionPreference = 'Stop'; ",
     "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); ",
     "$separatorCode = [int]([System.IO.Path]::DirectorySeparatorChar); ",
+    "if ($PSVersionTable.PSVersion.Major -ne 7) { throw 'expected PowerShell 7' }; ",
+    "if ($PSVersionTable.PSEdition -ne 'Core') { throw 'expected PowerShell Core' }; ",
+    "if (-not $IsWindows) { throw 'expected Windows semantics' }; ",
+    "if ($separatorCode -ne 92) { throw 'expected backslash path separator' }; ",
     "Write-Output ('WINE_PWSH_SMOKE|' + ",
     "$PSVersionTable.PSVersion.ToString() + '|' + ",
     "$PSVersionTable.PSEdition + '|' + ",
     "$IsWindows.ToString().ToLowerInvariant() + '|' + $separatorCode)",
 );
 
-#[test]
-fn powershell_runtime_is_materialized_at_the_windows_fallback_path() -> Result<()> {
-    let prefix = TempDir::new()?;
-    let runtime = TempDir::new()?;
-    fs::create_dir(runtime.path().join("Modules"))?;
-    fs::write(runtime.path().join("pwsh.exe"), b"pwsh")?;
-    fs::write(runtime.path().join("Modules").join("marker.txt"), b"module")?;
-
-    install_powershell_runtime(prefix.path(), runtime.path())?;
-
-    let installed = prefix
-        .path()
-        .join("drive_c")
-        .join("Program Files")
-        .join("PowerShell")
-        .join("7");
-    assert_eq!(fs::read(installed.join("pwsh.exe"))?, b"pwsh");
-    assert_eq!(
-        fs::read(installed.join("Modules").join("marker.txt"))?,
-        b"module"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn pinned_powershell_runs_under_wine() -> Result<()> {
-    let runtime = WineRuntimePaths::from_runfiles()?;
-    let prefix = TempDir::new()?;
-    install_powershell_runtime(prefix.path(), &runtime.powershell_runtime)?;
-    let mut env = std::env::vars().collect::<HashMap<_, _>>();
-    env.remove("DISPLAY");
-    env.extend([
-        ("HOME".to_string(), prefix.path().to_string_lossy().into_owned()),
-        (
-            "XDG_RUNTIME_DIR".to_string(),
-            prefix.path().to_string_lossy().into_owned(),
-        ),
-        ("WINEARCH".to_string(), "win64".to_string()),
-        (
-            "WINEPREFIX".to_string(),
-            prefix.path().to_string_lossy().into_owned(),
-        ),
-        (
-            "WINEDLLPATH".to_string(),
-            runtime.dll_path.to_string_lossy().into_owned(),
-        ),
-        (
-            "WINESERVER".to_string(),
-            runtime.wineserver.to_string_lossy().into_owned(),
-        ),
-        ("WINEDEBUG".to_string(), "-all".to_string()),
-        (
-            "WINEDLLOVERRIDES".to_string(),
-            "mscoree,mshtml,winegstreamer=".to_string(),
-        ),
-        ("LANG".to_string(), "C.UTF-8".to_string()),
-        ("LC_ALL".to_string(), "C.UTF-8".to_string()),
-        ("LC_CTYPE".to_string(), "C.UTF-8".to_string()),
-        ("TEMP".to_string(), r"C:\windows\temp".to_string()),
-        ("TMP".to_string(), r"C:\windows\temp".to_string()),
-    ]);
-    let wine = runtime.wine.to_string_lossy().into_owned();
-    let args = [
-        r"C:\Program Files\PowerShell\7\pwsh.exe".to_string(),
-        "-NoLogo".to_string(),
-        "-NoProfile".to_string(),
-        "-NonInteractive".to_string(),
-        "-Command".to_string(),
-        POWERSHELL_SMOKE_SCRIPT.to_string(),
-    ];
-    let SpawnedProcess {
-        session: process,
-        mut stdout_rx,
-        mut stderr_rx,
-        exit_rx,
-    } = codex_utils_pty::spawn_pty_process(
-        &wine,
-        &args,
-        prefix.path(),
-        &env,
-        /*arg0*/ &None,
-        TerminalSize::default(),
-    )
-    .await?;
-    let stderr_task = tokio::spawn(async move { while stderr_rx.recv().await.is_some() {} });
-    let output = timeout(Duration::from_secs(30), async {
-        let mut output = Vec::new();
-        while let Some(chunk) = stdout_rx.recv().await {
-            output.extend(chunk);
-        }
-        Ok::<_, anyhow::Error>(output)
-    })
-    .await
-    .context("PowerShell smoke test timed out")??;
-    let exit_code = exit_rx.await.context("wait for PowerShell")?;
-    drop(process);
-    stderr_task.abort();
-    let _status = TokioCommand::new(&runtime.wineserver)
-        .args(["-k", "-w"])
-        .env("HOME", prefix.path())
-        .env("WINEPREFIX", prefix.path())
-        .env("XDG_RUNTIME_DIR", prefix.path())
-        .status()
-        .await?;
-    anyhow::ensure!(exit_code == 0, "PowerShell exited with {exit_code}");
-    let output = String::from_utf8(output)?;
+fn assert_powershell_smoke_output(output: &str) -> Result<()> {
     let marker_start = output
         .find(POWERSHELL_SMOKE_MARKER)
         .with_context(|| format!("PowerShell smoke marker was missing from {output:?}"))?;
@@ -376,4 +275,39 @@ async fn shutdown_returns_teardown_error() -> Result<()> {
     assert_eq!(error.to_string(), "stop isolated wineserver");
     assert_prefix_removed(&prefix);
     Ok(())
+}
+
+#[test]
+fn powershell_runtime_is_materialized_at_the_windows_fallback_path() -> Result<()> {
+    let prefix = TempDir::new()?;
+    let runtime = TempDir::new()?;
+    fs::create_dir(runtime.path().join("Modules"))?;
+    fs::write(runtime.path().join("pwsh.exe"), b"pwsh")?;
+    fs::write(runtime.path().join("Modules").join("marker.txt"), b"module")?;
+
+    install_powershell_runtime(prefix.path(), runtime.path())?;
+
+    let installed = prefix
+        .path()
+        .join("drive_c")
+        .join("Program Files")
+        .join("PowerShell")
+        .join("7");
+    assert_eq!(fs::read(installed.join("pwsh.exe"))?, b"pwsh");
+    assert_eq!(
+        fs::read(installed.join("Modules").join("marker.txt"))?,
+        b"module"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn pinned_powershell_runs_without_a_pty_under_wine() -> Result<()> {
+    run_powershell(POWERSHELL_SMOKE_SCRIPT).await
+}
+
+#[tokio::test]
+async fn pinned_powershell_runs_with_a_pty_under_wine() -> Result<()> {
+    let output = run_powershell_with_pty(POWERSHELL_SMOKE_SCRIPT).await?;
+    assert_powershell_smoke_output(&output)
 }
