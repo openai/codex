@@ -58,6 +58,40 @@ fn file_uri_parses_a_windows_path_on_any_host() {
     );
 }
 
+#[test]
+fn infers_path_conventions_from_uri_shape() {
+    for (uri, expected) in [
+        ("file:///", Some(PathConvention::Posix)),
+        ("file:///home/alice/src", Some(PathConvention::Posix)),
+        ("file:///C:/Users/Alice/src", Some(PathConvention::Windows)),
+        ("file:///d:", Some(PathConvention::Windows)),
+        ("file://server/share/src", Some(PathConvention::Windows)),
+        (
+            "file:///%00/bad/path/L3RtcC9udWxsLQAt_y1ieXRl",
+            Some(PathConvention::Posix),
+        ),
+        (
+            "file:///%00/bad/path/XABcAC4AXABDAE8ATQAxAFwA",
+            Some(PathConvention::Windows),
+        ),
+        ("file:///%00/bad/path/YQ", None),
+    ] {
+        let path = PathUri::parse(uri).expect("valid path URI");
+
+        assert_eq!(path.infer_path_convention(), expected, "inferring {uri}");
+    }
+}
+
+#[test]
+fn drive_shaped_posix_uri_is_intentionally_inferred_as_windows() {
+    let path = PathUri::parse("file:///C:/actually/a/posix/path").expect("valid path URI");
+
+    // `/C:/...` is valid on POSIX, but treating this uncommon spelling as a
+    // Windows drive lets callers render the overwhelmingly more common foreign
+    // Windows URI without separately carrying its source convention.
+    assert_eq!(path.infer_path_convention(), Some(PathConvention::Windows));
+}
+
 #[cfg(windows)]
 #[test]
 fn file_uri_falls_back_for_windows_prefixes_without_a_uri_representation() {

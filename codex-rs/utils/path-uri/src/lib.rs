@@ -35,15 +35,18 @@ const BAD_PATH_URI_PREFIX: &str = "file:///%00/bad/path/";
 /// created by [`Self::from_abs_path`] are opaque to these lexical operations.
 ///
 /// `file:` paths retain their URI spelling so they can be parsed independently
-/// of the current host. In particular, `/C:/src` remains ambiguous between a
-/// Windows drive path and a valid POSIX path until [`Self::to_abs_path`]
-/// applies the current host's rules. A local POSIX `file:` URI can also retain
-/// percent-encoded non-UTF-8 bytes for lossless native round trips.
+/// of the current host. In particular, `/C:/src` is structurally ambiguous
+/// between a Windows drive path and a valid POSIX path;
+/// [`Self::infer_path_convention`] applies a documented heuristic, while
+/// [`Self::to_abs_path`] applies the current host's rules. A local POSIX
+/// `file:` URI can also retain percent-encoded non-UTF-8 bytes for lossless
+/// native round trips.
 ///
 /// Like [VS Code resources], path operations use `/` URI separators on every
-/// host. They preserve a URL authority but do not infer Windows drive or UNC
-/// roots from path text. Native path normalization, filesystem aliases,
-/// symlinks, case sensitivity, and Unicode normalization are not resolved.
+/// host. Lexical path operations preserve a URL authority without interpreting
+/// Windows drive or UNC roots from path text. Native path normalization,
+/// filesystem aliases, symlinks, case sensitivity, and Unicode normalization
+/// are not resolved.
 ///
 /// Serde represents a `PathUri` as its canonical URI string. Deserialization
 /// also accepts an absolute native path for compatibility with fields that
@@ -127,6 +130,42 @@ impl PathUri {
 
     fn opaque_fallback_bytes(&self) -> Option<Vec<u8>> {
         decode_bad_path_uri(&self.0)
+    }
+
+    /// Infers the native path convention represented by this URI.
+    ///
+    /// A URI authority is treated as a Windows UNC host, and a leading
+    /// drive-letter segment such as `C:` is treated as a Windows drive. All
+    /// other ordinary file URIs are treated as POSIX paths. This deliberately
+    /// classifies `file:///C:/src` as Windows even though `/C:/src` is also a
+    /// valid POSIX path. In practice, POSIX paths with a drive-shaped first
+    /// component are rare enough that recognizing foreign Windows paths is the
+    /// more useful default.
+    ///
+    /// Opaque fallback URIs are inspected for an absolute POSIX byte prefix or
+    /// an absolute Windows UTF-16LE prefix. `None` is returned when their
+    /// payload does not identify either convention.
+    ///
+    /// TODO(anp): Once `PathUri` carries an environment identifier, prefer the
+    /// environment's declared convention over this spelling-based heuristic.
+    pub fn infer_path_convention(&self) -> Option<PathConvention> {
+        if let Some(path_bytes) = self.opaque_fallback_bytes() {
+            return infer_opaque_path_convention(&path_bytes);
+        }
+        if self.0.host_str().is_some() {
+            return Some(PathConvention::Windows);
+        }
+
+        let has_windows_drive = self
+            .0
+            .path_segments()
+            .and_then(|mut segments| segments.find(|segment| !segment.is_empty()))
+            .is_some_and(is_windows_drive_uri_segment);
+        if has_windows_drive {
+            Some(PathConvention::Windows)
+        } else {
+            Some(PathConvention::Posix)
+        }
     }
 
     /// Returns the decoded final URI path segment, or `None` for the URI root
@@ -387,6 +426,29 @@ fn decode_bad_path_uri(url: &Url) -> Option<Vec<u8>> {
         .ok()?;
     (base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&path_bytes) == encoded_path)
         .then_some(path_bytes)
+}
+
+fn is_windows_drive_uri_segment(segment: &str) -> bool {
+    matches!(segment.as_bytes(), [drive, b':'] if drive.is_ascii_alphabetic())
+}
+
+fn infer_opaque_path_convention(path_bytes: &[u8]) -> Option<PathConvention> {
+    if path_bytes.starts_with(b"/") {
+        return Some(PathConvention::Posix);
+    }
+    if !path_bytes.len().is_multiple_of(2) {
+        return None;
+    }
+
+    let mut path_wide = path_bytes
+        .chunks_exact(2)
+        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]));
+    let first = path_wide.next()?;
+    let second = path_wide.next()?;
+    let has_drive = u8::try_from(first).is_ok_and(|drive| drive.is_ascii_alphabetic())
+        && second == u16::from(b':');
+    let has_unc_prefix = first == u16::from(b'\\') && second == u16::from(b'\\');
+    (has_drive || has_unc_prefix).then_some(PathConvention::Windows)
 }
 
 /// Rejects URI metadata that has no defined meaning for `file:` URIs.
