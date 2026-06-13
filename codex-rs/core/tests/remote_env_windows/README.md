@@ -1,10 +1,8 @@
 # Windows remote-environment test
 
-This directory cross-builds a small Windows exec-server fixture and runs it
-under a pinned Wine runtime from x86-64 Linux Bazel. A core `test_codex`
-integration test drives it through the normal model tool-call and remote-
-execution path. The Windows fixture links only `codex-exec-server` because the
-full Codex Windows graph does not yet cross-build.
+This Bazel-only `test_codex` integration test runs a Windows exec-server fixture
+under pinned Wine and exercises the normal model tool-call and remote-execution
+path.
 
 ## Running the test
 
@@ -14,8 +12,8 @@ bazel test \
   --test_output=errors
 ```
 
-No system Wine or apt packages are required. Every process gets a fresh
-`WINEPREFIX` and isolated wineserver.
+No system Wine is required. Every process gets a fresh `WINEPREFIX` and isolated
+wineserver.
 
 ## Current limitations
 
