@@ -425,6 +425,19 @@ impl UnifiedExecProcessManager {
         }
     }
 
+    async fn release_process_id_after_exit_event(&self, process_id: i32) {
+        let removed = {
+            let mut store = self.process_store.lock().await;
+            store.remove(process_id)
+        };
+        if let Some(mut entry) = removed {
+            unregister_network_approval_for_entry(&entry).await;
+            if let Some(exit_watcher) = entry.exit_watcher.take() {
+                let _ = exit_watcher.await;
+            }
+        }
+    }
+
     pub(crate) async fn exec_command(
         &self,
         request: ExecCommandRequest,
@@ -536,6 +549,7 @@ impl UnifiedExecProcessManager {
                 deferred_network_approval.take(),
             )
             .await;
+            let error = fail_process_with_message(process.as_ref(), message.clone());
             emit_failed_initial_exec_end_if_unstored(
                 process_started_alive,
                 context,
@@ -546,8 +560,13 @@ impl UnifiedExecProcessManager {
                 wall_time,
             )
             .await;
-            self.release_process_id(request.process_id).await;
-            return Err(fail_process_with_message(process.as_ref(), message));
+            if process_started_alive {
+                self.release_process_id_after_exit_event(request.process_id)
+                    .await;
+            } else {
+                self.release_process_id(request.process_id).await;
+            }
+            return Err(error);
         }
         if let Some(message) = process.failure_message() {
             let finish_result = finish_deferred_network_approval_for_session(
@@ -555,6 +574,9 @@ impl UnifiedExecProcessManager {
                 deferred_network_approval.take(),
             )
             .await;
+            let message = finish_result.err().unwrap_or(message);
+            let error = fail_process_with_message(process.as_ref(), message.clone());
+            let message = process.failure_message().unwrap_or(message);
             emit_failed_initial_exec_end_if_unstored(
                 process_started_alive,
                 context,
@@ -565,11 +587,13 @@ impl UnifiedExecProcessManager {
                 wall_time,
             )
             .await;
-            self.release_process_id(request.process_id).await;
-            if let Err(message) = finish_result {
-                return Err(fail_process_with_message(process.as_ref(), message));
+            if process_started_alive {
+                self.release_process_id_after_exit_event(request.process_id)
+                    .await;
+            } else {
+                self.release_process_id(request.process_id).await;
             }
-            return Err(UnifiedExecError::process_failed(message));
+            return Err(error);
         }
         let process_id = request.process_id;
         let (response_process_id, exit_code) = if process_started_alive {

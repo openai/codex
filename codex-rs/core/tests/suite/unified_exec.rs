@@ -877,13 +877,15 @@ async fn unified_exec_short_lived_network_denial_emits_failed_end_event() -> Res
         end_event.process_id.is_some(),
         "short-lived denial should still emit an end event for the command"
     );
+    assert!(
+        !turn_completed,
+        "stored initial-yield failures must emit their command end before turn completion"
+    );
 
-    if !turn_completed {
-        wait_for_event(&test.codex, |event| {
-            matches!(event, EventMsg::TurnComplete(_))
-        })
-        .await;
-    }
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
     Ok(())
 }
 
