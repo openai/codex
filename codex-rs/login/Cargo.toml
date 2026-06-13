@@ -21,7 +21,12 @@ codex-protocol = { workspace = true }
 codex-secrets = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-utils-template = { workspace = true }
-codex-workload-identity = { workspace = true, features = ["azure"] }
+codex-workload-identity-providers = { workspace = true, features = [
+    "azure",
+    "gcp",
+    "github-actions",
+    "spiffe",
+] }
 once_cell = { workspace = true }
 os_info = { workspace = true }
 rand = { workspace = true }

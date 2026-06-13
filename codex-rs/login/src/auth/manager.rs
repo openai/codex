@@ -50,8 +50,8 @@ use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::PlanType as InternalPlanType;
 use codex_protocol::auth::RefreshTokenFailedError;
 use codex_protocol::auth::RefreshTokenFailedReason;
-use codex_workload_identity::WorkloadIdentityClient;
-use codex_workload_identity::WorkloadIdentityConfig;
+use codex_workload_identity_providers::WorkloadIdentityConfig;
+use codex_workload_identity_providers::build_client as build_workload_identity_client;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -1930,8 +1930,11 @@ impl AuthManager {
             .await,
         );
         if let Some(workload_identity) = config.workload_identity() {
-            let client =
-                WorkloadIdentityClient::new(workload_identity, CLIENT_ID, build_reqwest_client());
+            let client = build_workload_identity_client(
+                workload_identity,
+                CLIENT_ID,
+                build_reqwest_client(),
+            );
             auth_manager.set_external_auth(Arc::new(WorkloadIdentityExternalAuth::new(client)));
         }
         auth_manager

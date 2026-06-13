@@ -36,6 +36,7 @@ use std::collections::HashMap;
 pub(crate) struct CommandShell {
     pub program: String,
     pub args: Vec<String>,
+    pub excluded_environment_variables: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

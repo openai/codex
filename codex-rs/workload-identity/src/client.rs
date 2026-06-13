@@ -1,12 +1,10 @@
-use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::CredentialSourceConfig;
+use crate::SubjectTokenError;
+use crate::SubjectTokenProvider;
 use crate::WorkloadIdentityConfig;
-#[cfg(feature = "azure")]
-use crate::azure::AzureSubjectTokenSource;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
@@ -14,7 +12,6 @@ use thiserror::Error;
 use tokio::sync::Semaphore;
 
 const TOKEN_EXCHANGE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
-const JWT_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:jwt";
 const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_token";
 const MAX_REFRESH_LEAD: Duration = Duration::from_secs(5 * 60);
 const TOKEN_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -40,18 +37,8 @@ impl std::fmt::Debug for WorkloadIdentityAccessToken {
 
 #[derive(Debug, Error)]
 pub enum WorkloadIdentityError {
-    #[error("AZURE_FEDERATED_TOKEN_FILE is not set and no Azure token_file was configured")]
-    MissingAzureFederatedTokenFile,
-    #[error("failed to read workload identity subject token from {path}: {source}")]
-    ReadSubjectToken {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("workload identity subject token file is empty")]
-    EmptySubjectToken,
-    #[error("the configured credential source is not enabled in this Codex build")]
-    CredentialSourceNotEnabled,
+    #[error(transparent)]
+    SubjectToken(#[from] SubjectTokenError),
     #[error("workload identity token exchange request failed: {0}")]
     Request(#[from] reqwest::Error),
     #[error("workload identity token exchange was rejected with HTTP {status}: {message}")]
@@ -70,40 +57,6 @@ pub enum WorkloadIdentityError {
     RecentFailure(String),
 }
 
-enum SubjectTokenSource {
-    #[cfg(feature = "azure")]
-    Azure(AzureSubjectTokenSource),
-    #[cfg(not(feature = "azure"))]
-    Disabled,
-}
-
-impl SubjectTokenSource {
-    fn from_config(config: CredentialSourceConfig) -> Self {
-        match config {
-            CredentialSourceConfig::Azure { token_file } => {
-                #[cfg(feature = "azure")]
-                {
-                    Self::Azure(AzureSubjectTokenSource::new(token_file))
-                }
-                #[cfg(not(feature = "azure"))]
-                {
-                    let _ = token_file;
-                    Self::Disabled
-                }
-            }
-        }
-    }
-
-    async fn subject_token(&self) -> Result<String, WorkloadIdentityError> {
-        match self {
-            #[cfg(feature = "azure")]
-            Self::Azure(source) => source.subject_token().await,
-            #[cfg(not(feature = "azure"))]
-            Self::Disabled => Err(WorkloadIdentityError::CredentialSourceNotEnabled),
-        }
-    }
-}
-
 struct CachedAccessToken {
     token: WorkloadIdentityAccessToken,
     refresh_at: Instant,
@@ -120,29 +73,33 @@ struct CacheState {
     failure: Option<CachedExchangeFailure>,
 }
 
-pub struct WorkloadIdentityClient {
+pub struct WorkloadIdentityClient<S> {
     identity_provider_id: String,
     identity_provider_mapping_id: String,
     token_url: String,
     client_id: String,
-    source: SubjectTokenSource,
+    source: S,
     http: reqwest::Client,
     cache: Mutex<CacheState>,
     exchange_lock: Semaphore,
 }
 
-impl WorkloadIdentityClient {
+impl<S> WorkloadIdentityClient<S>
+where
+    S: SubjectTokenProvider,
+{
     pub fn new(
         config: WorkloadIdentityConfig,
         client_id: impl Into<String>,
         http: reqwest::Client,
+        source: S,
     ) -> Self {
         Self {
             identity_provider_id: config.identity_provider_id,
             identity_provider_mapping_id: config.identity_provider_mapping_id,
             token_url: config.token_url,
             client_id: client_id.into(),
-            source: SubjectTokenSource::from_config(config.credential_source),
+            source,
             http,
             cache: Mutex::new(CacheState::default()),
             exchange_lock: Semaphore::new(/*permits*/ 1),
@@ -220,8 +177,8 @@ impl WorkloadIdentityClient {
             .json(&TokenExchangeRequest {
                 grant_type: TOKEN_EXCHANGE_GRANT_TYPE,
                 requested_token_type: ACCESS_TOKEN_TYPE,
-                subject_token: &subject_token,
-                subject_token_type: JWT_TOKEN_TYPE,
+                subject_token: subject_token.value(),
+                subject_token_type: subject_token.token_type(),
                 identity_provider_id: &self.identity_provider_id,
                 identity_provider_mapping_id: &self.identity_provider_mapping_id,
                 client_id: &self.client_id,
@@ -308,6 +265,6 @@ struct TokenExchangeErrorResponse {
     error: Option<String>,
 }
 
-#[cfg(all(test, feature = "azure"))]
+#[cfg(test)]
 #[path = "client_tests.rs"]
 mod tests;

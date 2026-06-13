@@ -1,0 +1,31 @@
+[package]
+name = "codex-workload-identity-providers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+azure = ["dep:codex-workload-identity-azure"]
+gcp = ["dep:codex-workload-identity-gcp"]
+github-actions = ["dep:codex-workload-identity-github-actions"]
+spiffe = ["dep:codex-workload-identity-spiffe"]
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-workload-identity = { workspace = true }
+codex-workload-identity-azure = { workspace = true, optional = true }
+codex-workload-identity-gcp = { workspace = true, optional = true }
+codex-workload-identity-github-actions = { workspace = true, optional = true }
+codex-workload-identity-spiffe = { workspace = true, optional = true }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread"] }
+
+[lib]
+doctest = false

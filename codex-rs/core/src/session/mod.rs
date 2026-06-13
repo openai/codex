@@ -3625,6 +3625,18 @@ async fn build_hooks_for_config(
         plugin_hook_load_warnings,
         shell_program: hook_shell_program,
         shell_args: hook_shell_argv,
+        excluded_environment_variables: config
+            .workload_identity
+            .as_ref()
+            .map(|workload_identity| {
+                workload_identity
+                    .credential_source
+                    .sensitive_environment_variables()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 

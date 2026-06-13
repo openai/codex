@@ -82,6 +82,7 @@ use codex_model_provider_info::merge_configured_model_providers;
 use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
+use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
@@ -1485,6 +1486,43 @@ impl Config {
                 name.clone(),
                 server.clone(),
             ));
+        }
+
+        let sensitive_environment_variables = self
+            .workload_identity
+            .as_ref()
+            .map(|workload_identity| {
+                workload_identity
+                    .credential_source
+                    .sensitive_environment_variables()
+            })
+            .unwrap_or_default();
+        let is_sensitive = |name: &str| {
+            sensitive_environment_variables
+                .iter()
+                .any(|sensitive| name.eq_ignore_ascii_case(sensitive))
+        };
+        for server in configured_mcp_servers.values_mut() {
+            match &mut server.transport {
+                McpServerTransportConfig::Stdio { env, env_vars, .. } => {
+                    if let Some(env) = env {
+                        env.retain(|name, _| !is_sensitive(name));
+                    }
+                    env_vars.retain(|env_var| !is_sensitive(env_var.name()));
+                }
+                McpServerTransportConfig::StreamableHttp {
+                    bearer_token_env_var,
+                    env_http_headers,
+                    ..
+                } => {
+                    if bearer_token_env_var.as_deref().is_some_and(&is_sensitive) {
+                        *bearer_token_env_var = None;
+                    }
+                    if let Some(env_http_headers) = env_http_headers {
+                        env_http_headers.retain(|_, env_var| !is_sensitive(env_var));
+                    }
+                }
+            }
         }
 
         McpConfig {
@@ -3179,7 +3217,20 @@ impl Config {
             })?
             .clone();
 
-        let shell_environment_policy = cfg.shell_environment_policy.into();
+        let mut shell_environment_policy: ShellEnvironmentPolicy = cfg.shell_environment_policy.into();
+        if let Some(workload_identity) = cfg.workload_identity.as_ref() {
+            for variable in workload_identity
+                .credential_source
+                .sensitive_environment_variables()
+            {
+                shell_environment_policy
+                    .exclude
+                    .push(EnvironmentVariablePattern::new_case_insensitive(variable));
+                shell_environment_policy
+                    .r#set
+                    .retain(|name, _| !name.eq_ignore_ascii_case(variable));
+            }
+        }
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
 
         let history = cfg.history.unwrap_or_default();

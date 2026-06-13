@@ -1,8 +1,6 @@
 mod client;
 mod config;
-
-#[cfg(feature = "azure")]
-mod azure;
+mod source;
 
 pub use client::WorkloadIdentityAccessToken;
 pub use client::WorkloadIdentityClient;
@@ -11,3 +9,10 @@ pub use config::CredentialSourceConfig;
 pub use config::WorkloadIdentityConfig;
 pub use config::WorkloadIdentityConfigError;
 pub use config::default_token_url;
+pub use source::EnvironmentSubjectTokenSource;
+pub use source::FileSubjectTokenSource;
+pub use source::MAX_SUBJECT_TOKEN_BYTES;
+pub use source::SubjectToken;
+pub use source::SubjectTokenError;
+pub use source::SubjectTokenProvider;
+pub use source::UnavailableSubjectTokenSource;

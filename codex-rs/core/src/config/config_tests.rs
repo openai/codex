@@ -162,6 +162,101 @@ fn http_mcp(url: &str) -> McpServerConfig {
     }
 }
 
+#[tokio::test]
+async fn workload_assertion_environment_is_excluded_from_model_processes() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+workload_identity = { identity_provider_id = "idp_example", identity_provider_mapping_id = "idpm_example", audience = "openai-audience", credential_source = { type = "environment", variable = "CODEX_WIF_ASSERTION" } }
+
+[shell_environment_policy]
+inherit = "all"
+ignore_default_excludes = true
+
+[shell_environment_policy.set]
+CODEX_WIF_ASSERTION = "configured-override"
+
+[mcp_servers.local]
+command = "env"
+env_vars = ["CODEX_WIF_ASSERTION", "SAFE_VAR"]
+
+[mcp_servers.local.env]
+CODEX_WIF_ASSERTION = "configured-override"
+SAFE_VAR = "safe"
+
+[mcp_servers.http]
+url = "https://mcp.example.test"
+bearer_token_env_var = "CODEX_WIF_ASSERTION"
+
+[mcp_servers.http.env_http_headers]
+X-Assertion = "CODEX_WIF_ASSERTION"
+X-Safe = "SAFE_VAR"
+"#,
+    )?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    let shell_env = codex_protocol::shell_environment::create_env_from_vars(
+        [
+            (
+                "CODEX_WIF_ASSERTION".to_string(),
+                "secret.assertion".to_string(),
+            ),
+            ("SAFE_VAR".to_string(), "safe".to_string()),
+        ],
+        &config.permissions.shell_environment_policy,
+        /*thread_id*/ None,
+    );
+    assert_eq!(
+        shell_env,
+        HashMap::from([("SAFE_VAR".to_string(), "safe".to_string())])
+    );
+
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+    let local = mcp_config
+        .configured_mcp_servers
+        .get("local")
+        .expect("local MCP config");
+    let McpServerTransportConfig::Stdio { env, env_vars, .. } = &local.transport else {
+        panic!("expected stdio MCP config");
+    };
+    assert_eq!(
+        env,
+        &Some(HashMap::from([(
+            "SAFE_VAR".to_string(),
+            "safe".to_string()
+        )]))
+    );
+    assert_eq!(env_vars, &vec![McpServerEnvVar::from("SAFE_VAR")]);
+
+    let http = mcp_config
+        .configured_mcp_servers
+        .get("http")
+        .expect("HTTP MCP config");
+    let McpServerTransportConfig::StreamableHttp {
+        bearer_token_env_var,
+        env_http_headers,
+        ..
+    } = &http.transport
+    else {
+        panic!("expected HTTP MCP config");
+    };
+    assert_eq!(bearer_token_env_var, &None);
+    assert_eq!(
+        env_http_headers,
+        &Some(HashMap::from([(
+            "X-Safe".to_string(),
+            "SAFE_VAR".to_string()
+        )]))
+    );
+    Ok(())
+}
+
 async fn derive_legacy_sandbox_policy_for_test(
     cfg: &ConfigToml,
     sandbox_mode_override: Option<SandboxMode>,

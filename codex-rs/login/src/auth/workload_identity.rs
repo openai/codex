@@ -1,17 +1,17 @@
 use async_trait::async_trait;
 use codex_app_server_protocol::AuthMode;
-use codex_workload_identity::WorkloadIdentityClient;
+use codex_workload_identity_providers::ConfiguredWorkloadIdentityClient;
 
 use super::ExternalAuth;
 use super::ExternalAuthRefreshContext;
 use super::ExternalAuthTokens;
 
 pub(super) struct WorkloadIdentityExternalAuth {
-    client: WorkloadIdentityClient,
+    client: ConfiguredWorkloadIdentityClient,
 }
 
 impl WorkloadIdentityExternalAuth {
-    pub(super) fn new(client: WorkloadIdentityClient) -> Self {
+    pub(super) fn new(client: ConfiguredWorkloadIdentityClient) -> Self {
         Self { client }
     }
 

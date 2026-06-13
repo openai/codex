@@ -3250,7 +3250,7 @@ dependencies = [
  "codex-secrets",
  "codex-terminal-detection",
  "codex-utils-template",
- "codex-workload-identity",
+ "codex-workload-identity-providers",
  "core_test_support",
  "jsonwebtoken",
  "keyring",
@@ -4426,6 +4426,70 @@ dependencies = [
  "tokio",
  "url",
  "wiremock",
+]
+
+[[package]]
+name = "codex-workload-identity-azure"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-workload-identity",
+ "pretty_assertions",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "codex-workload-identity-gcp"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-workload-identity",
+ "pretty_assertions",
+ "reqwest 0.12.28",
+ "tokio",
+ "url",
+ "wiremock",
+]
+
+[[package]]
+name = "codex-workload-identity-github-actions"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-workload-identity",
+ "pretty_assertions",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "wiremock",
+]
+
+[[package]]
+name = "codex-workload-identity-providers"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-workload-identity",
+ "codex-workload-identity-azure",
+ "codex-workload-identity-gcp",
+ "codex-workload-identity-github-actions",
+ "codex-workload-identity-spiffe",
+ "reqwest 0.12.28",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "codex-workload-identity-spiffe"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-workload-identity",
+ "spiffe",
+ "tokio",
 ]
 
 [[package]]
@@ -12602,6 +12666,32 @@ checksum = "94bf565ee1681b4473aa5a9d71d807347c28021bd1d8947cb626b02f42a0141f"
 dependencies = [
  "itertools 0.14.0",
  "quickcheck",
+]
+
+[[package]]
+name = "spiffe"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66b316e388514701f5c8aac295909a66f72f738b8ac632814d62692309877742"
+dependencies = [
+ "arc-swap",
+ "base64ct",
+ "fastrand",
+ "futures",
+ "hyper-util",
+ "prost 0.14.3",
+ "prost-types 0.14.3",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tonic",
+ "tonic-prost",
+ "tower",
+ "url",
+ "zeroize",
 ]
 
 [[package]]

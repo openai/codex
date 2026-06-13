@@ -33,6 +33,11 @@ members = [
     "connectors",
     "config",
     "workload-identity",
+    "workload-identity-azure",
+    "workload-identity-gcp",
+    "workload-identity-github-actions",
+    "workload-identity-providers",
+    "workload-identity-spiffe",
     "context-fragments",
     "shell-command",
     "shell-escalation",
@@ -165,6 +170,11 @@ codex-code-mode-protocol = { path = "code-mode-protocol" }
 codex-home = { path = "codex-home" }
 codex-config = { path = "config" }
 codex-workload-identity = { path = "workload-identity" }
+codex-workload-identity-azure = { path = "workload-identity-azure" }
+codex-workload-identity-gcp = { path = "workload-identity-gcp" }
+codex-workload-identity-github-actions = { path = "workload-identity-github-actions" }
+codex-workload-identity-providers = { path = "workload-identity-providers" }
+codex-workload-identity-spiffe = { path = "workload-identity-spiffe" }
 codex-connectors = { path = "connectors" }
 codex-context-fragments = { path = "context-fragments" }
 codex-core = { path = "core" }
@@ -394,6 +404,7 @@ sha2 = "0.10"
 shlex = "1.3.0"
 similar = "2.7.0"
 socket2 = "0.6.1"
+spiffe = { version = "0.16.0", default-features = false }
 sqlx = { version = "0.9.0", default-features = false, features = [
     "chrono",
     "json",

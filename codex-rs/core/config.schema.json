@@ -794,6 +794,48 @@
       "oneOf": [
         {
           "additionalProperties": false,
+          "description": "An OIDC token injected directly into the Codex process environment.",
+          "properties": {
+            "type": {
+              "enum": [
+                "environment"
+              ],
+              "type": "string"
+            },
+            "variable": {
+              "description": "Name of the environment variable. The value is never serialized.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "variable"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An OIDC token projected into a file by the workload runtime.",
+          "properties": {
+            "path": {
+              "description": "Absolute path to the projected token.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "file"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "A projected Azure workload identity token.",
           "properties": {
             "token_file": {
@@ -804,6 +846,85 @@
             "type": {
               "enum": [
                 "azure"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A GCE or GKE service-account identity token from the metadata service.",
+          "properties": {
+            "service_account": {
+              "default": null,
+              "description": "Service account email or `default` when omitted.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "gcp"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A GitHub Actions OIDC token requested from the runner token service.",
+          "properties": {
+            "type": {
+              "enum": [
+                "github_actions"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A JWT-SVID requested from the local SPIFFE Workload API.",
+          "properties": {
+            "endpoint_socket": {
+              "default": null,
+              "description": "Workload API endpoint. Defaults to `SPIFFE_ENDPOINT_SOCKET`.",
+              "type": "string"
+            },
+            "spiffe_id": {
+              "default": null,
+              "description": "Explicit SPIFFE ID when the workload exposes more than one identity.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "spiffe"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Reserved for the approved AWS workload proof contract.",
+          "properties": {
+            "type": {
+              "enum": [
+                "aws"
               ],
               "type": "string"
             }
@@ -4418,6 +4539,10 @@
       "additionalProperties": false,
       "description": "Configuration for exchanging a workload credential for a Codex access token.",
       "properties": {
+        "audience": {
+          "description": "Audience requested from the external workload identity provider.",
+          "type": "string"
+        },
         "credential_source": {
           "allOf": [
             {
@@ -4441,6 +4566,7 @@
         }
       },
       "required": [
+        "audience",
         "credential_source",
         "identity_provider_id",
         "identity_provider_mapping_id"
