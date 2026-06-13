@@ -10,6 +10,7 @@ chrono = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
 codex-protocol = { workspace = true }
 dirs = { workspace = true }
+libsqlite3-sys = { workspace = true }
 log = { workspace = true }
 owo-colors = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -24,6 +25,10 @@ uuid = { workspace = true }
 [dev-dependencies]
 codex-git-utils = { workspace = true }
 pretty_assertions = { workspace = true }
+
+[package.metadata.cargo-shear]
+# This direct dependency constrains SQLx's bundled SQLite version.
+ignored = ["libsqlite3-sys"]
 
 [lints]
 workspace = true
