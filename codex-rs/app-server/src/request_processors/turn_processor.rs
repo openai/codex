@@ -339,7 +339,7 @@ impl TurnRequestProcessor {
                 .into_iter()
                 .map(|environment| TurnEnvironmentSelection {
                     environment_id: environment.environment_id,
-                    cwd: environment.cwd,
+                    cwd: codex_utils_path_uri::PathUri::from_abs_path(&environment.cwd),
                 })
                 .collect::<Vec<_>>()
         });
@@ -523,7 +523,7 @@ impl TurnRequestProcessor {
             environment_selections
                 .iter()
                 .find(|selection| selection.environment_id == LOCAL_ENVIRONMENT_ID)
-                .map(|selection| selection.cwd.clone())
+                .and_then(|selection| selection.cwd.to_abs_path().ok())
                 .unwrap_or_else(|| snapshot.cwd().clone())
         });
         Some(TurnEnvironmentSelections::new(

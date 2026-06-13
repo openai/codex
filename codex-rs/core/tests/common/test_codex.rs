@@ -104,7 +104,7 @@ impl UserInstructionsProvider for RecordingUserInstructionsProvider {
 pub fn local(cwd: AbsolutePathBuf) -> TurnEnvironmentSelection {
     TurnEnvironmentSelection {
         environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        cwd,
+        cwd: codex_utils_path_uri::PathUri::from_abs_path(&cwd),
     }
 }
 

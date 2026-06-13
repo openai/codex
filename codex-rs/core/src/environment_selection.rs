@@ -20,7 +20,7 @@ pub(crate) fn default_thread_environment_selections(
         .into_iter()
         .map(|environment_id| TurnEnvironmentSelection {
             environment_id,
-            cwd: cwd.clone(),
+            cwd: codex_utils_path_uri::PathUri::from_abs_path(cwd),
         })
         .collect()
 }
@@ -99,7 +99,12 @@ pub(crate) async fn resolve_environment_selections(
         turn_environments.push(TurnEnvironment::new(
             environment_id,
             environment,
-            selected_environment.cwd.clone(),
+            selected_environment.cwd.to_abs_path().map_err(|err| {
+                CodexErr::InvalidRequest(format!(
+                    "turn environment cwd `{}` is not valid on this host: {err}",
+                    selected_environment.cwd
+                ))
+            })?,
             shell,
         ));
     }
@@ -114,6 +119,7 @@ mod tests {
     use codex_exec_server::REMOTE_ENVIRONMENT_ID;
     use codex_protocol::protocol::TurnEnvironmentSelection;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -129,6 +135,7 @@ mod tests {
     #[tokio::test]
     async fn default_thread_environment_selections_use_manager_default_id() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let cwd_uri = PathUri::from_abs_path(&cwd);
         let manager = EnvironmentManager::create_for_tests(
             Some("ws://127.0.0.1:8765".to_string()),
             Some(test_runtime_paths()),
@@ -139,7 +146,7 @@ mod tests {
             default_thread_environment_selections(&manager, &cwd),
             vec![TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                cwd,
+                cwd: cwd_uri,
             }]
         );
     }
@@ -157,6 +164,7 @@ url = "ws://127.0.0.1:8765"
         )
         .expect("write environments.toml");
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let cwd_uri = PathUri::from_abs_path(&cwd);
         let manager =
             EnvironmentManager::from_codex_home(temp_dir.path(), Some(test_runtime_paths()))
                 .await
@@ -167,11 +175,11 @@ url = "ws://127.0.0.1:8765"
             vec![
                 TurnEnvironmentSelection {
                     environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                    cwd: cwd.clone(),
+                    cwd: cwd_uri.clone(),
                 },
                 TurnEnvironmentSelection {
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                    cwd,
+                    cwd: cwd_uri,
                 },
             ]
         );
@@ -191,6 +199,7 @@ url = "ws://127.0.0.1:8765"
     #[tokio::test]
     async fn resolve_environment_selections_rejects_duplicate_ids() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let cwd_uri = PathUri::from_abs_path(&cwd);
         let manager = EnvironmentManager::default_for_tests();
 
         let err = resolve_environment_selections(
@@ -198,11 +207,11 @@ url = "ws://127.0.0.1:8765"
             &[
                 TurnEnvironmentSelection {
                     environment_id: "local".to_string(),
-                    cwd: cwd.clone(),
+                    cwd: cwd_uri.clone(),
                 },
                 TurnEnvironmentSelection {
                     environment_id: "local".to_string(),
-                    cwd: cwd.join("other"),
+                    cwd: cwd_uri.join("other").expect("other cwd URI"),
                 },
             ],
         )
@@ -216,13 +225,14 @@ url = "ws://127.0.0.1:8765"
     async fn resolved_environment_selections_use_first_selection_as_primary() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let selected_cwd = cwd.join("selected");
+        let selected_cwd_uri = PathUri::from_abs_path(&selected_cwd);
         let manager = EnvironmentManager::default_for_tests();
 
         let resolved = resolve_environment_selections(
             &manager,
             &[TurnEnvironmentSelection {
                 environment_id: "local".to_string(),
-                cwd: selected_cwd,
+                cwd: selected_cwd_uri,
             }],
         )
         .await
@@ -255,12 +265,13 @@ url = "ws://127.0.0.1:8765"
     #[tokio::test]
     async fn single_local_environment_cwd_requires_exactly_one_local_environment() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let cwd_uri = PathUri::from_abs_path(&cwd);
         let local_manager = EnvironmentManager::default_for_tests();
         let local = resolve_environment_selections(
             &local_manager,
             &[TurnEnvironmentSelection {
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                cwd: cwd.clone(),
+                cwd: cwd_uri,
             }],
         )
         .await
