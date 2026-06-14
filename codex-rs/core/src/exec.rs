@@ -47,6 +47,11 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use codex_utils_pty::process_group::kill_child_process_group;
+#[cfg(target_os = "windows")]
+use std::ffi::OsStr;
+
+#[cfg(target_os = "windows")]
+use codex_shell_command::powershell::parse_powershell_command_into_plain_commands;
 
 pub const DEFAULT_EXEC_COMMAND_TIMEOUT_MS: u64 = 10_000;
 
@@ -552,6 +557,65 @@ fn windowsapps_path_kind(path: &str) -> &'static str {
 }
 
 #[cfg(target_os = "windows")]
+fn env_var_case_insensitive<'a>(env: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
+    env.iter()
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(key))
+        .map(|(_, value)| value.as_str())
+}
+
+#[cfg(target_os = "windows")]
+fn looks_like_powershell_command_not_found(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    lower.contains("commandnotfoundexception")
+        || lower.contains("is not recognized as the name of a cmdlet")
+        || lower.contains("is not recognized as an internal or external command")
+}
+
+#[cfg(target_os = "windows")]
+fn maybe_windows_sandbox_path_denied_hint(
+    command: &[String],
+    cwd: &AbsolutePathBuf,
+    env: &HashMap<String, String>,
+    exit_code: i32,
+    stderr: &str,
+) -> Option<String> {
+    if exit_code == 0 || !looks_like_powershell_command_not_found(stderr) {
+        return None;
+    }
+
+    let parsed = parse_powershell_command_into_plain_commands(command)?;
+    let inner = parsed.first()?;
+    if parsed.len() != 1 || inner.is_empty() {
+        return None;
+    }
+
+    let program = inner.first()?.trim();
+    if program.is_empty() {
+        return None;
+    }
+
+    let program_path = Path::new(program);
+    if program_path.components().count() != 1 {
+        return None;
+    }
+
+    let path = env_var_case_insensitive(env, "PATH").map(OsStr::new);
+    let resolved = which::which_in(program, path, cwd.as_path()).ok()?;
+    let resolved_display = resolved.display().to_string();
+    if stderr.contains(&resolved_display) {
+        return None;
+    }
+
+    let display_program = resolved
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program);
+    Some(format!(
+        "Codex note: `{display_program}` exists on PATH at `{resolved_display}`, but PowerShell reported it as missing inside the Windows sandbox. This usually means the sandbox blocked traversal or execution for that PATH entry. Try approving execution outside the sandbox or moving the toolchain under an allowed path."
+    ))
+}
+
+#[cfg(target_os = "windows")]
 fn record_windows_sandbox_spawn_failure(
     command_path: Option<&str>,
     windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
@@ -722,6 +786,19 @@ async fn exec_windows_sandbox(
         stdout_text.truncate(max_bytes);
     }
     let mut stderr_text = capture.stderr;
+    if let Some(hint) = maybe_windows_sandbox_path_denied_hint(
+        &command,
+        &cwd,
+        &env,
+        capture.exit_code,
+        &stderr_text,
+    ) {
+        if !stderr_text.is_empty() && !stderr_text.ends_with('\n') {
+            stderr_text.push('\n');
+        }
+        stderr_text.push_str(&hint);
+        stderr_text.push('\n');
+    }
     if let Some(max_bytes) = capture_policy.retained_bytes_cap()
         && stderr_text.len() > max_bytes
     {

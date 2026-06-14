@@ -1248,6 +1248,60 @@ while :; do sleep 1; done"#
     Ok(())
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_path_denied_hint_detects_hidden_path_binary() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let tool_dir = temp_dir.path().join("go-bin");
+    std::fs::create_dir_all(&tool_dir).expect("create tool dir");
+    std::fs::write(tool_dir.join("go.exe"), b"stub").expect("write stub");
+
+    let cwd = temp_dir.path().abs();
+    let mut env = HashMap::new();
+    env.insert("PATH".to_string(), tool_dir.display().to_string());
+    env.insert("PATHEXT".to_string(), ".COM;.EXE;.BAT;.CMD".to_string());
+
+    let hint = maybe_windows_sandbox_path_denied_hint(
+        &[
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "go version".to_string(),
+        ],
+        &cwd,
+        &env,
+        /*exit_code*/ 1,
+        "go : The term 'go' is not recognized as the name of a cmdlet, function, script file, or operable program.\r\nFullyQualifiedErrorId : CommandNotFoundException\r\n",
+    )
+    .expect("expected PATH denial hint");
+
+    assert!(hint.contains("go.exe"));
+    assert!(hint.contains("inside the Windows sandbox"));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_path_denied_hint_skips_nonexistent_binary() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = temp_dir.path().abs();
+    let env = HashMap::from([("PATH".to_string(), temp_dir.path().display().to_string())]);
+
+    let hint = maybe_windows_sandbox_path_denied_hint(
+        &[
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "go version".to_string(),
+        ],
+        &cwd,
+        &env,
+        /*exit_code*/ 1,
+        "go : The term 'go' is not recognized as the name of a cmdlet, function, script file, or operable program.\r\nFullyQualifiedErrorId : CommandNotFoundException\r\n",
+    );
+
+    assert!(hint.is_none());
+}
+
 #[cfg(unix)]
 fn long_running_command() -> Vec<String> {
     vec![
