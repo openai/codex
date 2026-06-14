@@ -82,6 +82,7 @@ pub(crate) struct MigrationDetails {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PendingPluginImport {
     pub cwd: Option<PathBuf>,
+    pub description: String,
     pub details: MigrationDetails,
 }
 
@@ -91,6 +92,59 @@ pub(crate) struct PluginImportOutcome {
     pub succeeded_plugin_ids: Vec<String>,
     pub failed_marketplaces: Vec<String>,
     pub failed_plugin_ids: Vec<String>,
+    pub raw_errors: Vec<ExternalAgentConfigImportRawError>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ExternalAgentConfigImportOutcome {
+    pub pending_plugin_imports: Vec<PendingPluginImport>,
+    pub item_results: Vec<ExternalAgentConfigImportItemResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExternalAgentConfigImportItemResult {
+    pub item_type: ExternalAgentConfigMigrationItemType,
+    pub description: String,
+    pub cwd: Option<PathBuf>,
+    pub success_count: u32,
+    pub error_count: u32,
+    pub raw_errors: Vec<ExternalAgentConfigImportRawError>,
+}
+
+impl ExternalAgentConfigImportItemResult {
+    pub(crate) fn new(
+        item_type: ExternalAgentConfigMigrationItemType,
+        description: String,
+        cwd: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            item_type,
+            description,
+            cwd,
+            success_count: 0,
+            error_count: 0,
+            raw_errors: Vec::new(),
+        }
+    }
+
+    pub(crate) fn record_successes(&mut self, count: usize) {
+        let count = u32::try_from(count).unwrap_or(u32::MAX);
+        self.success_count = self.success_count.saturating_add(count);
+    }
+
+    pub(crate) fn record_error(&mut self, raw_error: ExternalAgentConfigImportRawError) {
+        self.error_count = self.error_count.saturating_add(1);
+        self.raw_errors.push(raw_error);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExternalAgentConfigImportRawError {
+    pub item_type: ExternalAgentConfigMigrationItemType,
+    pub failure_stage: String,
+    pub message: String,
+    pub cwd: Option<PathBuf>,
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,95 +221,177 @@ impl ExternalAgentConfigService {
     pub(crate) async fn import(
         &self,
         migration_items: Vec<ExternalAgentConfigMigrationItem>,
-    ) -> io::Result<Vec<PendingPluginImport>> {
-        let mut pending_plugin_imports = Vec::new();
+    ) -> io::Result<ExternalAgentConfigImportOutcome> {
+        let mut outcome = ExternalAgentConfigImportOutcome::default();
         for migration_item in migration_items {
-            match migration_item.item_type {
-                ExternalAgentConfigMigrationItemType::Config => {
-                    self.import_config(migration_item.cwd.as_deref())?;
+            let item_type = migration_item.item_type;
+            let description = migration_item.description.clone();
+            let cwd_for_log = migration_item.cwd.clone();
+            let mut item_result = ExternalAgentConfigImportItemResult::new(
+                item_type,
+                description.clone(),
+                cwd_for_log.clone(),
+            );
+            let import_result = match migration_item.item_type {
+                ExternalAgentConfigMigrationItemType::Config => (|| {
+                    let migrated_count = self.import_config(migration_item.cwd.as_deref())?;
                     emit_migration_metric(
                         EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
                         ExternalAgentConfigMigrationItemType::Config,
                         /*skills_count*/ None,
                     );
-                }
-                ExternalAgentConfigMigrationItemType::Skills => {
+                    item_result.record_successes(migrated_count);
+                    Ok(())
+                })(),
+                ExternalAgentConfigMigrationItemType::Skills => (|| {
                     let skills_count = self.import_skills(migration_item.cwd.as_deref())?;
                     emit_migration_metric(
                         EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
                         ExternalAgentConfigMigrationItemType::Skills,
                         Some(skills_count),
                     );
-                }
-                ExternalAgentConfigMigrationItemType::AgentsMd => {
-                    self.import_agents_md(migration_item.cwd.as_deref())?;
+                    item_result.record_successes(skills_count);
+                    Ok(())
+                })(),
+                ExternalAgentConfigMigrationItemType::AgentsMd => (|| {
+                    let migrated_count = self.import_agents_md(migration_item.cwd.as_deref())?;
                     emit_migration_metric(
                         EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
                         ExternalAgentConfigMigrationItemType::AgentsMd,
                         /*skills_count*/ None,
                     );
-                }
+                    item_result.record_successes(migrated_count);
+                    Ok(())
+                })(),
                 ExternalAgentConfigMigrationItemType::Plugins => {
-                    let cwd = migration_item.cwd;
-                    let details = migration_item.details.ok_or_else(|| {
-                        invalid_data_error("plugins migration item is missing details".to_string())
-                    })?;
-                    let (local_details, remote_details) =
-                        self.partition_plugin_migration_details(cwd.as_deref(), details)?;
+                    async {
+                        let cwd = migration_item.cwd;
+                        let details = match migration_item.details {
+                            Some(details) => details,
+                            None => {
+                                let err = invalid_data_error(
+                                    "plugins migration item is missing details".to_string(),
+                                );
+                                record_import_error(
+                                    &mut item_result,
+                                    "missing_details",
+                                    err.to_string(),
+                                    /*source*/ None,
+                                );
+                                return Err(err);
+                            }
+                        };
+                        let (local_details, remote_details) = match self
+                            .partition_plugin_migration_details(cwd.as_deref(), details)
+                        {
+                            Ok(details) => details,
+                            Err(err) => {
+                                record_import_error(
+                                    &mut item_result,
+                                    "plugin_partition",
+                                    err.to_string(),
+                                    /*source*/ None,
+                                );
+                                return Err(err);
+                            }
+                        };
 
-                    if let Some(local_details) = local_details {
-                        self.import_plugins(cwd.as_deref(), Some(local_details))
-                            .await?;
+                        if let Some(local_details) = local_details {
+                            let plugin_outcome = match self
+                                .import_plugins(cwd.as_deref(), Some(local_details))
+                                .await
+                            {
+                                Ok(plugin_outcome) => plugin_outcome,
+                                Err(err) => {
+                                    record_import_error(
+                                        &mut item_result,
+                                        "plugin_import",
+                                        err.to_string(),
+                                        /*source*/ None,
+                                    );
+                                    return Err(err);
+                                }
+                            };
+                            item_result.record_successes(plugin_outcome.succeeded_plugin_ids.len());
+                            for raw_error in plugin_outcome.raw_errors {
+                                item_result.record_error(raw_error);
+                            }
+                        }
+                        if let Some(remote_details) = remote_details {
+                            outcome.pending_plugin_imports.push(PendingPluginImport {
+                                cwd,
+                                description: description.clone(),
+                                details: remote_details,
+                            });
+                        }
+                        emit_migration_metric(
+                            EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
+                            ExternalAgentConfigMigrationItemType::Plugins,
+                            /*skills_count*/ None,
+                        );
+                        Ok(())
                     }
-                    if let Some(remote_details) = remote_details {
-                        pending_plugin_imports.push(PendingPluginImport {
-                            cwd,
-                            details: remote_details,
-                        });
-                    }
-                    emit_migration_metric(
-                        EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
-                        ExternalAgentConfigMigrationItemType::Plugins,
-                        /*skills_count*/ None,
-                    );
+                    .await
                 }
-                ExternalAgentConfigMigrationItemType::McpServerConfig => {
-                    self.import_mcp_server_config(migration_item.cwd.as_deref())?;
+                ExternalAgentConfigMigrationItemType::McpServerConfig => (|| {
+                    let migrated_count =
+                        self.import_mcp_server_config(migration_item.cwd.as_deref())?;
                     emit_migration_metric(
                         EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
                         ExternalAgentConfigMigrationItemType::McpServerConfig,
                         /*skills_count*/ None,
                     );
-                }
-                ExternalAgentConfigMigrationItemType::Subagents => {
+                    item_result.record_successes(migrated_count);
+                    Ok(())
+                })(),
+                ExternalAgentConfigMigrationItemType::Subagents => (|| {
                     let subagents_count = self.import_subagents(migration_item.cwd.as_deref())?;
                     emit_migration_metric(
                         EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
                         ExternalAgentConfigMigrationItemType::Subagents,
                         Some(subagents_count),
                     );
-                }
-                ExternalAgentConfigMigrationItemType::Hooks => {
-                    self.import_hooks(migration_item.cwd.as_deref())?;
+                    item_result.record_successes(subagents_count);
+                    Ok(())
+                })(),
+                ExternalAgentConfigMigrationItemType::Hooks => (|| {
+                    let migrated_count = self.import_hooks(migration_item.cwd.as_deref())?;
                     emit_migration_metric(
                         EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
                         ExternalAgentConfigMigrationItemType::Hooks,
                         /*skills_count*/ None,
                     );
-                }
-                ExternalAgentConfigMigrationItemType::Commands => {
+                    item_result.record_successes(migrated_count);
+                    Ok(())
+                })(),
+                ExternalAgentConfigMigrationItemType::Commands => (|| {
                     let commands_count = self.import_commands(migration_item.cwd.as_deref())?;
                     emit_migration_metric(
                         EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
                         ExternalAgentConfigMigrationItemType::Commands,
                         Some(commands_count),
                     );
+                    item_result.record_successes(commands_count);
+                    Ok(())
+                })(),
+                ExternalAgentConfigMigrationItemType::Sessions => Ok(()),
+            };
+            if let Err(err) = import_result {
+                if item_type != ExternalAgentConfigMigrationItemType::Plugins {
+                    record_import_error(
+                        &mut item_result,
+                        "item_import",
+                        err.to_string(),
+                        /*source*/ None,
+                    );
                 }
-                ExternalAgentConfigMigrationItemType::Sessions => {}
+                outcome.item_results.push(item_result);
+                continue;
             }
+            outcome.item_results.push(item_result);
         }
 
-        Ok(pending_plugin_imports)
+        Ok(outcome)
     }
 
     async fn detect_migrations(
@@ -718,6 +854,16 @@ impl ExternalAgentConfigService {
                         .remove(&marketplace_name)
                 });
             let Some(import_source) = import_source else {
+                let message = format!(
+                    "external agent plugin marketplace source was not found: {marketplace_name}"
+                );
+                record_plugin_import_errors(
+                    &mut outcome,
+                    cwd,
+                    &plugin_ids,
+                    "plugin_marketplace_source",
+                    message,
+                );
                 outcome.failed_marketplaces.push(marketplace_name);
                 outcome.failed_plugin_ids.extend(plugin_ids);
                 continue;
@@ -733,6 +879,16 @@ impl ExternalAgentConfigService {
                     let Some(marketplace_path) = find_marketplace_manifest_path(
                         add_marketplace_outcome.installed_root.as_path(),
                     ) else {
+                        let message = format!(
+                            "plugin marketplace manifest was not found after install: {marketplace_name}"
+                        );
+                        record_plugin_import_errors(
+                            &mut outcome,
+                            cwd,
+                            &plugin_ids,
+                            "plugin_marketplace_manifest",
+                            message,
+                        );
                         outcome.failed_marketplaces.push(marketplace_name);
                         outcome.failed_plugin_ids.extend(plugin_ids);
                         continue;
@@ -742,7 +898,14 @@ impl ExternalAgentConfigService {
                         .push(marketplace_name.clone());
                     marketplace_path
                 }
-                Err(_) => {
+                Err(err) => {
+                    record_plugin_import_errors(
+                        &mut outcome,
+                        cwd,
+                        &plugin_ids,
+                        "plugin_marketplace_add",
+                        err.to_string(),
+                    );
                     outcome.failed_marketplaces.push(marketplace_name);
                     outcome.failed_plugin_ids.extend(plugin_ids);
                     continue;
@@ -759,9 +922,16 @@ impl ExternalAgentConfigService {
                     Ok(_) => outcome
                         .succeeded_plugin_ids
                         .push(format!("{plugin_name}@{marketplace_name}")),
-                    Err(_) => outcome
-                        .failed_plugin_ids
-                        .push(format!("{plugin_name}@{marketplace_name}")),
+                    Err(err) => {
+                        let plugin_id = format!("{plugin_name}@{marketplace_name}");
+                        outcome.failed_plugin_ids.push(plugin_id.clone());
+                        outcome.raw_errors.push(plugin_import_raw_error(
+                            cwd,
+                            "plugin_install",
+                            err.to_string(),
+                            Some(plugin_id),
+                        ));
+                    }
                 }
             }
         }
@@ -769,7 +939,7 @@ impl ExternalAgentConfigService {
         Ok(outcome)
     }
 
-    fn import_config(&self, cwd: Option<&Path>) -> io::Result<()> {
+    fn import_config(&self, cwd: Option<&Path>) -> io::Result<usize> {
         let repo_root = find_repo_root(cwd)?;
         let (source_settings, target_config) = if let Some(repo_root) = repo_root.as_ref() {
             (
@@ -777,7 +947,7 @@ impl ExternalAgentConfigService {
                 repo_root.join(".codex").join("config.toml"),
             )
         } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
-            return Ok(());
+            return Ok(0);
         } else {
             (
                 self.external_agent_home.join("settings.json"),
@@ -785,11 +955,11 @@ impl ExternalAgentConfigService {
             )
         };
         let Some(settings) = effective_external_settings(&source_settings)? else {
-            return Ok(());
+            return Ok(0);
         };
         let migrated = build_config_from_external(&settings)?;
         if is_empty_toml_table(&migrated) {
-            return Ok(());
+            return Ok(0);
         }
 
         let Some(target_parent) = target_config.parent() else {
@@ -798,7 +968,7 @@ impl ExternalAgentConfigService {
         fs::create_dir_all(target_parent)?;
         if !target_config.exists() {
             write_toml_file(&target_config, &migrated)?;
-            return Ok(());
+            return Ok(1);
         }
 
         let existing_raw = fs::read_to_string(&target_config)?;
@@ -811,14 +981,14 @@ impl ExternalAgentConfigService {
 
         let changed = merge_missing_toml_values(&mut existing, &migrated)?;
         if !changed {
-            return Ok(());
+            return Ok(0);
         }
 
         write_toml_file(&target_config, &existing)?;
-        Ok(())
+        Ok(1)
     }
 
-    fn import_mcp_server_config(&self, cwd: Option<&Path>) -> io::Result<()> {
+    fn import_mcp_server_config(&self, cwd: Option<&Path>) -> io::Result<usize> {
         let repo_root = find_repo_root(cwd)?;
         let (source_settings, target_config) = if let Some(repo_root) = repo_root.as_ref() {
             (
@@ -826,7 +996,7 @@ impl ExternalAgentConfigService {
                 repo_root.join(".codex").join("config.toml"),
             )
         } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
-            return Ok(());
+            return Ok(0);
         } else {
             (
                 self.external_agent_home.join("settings.json"),
@@ -843,7 +1013,7 @@ impl ExternalAgentConfigService {
             settings.as_ref(),
         )?;
         if is_empty_toml_table(&migrated) {
-            return Ok(());
+            return Ok(0);
         }
 
         let Some(target_parent) = target_config.parent() else {
@@ -851,8 +1021,9 @@ impl ExternalAgentConfigService {
         };
         fs::create_dir_all(target_parent)?;
         if !target_config.exists() {
+            let migrated_count = migrated_mcp_server_names(&migrated).len();
             write_toml_file(&target_config, &migrated)?;
-            return Ok(());
+            return Ok(migrated_count);
         }
 
         let existing_raw = fs::read_to_string(&target_config)?;
@@ -862,10 +1033,11 @@ impl ExternalAgentConfigService {
             toml::from_str::<TomlValue>(&existing_raw)
                 .map_err(|err| invalid_data_error(format!("invalid existing config.toml: {err}")))?
         };
-        if !merge_missing_mcp_servers(&mut existing, &migrated)?.is_empty() {
+        let merged_server_count = merge_missing_mcp_servers(&mut existing, &migrated)?.len();
+        if merged_server_count > 0 {
             write_toml_file(&target_config, &existing)?;
         }
-        Ok(())
+        Ok(merged_server_count)
     }
 
     fn import_subagents(&self, cwd: Option<&Path>) -> io::Result<usize> {
@@ -886,7 +1058,7 @@ impl ExternalAgentConfigService {
         import_subagents(&source_agents, &target_agents)
     }
 
-    fn import_hooks(&self, cwd: Option<&Path>) -> io::Result<()> {
+    fn import_hooks(&self, cwd: Option<&Path>) -> io::Result<usize> {
         let (source_external_agent_dir, target_hooks) =
             if let Some(repo_root) = find_repo_root(cwd)? {
                 (
@@ -894,7 +1066,7 @@ impl ExternalAgentConfigService {
                     repo_root.join(".codex").join("hooks.json"),
                 )
             } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
-                return Ok(());
+                return Ok(0);
             } else {
                 (
                     self.external_agent_home.clone(),
@@ -902,8 +1074,10 @@ impl ExternalAgentConfigService {
                 )
             };
 
-        import_hooks(&source_external_agent_dir, &target_hooks)?;
-        Ok(())
+        Ok(usize::from(import_hooks(
+            &source_external_agent_dir,
+            &target_hooks,
+        )?))
     }
 
     fn import_commands(&self, cwd: Option<&Path>) -> io::Result<usize> {
@@ -964,14 +1138,14 @@ impl ExternalAgentConfigService {
         Ok(copied_count)
     }
 
-    fn import_agents_md(&self, cwd: Option<&Path>) -> io::Result<()> {
+    fn import_agents_md(&self, cwd: Option<&Path>) -> io::Result<usize> {
         let (source_agents_md, target_agents_md) = if let Some(repo_root) = find_repo_root(cwd)? {
             let Some(source_agents_md) = find_repo_agents_md_source(&repo_root)? else {
-                return Ok(());
+                return Ok(0);
             };
             (source_agents_md, repo_root.join("AGENTS.md"))
         } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
-            return Ok(());
+            return Ok(0);
         } else {
             (
                 self.external_agent_home.join(EXTERNAL_AGENT_CONFIG_MD),
@@ -981,7 +1155,7 @@ impl ExternalAgentConfigService {
         if !is_non_empty_text_file(&source_agents_md)?
             || !is_missing_or_empty_text_file(&target_agents_md)?
         {
-            return Ok(());
+            return Ok(0);
         }
 
         let Some(target_parent) = target_agents_md.parent() else {
@@ -989,7 +1163,8 @@ impl ExternalAgentConfigService {
         };
         fs::create_dir_all(target_parent)?;
 
-        rewrite_and_copy_text_file(&source_agents_md, &target_agents_md)
+        rewrite_and_copy_text_file(&source_agents_md, &target_agents_md)?;
+        Ok(1)
     }
 }
 
@@ -1611,11 +1786,8 @@ fn invalid_data_error(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
-fn migration_metric_tags(
-    item_type: ExternalAgentConfigMigrationItemType,
-    skills_count: Option<usize>,
-) -> Vec<(&'static str, String)> {
-    let migration_type = match item_type {
+fn migration_item_type_label(item_type: ExternalAgentConfigMigrationItemType) -> &'static str {
+    match item_type {
         ExternalAgentConfigMigrationItemType::Config => "config",
         ExternalAgentConfigMigrationItemType::Skills => "skills",
         ExternalAgentConfigMigrationItemType::AgentsMd => "agents_md",
@@ -1625,8 +1797,62 @@ fn migration_metric_tags(
         ExternalAgentConfigMigrationItemType::Hooks => "hooks",
         ExternalAgentConfigMigrationItemType::Commands => "commands",
         ExternalAgentConfigMigrationItemType::Sessions => "sessions",
-    };
-    let mut tags = vec![("migration_type", migration_type.to_string())];
+    }
+}
+
+pub(crate) fn record_import_error(
+    result: &mut ExternalAgentConfigImportItemResult,
+    failure_stage: &'static str,
+    message: impl Into<String>,
+    source: Option<String>,
+) {
+    result.record_error(ExternalAgentConfigImportRawError {
+        item_type: result.item_type,
+        failure_stage: failure_stage.to_string(),
+        message: message.into(),
+        cwd: result.cwd.clone(),
+        source,
+    });
+}
+
+fn record_plugin_import_errors(
+    outcome: &mut PluginImportOutcome,
+    cwd: Option<&Path>,
+    plugin_ids: &[String],
+    failure_stage: &'static str,
+    message: impl Into<String>,
+) {
+    let message = message.into();
+    outcome
+        .raw_errors
+        .extend(plugin_ids.iter().map(|plugin_id| {
+            plugin_import_raw_error(cwd, failure_stage, message.clone(), Some(plugin_id.clone()))
+        }));
+}
+
+fn plugin_import_raw_error(
+    cwd: Option<&Path>,
+    failure_stage: &'static str,
+    message: String,
+    source: Option<String>,
+) -> ExternalAgentConfigImportRawError {
+    ExternalAgentConfigImportRawError {
+        item_type: ExternalAgentConfigMigrationItemType::Plugins,
+        failure_stage: failure_stage.to_string(),
+        message,
+        cwd: cwd.map(Path::to_path_buf),
+        source,
+    }
+}
+
+fn migration_metric_tags(
+    item_type: ExternalAgentConfigMigrationItemType,
+    skills_count: Option<usize>,
+) -> Vec<(&'static str, String)> {
+    let mut tags = vec![(
+        "migration_type",
+        migration_item_type_label(item_type).to_string(),
+    )];
     if matches!(
         item_type,
         ExternalAgentConfigMigrationItemType::Skills

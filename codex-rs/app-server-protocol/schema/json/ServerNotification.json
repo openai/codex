@@ -1139,7 +1139,152 @@
       "type": "object"
     },
     "ExternalAgentConfigImportCompletedNotification": {
+      "properties": {
+        "importId": {
+          "type": "string"
+        },
+        "itemResults": {
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportTypeResult"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "importId",
+        "itemResults"
+      ],
       "type": "object"
+    },
+    "ExternalAgentConfigImportItemResult": {
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "errorCount": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "itemType": {
+          "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
+        },
+        "rawErrors": {
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportRawError"
+          },
+          "type": "array"
+        },
+        "successCount": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "description",
+        "errorCount",
+        "itemType",
+        "rawErrors",
+        "successCount"
+      ],
+      "type": "object"
+    },
+    "ExternalAgentConfigImportProgressNotification": {
+      "properties": {
+        "importId": {
+          "type": "string"
+        },
+        "itemResult": {
+          "$ref": "#/definitions/ExternalAgentConfigImportItemResult"
+        }
+      },
+      "required": [
+        "importId",
+        "itemResult"
+      ],
+      "type": "object"
+    },
+    "ExternalAgentConfigImportRawError": {
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failureStage": {
+          "type": "string"
+        },
+        "itemType": {
+          "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
+        },
+        "message": {
+          "type": "string"
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "failureStage",
+        "itemType",
+        "message"
+      ],
+      "type": "object"
+    },
+    "ExternalAgentConfigImportTypeResult": {
+      "properties": {
+        "errorCount": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "itemType": {
+          "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
+        },
+        "rawErrors": {
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportRawError"
+          },
+          "type": "array"
+        },
+        "successCount": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "errorCount",
+        "itemType",
+        "rawErrors",
+        "successCount"
+      ],
+      "type": "object"
+    },
+    "ExternalAgentConfigMigrationItemType": {
+      "enum": [
+        "AGENTS_MD",
+        "CONFIG",
+        "SKILLS",
+        "PLUGINS",
+        "MCP_SERVER_CONFIG",
+        "SUBAGENTS",
+        "HOOKS",
+        "COMMANDS",
+        "SESSIONS"
+      ],
+      "type": "string"
     },
     "FileChangeOutputDeltaNotification": {
       "description": "Deprecated legacy notification for `apply_patch` textual output.\n\nThe server no longer emits this notification.",
@@ -6188,6 +6333,26 @@
         "params"
       ],
       "title": "RemoteControl/status/changedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "externalAgentConfig/import/progress"
+          ],
+          "title": "ExternalAgentConfig/import/progressNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ExternalAgentConfigImportProgressNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "ExternalAgentConfig/import/progressNotification",
       "type": "object"
     },
     {

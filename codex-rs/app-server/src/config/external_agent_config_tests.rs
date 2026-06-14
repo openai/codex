@@ -35,6 +35,23 @@ fn github_plugin_details() -> MigrationDetails {
     }
 }
 
+fn assert_single_plugin_raw_error(
+    raw_errors: &[ExternalAgentConfigImportRawError],
+    failure_stage: &str,
+    source: &str,
+) {
+    assert_eq!(raw_errors.len(), 1);
+    let raw_error = &raw_errors[0];
+    assert_eq!(
+        raw_error.item_type,
+        ExternalAgentConfigMigrationItemType::Plugins
+    );
+    assert_eq!(raw_error.failure_stage, failure_stage);
+    assert_eq!(raw_error.cwd, None);
+    assert_eq!(raw_error.source.as_deref(), Some(source));
+    assert!(!raw_error.message.is_empty());
+}
+
 #[tokio::test]
 async fn detect_home_lists_config_skills_and_agents_md() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
@@ -926,7 +943,7 @@ async fn import_home_skips_empty_config_migration() {
     )
     .expect("write settings");
 
-    service_for_paths(external_agent_home, codex_home.clone())
+    let outcome = service_for_paths(external_agent_home, codex_home.clone())
         .import(vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Config,
             description: String::new(),
@@ -936,6 +953,17 @@ async fn import_home_skips_empty_config_migration() {
         .await
         .expect("import");
 
+    assert_eq!(
+        outcome.item_results,
+        vec![ExternalAgentConfigImportItemResult {
+            item_type: ExternalAgentConfigMigrationItemType::Config,
+            description: String::new(),
+            cwd: None,
+            success_count: 0,
+            error_count: 0,
+            raw_errors: Vec::new(),
+        }]
+    );
     assert!(!codex_home.join("config.toml").exists());
 }
 
@@ -1002,7 +1030,21 @@ async fn import_local_plugins_returns_completed_status() {
         .await
         .expect("import");
 
-    assert_eq!(outcome, Vec::<PendingPluginImport>::new());
+    assert_eq!(
+        outcome.pending_plugin_imports,
+        Vec::<PendingPluginImport>::new()
+    );
+    assert_eq!(
+        outcome.item_results,
+        vec![ExternalAgentConfigImportItemResult {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: String::new(),
+            cwd: None,
+            success_count: 1,
+            error_count: 0,
+            raw_errors: Vec::new(),
+        }]
+    );
     let config = fs::read_to_string(codex_home.join("config.toml")).expect("read config");
     assert!(config.contains(r#"[plugins."cloudflare@my-plugins"]"#));
     assert!(config.contains("enabled = true"));
@@ -1044,9 +1086,10 @@ async fn import_git_plugins_returns_pending_async_status() {
         .expect("import");
 
     assert_eq!(
-        outcome,
+        outcome.pending_plugin_imports,
         vec![PendingPluginImport {
             cwd: None,
+            description: String::new(),
             details: MigrationDetails {
                 plugins: vec![PluginsMigration {
                     marketplace_name: "acme-tools".to_string(),
@@ -1054,6 +1097,17 @@ async fn import_git_plugins_returns_pending_async_status() {
                 }],
                 ..Default::default()
             },
+        }]
+    );
+    assert_eq!(
+        outcome.item_results,
+        vec![ExternalAgentConfigImportItemResult {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: String::new(),
+            cwd: None,
+            success_count: 0,
+            error_count: 0,
+            raw_errors: Vec::new(),
         }]
     );
     assert!(!codex_home.join("config.toml").exists());
@@ -1140,7 +1194,7 @@ async fn import_repo_agents_md_rewrites_terms_and_skips_non_empty_targets() {
     )
     .expect("write target");
 
-    service_for_paths(
+    let outcome = service_for_paths(
         root.path().join(EXTERNAL_AGENT_DIR),
         root.path().join(".codex"),
     )
@@ -1161,6 +1215,27 @@ async fn import_repo_agents_md_rewrites_terms_and_skips_non_empty_targets() {
     .await
     .expect("import");
 
+    assert_eq!(
+        outcome.item_results,
+        vec![
+            ExternalAgentConfigImportItemResult {
+                item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
+                description: String::new(),
+                cwd: Some(repo_root.clone()),
+                success_count: 1,
+                error_count: 0,
+                raw_errors: Vec::new(),
+            },
+            ExternalAgentConfigImportItemResult {
+                item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
+                description: String::new(),
+                cwd: Some(repo_with_existing_target.clone()),
+                success_count: 0,
+                error_count: 0,
+                raw_errors: Vec::new(),
+            },
+        ]
+    );
     assert_eq!(
         fs::read_to_string(repo_root.join("AGENTS.md")).expect("read target"),
         "Codex\nCodex\nCodex\nSee AGENTS.md\n"
@@ -1184,7 +1259,7 @@ async fn import_repo_agents_md_overwrites_empty_targets() {
     .expect("write source");
     fs::write(repo_root.join("AGENTS.md"), " \n\t").expect("write empty target");
 
-    service_for_paths(
+    let outcome = service_for_paths(
         root.path().join(EXTERNAL_AGENT_DIR),
         root.path().join(".codex"),
     )
@@ -1197,6 +1272,17 @@ async fn import_repo_agents_md_overwrites_empty_targets() {
     .await
     .expect("import");
 
+    assert_eq!(
+        outcome.item_results,
+        vec![ExternalAgentConfigImportItemResult {
+            item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
+            description: String::new(),
+            cwd: Some(repo_root.clone()),
+            success_count: 1,
+            error_count: 0,
+            raw_errors: Vec::new(),
+        }]
+    );
     assert_eq!(
         fs::read_to_string(repo_root.join("AGENTS.md")).expect("read target"),
         "Codex guidance"
@@ -1265,7 +1351,7 @@ async fn import_repo_hooks_preserves_disabled_codex_hooks_feature() {
     )
     .expect("write config");
 
-    service_for_paths(
+    let outcome = service_for_paths(
         root.path().join(EXTERNAL_AGENT_DIR),
         root.path().join(".codex"),
     )
@@ -1278,6 +1364,17 @@ async fn import_repo_hooks_preserves_disabled_codex_hooks_feature() {
     .await
     .expect("import");
 
+    assert_eq!(
+        outcome.item_results,
+        vec![ExternalAgentConfigImportItemResult {
+            item_type: ExternalAgentConfigMigrationItemType::Hooks,
+            description: String::new(),
+            cwd: Some(repo_root.clone()),
+            success_count: 1,
+            error_count: 0,
+            raw_errors: Vec::new(),
+        }]
+    );
     assert_eq!(
         fs::read_to_string(repo_root.join(".codex").join("config.toml")).expect("read config"),
         "[features]\ncodex_hooks = false\n"
@@ -1329,7 +1426,7 @@ async fn import_repo_mcp_uses_home_settings_toggles_when_repo_settings_missing()
     )
     .expect("write external agent project config");
 
-    service_for_paths(external_agent_home, root.path().join(".codex"))
+    let outcome = service_for_paths(external_agent_home, root.path().join(".codex"))
         .import(vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::McpServerConfig,
             description: String::new(),
@@ -1339,6 +1436,17 @@ async fn import_repo_mcp_uses_home_settings_toggles_when_repo_settings_missing()
         .await
         .expect("import");
 
+    assert_eq!(
+        outcome.item_results,
+        vec![ExternalAgentConfigImportItemResult {
+            item_type: ExternalAgentConfigMigrationItemType::McpServerConfig,
+            description: String::new(),
+            cwd: Some(repo_root.clone()),
+            success_count: 1,
+            error_count: 0,
+            raw_errors: Vec::new(),
+        }]
+    );
     let config: TomlValue = toml::from_str(
         &fs::read_to_string(repo_root.join(".codex").join("config.toml")).expect("read config"),
     )
@@ -1489,6 +1597,40 @@ async fn import_repo_uses_non_empty_external_agent_agents_source() {
     }])
     .await
     .expect("import");
+
+    assert_eq!(
+        fs::read_to_string(repo_root.join("AGENTS.md")).expect("read target"),
+        "Codex guidance"
+    );
+}
+
+#[tokio::test]
+async fn import_continues_after_failed_migration_item() {
+    let root = TempDir::new().expect("create tempdir");
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git");
+    fs::write(repo_root.join(EXTERNAL_AGENT_CONFIG_MD), "Claude guidance").expect("write source");
+
+    service_for_paths(
+        root.path().join(EXTERNAL_AGENT_DIR),
+        root.path().join(".codex"),
+    )
+    .import(vec![
+        ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: "invalid plugin migration".to_string(),
+            cwd: Some(repo_root.clone()),
+            details: None,
+        },
+        ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
+            description: "valid agents migration".to_string(),
+            cwd: Some(repo_root.clone()),
+            details: None,
+        },
+    ])
+    .await
+    .expect("import continues");
 
     assert_eq!(
         fs::read_to_string(repo_root.join("AGENTS.md")).expect("read target"),
@@ -2058,14 +2200,17 @@ async fn import_plugins_requires_source_marketplace_details() {
         .await
         .expect("import plugins");
 
+    assert_eq!(outcome.succeeded_marketplaces, Vec::<String>::new());
+    assert_eq!(outcome.succeeded_plugin_ids, Vec::<String>::new());
+    assert_eq!(outcome.failed_marketplaces, vec!["other-tools".to_string()]);
     assert_eq!(
-        outcome,
-        PluginImportOutcome {
-            succeeded_marketplaces: Vec::new(),
-            succeeded_plugin_ids: Vec::new(),
-            failed_marketplaces: vec!["other-tools".to_string()],
-            failed_plugin_ids: vec!["formatter@other-tools".to_string()],
-        }
+        outcome.failed_plugin_ids,
+        vec!["formatter@other-tools".to_string()]
+    );
+    assert_single_plugin_raw_error(
+        &outcome.raw_errors,
+        "plugin_marketplace_source",
+        "formatter@other-tools",
     );
 }
 
@@ -2094,14 +2239,17 @@ async fn import_plugins_defers_marketplace_source_validation_to_add_marketplace(
         .await
         .expect("import plugins");
 
+    assert_eq!(outcome.succeeded_marketplaces, Vec::<String>::new());
+    assert_eq!(outcome.succeeded_plugin_ids, Vec::<String>::new());
+    assert_eq!(outcome.failed_marketplaces, vec!["acme-tools".to_string()]);
     assert_eq!(
-        outcome,
-        PluginImportOutcome {
-            succeeded_marketplaces: Vec::new(),
-            succeeded_plugin_ids: Vec::new(),
-            failed_marketplaces: vec!["acme-tools".to_string()],
-            failed_plugin_ids: vec!["formatter@acme-tools".to_string()],
-        }
+        outcome.failed_plugin_ids,
+        vec!["formatter@acme-tools".to_string()]
+    );
+    assert_single_plugin_raw_error(
+        &outcome.raw_errors,
+        "plugin_marketplace_add",
+        "formatter@acme-tools",
     );
 }
 
@@ -2173,6 +2321,7 @@ async fn import_plugins_supports_external_agent_plugin_marketplace_layout() {
             succeeded_plugin_ids: vec!["cloudflare@my-plugins".to_string()],
             failed_marketplaces: Vec::new(),
             failed_plugin_ids: Vec::new(),
+            raw_errors: Vec::new(),
         }
     );
     let config = fs::read_to_string(codex_home.join("config.toml")).expect("read config");
@@ -2367,6 +2516,7 @@ async fn import_plugins_supports_relative_external_agent_plugin_marketplace_path
             succeeded_plugin_ids: vec!["cloudflare@my-plugins".to_string()],
             failed_marketplaces: Vec::new(),
             failed_plugin_ids: Vec::new(),
+            raw_errors: Vec::new(),
         }
     );
     let config = fs::read_to_string(codex_home.join("config.toml")).expect("read config");
@@ -2407,13 +2557,19 @@ async fn import_plugins_infers_external_official_marketplace_when_missing_from_s
         .expect("import plugins");
 
     assert_eq!(
-        outcome,
-        PluginImportOutcome {
-            succeeded_marketplaces: vec![EXTERNAL_OFFICIAL_MARKETPLACE_NAME.to_string()],
-            succeeded_plugin_ids: Vec::new(),
-            failed_marketplaces: Vec::new(),
-            failed_plugin_ids: vec![format!("sample@{EXTERNAL_OFFICIAL_MARKETPLACE_NAME}")],
-        }
+        outcome.succeeded_marketplaces,
+        vec![EXTERNAL_OFFICIAL_MARKETPLACE_NAME.to_string()]
+    );
+    assert_eq!(outcome.succeeded_plugin_ids, Vec::<String>::new());
+    assert_eq!(outcome.failed_marketplaces, Vec::<String>::new());
+    assert_eq!(
+        outcome.failed_plugin_ids,
+        vec![format!("sample@{EXTERNAL_OFFICIAL_MARKETPLACE_NAME}")]
+    );
+    assert_single_plugin_raw_error(
+        &outcome.raw_errors,
+        "plugin_install",
+        &format!("sample@{EXTERNAL_OFFICIAL_MARKETPLACE_NAME}"),
     );
 }
 
@@ -2571,6 +2727,7 @@ async fn import_plugins_supports_project_relative_external_agent_plugin_marketpl
             succeeded_plugin_ids: vec!["cloudflare@my-plugins".to_string()],
             failed_marketplaces: Vec::new(),
             failed_plugin_ids: Vec::new(),
+            raw_errors: Vec::new(),
         }
     );
     let config = fs::read_to_string(codex_home.join("config.toml")).expect("read config");

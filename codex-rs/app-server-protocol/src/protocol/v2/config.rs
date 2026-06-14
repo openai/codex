@@ -668,12 +668,58 @@ pub struct ExternalAgentConfigImportParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ExternalAgentConfigImportResponse {}
+pub struct ExternalAgentConfigImportResponse {
+    pub import_id: String,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ExternalAgentConfigImportCompletedNotification {}
+pub struct ExternalAgentConfigImportRawError {
+    pub item_type: ExternalAgentConfigMigrationItemType,
+    pub failure_stage: String,
+    pub message: String,
+    pub cwd: Option<PathBuf>,
+    pub source: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportItemResult {
+    pub item_type: ExternalAgentConfigMigrationItemType,
+    pub description: String,
+    pub cwd: Option<PathBuf>,
+    pub success_count: u32,
+    pub error_count: u32,
+    pub raw_errors: Vec<ExternalAgentConfigImportRawError>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportTypeResult {
+    pub item_type: ExternalAgentConfigMigrationItemType,
+    pub success_count: u32,
+    pub error_count: u32,
+    pub raw_errors: Vec<ExternalAgentConfigImportRawError>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportProgressNotification {
+    pub import_id: String,
+    pub item_result: ExternalAgentConfigImportItemResult,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportCompletedNotification {
+    pub import_id: String,
+    pub item_results: Vec<ExternalAgentConfigImportTypeResult>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
