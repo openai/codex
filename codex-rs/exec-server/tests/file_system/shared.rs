@@ -30,10 +30,7 @@ fn sandbox_context_from_profile_preserves_workspace_write_read_only_subpaths() -
     std::fs::create_dir_all(&git_dir)?;
 
     let sandbox = workspace_write_sandbox(writable_dir.clone());
-    let policy = sandbox
-        .try_into_app()?
-        .permissions
-        .file_system_sandbox_policy();
+    let policy = sandbox.into_app()?.permissions.file_system_sandbox_policy();
     let cwd = absolute_path(writable_dir.clone());
     let writable_roots = policy.get_writable_roots_with_cwd(cwd.as_path());
     let writable_dir = absolute_path(std::fs::canonicalize(writable_dir)?);
@@ -529,7 +526,7 @@ async fn file_system_sandboxed_write_allows_additional_write_root(
     std::fs::create_dir_all(&readable_dir)?;
     std::fs::create_dir_all(&writable_dir)?;
 
-    let mut sandbox = read_only_sandbox(readable_dir).try_into_app()?;
+    let mut sandbox = read_only_sandbox(readable_dir).into_app()?;
     let additional_permissions = AdditionalPermissionProfile {
         network: None,
         file_system: Some(FileSystemPermissions::from_read_write_roots(

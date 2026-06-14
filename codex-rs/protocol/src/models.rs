@@ -12,6 +12,8 @@ use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
+use crate::permissions::AppFileSystemSandboxEntry;
+use crate::permissions::ExecFileSystemSandboxEntry;
 use crate::permissions::FileSystemAccessMode;
 use crate::permissions::FileSystemPath;
 use crate::permissions::FileSystemSandboxEntry;
@@ -71,6 +73,32 @@ pub struct FileSystemPermissions<PathType = AbsolutePathBuf> {
 
 pub type AppFileSystemPermissions = FileSystemPermissions<AbsolutePathBuf>;
 pub type ExecFileSystemPermissions = FileSystemPermissions<PathUri>;
+
+impl AppFileSystemPermissions {
+    pub fn into_exec(self) -> ExecFileSystemPermissions {
+        FileSystemPermissions {
+            entries: self
+                .entries
+                .into_iter()
+                .map(AppFileSystemSandboxEntry::into_exec)
+                .collect(),
+            glob_scan_max_depth: self.glob_scan_max_depth,
+        }
+    }
+}
+
+impl ExecFileSystemPermissions {
+    pub fn into_app(self) -> io::Result<AppFileSystemPermissions> {
+        Ok(FileSystemPermissions {
+            entries: self
+                .entries
+                .into_iter()
+                .map(ExecFileSystemSandboxEntry::into_app)
+                .collect::<io::Result<_>>()?,
+            glob_scan_max_depth: self.glob_scan_max_depth,
+        })
+    }
+}
 
 impl<PathType> Default for FileSystemPermissions<PathType> {
     fn default() -> Self {
@@ -298,6 +326,42 @@ pub enum ManagedFileSystemPermissions<PathType = AbsolutePathBuf> {
 pub type AppManagedFileSystemPermissions = ManagedFileSystemPermissions<AbsolutePathBuf>;
 pub type ExecManagedFileSystemPermissions = ManagedFileSystemPermissions<PathUri>;
 
+impl AppManagedFileSystemPermissions {
+    pub fn into_exec(self) -> ExecManagedFileSystemPermissions {
+        match self {
+            Self::Restricted {
+                entries,
+                glob_scan_max_depth,
+            } => ManagedFileSystemPermissions::Restricted {
+                entries: entries
+                    .into_iter()
+                    .map(AppFileSystemSandboxEntry::into_exec)
+                    .collect(),
+                glob_scan_max_depth,
+            },
+            Self::Unrestricted => ManagedFileSystemPermissions::Unrestricted,
+        }
+    }
+}
+
+impl ExecManagedFileSystemPermissions {
+    pub fn into_app(self) -> io::Result<AppManagedFileSystemPermissions> {
+        Ok(match self {
+            Self::Restricted {
+                entries,
+                glob_scan_max_depth,
+            } => ManagedFileSystemPermissions::Restricted {
+                entries: entries
+                    .into_iter()
+                    .map(ExecFileSystemSandboxEntry::into_app)
+                    .collect::<io::Result<_>>()?,
+                glob_scan_max_depth,
+            },
+            Self::Unrestricted => ManagedFileSystemPermissions::Unrestricted,
+        })
+    }
+}
+
 impl ManagedFileSystemPermissions {
     fn from_sandbox_policy(file_system_sandbox_policy: &FileSystemSandboxPolicy) -> Self {
         match file_system_sandbox_policy.kind {
@@ -360,6 +424,38 @@ pub enum PermissionProfile<PathType = AbsolutePathBuf> {
 
 pub type AppPermissionProfile = PermissionProfile<AbsolutePathBuf>;
 pub type ExecPermissionProfile = PermissionProfile<PathUri>;
+
+impl AppPermissionProfile {
+    pub fn into_exec(self) -> ExecPermissionProfile {
+        match self {
+            Self::Managed {
+                file_system,
+                network,
+            } => PermissionProfile::Managed {
+                file_system: file_system.into_exec(),
+                network,
+            },
+            Self::Disabled => PermissionProfile::Disabled,
+            Self::External { network } => PermissionProfile::External { network },
+        }
+    }
+}
+
+impl ExecPermissionProfile {
+    pub fn into_app(self) -> io::Result<AppPermissionProfile> {
+        Ok(match self {
+            Self::Managed {
+                file_system,
+                network,
+            } => PermissionProfile::Managed {
+                file_system: file_system.into_app()?,
+                network,
+            },
+            Self::Disabled => PermissionProfile::Disabled,
+            Self::External { network } => PermissionProfile::External { network },
+        })
+    }
+}
 
 /// Metadata for the named or implicit built-in permissions profile that
 /// produced the active `PermissionProfile`.

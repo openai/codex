@@ -185,6 +185,24 @@ pub struct FileSystemSandboxEntry<PathType = AbsolutePathBuf> {
 pub type AppFileSystemSandboxEntry = FileSystemSandboxEntry<AbsolutePathBuf>;
 pub type ExecFileSystemSandboxEntry = FileSystemSandboxEntry<PathUri>;
 
+impl AppFileSystemSandboxEntry {
+    pub fn into_exec(self) -> ExecFileSystemSandboxEntry {
+        FileSystemSandboxEntry {
+            path: self.path.into_exec(),
+            access: self.access,
+        }
+    }
+}
+
+impl ExecFileSystemSandboxEntry {
+    pub fn into_app(self) -> io::Result<AppFileSystemSandboxEntry> {
+        Ok(FileSystemSandboxEntry {
+            path: self.path.into_app()?,
+            access: self.access,
+        })
+    }
+}
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, Default, JsonSchema, TS,
 )]
@@ -358,6 +376,30 @@ pub enum FileSystemPath<PathType = AbsolutePathBuf> {
 
 pub type AppFileSystemPath = FileSystemPath<AbsolutePathBuf>;
 pub type ExecFileSystemPath = FileSystemPath<PathUri>;
+
+impl AppFileSystemPath {
+    pub fn into_exec(self) -> ExecFileSystemPath {
+        match self {
+            Self::Path { path } => FileSystemPath::Path {
+                path: PathUri::from_abs_path(&path),
+            },
+            Self::GlobPattern { pattern } => FileSystemPath::GlobPattern { pattern },
+            Self::Special { value } => FileSystemPath::Special { value },
+        }
+    }
+}
+
+impl ExecFileSystemPath {
+    pub fn into_app(self) -> io::Result<AppFileSystemPath> {
+        Ok(match self {
+            Self::Path { path } => FileSystemPath::Path {
+                path: path.to_abs_path()?,
+            },
+            Self::GlobPattern { pattern } => FileSystemPath::GlobPattern { pattern },
+            Self::Special { value } => FileSystemPath::Special { value },
+        })
+    }
+}
 
 const PROJECT_ROOTS_GLOB_PATTERN_PREFIX: &str = "codex-project-roots://";
 

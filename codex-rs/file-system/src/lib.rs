@@ -4,7 +4,6 @@ use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::FileSystemPath;
-use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
@@ -117,10 +116,7 @@ impl AppFileSystemSandboxContext {
 
     pub fn into_exec(self) -> ExecFileSystemSandboxContext {
         FileSystemSandboxContext {
-            permissions: map_permission_paths(self.permissions, |path| {
-                Ok::<_, std::convert::Infallible>(PathUri::from_abs_path(&path))
-            })
-            .expect("mapping absolute paths to path URIs is infallible"),
+            permissions: self.permissions.into_exec(),
             cwd: self.cwd,
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
@@ -160,61 +156,15 @@ impl<PathType> FileSystemSandboxContext<PathType> {
 }
 
 impl ExecFileSystemSandboxContext {
-    pub fn try_into_app(self) -> io::Result<AppFileSystemSandboxContext> {
+    pub fn into_app(self) -> io::Result<AppFileSystemSandboxContext> {
         Ok(FileSystemSandboxContext {
-            permissions: map_permission_paths(self.permissions, |path| path.to_abs_path())?,
+            permissions: self.permissions.into_app()?,
             cwd: self.cwd,
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
             use_legacy_landlock: self.use_legacy_landlock,
         })
     }
-}
-
-fn map_permission_paths<SourcePath, TargetPath, Error>(
-    permissions: PermissionProfile<SourcePath>,
-    mut map_path: impl FnMut(SourcePath) -> Result<TargetPath, Error>,
-) -> Result<PermissionProfile<TargetPath>, Error> {
-    Ok(match permissions {
-        PermissionProfile::Managed {
-            file_system,
-            network,
-        } => PermissionProfile::Managed {
-            file_system: match file_system {
-                ManagedFileSystemPermissions::Restricted {
-                    entries,
-                    glob_scan_max_depth,
-                } => ManagedFileSystemPermissions::Restricted {
-                    entries: entries
-                        .into_iter()
-                        .map(|entry| {
-                            Ok(FileSystemSandboxEntry {
-                                path: match entry.path {
-                                    FileSystemPath::Path { path } => FileSystemPath::Path {
-                                        path: map_path(path)?,
-                                    },
-                                    FileSystemPath::GlobPattern { pattern } => {
-                                        FileSystemPath::GlobPattern { pattern }
-                                    }
-                                    FileSystemPath::Special { value } => {
-                                        FileSystemPath::Special { value }
-                                    }
-                                },
-                                access: entry.access,
-                            })
-                        })
-                        .collect::<Result<_, Error>>()?,
-                    glob_scan_max_depth,
-                },
-                ManagedFileSystemPermissions::Unrestricted => {
-                    ManagedFileSystemPermissions::Unrestricted
-                }
-            },
-            network,
-        },
-        PermissionProfile::Disabled => PermissionProfile::Disabled,
-        PermissionProfile::External { network } => PermissionProfile::External { network },
-    })
 }
 
 pub type FileSystemResult<T> = io::Result<T>;

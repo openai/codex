@@ -66,7 +66,7 @@ impl FileSystemSandboxRunner {
         request: FsHelperRequest,
     ) -> Result<FsHelperPayload, JSONRPCErrorError> {
         let cwd = sandbox_cwd(sandbox)?;
-        let native_sandbox = sandbox.clone().try_into_app().map_err(|err| {
+        let native_sandbox = sandbox.clone().into_app().map_err(|err| {
             invalid_request(format!("invalid sandbox permission path URI: {err}"))
         })?;
         let mut file_system_policy = native_sandbox.permissions.file_system_sandbox_policy();
