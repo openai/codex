@@ -72,6 +72,7 @@ const TOOL_TYPE_KEY: &str = "tool_type";
 const TOOL_ID_KEY: &str = "tool_id";
 const TOOL_SUGGEST_SUGGEST_TYPE_KEY: &str = "suggest_type";
 const TOOL_SUGGEST_REASON_KEY: &str = "suggest_reason";
+const TOOL_SUGGEST_DESCRIPTION_KEY: &str = "description";
 const TOOL_SUGGEST_INSTALL_URL_KEY: &str = "install_url";
 const TOOL_SUGGEST_ENTRIES_KEY: &str = "entries";
 
@@ -406,6 +407,7 @@ fn parse_tool_suggestion_request(meta: Option<&Value>) -> Option<ToolSuggestionR
         suggest_type,
         suggest_reason: meta
             .get(TOOL_SUGGEST_REASON_KEY)
+            .or_else(|| entry.get(TOOL_SUGGEST_DESCRIPTION_KEY))
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
@@ -2092,6 +2094,7 @@ mod tests {
                     "suggest_type": "install",
                     "entries": [
                         {
+                            "description": "Plan events and schedules.",
                             "id": "connector_2128aebfecb84f64a069897515042a44",
                             "tool_type": "connector",
                             "tool_id": "connector_2128aebfecb84f64a069897515042a44",
@@ -2109,7 +2112,7 @@ mod tests {
             Some(&ToolSuggestionRequest {
                 tool_type: ToolSuggestionToolType::Connector,
                 suggest_type: ToolSuggestionType::Install,
-                suggest_reason: String::new(),
+                suggest_reason: "Plan events and schedules.".to_string(),
                 tool_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
                 tool_name: "Google Calendar".to_string(),
                 install_url: Some("https://example.test/google-calendar".to_string()),
