@@ -288,9 +288,10 @@ mod tests {
         turn.environments.turn_environments[0] = TurnEnvironment::new(
             current.environment_id,
             current.environment,
-            cwd,
+            PathUri::from_abs_path(&cwd),
             current.shell,
-        );
+        )
+        .expect("turn environment");
     }
 
     #[test]
