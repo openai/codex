@@ -396,11 +396,13 @@ impl TurnContext {
 
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         let workspace_roots = self.config.effective_workspace_roots();
+        let model_workspace_roots = self.model_workspace_roots();
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
             #[allow(deprecated)]
             cwd: self.cwd.to_path_buf(),
             workspace_roots: (!workspace_roots.is_empty()).then_some(workspace_roots),
+            model_workspace_roots: Some(model_workspace_roots),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             approval_policy: self.approval_policy.value(),
@@ -417,6 +419,26 @@ impl TurnContext {
             effort: self.reasoning_effort.clone(),
             summary: ReasoningSummaryConfig::Auto,
         }
+    }
+
+    pub(crate) fn model_workspace_roots(&self) -> Vec<PathUri> {
+        let mut workspace_roots = self
+            .config
+            .effective_workspace_roots()
+            .iter()
+            .map(PathUri::from_abs_path)
+            .collect::<Vec<_>>();
+        if !self.config.workspace_roots_explicit
+            && !self.config.workspace_roots.is_empty()
+            && let Some(primary_environment) = self.environments.primary()
+            && let Some(implicit_workspace_root) = workspace_roots.first_mut()
+        {
+            *implicit_workspace_root = primary_environment.cwd_uri().clone();
+        }
+
+        let mut seen = HashSet::new();
+        workspace_roots.retain(|root| seen.insert(root.clone()));
+        workspace_roots
     }
 
     fn turn_context_network_item(&self) -> Option<TurnContextNetworkItem> {

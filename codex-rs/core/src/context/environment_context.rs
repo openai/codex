@@ -97,7 +97,7 @@ impl EnvironmentContextEnvironments {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileSystemContext {
-    workspace_roots: Vec<String>,
+    workspace_roots: Vec<PathUri>,
     permission_profile: FileSystemPermissionProfileContext,
 }
 
@@ -121,14 +121,12 @@ impl FileSystemContext {
     fn from_permission_profile(
         permission_profile: &PermissionProfile,
         workspace_roots: &[AbsolutePathBuf],
+        model_workspace_roots: &[PathUri],
     ) -> Self {
         let permission_profile = permission_profile
             .clone()
             .materialize_project_roots_with_workspace_roots(workspace_roots);
-        let workspace_roots = workspace_roots
-            .iter()
-            .map(|root| root.to_string_lossy().into_owned())
-            .collect();
+        let workspace_roots = model_workspace_roots.to_vec();
         let permission_profile = match permission_profile {
             PermissionProfile::Managed { file_system, .. } => {
                 FileSystemPermissionProfileContext::Managed(ManagedFileSystemContext::from(
@@ -149,7 +147,7 @@ impl FileSystemContext {
         if !self.workspace_roots.is_empty() {
             rendered.push_str("<workspace_roots>");
             for root in &self.workspace_roots {
-                push_text_element(&mut rendered, "root", root);
+                push_text_element(&mut rendered, "root", &render_environment_path(root));
             }
             rendered.push_str("</workspace_roots>");
         }
@@ -431,9 +429,12 @@ impl EnvironmentContext {
             Self::network_from_turn_context(turn_context),
             /*subagents*/ None,
         );
+        let workspace_roots = turn_context.config.effective_workspace_roots();
+        let model_workspace_roots = turn_context.model_workspace_roots();
         context.filesystem = Some(FileSystemContext::from_permission_profile(
             &turn_context.permission_profile,
-            &turn_context.config.effective_workspace_roots(),
+            &workspace_roots,
+            &model_workspace_roots,
         ));
         context
     }
@@ -500,9 +501,15 @@ impl EnvironmentContext {
     fn filesystem_from_turn_context_item(
         turn_context_item: &TurnContextItem,
     ) -> Option<FileSystemContext> {
+        let workspace_roots = workspace_roots_from_turn_context_item(turn_context_item);
+        let model_workspace_roots = turn_context_item
+            .model_workspace_roots
+            .clone()
+            .unwrap_or_else(|| workspace_roots.iter().map(PathUri::from_abs_path).collect());
         Some(FileSystemContext::from_permission_profile(
             &turn_context_item.permission_profile(),
-            &workspace_roots_from_turn_context_item(turn_context_item),
+            &workspace_roots,
+            &model_workspace_roots,
         ))
     }
 }
@@ -542,7 +549,7 @@ impl ContextualUserFragment for EnvironmentContext {
         let mut lines = Vec::new();
         match &self.environments {
             EnvironmentContextEnvironments::Single(environment) => {
-                let cwd = render_environment_cwd(&environment.cwd);
+                let cwd = render_environment_path(&environment.cwd);
                 lines.push(format!("  <cwd>{cwd}</cwd>"));
                 lines.push(format!("  <shell>{}</shell>", environment.shell));
             }
@@ -550,7 +557,7 @@ impl ContextualUserFragment for EnvironmentContext {
                 lines.push("  <environments>".to_string());
                 for environment in environments {
                     lines.push(format!("    <environment id=\"{}\">", environment.id));
-                    let cwd = render_environment_cwd(&environment.cwd);
+                    let cwd = render_environment_path(&environment.cwd);
                     lines.push(format!("      <cwd>{cwd}</cwd>"));
                     lines.push(format!("      <shell>{}</shell>", environment.shell));
                     lines.push("    </environment>".to_string());
@@ -594,13 +601,13 @@ fn turn_context_item_cwd_uri(turn_context_item: &TurnContextItem) -> PathUri {
     PathUri::from_abs_path(&cwd)
 }
 
-fn render_environment_cwd(cwd: &PathUri) -> String {
-    let Some(convention) = cwd.infer_path_convention() else {
-        return cwd.to_string();
+fn render_environment_path(path: &PathUri) -> String {
+    let Some(convention) = path.infer_path_convention() else {
+        return path.to_string();
     };
-    ApiPathString::from_path_uri(cwd, convention)
+    ApiPathString::from_path_uri(path, convention)
         .map(ApiPathString::into_string)
-        .unwrap_or_else(|_| cwd.to_string())
+        .unwrap_or_else(|_| path.to_string())
 }
 
 #[cfg(test)]

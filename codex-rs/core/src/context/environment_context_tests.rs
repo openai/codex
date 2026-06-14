@@ -163,6 +163,10 @@ fn serialize_environment_context_with_full_filesystem_profile() {
     context.filesystem = Some(FileSystemContext::from_permission_profile(
         &workspace_write_permission_profile_with_private_denials(),
         &[repo.clone(), other_repo.clone()],
+        &[
+            PathUri::from_abs_path(&repo),
+            PathUri::from_abs_path(&other_repo),
+        ],
     ));
 
     let expected = format!(
@@ -192,6 +196,7 @@ fn turn_context_item_filesystem_uses_workspace_roots_instead_of_cwd() {
         turn_id: None,
         cwd: test_path_buf("/not-the-workspace"),
         workspace_roots: Some(vec![repo.clone(), other_repo.clone()]),
+        model_workspace_roots: None,
         current_date: None,
         timezone: None,
         approval_policy: AskForApproval::Never,
@@ -234,6 +239,51 @@ fn turn_context_item_filesystem_uses_workspace_roots_instead_of_cwd() {
     );
 }
 
+#[test]
+fn turn_context_item_filesystem_renders_persisted_model_workspace_roots() {
+    let host_repo = test_abs_path("/host/repo");
+    let host_repo_private = host_repo.join("private");
+    let host_repo_private_glob =
+        AbsolutePathBuf::resolve_path_against_base(Path::new("private/**"), host_repo.as_path());
+    let remote_repo = PathUri::parse("file:///C:/remote%20repo").expect("Windows workspace URI");
+    let item = TurnContextItem {
+        turn_id: None,
+        cwd: test_path_buf("/host/cwd"),
+        workspace_roots: Some(vec![host_repo.clone()]),
+        model_workspace_roots: Some(vec![remote_repo]),
+        current_date: None,
+        timezone: None,
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: Some(workspace_write_permission_profile_with_private_denials()),
+        network: None,
+        file_system_sandbox_policy: None,
+        model: "gpt-5".to_string(),
+        comp_hash: None,
+        personality: None,
+        collaboration_mode: None,
+        multi_agent_version: None,
+        realtime_active: None,
+        effort: None,
+        summary: codex_protocol::config_types::ReasoningSummary::Auto,
+    };
+
+    assert_eq!(
+        EnvironmentContext::from_turn_context_item(&item, fake_shell_name()).render(),
+        format!(
+            r#"<environment_context>
+  <cwd>{}</cwd>
+  <shell>bash</shell>
+  <filesystem><workspace_roots><root>C:\remote repo</root></workspace_roots><permission_profile type="managed"><file_system type="restricted"><entry access="write"><path>{host_repo}</path></entry><entry access="deny" escalatable="false"><path>{host_repo_private}</path></entry><entry access="deny" escalatable="false"><glob>{host_repo_private_glob}</glob></entry></file_system></permission_profile></filesystem>
+</environment_context>"#,
+            test_path_buf("/host/cwd").display(),
+            host_repo = host_repo.to_string_lossy(),
+            host_repo_private = host_repo_private.to_string_lossy(),
+            host_repo_private_glob = host_repo_private_glob.to_string_lossy(),
+        )
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn legacy_projected_windows_cwd_matches_environment_uri() {
@@ -241,6 +291,7 @@ fn legacy_projected_windows_cwd_matches_environment_uri() {
         turn_id: None,
         cwd: PathBuf::from("/C:/windows"),
         workspace_roots: None,
+        model_workspace_roots: None,
         current_date: None,
         timezone: None,
         approval_policy: AskForApproval::Never,

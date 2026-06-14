@@ -2993,6 +2993,10 @@ pub struct TurnContextItem {
     /// `:workspace_roots` filesystem permissions in `permission_profile`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
+    /// Environment-aware workspace roots rendered in model-visible context.
+    /// `workspace_roots` remains host-native for permission materialization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_workspace_roots: Option<Vec<PathUri>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_date: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5311,6 +5315,7 @@ mod tests {
         }))?;
 
         assert_eq!(item.network, None);
+        assert_eq!(item.model_workspace_roots, None);
         assert_eq!(item.file_system_sandbox_policy, None);
         assert_eq!(item.comp_hash, None);
         Ok(())
@@ -5355,6 +5360,7 @@ mod tests {
             turn_id: None,
             cwd: test_path_buf("/tmp"),
             workspace_roots: None,
+            model_workspace_roots: None,
             current_date: None,
             timezone: None,
             approval_policy: AskForApproval::Never,

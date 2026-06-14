@@ -2678,6 +2678,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         #[allow(deprecated)]
         cwd: turn_context.cwd.to_path_buf(),
         workspace_roots: None,
+        model_workspace_roots: None,
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
@@ -8130,6 +8131,50 @@ async fn turn_context_item_uses_turn_context_comp_hash_snapshot() {
     assert_eq!(
         turn_context.to_turn_context_item().comp_hash.as_deref(),
         Some("turn-context-hash")
+    );
+}
+
+#[tokio::test]
+async fn turn_context_item_separates_host_and_model_workspace_roots() {
+    let (_session, mut turn_context) = make_session_and_context().await;
+    assert!(!turn_context.config.workspace_roots_explicit);
+    let windows_cwd = codex_utils_path_uri::PathUri::parse("file:///C:/remote%20workspace")
+        .expect("Windows cwd URI");
+    let current_environment = turn_context.environments.turn_environments[0].clone();
+    turn_context.environments.turn_environments[0] = TurnEnvironment::new(
+        "remote".to_string(),
+        current_environment.environment,
+        windows_cwd.clone(),
+        current_environment.shell,
+    )
+    .expect("remote turn environment");
+
+    let host_workspace_roots = turn_context.config.effective_workspace_roots();
+    let implicit_item = turn_context.to_turn_context_item();
+    assert_eq!(
+        (
+            implicit_item.workspace_roots,
+            implicit_item.model_workspace_roots,
+        ),
+        (Some(host_workspace_roots.clone()), Some(vec![windows_cwd]),)
+    );
+
+    Arc::make_mut(&mut turn_context.config).workspace_roots_explicit = true;
+    let explicit_item = turn_context.to_turn_context_item();
+    assert_eq!(
+        (
+            explicit_item.workspace_roots,
+            explicit_item.model_workspace_roots,
+        ),
+        (
+            Some(host_workspace_roots.clone()),
+            Some(
+                host_workspace_roots
+                    .iter()
+                    .map(codex_utils_path_uri::PathUri::from_abs_path)
+                    .collect()
+            ),
+        )
     );
 }
 
