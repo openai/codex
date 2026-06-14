@@ -19,6 +19,7 @@ use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -29,6 +30,7 @@ use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use serde_json::Value;
 use serde_json::json;
+use test_case::test_case;
 fn call_output(req: &ResponsesRequest, call_id: &str) -> (String, Option<bool>) {
     let raw = req.function_call_output(call_id);
     assert_eq!(
@@ -134,8 +136,11 @@ async fn shell_command_tool_executes_command_and_streams_output() -> anyhow::Res
     Ok(())
 }
 
+#[test_case(None; "omitted_namespace")]
+#[test_case(Some(""); "empty_namespace")]
+#[test_case(Some("functions"); "explicit_functions_namespace")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
+async fn update_plan_tool_emits_plan_update_event(namespace: Option<&str>) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -158,9 +163,15 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
     })
     .to_string();
 
+    let function_call = match namespace {
+        Some(namespace) => {
+            ev_function_call_with_namespace(call_id, namespace, "update_plan", &plan_args)
+        }
+        None => ev_function_call(call_id, "update_plan", &plan_args),
+    };
     let first_response = sse(vec![
         ev_response_created("resp-1"),
-        ev_function_call(call_id, "update_plan", &plan_args),
+        function_call,
         ev_completed("resp-1"),
     ]);
     responses::mount_sse_once(&server, first_response).await;
@@ -350,9 +361,11 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
 *** End Patch"#
     );
 
+    let mut custom_tool_call = ev_apply_patch_custom_tool_call(call_id, &patch_content);
+    custom_tool_call["namespace"] = json!("functions");
     let first_response = sse(vec![
         ev_response_created("resp-1"),
-        ev_apply_patch_custom_tool_call(call_id, &patch_content),
+        custom_tool_call,
         ev_completed("resp-1"),
     ]);
     responses::mount_sse_once(&server, first_response).await;

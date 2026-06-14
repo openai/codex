@@ -7,6 +7,7 @@ mod tool_name;
 pub use agent_path::AgentPath;
 pub use session_id::SessionId;
 pub use thread_id::ThreadId;
+pub use tool_name::DEFAULT_FUNCTION_NAMESPACE;
 pub use tool_name::ToolName;
 pub mod approvals;
 pub mod capabilities;

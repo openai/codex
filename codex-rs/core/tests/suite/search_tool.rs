@@ -896,7 +896,7 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
                     "item": {
                         "type": "function_call",
                         "call_id": dynamic_call_id,
-                        "namespace": "codex_app",
+                        "namespace": "functions",
                         "name": tool_name,
                         "arguments": tool_call_arguments,
                     }
@@ -920,17 +920,11 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
         "required": ["mode"],
         "additionalProperties": false,
     });
-    let dynamic_tool = DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
-        name: "codex_app".to_string(),
-        description: "Automation tools.".to_string(),
-        tools: vec![DynamicToolNamespaceTool::Function(
-            DynamicToolFunctionSpec {
-                name: tool_name.to_string(),
-                description: tool_description.to_string(),
-                input_schema: input_schema.clone(),
-                defer_loading: true,
-            },
-        )],
+    let dynamic_tool = DynamicToolSpec::Function(DynamicToolFunctionSpec {
+        name: tool_name.to_string(),
+        description: tool_description.to_string(),
+        input_schema: input_schema.clone(),
+        defer_loading: true,
     });
 
     let mut builder = test_codex().with_config(configure_search_capable_model);
@@ -964,7 +958,7 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
         unreachable!("event guard guarantees DynamicToolCallRequest");
     };
     assert_eq!(request.call_id, dynamic_call_id);
-    assert_eq!(request.namespace.as_deref(), Some("codex_app"));
+    assert_eq!(request.namespace, None);
     assert_eq!(request.tool, tool_name);
     assert_eq!(request.arguments, tool_args);
 
@@ -1006,8 +1000,8 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
         tools,
         vec![json!({
             "type": "namespace",
-            "name": "codex_app",
-            "description": "Automation tools.",
+            "name": "functions",
+            "description": "Tools in the functions namespace.",
             "tools": [{
                 "type": "function",
                 "name": tool_name,

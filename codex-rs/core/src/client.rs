@@ -84,6 +84,7 @@ use codex_rollout_trace::CompactionTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
 use codex_tools::create_tools_json_for_responses_api;
+use codex_tools::create_tools_json_for_responses_lite;
 use codex_utils_output_truncation::approx_tokens_from_byte_count;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
@@ -785,7 +786,11 @@ impl ModelClient {
         if !self.state.provider.info().is_openai() {
             input.iter_mut().for_each(ResponseItem::clear_metadata);
         }
-        let tools = create_tools_json_for_responses_api(&prompt.tools)?;
+        let tools = if model_info.use_responses_lite {
+            create_tools_json_for_responses_lite(&prompt.tools)?
+        } else {
+            create_tools_json_for_responses_api(&prompt.tools)?
+        };
         let (instructions, tools) = if model_info.use_responses_lite {
             let additional_tools = ResponseItem::AdditionalTools {
                 id: None,

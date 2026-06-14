@@ -18,6 +18,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_tools::DEFAULT_FUNCTION_NAMESPACE;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
@@ -172,6 +173,39 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
         }
         other => panic!("expected function payload, got {other:?}"),
     }
+
+    Ok(())
+}
+
+#[test]
+fn build_tool_call_normalizes_default_function_and_custom_namespaces() -> anyhow::Result<()> {
+    for namespace in [None, Some(""), Some(DEFAULT_FUNCTION_NAMESPACE)] {
+        let function_call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+            id: None,
+            name: "lookup".to_string(),
+            namespace: namespace.map(str::to_string),
+            arguments: "{}".to_string(),
+            call_id: "call-function".to_string(),
+        })?
+        .expect("function_call should produce a tool call");
+        assert_eq!(
+            function_call.tool_name,
+            ToolName::namespaced(DEFAULT_FUNCTION_NAMESPACE, "lookup")
+        );
+    }
+
+    let custom_call = ToolRouter::build_tool_call(ResponseItem::CustomToolCall {
+        id: None,
+        status: None,
+        call_id: "call-custom".to_string(),
+        name: "apply_patch".to_string(),
+        input: "*** Begin Patch\n*** End Patch".to_string(),
+    })?
+    .expect("custom_tool_call should produce a tool call");
+    assert_eq!(
+        custom_call.tool_name,
+        ToolName::namespaced(DEFAULT_FUNCTION_NAMESPACE, "apply_patch")
+    );
 
     Ok(())
 }
@@ -443,9 +477,7 @@ fn namespace_function_names(specs: &[ToolSpec], namespace_name: &str) -> Vec<Str
                 namespace
                     .tools
                     .iter()
-                    .map(|tool| match tool {
-                        ResponsesApiNamespaceTool::Function(tool) => tool.name.clone(),
-                    })
+                    .map(|tool| tool.name().to_string())
                     .collect(),
             ),
             ToolSpec::Function(_)

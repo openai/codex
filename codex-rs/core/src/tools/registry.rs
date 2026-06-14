@@ -325,6 +325,10 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     fn new(tools: HashMap<ToolName, Arc<dyn CoreToolRuntime>>) -> Self {
+        let tools = tools
+            .into_iter()
+            .map(|(name, tool)| (name.with_default_namespace(), tool))
+            .collect();
         Self { tools }
     }
 
@@ -332,7 +336,7 @@ impl ToolRegistry {
     pub(crate) fn from_tools(tools: impl IntoIterator<Item = Arc<dyn CoreToolRuntime>>) -> Self {
         let mut tools_by_name = HashMap::new();
         for tool in tools {
-            let name = tool.tool_name();
+            let name = tool.tool_name().with_default_namespace();
             if tools_by_name.contains_key(&name) {
                 error_or_panic(format!("tool {name} already registered"));
                 continue;
@@ -357,7 +361,9 @@ impl ToolRegistry {
     }
 
     fn tool(&self, name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
-        self.tools.get(name).map(Arc::clone)
+        self.tools
+            .get(&name.clone().with_default_namespace())
+            .map(Arc::clone)
     }
 
     #[cfg(test)]
@@ -369,7 +375,7 @@ impl ToolRegistry {
 
     #[cfg(test)]
     pub(crate) fn tool_exposure(&self, name: &ToolName) -> Option<ToolExposure> {
-        self.tools.get(name).map(|tool| tool.exposure())
+        self.tool(name).map(|tool| tool.exposure())
     }
 
     pub(crate) fn create_diff_consumer(
@@ -712,10 +718,8 @@ async fn handle_any_tool(
 
 fn function_hook_tool_name(invocation: &ToolInvocation) -> HookToolName {
     if invocation.tool_name.name == "spawn_agent"
-        && matches!(
-            invocation.tool_name.namespace.as_deref(),
-            None | Some(MULTI_AGENT_V1_NAMESPACE)
-        )
+        && (invocation.tool_name.is_default_namespace()
+            || invocation.tool_name.namespace.as_deref() == Some(MULTI_AGENT_V1_NAMESPACE))
     {
         return HookToolName::spawn_agent();
     }

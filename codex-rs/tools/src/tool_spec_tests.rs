@@ -9,6 +9,7 @@ use crate::JsonSchema;
 use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
 use crate::create_tools_json_for_responses_api;
+use crate::create_tools_json_for_responses_lite;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchFilters as ConfigWebSearchFilters;
 use codex_protocol::config_types::WebSearchUserLocation as ConfigWebSearchUserLocation;
@@ -147,6 +148,66 @@ fn create_tools_json_for_responses_api_includes_top_level_name() {
                 },
             },
         })]
+    );
+}
+
+#[test]
+fn responses_lite_groups_default_function_and_custom_tools() {
+    let function = |name: &str| ResponsesApiTool {
+        name: name.to_string(),
+        description: String::new(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::default(),
+        output_schema: None,
+    };
+    let tools = create_tools_json_for_responses_lite(&[
+        ToolSpec::ToolSearch {
+            execution: "client".to_string(),
+            description: "Search tools".to_string(),
+            parameters: JsonSchema::default(),
+        },
+        ToolSpec::Function(function("lookup_order")),
+        ToolSpec::Freeform(FreeformTool {
+            name: "exec".to_string(),
+            description: String::new(),
+            format: FreeformToolFormat {
+                r#type: "grammar".to_string(),
+                syntax: "lark".to_string(),
+                definition: "start: /.+/".to_string(),
+            },
+        }),
+        ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "functions".to_string(),
+            description: "Default tools".to_string(),
+            tools: vec![ResponsesApiNamespaceTool::Function(function("existing"))],
+        }),
+    ])
+    .expect("serialize Responses Lite tools");
+
+    assert_eq!(tools.len(), 2);
+    assert_eq!(tools[0]["type"], "tool_search");
+    assert_eq!(tools[1]["type"], "namespace");
+    assert_eq!(tools[1]["name"], "functions");
+    assert_eq!(tools[1]["description"], "Default tools");
+    let nested_tools = tools[1]["tools"]
+        .as_array()
+        .expect("functions namespace should contain tools");
+    assert_eq!(
+        nested_tools
+            .iter()
+            .map(|tool| {
+                (
+                    tool["type"].as_str().expect("tool type should be a string"),
+                    tool["name"].as_str().expect("tool name should be a string"),
+                )
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            ("function", "lookup_order"),
+            ("custom", "exec"),
+            ("function", "existing"),
+        ]
     );
 }
 

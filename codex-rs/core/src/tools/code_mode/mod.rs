@@ -47,9 +47,9 @@ pub(crate) const PUBLIC_TOOL_NAME: &str = codex_code_mode::PUBLIC_TOOL_NAME;
 pub(crate) const WAIT_TOOL_NAME: &str = codex_code_mode::WAIT_TOOL_NAME;
 pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 = codex_code_mode::DEFAULT_WAIT_YIELD_TIME_MS;
 
-/// Returns true for the un-namespaced code-mode `exec` tool.
+/// Returns true for the code-mode `exec` tool in the default namespace.
 pub(crate) fn is_exec_tool_name(tool_name: &ToolName) -> bool {
-    tool_name.namespace.is_none() && tool_name.name == PUBLIC_TOOL_NAME
+    tool_name.is_default_namespace() && tool_name.name == PUBLIC_TOOL_NAME
 }
 
 #[derive(Clone)]

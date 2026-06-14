@@ -33,7 +33,9 @@ fn uses_reserved_image_gen_namespace() {
         panic!("imagegen should advertise a namespace tool");
     };
     assert_eq!(spec.name, IMAGE_GEN_NAMESPACE);
-    let ResponsesApiNamespaceTool::Function(function) = &spec.tools[0];
+    let ResponsesApiNamespaceTool::Function(function) = &spec.tools[0] else {
+        panic!("imagegen should advertise a function tool");
+    };
     assert_eq!(function.name, IMAGEGEN_TOOL_NAME);
 }
 

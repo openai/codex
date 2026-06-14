@@ -37,6 +37,9 @@ pub(crate) const TELEMETRY_PREVIEW_TRUNCATION_NOTICE: &str =
 /// names still require a single flattened string. Keep comparisons and sorting
 /// on `ToolName` itself; use this only when crossing those boundaries.
 pub(crate) fn flat_tool_name(tool_name: &ToolName) -> Cow<'_, str> {
+    if tool_name.is_default_namespace() {
+        return Cow::Borrowed(tool_name.name.as_str());
+    }
     match tool_name.namespace.as_deref() {
         Some(namespace) => {
             let mut name = String::with_capacity(namespace.len() + tool_name.name.len());
