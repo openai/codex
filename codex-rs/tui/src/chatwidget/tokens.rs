@@ -31,7 +31,7 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::plain_lines;
 
-pub(super) use chart::TokenActivityView;
+pub(crate) use chart::TokenActivityView;
 
 /// Tracks the renderable lifecycle of one token activity history cell.
 #[derive(Debug)]
@@ -153,7 +153,7 @@ impl ChatWidget {
     /// Each invocation receives a request ID so background responses update only
     /// their own card. The card remains outside transcript history until completion,
     /// which keeps loading visible without disturbing existing transcript content.
-    pub(super) fn add_token_activity_output(&mut self, view: TokenActivityView) {
+    pub(crate) fn add_token_activity_output(&mut self, view: TokenActivityView) {
         let request_id = self.next_token_activity_request_id;
         self.next_token_activity_request_id =
             self.next_token_activity_request_id.wrapping_add(/*rhs*/ 1);

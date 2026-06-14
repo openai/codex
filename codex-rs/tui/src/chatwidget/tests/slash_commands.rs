@@ -83,7 +83,7 @@ fn dispatch_usage_and_expect_refresh(
     chat: &mut ChatWidget,
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
 ) -> u64 {
-    chat.dispatch_command(SlashCommand::Usage);
+    chat.dispatch_command_with_args(SlashCommand::Usage, "daily".to_string(), Vec::new());
     expect_token_activity_refresh(rx)
 }
 
@@ -1245,7 +1245,7 @@ async fn usage_command_runs_with_backend_auth_without_chatgpt_account_flag() {
         /*has_chatgpt_account*/ false, /*has_codex_backend_auth*/ true,
     );
 
-    chat.dispatch_command(SlashCommand::Usage);
+    chat.dispatch_command_with_args(SlashCommand::Usage, "daily".to_string(), Vec::new());
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::RefreshTokenActivity { .. }));
     assert!(!chat.has_chatgpt_account());
@@ -1259,7 +1259,7 @@ async fn usage_command_runs_with_backend_auth_from_widget_init() {
     )
     .await;
 
-    chat.dispatch_command(SlashCommand::Usage);
+    chat.dispatch_command_with_args(SlashCommand::Usage, "daily".to_string(), Vec::new());
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::RefreshTokenActivity { .. }));
     assert!(!chat.has_chatgpt_account());

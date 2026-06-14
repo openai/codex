@@ -5532,7 +5532,7 @@ async fn queued_rollback_syncs_overlay_and_clears_deferred_history() {
         /*has_chatgpt_account*/ false, /*has_codex_backend_auth*/ true,
     );
     app.chat_widget
-        .set_composer_text("/usage".to_string(), Vec::new(), Vec::new());
+        .set_composer_text("/usage daily".to_string(), Vec::new(), Vec::new());
     app.chat_widget
         .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     app.chat_widget
