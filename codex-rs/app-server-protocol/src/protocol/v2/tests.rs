@@ -3723,7 +3723,8 @@ fn thread_settings_update_params_preserve_field_level_experimental_gates() {
 
 #[test]
 fn turn_start_params_round_trip_environments() {
-    let cwd = ApiPathString::new(r"C:\workspace");
+    let cwd: ApiPathString =
+        serde_json::from_value(json!(r"C:\workspace")).expect("API path should deserialize");
     let params: TurnStartParams = serde_json::from_value(json!({
         "threadId": "thread_123",
         "input": [],
@@ -3823,7 +3824,7 @@ fn turn_start_params_preserve_relative_environment_cwd_for_boundary_validation()
         params.environments,
         Some(vec![TurnEnvironmentParams {
             environment_id: "local".to_string(),
-            cwd: ApiPathString::new("relative"),
+            cwd: serde_json::from_value(json!("relative")).expect("API path should deserialize"),
         }])
     );
 }

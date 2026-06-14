@@ -353,7 +353,7 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
 }
 
 #[tokio::test]
-async fn native_environment_selections_use_selected_environment_metadata() {
+async fn native_environment_selections_preserve_selected_path_syntax() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -370,7 +370,8 @@ async fn native_environment_selections_use_selected_environment_metadata() {
     let selections = manager
         .resolve_native_environment_selections([(
             "local".to_string(),
-            ApiPathString::new(config.cwd.display().to_string()),
+            ApiPathString::from_abs_path(&config.cwd, PathConvention::native())
+                .expect("render native cwd"),
         )])
         .await
         .expect("resolve local selection");
@@ -398,7 +399,8 @@ async fn native_environment_selections_reject_duplicate_ids() {
         config.codex_home.to_path_buf(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     );
-    let native_cwd = ApiPathString::new(config.cwd.display().to_string());
+    let native_cwd = ApiPathString::from_abs_path(&config.cwd, PathConvention::native())
+        .expect("render native cwd");
     let error = manager
         .resolve_native_environment_selections([
             ("local".to_string(), native_cwd.clone()),
@@ -412,16 +414,14 @@ async fn native_environment_selections_reject_duplicate_ids() {
     let error = manager
         .resolve_native_environment_selections([(
             "local".to_string(),
-            ApiPathString::new("relative"),
+            serde_json::from_value(serde_json::json!("relative"))
+                .expect("API path should deserialize"),
         )])
         .await
         .expect_err("relative cwd must fail at the environment boundary");
     assert_eq!(
         error.to_string(),
-        format!(
-            "invalid cwd for environment `local`: path `relative` is not absolute using {} path syntax",
-            PathConvention::native()
-        )
+        "invalid cwd for environment `local`: path `relative` does not use absolute POSIX or Windows path syntax"
     );
 }
 

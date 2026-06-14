@@ -162,7 +162,7 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn app_server_rejects_windows_environment_cwd() -> Result<()> {
+async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Result<()> {
     WineExecServer
         .scope(|exec_server_url| async move {
             let codex_home = TempDir::new()?;
