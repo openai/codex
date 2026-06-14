@@ -922,6 +922,7 @@ async fn run_auto_compact(
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
+            client_session.turn_state(),
             initial_context_injection,
             reason,
             phase,

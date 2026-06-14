@@ -2631,6 +2631,7 @@ impl Config {
             web_search_mode: mut constrained_web_search_mode,
             allow_managed_hooks_only: _,
             allow_appshots: _,
+            allow_remote_control: _,
             computer_use: _,
             feature_requirements,
             managed_hooks: _,
@@ -3702,7 +3703,7 @@ impl Config {
             return Ok(None);
         };
 
-        let path_uri = PathUri::from_abs_path(path)?;
+        let path_uri = PathUri::from_abs_path(path);
         let contents = fs
             .read_file_text(&path_uri, /*sandbox*/ None)
             .await

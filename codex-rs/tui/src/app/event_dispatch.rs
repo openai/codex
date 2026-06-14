@@ -227,27 +227,7 @@ impl App {
                 self.begin_thread_switch_history_replay_buffer();
             }
             AppEvent::InsertHistoryCell(cell) => {
-                let cell: Arc<dyn HistoryCell> = cell.into();
-                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_cell(cell.clone());
-                    tui.frame_requester().schedule_frame();
-                }
-                self.transcript_cells.push(cell.clone());
-                if self.initial_history_replay_buffer.as_ref().is_some() {
-                    self.insert_history_cell_lines_with_initial_replay_buffer(
-                        tui,
-                        cell.as_ref(),
-                        self.chat_widget
-                            .history_wrap_width(tui.terminal.last_known_screen_size.width),
-                    );
-                } else {
-                    self.insert_history_cell_lines(
-                        tui,
-                        cell.as_ref(),
-                        self.chat_widget
-                            .history_wrap_width(tui.terminal.last_known_screen_size.width),
-                    );
-                }
+                self.insert_history_cell(tui, cell);
             }
             AppEvent::EndInitialHistoryReplayBuffer => {
                 self.finish_initial_history_replay_buffer(tui);
@@ -265,10 +245,16 @@ impl App {
                     scrollback_reflow,
                     deferred_history_cell,
                 )?;
+                self.chat_widget.note_stream_consolidation_completed();
+                self.insert_completed_token_activity_output_after_stream_shutdown(tui);
             }
             AppEvent::ConsolidateProposedPlan(source) => {
                 if !self.terminal_resize_reflow_enabled() {
-                    self.transcript_reflow.clear();
+                    if !self.transcript_reflow.history_cell_refresh_requested() {
+                        self.transcript_reflow.clear();
+                    }
+                    self.chat_widget.note_stream_consolidation_completed();
+                    self.insert_completed_token_activity_output_after_stream_shutdown(tui);
                     return Ok(AppRunControl::Continue);
                 }
                 let end = self.transcript_cells.len();
@@ -303,6 +289,8 @@ impl App {
 
                     self.maybe_finish_stream_reflow(tui)?;
                 }
+                self.chat_widget.note_stream_consolidation_completed();
+                self.insert_completed_token_activity_output_after_stream_shutdown(tui);
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
@@ -722,6 +710,9 @@ impl App {
             AppEvent::RefreshRateLimits { origin } => {
                 self.refresh_rate_limits(app_server, origin);
             }
+            AppEvent::RefreshTokenActivity { request_id } => {
+                self.refresh_token_activity(app_server, request_id);
+            }
             AppEvent::OpenThreadGoalMenu { thread_id } => {
                 self.open_thread_goal_menu(app_server, thread_id).await;
             }
@@ -778,6 +769,25 @@ impl App {
                     }
                 }
             },
+            AppEvent::TokenActivityLoaded { request_id, result } => {
+                if let Err(err) = &result {
+                    tracing::warn!("account/usage/read failed during TUI refresh: {err}");
+                }
+                if self
+                    .chat_widget
+                    .finish_token_activity_refresh(request_id, result)
+                {
+                    // Commit synchronously so an already queued /clear cannot overtake this card.
+                    // Do not route through ChatWidget::add_to_history: /usage may complete during
+                    // active work, and flushing an in-progress tool cell would corrupt its lifecycle.
+                    // If an answer stream is active, keep the settled card transient until its
+                    // provisional transcript cells have been consolidated.
+                    self.insert_completed_token_activity_output_if_ready(tui);
+                }
+            }
+            AppEvent::CommitCompletedTokenActivityOutput => {
+                self.insert_completed_token_activity_output_after_stream_shutdown(tui);
+            }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
             }
@@ -1966,6 +1976,7 @@ impl App {
                         }
                         self.sync_tui_theme_selection(name);
                         self.refresh_status_line();
+                        tui.frame_requester().schedule_frame();
                     }
                     Err(err) => {
                         self.restore_runtime_theme_from_config();
@@ -1978,6 +1989,7 @@ impl App {
             }
             AppEvent::SyntaxThemePreviewed => {
                 self.refresh_status_line();
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenKeymapActionMenu { context, action } => {
                 self.chat_widget

@@ -373,6 +373,7 @@ pub(crate) struct ChatComposer {
     config: ChatComposerConfig,
     connectors_enabled: bool,
     plugins_command_enabled: bool,
+    token_activity_command_enabled: bool,
     service_tier_commands_enabled: bool,
     service_tier_commands: Vec<ServiceTierCommand>,
     mentions_v2_enabled: bool,
@@ -441,6 +442,7 @@ impl ChatComposer {
             collaboration_modes_enabled: self.collaboration_modes_enabled,
             connectors_enabled: self.connectors_enabled,
             plugins_command_enabled: self.plugins_command_enabled,
+            token_activity_command_enabled: self.token_activity_command_enabled,
             service_tier_commands_enabled: self.service_tier_commands_enabled,
             goal_command_enabled: self.goal_command_enabled,
             personality_command_enabled: self.personality_command_enabled,
@@ -535,6 +537,7 @@ impl ChatComposer {
             config,
             connectors_enabled: false,
             plugins_command_enabled: false,
+            token_activity_command_enabled: false,
             service_tier_commands_enabled: false,
             service_tier_commands: Vec::new(),
             mentions_v2_enabled: false,
@@ -575,6 +578,10 @@ impl ChatComposer {
 
     pub fn set_plugins_command_enabled(&mut self, enabled: bool) {
         self.plugins_command_enabled = enabled;
+    }
+
+    pub fn set_token_activity_command_enabled(&mut self, enabled: bool) {
+        self.token_activity_command_enabled = enabled;
     }
 
     pub fn set_mentions_v2_enabled(&mut self, enabled: bool) {
@@ -6349,6 +6356,28 @@ mod tests {
                     has_skills: true,
                     mcp_server_names: vec!["sample".to_string()],
                     app_connector_ids: vec![AppConnectorId("calendar".to_string())],
+                }]));
+            },
+        );
+    }
+
+    #[test]
+    fn default_unified_mention_popup_snapshot() {
+        snapshot_composer_state(
+            "default_unified_mention_popup",
+            /*enhanced_keys_supported*/ false,
+            |composer| {
+                let features = codex_features::Features::with_defaults();
+                composer
+                    .set_mentions_v2_enabled(features.enabled(codex_features::Feature::MentionsV2));
+                composer.set_text_content("@sa".to_string(), Vec::new(), Vec::new());
+                composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
+                    config_name: "sample@test".to_string(),
+                    display_name: "Sample Plugin".to_string(),
+                    description: Some("Plugin with skills and an MCP server".to_string()),
+                    has_skills: true,
+                    mcp_server_names: vec!["sample".to_string()],
+                    app_connector_ids: Vec::new(),
                 }]));
             },
         );

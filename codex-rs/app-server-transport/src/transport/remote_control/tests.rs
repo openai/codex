@@ -230,6 +230,7 @@ async fn explicit_disabled_start_ignores_persisted_enable() {
         RemoteControlStartConfig {
             remote_control_url: TEST_REMOTE_CONTROL_URL.to_string(),
             installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::Allowed,
         },
         Some(state_db.clone()),
         remote_control_auth_manager(),
@@ -256,6 +257,105 @@ async fn explicit_disabled_start_ignores_persisted_enable() {
             .expect("enrollment should load"),
         Some(enrollment)
     );
+
+    shutdown_token.cancel();
+    remote_task.await.expect("remote control task should join");
+}
+
+#[tokio::test]
+async fn managed_disable_overrides_startup_and_persisted_enablement() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let state_db = remote_control_state_runtime(&codex_home).await;
+    let remote_control_target = normalize_remote_control_url(&remote_control_url)
+        .expect("remote control target should normalize");
+    let enrollment = RemoteControlEnrollmentRecord {
+        websocket_url: remote_control_target.websocket_url,
+        account_id: "account_id".to_string(),
+        app_server_client_name: None,
+        server_id: "server-id".to_string(),
+        environment_id: "environment-id".to_string(),
+        server_name: "server-name".to_string(),
+        remote_control_enabled: Some(true),
+    };
+    state_db
+        .upsert_remote_control_enrollment(&enrollment)
+        .await
+        .expect("enrollment should persist");
+    let (transport_event_tx, _transport_event_rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+
+    let (remote_task, remote_handle) = start_remote_control(
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::DisabledByRequirements,
+        },
+        Some(state_db.clone()),
+        remote_control_auth_manager(),
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        RemoteControlStartupMode::EnabledEphemeral,
+    )
+    .await
+    .expect("remote control should start disabled");
+
+    assert_eq!(
+        remote_handle.status().status,
+        RemoteControlConnectionStatus::Disabled
+    );
+    assert_eq!(
+        remote_handle.ensure_remote_control_allowed(),
+        Err(RemoteControlDisabledByRequirements)
+    );
+    assert!(
+        !remote_handle
+            .resolve_persisted_preference(/*app_server_client_name*/ None)
+            .await
+            .expect("managed disable should resolve without loading persistence")
+    );
+    assert_eq!(
+        remote_handle
+            .enable_ephemeral()
+            .expect_err("managed requirements should reject ephemeral enable"),
+        RemoteControlEnableError::DisabledByRequirements(RemoteControlDisabledByRequirements)
+    );
+    let enable_error = remote_handle
+        .enable(/*app_server_client_name*/ None)
+        .await
+        .expect_err("managed requirements should reject durable enable");
+    assert_eq!(enable_error.kind(), std::io::ErrorKind::PermissionDenied);
+    assert_eq!(
+        enable_error.to_string(),
+        "remote control is disabled by managed requirements"
+    );
+    let disable_error = remote_handle
+        .disable(/*app_server_client_name*/ None)
+        .await
+        .expect_err("managed requirements should reject durable disable");
+    assert_eq!(disable_error.kind(), std::io::ErrorKind::PermissionDenied);
+    assert_eq!(
+        disable_error.to_string(),
+        "remote control is disabled by managed requirements"
+    );
+    assert_eq!(
+        state_db
+            .get_remote_control_enrollment(
+                &enrollment.websocket_url,
+                &enrollment.account_id,
+                /*app_server_client_name*/ None,
+            )
+            .await
+            .expect("enrollment should load"),
+        Some(enrollment)
+    );
+    timeout(Duration::from_millis(100), listener.accept())
+        .await
+        .expect_err("managed requirements should prevent backend contact");
 
     shutdown_token.cancel();
     remote_task.await.expect("remote control task should join");
@@ -303,6 +403,7 @@ fn remote_control_handle_with_current_enrollment(
         },
     )));
     RemoteControlHandle {
+        policy: RemoteControlPolicy::Allowed,
         desired_state_tx: Arc::new(desired_state_tx),
         desired_state_rpc_lock: Arc::new(Semaphore::new(1)),
         desired_state_persistence_lock: Arc::new(Semaphore::new(1)),
@@ -430,6 +531,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
         RemoteControlStartConfig {
             remote_control_url,
             installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::Allowed,
         },
         Some(state_db.clone()),
         remote_control_auth_manager(),
@@ -723,6 +825,7 @@ async fn remote_control_transport_reconnects_after_disconnect() {
         RemoteControlStartConfig {
             remote_control_url,
             installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::Allowed,
         },
         Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
@@ -824,6 +927,7 @@ async fn remote_control_transport_refreshes_server_token_after_websocket_unautho
         RemoteControlStartConfig {
             remote_control_url,
             installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::Allowed,
         },
         Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
@@ -904,6 +1008,7 @@ async fn remote_control_start_allows_remote_control_invalid_url_when_disabled() 
         RemoteControlStartConfig {
             remote_control_url: "https://internal.example.com/backend-api/".to_string(),
             installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::Allowed,
         },
         /*state_db*/ None,
         remote_control_auth_manager(),
@@ -944,6 +1049,7 @@ async fn remote_control_start_allows_missing_auth_when_enabled() {
         RemoteControlStartConfig {
             remote_control_url,
             installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::Allowed,
         },
         Some(remote_control_state_runtime(&codex_home).await),
         auth_manager,
@@ -979,6 +1085,7 @@ async fn remote_control_start_reports_missing_state_db_as_disabled_when_enabled(
         RemoteControlStartConfig {
             remote_control_url,
             installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::Allowed,
         },
         /*state_db*/ None,
         remote_control_auth_manager(),
@@ -1008,7 +1115,7 @@ async fn remote_control_start_reports_missing_state_db_as_disabled_when_enabled(
         remote_handle
             .enable_ephemeral()
             .expect_err("enable should fail"),
-        super::RemoteControlUnavailable
+        RemoteControlEnableError::Unavailable(super::RemoteControlUnavailable)
     );
     timeout(Duration::from_millis(100), listener.accept())
         .await
@@ -1038,6 +1145,7 @@ async fn remote_control_handle_enable_disable_stops_and_restarts_connections() {
         RemoteControlStartConfig {
             remote_control_url,
             installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::Allowed,
         },
         Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
@@ -1157,6 +1265,7 @@ async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
         RemoteControlStartConfig {
             remote_control_url,
             installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::Allowed,
         },
         Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
@@ -1339,6 +1448,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
         RemoteControlStartConfig {
             remote_control_url,
             installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::Allowed,
         },
         Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
@@ -1587,6 +1697,7 @@ async fn remote_control_http_mode_refreshes_persisted_enrollment_before_connecti
         RemoteControlStartConfig {
             remote_control_url,
             installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::Allowed,
         },
         Some(state_db.clone()),
         remote_control_auth_manager_with_home(&codex_home),
@@ -1695,6 +1806,7 @@ async fn remote_control_stdio_mode_waits_for_client_name_before_connecting() {
         RemoteControlStartConfig {
             remote_control_url,
             installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::Allowed,
         },
         Some(state_db.clone()),
         remote_control_auth_manager_with_home(&codex_home),
@@ -1778,6 +1890,7 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
         RemoteControlStartConfig {
             remote_control_url,
             installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::Allowed,
         },
         Some(state_db.clone()),
         auth_manager.clone(),
@@ -1881,6 +1994,7 @@ async fn persisted_enable_does_not_follow_auth_to_an_account_without_a_preferenc
         RemoteControlStartConfig {
             remote_control_url,
             installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::Allowed,
         },
         Some(state_db.clone()),
         auth_manager.clone(),
@@ -1996,6 +2110,7 @@ async fn remote_control_http_mode_reenrolls_when_refresh_reports_stale_enrollmen
         RemoteControlStartConfig {
             remote_control_url,
             installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::Allowed,
         },
         Some(state_db.clone()),
         remote_control_auth_manager_with_home(&codex_home),
@@ -2118,6 +2233,7 @@ async fn remote_control_http_mode_reenrolls_after_explicit_missing_server_404() 
         RemoteControlStartConfig {
             remote_control_url,
             installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::Allowed,
         },
         Some(state_db.clone()),
         remote_control_auth_manager_with_home(&codex_home),
@@ -2254,6 +2370,7 @@ async fn remote_control_http_mode_preserves_stale_enrollment_when_reenrollment_f
         RemoteControlStartConfig {
             remote_control_url,
             installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::Allowed,
         },
         Some(state_db.clone()),
         remote_control_auth_manager_with_home(&codex_home),
@@ -2356,6 +2473,7 @@ async fn remote_control_http_mode_preserves_enrollment_after_generic_websocket_4
         RemoteControlStartConfig {
             remote_control_url,
             installation_id: TEST_INSTALLATION_ID.to_string(),
+            policy: RemoteControlPolicy::Allowed,
         },
         Some(state_db.clone()),
         remote_control_auth_manager_with_home(&codex_home),

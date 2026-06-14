@@ -20,6 +20,7 @@ use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
 use codex_utils_path_uri::PathUri;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use tracing::instrument;
 
 #[derive(Clone, Debug)]
 pub(crate) struct TurnSkillsContext {
@@ -56,19 +57,15 @@ impl TurnEnvironment {
         environment: Arc<Environment>,
         cwd: AbsolutePathBuf,
         shell: Option<shell::Shell>,
-    ) -> CodexResult<Self> {
-        let cwd_uri = PathUri::from_abs_path(&cwd).map_err(|_| {
-            CodexErr::InvalidRequest(
-                "turn environment cwd cannot be represented as a file URI".to_string(),
-            )
-        })?;
-        Ok(Self {
+    ) -> Self {
+        let cwd_uri = PathUri::from_abs_path(&cwd);
+        Self {
             environment_id,
             environment,
             cwd,
             cwd_uri,
             shell,
-        })
+        }
     }
 
     pub(crate) fn cwd(&self) -> &AbsolutePathBuf {
@@ -82,7 +79,7 @@ impl TurnEnvironment {
     pub(crate) fn selection(&self) -> TurnEnvironmentSelection {
         TurnEnvironmentSelection {
             environment_id: self.environment_id.clone(),
-            cwd: self.cwd.clone(),
+            cwd: self.cwd_uri.clone(),
         }
     }
 }
@@ -728,6 +725,7 @@ impl Session {
         .await
     }
 
+    #[instrument(name = "turn_context.build", level = "trace", skip_all)]
     async fn new_turn_context_from_configuration(
         &self,
         sub_id: String,

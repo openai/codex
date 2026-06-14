@@ -145,11 +145,7 @@ fn sandbox_cwd(sandbox: &FileSystemSandboxContext) -> Result<SandboxCwd, JSONRPC
 
     let native = AbsolutePathBuf::from_absolute_path(current_sandbox_cwd().map_err(io_error)?)
         .map_err(|err| invalid_request(format!("current directory is not absolute: {err}")))?;
-    let uri = PathUri::from_abs_path(&native).map_err(|err| {
-        invalid_request(format!(
-            "current directory cannot be represented as a file URI: {err}"
-        ))
-    })?;
+    let uri = PathUri::from_abs_path(&native);
     Ok(SandboxCwd { uri, native })
 }
 
@@ -519,7 +515,7 @@ mod tests {
                 .expect("runtime paths");
         let runner = FileSystemSandboxRunner::new(runtime_paths);
         let native_cwd = AbsolutePathBuf::current_dir().expect("cwd");
-        let cwd = PathUri::from_abs_path(&native_cwd).expect("cwd URI");
+        let cwd = PathUri::from_abs_path(&native_cwd);
         let file_system_policy =
             restricted_policy(vec![path_entry(native_cwd, FileSystemAccessMode::Write)]);
         let network_policy = NetworkSandboxPolicy::Restricted;
@@ -538,7 +534,7 @@ mod tests {
     fn sandbox_cwd_uses_context_cwd() {
         let native_cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir().as_path())
             .expect("absolute cwd");
-        let cwd = PathUri::from_abs_path(&native_cwd).expect("cwd URI");
+        let cwd = PathUri::from_abs_path(&native_cwd);
         let policy = restricted_policy(vec![special_entry(
             FileSystemSpecialPath::project_roots(/*subpath*/ None),
             FileSystemAccessMode::Write,

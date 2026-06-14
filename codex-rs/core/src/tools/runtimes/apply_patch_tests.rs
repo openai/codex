@@ -22,7 +22,6 @@ fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::
         std::env::temp_dir().abs(),
         /*shell*/ None,
     )
-    .expect("turn environment")
 }
 
 #[test]
@@ -208,7 +207,7 @@ async fn file_system_sandbox_context_uses_active_attempt() {
         NetworkSandboxPolicy::Restricted,
     );
     let manager = SandboxManager::new();
-    let sandbox_policy_cwd = PathUri::from_abs_path(&path).expect("path URI");
+    let sandbox_policy_cwd = PathUri::from_abs_path(&path);
     let attempt = SandboxAttempt {
         sandbox: SandboxType::MacosSeatbelt,
         permissions: &permissions,
@@ -237,7 +236,7 @@ async fn file_system_sandbox_context_uses_active_attempt() {
     assert_eq!(sandbox.permissions, expected_permissions);
     assert_eq!(
         sandbox.cwd,
-        Some(codex_utils_path_uri::PathUri::from_abs_path(&path).expect("path URI"))
+        Some(codex_utils_path_uri::PathUri::from_abs_path(&path))
     );
     assert_eq!(
         sandbox.windows_sandbox_level,
@@ -266,7 +265,7 @@ async fn no_sandbox_attempt_has_no_file_system_context() {
     };
     let permissions = PermissionProfile::Disabled;
     let manager = SandboxManager::new();
-    let sandbox_policy_cwd = PathUri::from_abs_path(&path).expect("path URI");
+    let sandbox_policy_cwd = PathUri::from_abs_path(&path);
     let attempt = SandboxAttempt {
         sandbox: SandboxType::None,
         permissions: &permissions,

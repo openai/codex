@@ -310,9 +310,9 @@ fn auth_elicitation_is_under_development() {
 }
 
 #[test]
-fn mentions_v2_is_under_development_and_disabled_by_default() {
-    assert_eq!(Feature::MentionsV2.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::MentionsV2.default_enabled(), false);
+fn mentions_v2_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::MentionsV2.stage(), Stage::Stable);
+    assert_eq!(Feature::MentionsV2.default_enabled(), true);
     assert_eq!(feature_for_key("mentions_v2"), Some(Feature::MentionsV2));
 }
 

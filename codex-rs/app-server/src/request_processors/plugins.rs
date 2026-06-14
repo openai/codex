@@ -1442,7 +1442,9 @@ impl PluginRequestProcessor {
                 .await;
         }
 
-        let plugin_apps = load_plugin_apps(result.installed_path.as_path()).await;
+        let plugin_app_declarations = load_plugin_apps(result.installed_path.as_path()).await;
+        let plugin_apps =
+            codex_plugin::app_connector_ids_from_declarations(&plugin_app_declarations);
         let auth = self.auth_manager.auth().await;
         let apps_needing_auth = self
             .plugin_apps_needing_auth_for_install(
@@ -1559,52 +1561,55 @@ impl PluginRequestProcessor {
         }
 
         let is_chatgpt_auth = auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth);
-        let apps_needing_auth =
-            if let Some(app_ids_needing_auth) = install_result.app_ids_needing_auth {
-                if app_ids_needing_auth.is_empty()
-                    || !config.features.apps_enabled_for_auth(is_chatgpt_auth)
-                {
-                    Vec::new()
-                } else {
-                    let plugin_apps = app_ids_needing_auth
-                        .into_iter()
-                        .map(codex_plugin::AppConnectorId)
-                        .collect::<Vec<_>>();
-                    let app_category_by_id = remote_detail
-                        .app_manifest
-                        .as_ref()
-                        .map(plugin_app_category_by_id_from_value)
-                        .unwrap_or_default();
-                    let all_connectors = connectors::list_cached_all_connectors(&config)
-                        .await
-                        .unwrap_or_default();
-                    connectors::connectors_for_plugin_apps(all_connectors, &plugin_apps)
-                        .into_iter()
-                        .map(|connector| {
-                            let category = app_category_by_id
-                                .get(&connector.id)
-                                .cloned()
-                                .or_else(|| connector.category());
-                            AppSummary {
-                                category,
-                                id: connector.id,
-                                name: connector.name,
-                                description: connector.description,
-                                install_url: connector.install_url,
-                            }
-                        })
-                        .collect()
-                }
+        let apps_needing_auth = if let Some(app_ids_needing_auth) =
+            install_result.app_ids_needing_auth
+        {
+            if app_ids_needing_auth.is_empty()
+                || !config.features.apps_enabled_for_auth(is_chatgpt_auth)
+            {
+                Vec::new()
             } else {
-                let plugin_apps = load_plugin_apps(result.installed_path.as_path()).await;
-                self.plugin_apps_needing_auth_for_install(
-                    &config,
-                    is_chatgpt_auth,
-                    &result.plugin_id.as_key(),
-                    &plugin_apps,
-                )
-                .await
-            };
+                let plugin_apps = app_ids_needing_auth
+                    .into_iter()
+                    .map(codex_plugin::AppConnectorId)
+                    .collect::<Vec<_>>();
+                let app_category_by_id = remote_detail
+                    .app_manifest
+                    .as_ref()
+                    .map(plugin_app_category_by_id_from_value)
+                    .unwrap_or_default();
+                let all_connectors = connectors::list_cached_all_connectors(&config)
+                    .await
+                    .unwrap_or_default();
+                connectors::connectors_for_plugin_apps(all_connectors, &plugin_apps)
+                    .into_iter()
+                    .map(|connector| {
+                        let category = app_category_by_id
+                            .get(&connector.id)
+                            .cloned()
+                            .or_else(|| connector.category());
+                        AppSummary {
+                            category,
+                            id: connector.id,
+                            name: connector.name,
+                            description: connector.description,
+                            install_url: connector.install_url,
+                        }
+                    })
+                    .collect()
+            }
+        } else {
+            let plugin_app_declarations = load_plugin_apps(result.installed_path.as_path()).await;
+            let plugin_apps =
+                codex_plugin::app_connector_ids_from_declarations(&plugin_app_declarations);
+            self.plugin_apps_needing_auth_for_install(
+                &config,
+                is_chatgpt_auth,
+                &result.plugin_id.as_key(),
+                &plugin_apps,
+            )
+            .await
+        };
 
         Ok(PluginInstallResponse {
             auth_policy: remote_detail.summary.auth_policy,
@@ -1937,9 +1942,9 @@ async fn load_plugin_app_summaries(
 }
 
 fn plugin_app_category_by_id_from_value(value: &serde_json::Value) -> HashMap<String, String> {
-    codex_core_plugins::loader::plugin_app_metadata_from_value(value)
+    codex_core_plugins::loader::plugin_app_declarations_from_value(value)
         .into_iter()
-        .filter_map(|app| app.category.map(|category| (app.id.0, category)))
+        .filter_map(|app| app.category.map(|category| (app.connector_id.0, category)))
         .collect()
 }
 
