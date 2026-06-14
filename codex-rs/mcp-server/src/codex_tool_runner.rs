@@ -233,9 +233,21 @@ async fn run_codex_tool_session_inner(
                             additional_permissions: _,
                             available_decisions: _,
                         } = ev;
+                        let cwd = match cwd.to_abs_path() {
+                            Ok(cwd) => cwd.into_path_buf(),
+                            Err(err) => {
+                                let result = create_call_tool_result_with_thread_id(
+                                    thread_id,
+                                    format!("Codex runtime error: {err}"),
+                                    Some(true),
+                                );
+                                outgoing.send_response(request_id.clone(), result).await;
+                                break;
+                            }
+                        };
                         handle_exec_approval_request(
                             command,
-                            cwd.to_path_buf(),
+                            cwd,
                             outgoing.clone(),
                             thread.clone(),
                             request_id.clone(),

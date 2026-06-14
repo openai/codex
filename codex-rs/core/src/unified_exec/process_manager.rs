@@ -57,6 +57,7 @@ use codex_protocol::protocol::ExecCommandSource;
 use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
+use codex_utils_path_uri::PathUri;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
     ("NO_COLOR", "1"),
@@ -150,13 +151,14 @@ fn exec_server_env_for_request(
 fn exec_server_params_for_request(
     process_id: i32,
     request: &ExecRequest,
+    cwd: &PathUri,
     tty: bool,
 ) -> codex_exec_server::ExecParams {
     let (env_policy, env) = exec_server_env_for_request(request);
     codex_exec_server::ExecParams {
         process_id: exec_server_process_id(process_id).into(),
         argv: request.command.clone(),
-        cwd: request.cwd.clone(),
+        cwd: cwd.clone(),
         env_policy,
         env,
         tty,
@@ -293,7 +295,6 @@ async fn emit_failed_initial_exec_end_if_unstored(
     process_started_alive: bool,
     context: &UnifiedExecContext,
     request: &ExecCommandRequest,
-    cwd: AbsolutePathBuf,
     transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
     fallback_output: String,
     message: String,
@@ -308,7 +309,7 @@ async fn emit_failed_initial_exec_end_if_unstored(
         Arc::clone(&context.turn),
         context.call_id.clone(),
         request.command.clone(),
-        cwd,
+        request.cwd_uri.clone(),
         Some(request.process_id.to_string()),
         transcript,
         fallback_output,
@@ -384,14 +385,8 @@ impl UnifiedExecProcessManager {
         request: ExecCommandRequest,
         context: &UnifiedExecContext,
     ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
-        // TODO(anp): Migrate unified-exec events and retained process metadata to PathUri so
-        // foreign working directories do not need a host-native projection here.
-        let event_cwd = request.cwd.to_abs_path().map_err(|err| {
-            UnifiedExecError::create_process(format!(
-                "command cwd `{}` is not native to the Codex host: {err}",
-                request.cwd
-            ))
-        })?;
+        let cwd = request.cwd.clone();
+        let cwd_uri = request.cwd_uri.clone();
         let process = self.open_session_with_sandbox(&request, context).await;
 
         let (process, mut deferred_network_approval) = match process {
@@ -420,7 +415,7 @@ impl UnifiedExecProcessManager {
         );
         let emitter = ToolEmitter::unified_exec(
             &request.command,
-            event_cwd.clone(),
+            cwd_uri.clone(),
             ExecCommandSource::UnifiedExecStartup,
             Some(request.process_id.to_string()),
         );
@@ -438,7 +433,8 @@ impl UnifiedExecProcessManager {
                 context,
                 &request.command,
                 request.hook_command.clone(),
-                event_cwd.clone(),
+                cwd.clone(),
+                cwd_uri.clone(),
                 start,
                 request.process_id,
                 request.tty,
@@ -497,7 +493,6 @@ impl UnifiedExecProcessManager {
                 process_started_alive,
                 context,
                 &request,
-                event_cwd.clone(),
                 Arc::clone(&transcript),
                 text.clone(),
                 message.clone(),
@@ -517,7 +512,6 @@ impl UnifiedExecProcessManager {
                 process_started_alive,
                 context,
                 &request,
-                event_cwd.clone(),
                 Arc::clone(&transcript),
                 text.clone(),
                 message.clone(),
@@ -569,7 +563,6 @@ impl UnifiedExecProcessManager {
                     process_started_alive,
                     context,
                     &request,
-                    event_cwd.clone(),
                     Arc::clone(&transcript),
                     text.clone(),
                     message.clone(),
@@ -586,7 +579,7 @@ impl UnifiedExecProcessManager {
                 Arc::clone(&context.turn),
                 context.call_id.clone(),
                 request.command.clone(),
-                event_cwd.clone(),
+                cwd_uri,
                 Some(process_id.to_string()),
                 Arc::clone(&transcript),
                 text.clone(),
@@ -846,6 +839,7 @@ impl UnifiedExecProcessManager {
         command: &[String],
         hook_command: String,
         cwd: AbsolutePathBuf,
+        cwd_uri: PathUri,
         started_at: Instant,
         process_id: i32,
         tty: bool,
@@ -884,7 +878,7 @@ impl UnifiedExecProcessManager {
             Arc::clone(&context.turn),
             context.call_id.clone(),
             command.to_vec(),
-            cwd,
+            cwd_uri,
             process_id,
             transcript,
             started_at,
@@ -895,6 +889,7 @@ impl UnifiedExecProcessManager {
         &self,
         process_id: i32,
         request: &ExecRequest,
+        cwd: &PathUri,
         tty: bool,
         mut spawn_lifecycle: SpawnLifecycleHandle,
         environment: &codex_exec_server::Environment,
@@ -994,7 +989,9 @@ impl UnifiedExecProcessManager {
 
             let started = environment
                 .get_exec_backend()
-                .start(exec_server_params_for_request(process_id, request, tty))
+                .start(exec_server_params_for_request(
+                    process_id, request, cwd, tty,
+                ))
                 .await
                 .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
             spawn_lifecycle.after_spawn();
@@ -1082,6 +1079,7 @@ impl UnifiedExecProcessManager {
             shell_type: request.shell_type,
             hook_command: request.hook_command.clone(),
             process_id: request.process_id,
+            cwd_uri: request.cwd_uri.clone(),
             cwd: request.cwd.clone(),
             sandbox_cwd: request.sandbox_cwd.clone(),
             turn_environment: request.turn_environment.clone(),

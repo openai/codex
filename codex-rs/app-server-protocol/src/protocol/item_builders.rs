@@ -34,8 +34,23 @@ use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_shell_command::parse_command::parse_command;
 use codex_shell_command::parse_command::shlex_join;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+#[expect(
+    clippy::expect_used,
+    reason = "legacy app-server command items still require a host-native cwd"
+)]
+fn project_command_cwd_to_host(cwd: &PathUri) -> AbsolutePathBuf {
+    let cwd = ApiPathString::from_path_uri(cwd, PathConvention::native())
+        .expect("command cwd should render using the app-server host path convention");
+    AbsolutePathBuf::try_from(cwd.into_string())
+        .expect("projected command cwd should be absolute on the app-server host")
+}
 
 pub fn build_file_change_approval_request_item(
     payload: &ApplyPatchApprovalRequestEvent,
@@ -66,10 +81,11 @@ pub fn build_file_change_end_item(payload: &PatchApplyEndEvent) -> ThreadItem {
 pub fn build_command_execution_approval_request_item(
     payload: &ExecApprovalRequestEvent,
 ) -> ThreadItem {
+    let cwd = project_command_cwd_to_host(&payload.cwd);
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: payload.cwd.clone(),
+        cwd: cwd.clone(),
         process_id: None,
         source: CommandExecutionSource::Agent,
         status: CommandExecutionStatus::InProgress,
@@ -77,7 +93,7 @@ pub fn build_command_execution_approval_request_item(
             .parsed_cmd
             .iter()
             .cloned()
-            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &payload.cwd))
+            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &cwd))
             .collect(),
         aggregated_output: None,
         exit_code: None,
@@ -86,10 +102,11 @@ pub fn build_command_execution_approval_request_item(
 }
 
 pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> ThreadItem {
+    let cwd = project_command_cwd_to_host(&payload.cwd);
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: payload.cwd.clone(),
+        cwd: cwd.clone(),
         process_id: payload.process_id.clone(),
         source: payload.source.into(),
         status: CommandExecutionStatus::InProgress,
@@ -97,7 +114,7 @@ pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> Th
             .parsed_cmd
             .iter()
             .cloned()
-            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &payload.cwd))
+            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &cwd))
             .collect(),
         aggregated_output: None,
         exit_code: None,
@@ -112,11 +129,12 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
         Some(payload.aggregated_output.clone())
     };
     let duration_ms = i64::try_from(payload.duration.as_millis()).unwrap_or(i64::MAX);
+    let cwd = project_command_cwd_to_host(&payload.cwd);
 
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: payload.cwd.clone(),
+        cwd: cwd.clone(),
         process_id: payload.process_id.clone(),
         source: payload.source.into(),
         status: (&payload.status).into(),
@@ -124,7 +142,7 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
             .parsed_cmd
             .iter()
             .cloned()
-            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &payload.cwd))
+            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &cwd))
             .collect(),
         aggregated_output,
         exit_code: Some(payload.exit_code),

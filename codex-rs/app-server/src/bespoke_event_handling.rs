@@ -113,6 +113,8 @@ use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestU
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::shlex_join;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -561,6 +563,16 @@ pub(crate) async fn apply_bespoke_event_handling(
                 parsed_cmd,
                 ..
             } = ev;
+            #[expect(
+                clippy::expect_used,
+                reason = "legacy command approval payloads still require a host-native cwd"
+            )]
+            let cwd = {
+                let cwd = ApiPathString::from_path_uri(&cwd, PathConvention::native())
+                    .expect("command cwd should render using the app-server host path convention");
+                AbsolutePathBuf::try_from(cwd.into_string())
+                    .expect("projected command cwd should be absolute on the app-server host")
+            };
             let command_actions = parsed_cmd
                 .iter()
                 .cloned()

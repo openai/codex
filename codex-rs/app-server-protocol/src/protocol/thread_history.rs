@@ -1278,6 +1278,7 @@ mod tests {
     use codex_protocol::protocol::WebSearchEndEvent;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
+    use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use std::time::Duration;
@@ -2072,7 +2073,7 @@ mod tests {
                 turn_id: "turn-1".into(),
                 completed_at_ms: 0,
                 command: vec!["echo".into(), "hello world".into()],
-                cwd: test_path_buf("/tmp").abs(),
+                cwd: PathUri::from_abs_path(&test_path_buf("/tmp").abs()),
                 parsed_cmd: vec![ParsedCommand::Unknown {
                     cmd: "echo hello world".into(),
                 }],
@@ -2312,7 +2313,7 @@ mod tests {
                 turn_id: "turn-1".into(),
                 completed_at_ms: 0,
                 command: vec!["ls".into()],
-                cwd: test_path_buf("/tmp").abs(),
+                cwd: PathUri::from_abs_path(&test_path_buf("/tmp").abs()),
                 parsed_cmd: vec![ParsedCommand::Unknown { cmd: "ls".into() }],
                 source: ExecCommandSource::Agent,
                 interaction_input: None,
@@ -2578,7 +2579,7 @@ mod tests {
                 turn_id: "turn-a".into(),
                 completed_at_ms: 0,
                 command: vec!["echo".into(), "done".into()],
-                cwd: test_path_buf("/tmp").abs(),
+                cwd: PathUri::from_abs_path(&test_path_buf("/tmp").abs()),
                 parsed_cmd: vec![ParsedCommand::Unknown {
                     cmd: "echo done".into(),
                 }],
@@ -2676,7 +2677,7 @@ mod tests {
                 turn_id: "turn-missing".into(),
                 completed_at_ms: 0,
                 command: vec!["echo".into(), "done".into()],
-                cwd: test_path_buf("/tmp").abs(),
+                cwd: PathUri::from_abs_path(&test_path_buf("/tmp").abs()),
                 parsed_cmd: vec![ParsedCommand::Unknown {
                     cmd: "echo done".into(),
                 }],

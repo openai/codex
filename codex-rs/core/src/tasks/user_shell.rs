@@ -162,9 +162,8 @@ pub(crate) async fn execute_user_shell_command(
 
     let call_id = Uuid::new_v4().to_string();
     let raw_command = command;
-    // TODO(anp): Migrate user-shell events and execution plumbing to PathUri so this local-only
-    // feature does not need to project the selected environment cwd onto the Codex host.
-    let Ok(cwd) = turn_environment.cwd().to_abs_path() else {
+    let cwd_uri = turn_environment.cwd().clone();
+    let Ok(cwd) = cwd_uri.to_abs_path() else {
         send_user_shell_error(
             &session,
             turn_context.as_ref(),
@@ -184,7 +183,7 @@ pub(crate) async fn execute_user_shell_command(
                 turn_id: turn_context.sub_id.clone(),
                 started_at_ms: now_unix_timestamp_ms(),
                 command: display_command.clone(),
-                cwd: cwd.clone(),
+                cwd: cwd_uri.clone(),
                 parsed_cmd: parsed_cmd.clone(),
                 source: ExecCommandSource::UserShell,
                 interaction_input: None,
@@ -258,7 +257,7 @@ pub(crate) async fn execute_user_shell_command(
                         turn_id: turn_context.sub_id.clone(),
                         completed_at_ms: now_unix_timestamp_ms(),
                         command: display_command.clone(),
-                        cwd: cwd.clone(),
+                        cwd: cwd_uri.clone(),
                         parsed_cmd: parsed_cmd.clone(),
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
@@ -283,7 +282,7 @@ pub(crate) async fn execute_user_shell_command(
                         turn_id: turn_context.sub_id.clone(),
                         completed_at_ms: now_unix_timestamp_ms(),
                         command: display_command.clone(),
-                        cwd: cwd.clone(),
+                        cwd: cwd_uri.clone(),
                         parsed_cmd: parsed_cmd.clone(),
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
@@ -328,7 +327,7 @@ pub(crate) async fn execute_user_shell_command(
                         turn_id: turn_context.sub_id.clone(),
                         completed_at_ms: now_unix_timestamp_ms(),
                         command: display_command,
-                        cwd,
+                        cwd: cwd_uri,
                         parsed_cmd,
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,

@@ -526,7 +526,7 @@ impl NetworkApprovalService {
                     /*approval_id*/ None,
                     prompt_command,
                     #[allow(deprecated)]
-                    turn_context.cwd.clone(),
+                    codex_utils_path_uri::PathUri::from_abs_path(&turn_context.cwd),
                     Some(prompt_reason),
                     Some(network_approval_context.clone()),
                     /*proposed_execpolicy_amendment*/ None,

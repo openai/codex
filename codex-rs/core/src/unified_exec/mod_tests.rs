@@ -103,12 +103,14 @@ async fn exec_command_with_tty(
         .map_or_else(|| turn.cwd.clone(), |workdir| turn.cwd.join(workdir));
     let command = vec!["bash".to_string(), "-lc".to_string(), cmd.to_string()];
     let request = test_exec_request(turn, command.clone(), cwd.clone(), shell_env());
+    let cwd_uri = request.cwd.clone();
 
     let process = Arc::new(
         manager
             .open_session_with_exec_env(
                 process_id,
                 &request,
+                &cwd_uri,
                 tty,
                 Box::new(NoopSpawnLifecycle),
                 turn.environments
@@ -808,10 +810,12 @@ async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
     );
 
     let environment = codex_exec_server::Environment::default_for_tests();
+    let cwd_uri = request.cwd.clone();
     let process = UnifiedExecProcessManager::default()
         .open_session_with_exec_env(
             /*process_id*/ 1234,
             &request,
+            &cwd_uri,
             /*tty*/ false,
             Box::new(NoopSpawnLifecycle),
             &environment,
@@ -850,10 +854,12 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
     );
 
     let manager = UnifiedExecProcessManager::default();
+    let cwd_uri = request.cwd.clone();
     let process = manager
         .open_session_with_exec_env(
             /*process_id*/ 1234,
             &request,
+            &cwd_uri,
             /*tty*/ true,
             Box::new(NoopSpawnLifecycle),
             remote_test_env.environment(),
@@ -907,10 +913,12 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
     );
 
     let manager = UnifiedExecProcessManager::default();
+    let cwd_uri = request.cwd.clone();
     let err = manager
         .open_session_with_exec_env(
             /*process_id*/ 1234,
             &request,
+            &cwd_uri,
             /*tty*/ true,
             Box::new(TestSpawnLifecycle {
                 inherited_fds: vec![42],

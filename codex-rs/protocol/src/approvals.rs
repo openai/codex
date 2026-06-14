@@ -6,6 +6,7 @@ use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::request_permissions::RequestPermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -234,7 +235,7 @@ pub struct ExecApprovalRequestEvent {
     /// The command to be executed.
     pub command: Vec<String>,
     /// The command's working directory.
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
     /// Optional human-readable reason for the approval (e.g. retry without sandbox).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,

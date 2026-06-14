@@ -176,7 +176,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                             call_id,
                             /*approval_id*/ None,
                             command,
-                            cwd,
+                            codex_utils_path_uri::PathUri::from_abs_path(&cwd),
                             reason,
                             ctx.network_approval_context.clone(),
                             req.exec_approval_requirement

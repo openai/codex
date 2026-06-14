@@ -128,7 +128,7 @@ impl ExecCommandHandler {
                 "unified exec is unavailable in this session".to_string(),
             ));
         };
-        let cwd = environment_args
+        let cwd_uri = environment_args
             .workdir
             .as_ref()
             .filter(|workdir| !workdir.is_empty())
@@ -136,9 +136,9 @@ impl ExecCommandHandler {
             .unwrap_or_else(|| turn_environment.cwd().clone());
         // TODO(anp): Migrate command approvals, granted permissions, and tool hooks to PathUri so
         // foreign command working directories do not require a host-native projection here.
-        let native_cwd = cwd.to_abs_path().map_err(|err| {
+        let native_cwd = cwd_uri.to_abs_path().map_err(|err| {
             FunctionCallError::RespondToModel(format!(
-                "command workdir `{cwd}` is not native to the Codex host: {err}"
+                "command workdir `{cwd_uri}` is not native to the Codex host: {err}"
             ))
         })?;
         let environment = Arc::clone(&turn_environment.environment);
@@ -280,7 +280,8 @@ impl ExecCommandHandler {
                     process_id,
                     yield_time_ms,
                     max_output_tokens,
-                    cwd,
+                    cwd_uri,
+                    cwd: native_cwd,
                     // TODO(anp): Migrate the sandbox orchestration traits to PathUri so the
                     // selected environment root can remain foreign until sandbox enforcement.
                     sandbox_cwd: turn_environment.cwd().to_abs_path().map_err(|err| {

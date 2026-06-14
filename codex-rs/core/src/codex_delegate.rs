@@ -25,6 +25,9 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -469,7 +472,33 @@ async fn handle_exec_approval(
         available_decisions,
         ..
     } = event;
-    let decision = if routes_approval_to_guardian(parent_ctx) {
+    let routes_to_guardian = routes_approval_to_guardian(parent_ctx);
+    let guardian_cwd = if routes_to_guardian {
+        match ApiPathString::from_path_uri(&cwd, PathConvention::native()) {
+            Ok(rendered_cwd) => match AbsolutePathBuf::try_from(rendered_cwd.into_string()) {
+                Ok(cwd) => Some(cwd),
+                Err(err) => {
+                    tracing::warn!(
+                        cwd = %cwd,
+                        %err,
+                        "delegated command approval cwd could not be projected onto the Codex host for guardian review"
+                    );
+                    None
+                }
+            },
+            Err(err) => {
+                tracing::warn!(
+                    cwd = %cwd,
+                    %err,
+                    "delegated command approval cwd could not be projected onto the Codex host for guardian review"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let decision = if let Some(cwd) = guardian_cwd {
         let review_cancel = cancel_token.child_token();
         let review_rx = spawn_approval_request_review(
             Arc::clone(parent_session),

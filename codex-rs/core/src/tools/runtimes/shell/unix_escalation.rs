@@ -505,7 +505,7 @@ impl CoreShellActionProvider {
                         call_id,
                         approval_id,
                         command,
-                        workdir.clone(),
+                        codex_utils_path_uri::PathUri::from_abs_path(&workdir),
                         /*reason*/ None,
                         /*network_approval_context*/ None,
                         /*proposed_execpolicy_amendment*/ None,

@@ -114,11 +114,12 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
         arg0: None,
     };
 
+    let cwd = PathUri::parse("file:///C:/remote%20workspace").expect("foreign cwd URI");
     let params =
-        exec_server_params_for_request(/*process_id*/ 123, &request, /*tty*/ true);
+        exec_server_params_for_request(/*process_id*/ 123, &request, &cwd, /*tty*/ true);
 
     assert_eq!(params.process_id.as_str(), "123");
-    assert_eq!(params.cwd, command_cwd);
+    assert_eq!(params.cwd, cwd);
     assert!(params.env_policy.is_some());
     assert_eq!(
         params.env,
@@ -201,8 +202,14 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         process_id: 123,
         yield_time_ms: 1000,
         max_output_tokens: None,
+        cwd_uri: turn
+            .environments
+            .primary()
+            .expect("primary environment")
+            .cwd()
+            .clone(),
         #[allow(deprecated)]
-        cwd: PathUri::from_abs_path(&turn.cwd),
+        cwd: turn.cwd.clone(),
         #[allow(deprecated)]
         sandbox_cwd: turn.cwd.clone(),
         turn_environment: turn
@@ -230,8 +237,6 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         /*process_started_alive*/ false,
         &context,
         &request,
-        #[allow(deprecated)]
-        turn.cwd.clone(),
         transcript,
         "PRE_DENIAL_MARKER".to_string(),
         "Network access denied".to_string(),

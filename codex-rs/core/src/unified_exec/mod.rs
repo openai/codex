@@ -97,7 +97,11 @@ pub(crate) struct ExecCommandRequest {
     pub process_id: i32,
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
-    pub cwd: PathUri,
+    /// Environment-owned cwd retained for remote launch and emitted events.
+    pub cwd_uri: PathUri,
+    /// Host-native projection used only by approval, policy, and sandbox code
+    /// that has not migrated to foreign paths yet.
+    pub cwd: AbsolutePathBuf,
     pub sandbox_cwd: AbsolutePathBuf,
     pub turn_environment: TurnEnvironment,
     pub shell_mode: UnifiedExecShellMode,
