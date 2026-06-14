@@ -5,27 +5,14 @@ use crate::tools::handlers::unified_exec::ExecCommandArgs;
 use codex_memories_read::usage::MEMORIES_USAGE_METRIC;
 use codex_memories_read::usage::memories_usage_kinds_from_command;
 use codex_protocol::models::ShellCommandToolCallParams;
-use codex_shell_command::bash::parse_plain_shell_script;
-use codex_shell_command::is_safe_command::is_known_safe_command;
 
 pub(crate) fn emit_metric_for_tool_read(invocation: &ToolInvocation, success: bool) {
-    let Some(script) = shell_script_for_invocation(invocation) else {
+    let Some(command) = shell_script_for_invocation(invocation) else {
         return;
     };
-    let Some(commands) = parse_plain_shell_script(&script) else {
-        return;
-    };
-    if !commands
-        .iter()
-        .all(|command| is_known_safe_command(command))
-    {
-        return;
-    }
 
     let success = if success { "true" } else { "false" };
     let tool_name = flat_tool_name(&invocation.tool_name);
-    // Preserve the full script so command parsing can carry `cd` state across commands.
-    let command = vec!["bash".to_string(), "-lc".to_string(), script];
     for kind in memories_usage_kinds_from_command(&command) {
         invocation.turn.session_telemetry.counter(
             MEMORIES_USAGE_METRIC,
