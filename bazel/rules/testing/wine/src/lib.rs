@@ -328,11 +328,12 @@ fn install_powershell_runtime(prefix: &Path, runtime: &Path) -> Result<()> {
 
 /// Recursively reproduces a runfiles directory in a writable Wine prefix.
 ///
-/// Bazel runfiles may be immutable and may contain the PowerShell distribution
-/// on a different filesystem from the temporary prefix. Hard links avoid
-/// repeatedly copying the roughly hundred-megabyte runtime when both locations
-/// share a filesystem; the copy fallback preserves correctness for sandbox or
-/// remote-execution layouts where cross-device hard links are unavailable.
+/// Bazel runfiles may be immutable, represented by a symlink forest, and may
+/// contain the PowerShell distribution on a different filesystem from the
+/// temporary prefix. Hard links avoid repeatedly copying the roughly
+/// hundred-megabyte runtime when both locations share a filesystem; the copy
+/// fallback preserves correctness for sandbox or remote-execution layouts
+/// where cross-device hard links are unavailable.
 fn materialize_runtime_directory(source: &Path, destination: &Path) -> Result<()> {
     fs::create_dir_all(destination).with_context(|| {
         format!(
@@ -346,23 +347,34 @@ fn materialize_runtime_directory(source: &Path, destination: &Path) -> Result<()
         let entry = entry.context("read PowerShell runtime entry")?;
         let source_path = entry.path();
         let destination_path = destination.join(entry.file_name());
-        let file_type = entry
-            .file_type()
-            .with_context(|| format!("inspect PowerShell runtime entry {}", source_path.display()))?;
+        // Local Bazel runfiles trees expose external-repository files as
+        // symlinks. Resolve those trusted runfiles entries before inspecting
+        // or linking them so the writable prefix contains ordinary files.
+        let resolved_source_path = fs::canonicalize(&source_path).with_context(|| {
+            format!("resolve PowerShell runtime entry {}", source_path.display())
+        })?;
+        let file_type = fs::metadata(&resolved_source_path)
+            .with_context(|| {
+                format!(
+                    "inspect PowerShell runtime entry {}",
+                    resolved_source_path.display()
+                )
+            })?
+            .file_type();
         if file_type.is_dir() {
             // PowerShell resolves assemblies and modules by their relative
             // locations, so flattening the archive is not an option.
-            materialize_runtime_directory(&source_path, &destination_path)?;
+            materialize_runtime_directory(&resolved_source_path, &destination_path)?;
         } else if file_type.is_file() {
             // A hard link gives each prefix the expected installation layout
             // without duplicating the large runtime in the common local case.
-            if fs::hard_link(&source_path, &destination_path).is_err() {
+            if fs::hard_link(&resolved_source_path, &destination_path).is_err() {
                 // Cross-device links are common under Bazel sandboxing and
                 // remote execution, where an ordinary copy is still valid.
-                fs::copy(&source_path, &destination_path).with_context(|| {
+                fs::copy(&resolved_source_path, &destination_path).with_context(|| {
                     format!(
                         "copy PowerShell runtime file {} to {}",
-                        source_path.display(),
+                        resolved_source_path.display(),
                         destination_path.display()
                     )
                 })?;
