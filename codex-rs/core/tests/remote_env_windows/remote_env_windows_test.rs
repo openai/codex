@@ -7,6 +7,8 @@ use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::AskForApproval as AppAskForApproval;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
@@ -21,6 +23,9 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
+use codex_exec_server::ExecServerClient;
+use codex_exec_server::FsWriteFileParams;
+use codex_exec_server::RemoteExecServerConnectArgs;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -179,11 +184,30 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Result<()> {
+    const AGENTS_INSTRUCTIONS: &str = "remote Windows workspace instructions";
     const CALL_ID: &str = "wine-cmd-smoke";
     const COMMAND: &str = r#"if ((Get-Location).Path -ne 'C:\windows') { exit 1 }"#;
 
     WineExecServer
         .scope(|exec_server_url| async move {
+            let exec_server_client = ExecServerClient::connect_websocket(
+                RemoteExecServerConnectArgs {
+                    websocket_url: exec_server_url.clone(),
+                    client_name: "remote-env-windows-test".to_string(),
+                    connect_timeout: APP_SERVER_READ_TIMEOUT,
+                    initialize_timeout: APP_SERVER_READ_TIMEOUT,
+                    resume_session_id: None,
+                },
+            )
+            .await?;
+            exec_server_client
+                .fs_write_file(FsWriteFileParams {
+                    path: PathUri::parse("file:///C:/windows/AGENTS.md")?,
+                    data_base64: STANDARD.encode(AGENTS_INSTRUCTIONS),
+                    sandbox: None,
+                })
+                .await?;
+
             let codex_home = TempDir::new()?;
             let responses = vec![
                 sse(vec![
