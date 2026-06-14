@@ -23,6 +23,7 @@ use rama_tls_rustls::server::TlsAcceptorData;
 use sha2::Digest as _;
 use sha2::Sha256;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 #[cfg(windows)]
 use std::ffi::OsString;
@@ -176,10 +177,7 @@ fn managed_ca_trust_bundle_for_cert_path(
                 .map(|value| (key, value.clone()))
         })
         .collect();
-    // Startup overrides are retained only as provenance for policy-gated
-    // per-child materialization. The baseline must never copy their contents
-    // before the child's filesystem policy is available.
-    let trust_bundle = build_managed_ca_trust_bundle(cert_path)?;
+    let trust_bundle = build_managed_ca_trust_bundle(cert_path, &startup_env_values)?;
     let path = persist_managed_ca_trust_bundle(cert_path, &trust_bundle)?;
 
     Ok(ManagedMitmCaTrustBundle {
@@ -189,7 +187,10 @@ fn managed_ca_trust_bundle_for_cert_path(
     })
 }
 
-fn build_managed_ca_trust_bundle(managed_ca_cert_path: &Path) -> Result<String> {
+fn build_managed_ca_trust_bundle(
+    managed_ca_cert_path: &Path,
+    startup_env_values: &HashMap<&'static str, String>,
+) -> Result<String> {
     let mut trust_bundle = String::new();
     let rustls_native_certs::CertificateResult { certs, errors, .. } =
         crate::native_certs::load_platform_native_certs();
@@ -201,6 +202,16 @@ fn build_managed_ca_trust_bundle(managed_ca_cert_path: &Path) -> Result<String> 
     }
     for cert in certs {
         push_certificate_pem(&mut trust_bundle, cert.as_ref());
+    }
+    let mut appended_startup_paths = HashSet::new();
+    for path in CUSTOM_CA_ENV_KEYS
+        .into_iter()
+        .filter_map(|key| startup_env_values.get(key))
+        .map(Path::new)
+    {
+        if path != managed_ca_cert_path && appended_startup_paths.insert(path) {
+            append_pem_file(&mut trust_bundle, path)?;
+        }
     }
     append_pem_file(&mut trust_bundle, managed_ca_cert_path)?;
     Ok(trust_bundle)
@@ -892,7 +903,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_ca_trust_bundle_keeps_startup_ca_override_out_of_baseline() {
+    fn managed_ca_trust_bundle_appends_startup_ca_override_to_baseline() {
         let dir = tempdir().unwrap();
         let managed_ca_cert_path = dir.path().join("ca.pem");
         let startup_ca_bundle_path = dir.path().join("startup-ca.pem");
@@ -907,7 +918,7 @@ mod tests {
             managed_ca_trust_bundle_for_cert_path(&managed_ca_cert_path, &env).unwrap();
         let baseline_bundle = fs::read_to_string(trust_bundle.path).unwrap();
 
-        assert!(!baseline_bundle.contains("startup ca"));
+        assert!(baseline_bundle.contains("startup ca"));
         assert!(baseline_bundle.contains("managed ca"));
     }
 
