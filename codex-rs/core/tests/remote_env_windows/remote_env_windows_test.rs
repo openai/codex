@@ -47,6 +47,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -188,7 +189,7 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
 async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Result<()> {
     const AGENTS_INSTRUCTIONS: &str = "remote Windows workspace instructions";
     const CALL_ID: &str = "wine-cmd-smoke";
-    const COMMAND: &str = "Get-Content AGENTS.md -ErrorAction Stop";
+    const COMMAND: &str = "Get-Content 'AGENTS.md' -ErrorAction Stop";
     const NATIVE_CWD: &str = r"C:\windows";
 
     WineExecServer
@@ -332,10 +333,17 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
             };
             assert_eq!(id, CALL_ID);
             assert_eq!(cwd.as_str(), r"C:\windows");
-            // TODO(anp): Parse command actions using the selected environment's path convention so
-            // their paths remain Windows-native instead of degrading the action to Unknown.
-            assert_eq!(command_actions.len(), 1);
-            assert!(matches!(command_actions[0], CommandAction::Unknown { .. }));
+            assert_eq!(
+                command_actions,
+                vec![CommandAction::Read {
+                    command: COMMAND.to_string(),
+                    name: "AGENTS.md".to_string(),
+                    path: ApiPathString::from_native_absolute_path(
+                        r"C:\windows\AGENTS.md",
+                        PathConvention::Windows,
+                    )?,
+                }]
+            );
             assert_eq!((status, exit_code), (CommandExecutionStatus::Completed, Some(0)));
             timeout(
                 APP_SERVER_READ_TIMEOUT,

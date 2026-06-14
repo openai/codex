@@ -2,6 +2,7 @@ use crate::bash::extract_bash_command;
 use crate::bash::try_parse_shell;
 use crate::bash::try_parse_word_only_commands_sequence;
 use crate::powershell::extract_powershell_command;
+use crate::powershell::extract_powershell_literal_read_path;
 use codex_protocol::parse_command::ParsedCommand;
 use shlex::split as shlex_split;
 use shlex::try_join as shlex_try_join;
@@ -1257,18 +1258,67 @@ mod tests {
 
     #[test]
     fn powershell_with_path_is_stripped() {
-        let command = if cfg!(windows) {
-            "C:\\windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
-        } else {
-            "/usr/local/bin/powershell.exe"
-        };
-
         assert_parsed(
-            &vec_str(&[command, "-NoProfile", "-c", "Write-Host hi"]),
+            &vec_str(&[
+                r"C:\windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                "-NoProfile",
+                "-c",
+                "Write-Host hi",
+            ]),
             vec![ParsedCommand::Unknown {
                 cmd: "Write-Host hi".to_string(),
             }],
         );
+    }
+
+    #[test]
+    fn powershell_literal_get_content_is_read_without_the_host_shell() {
+        let script = r"Get-Content 'C:\codex runtime\AGENTS.md' -ErrorAction Stop";
+        assert_parsed(
+            &vec_str(&[
+                r"C:\windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                "-NoProfile",
+                "-Command",
+                script,
+            ]),
+            vec![ParsedCommand::Read {
+                cmd: script.to_string(),
+                name: "AGENTS.md".to_string(),
+                path: PathBuf::from(r"C:\codex runtime\AGENTS.md"),
+            }],
+        );
+
+        let alias_script = r"gc '.\input.txt'";
+        assert_parsed(
+            &vec_str(&["pwsh.exe", "-Command", alias_script]),
+            vec![ParsedCommand::Read {
+                cmd: alias_script.to_string(),
+                name: "input.txt".to_string(),
+                path: PathBuf::from(r".\input.txt"),
+            }],
+        );
+    }
+
+    #[test]
+    fn powershell_dynamic_or_compound_get_content_stays_unknown() {
+        for script in [
+            "Get-Content $path",
+            r#"Get-Content "$(Get-Location)\AGENTS.md""#,
+            "Get-Content AGENTS.md | Select-Object -First 1",
+            "Get-Content AGENTS.md; Remove-Item AGENTS.md",
+            "Get-Content *.md",
+            "Get-Content Env:PATH",
+            r"'Get-Content' 'C:\input.txt'",
+            r"Get-Content '-Path' 'C:\input.txt'",
+            r#"Get-Content "C:\input.txt""#,
+        ] {
+            assert_parsed(
+                &vec_str(&["powershell.exe", "-Command", script]),
+                vec![ParsedCommand::Unknown {
+                    cmd: script.to_string(),
+                }],
+            );
+        }
     }
 }
 
@@ -1278,9 +1328,14 @@ pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
     }
 
     if let Some((_, script)) = extract_powershell_command(command) {
-        return vec![ParsedCommand::Unknown {
+        let parsed = extract_powershell_literal_read_path(script).map(|path| ParsedCommand::Read {
             cmd: script.to_string(),
-        }];
+            name: short_display_path(path),
+            path: PathBuf::from(path),
+        });
+        return vec![parsed.unwrap_or_else(|| ParsedCommand::Unknown {
+            cmd: script.to_string(),
+        })];
     }
 
     let normalized = normalize_tokens(command);

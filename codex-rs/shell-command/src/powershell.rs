@@ -70,6 +70,68 @@ pub fn extract_powershell_command(command: &[String]) -> Option<(&str, &str)> {
     None
 }
 
+/// Extracts the literal path from the narrow `Get-Content` shape that can be recognized without
+/// launching the selected execution environment's PowerShell on the Codex host.
+pub(crate) fn extract_powershell_literal_read_path(script: &str) -> Option<&str> {
+    if script
+        .chars()
+        .any(|character| matches!(character, '\0' | '\r' | '\n'))
+    {
+        return None;
+    }
+
+    let script = script.trim();
+    let command_end = script.find(char::is_whitespace)?;
+    let command = &script[..command_end];
+    if !command.eq_ignore_ascii_case("Get-Content") && !command.eq_ignore_ascii_case("gc") {
+        return None;
+    }
+
+    let quoted_path = script[command_end..].trim_start().strip_prefix('\'')?;
+    let path_end = quoted_path.find('\'')?;
+    let path = &quoted_path[..path_end];
+    if path.is_empty()
+        || path
+            .chars()
+            .any(|character| matches!(character, '*' | '?' | '[' | ']'))
+        || is_powershell_provider_path(path)
+    {
+        return None;
+    }
+
+    let trailing = quoted_path[path_end + 1..].trim();
+    if !trailing.is_empty() {
+        let mut words = trailing.split_whitespace();
+        let flag = words.next()?;
+        let value = words.next()?;
+        if !flag.eq_ignore_ascii_case("-ErrorAction")
+            || !value.eq_ignore_ascii_case("Stop")
+            || words.next().is_some()
+        {
+            return None;
+        }
+    }
+
+    Some(path)
+}
+
+fn is_powershell_provider_path(path: &str) -> bool {
+    if path.contains("::") {
+        return true;
+    }
+
+    let bytes = path.as_bytes();
+    match bytes.iter().position(|byte| *byte == b':') {
+        None => false,
+        Some(1) => !matches!(
+            bytes,
+            [drive, b':', separator, ..]
+                if drive.is_ascii_alphabetic() && matches!(separator, b'\\' | b'/')
+        ),
+        Some(_) => true,
+    }
+}
+
 /// Parse the script body from a top-level PowerShell wrapper into argv-like commands.
 ///
 /// This is intentionally narrower than the Windows safe-command parser: it only unwraps the
