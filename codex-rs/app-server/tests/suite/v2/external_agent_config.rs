@@ -7,8 +7,8 @@ use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
+use codex_app_server_protocol::ExternalAgentConfigImportProgressNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
-use codex_app_server_protocol::ExternalAgentConfigImportTypeResult;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginListParams;
@@ -97,6 +97,19 @@ async fn external_agent_config_import_sends_completion_notification_for_sync_onl
     .await??;
     let response: ExternalAgentConfigImportResponse = to_response(response)?;
     let import_id = assert_import_response(response);
+    let notification = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("externalAgentConfig/import/progress"),
+    )
+    .await??;
+    assert_eq!(notification.method, "externalAgentConfig/import/progress");
+    let progress: ExternalAgentConfigImportProgressNotification =
+        serde_json::from_value(notification.params.expect("progress params"))?;
+    assert_eq!(progress.import_id, import_id);
+    assert_eq!(
+        progress.item_result.item_type,
+        ExternalAgentConfigMigrationItemType::Config
+    );
     let notification = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
@@ -372,22 +385,40 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     let completed: ExternalAgentConfigImportCompletedNotification =
         serde_json::from_value(notification.params.expect("completed params"))?;
     assert_eq!(completed.import_id, import_id);
+    assert_eq!(completed.item_results.len(), 1);
+    let session_result = &completed.item_results[0];
     assert_eq!(
-        completed.item_results,
-        vec![ExternalAgentConfigImportTypeResult {
-            item_type: ExternalAgentConfigMigrationItemType::Sessions,
-            success_count: 1,
-            error_count: 0,
-            raw_errors: Vec::new(),
-        }]
+        session_result.item_type,
+        ExternalAgentConfigMigrationItemType::Sessions
     );
+    assert_eq!(session_result.success_count, 1);
+    assert_eq!(session_result.error_count, 0);
+    assert_eq!(session_result.raw_errors, Vec::new());
+    assert_eq!(session_result.successes.len(), 1);
+    let session_success = &session_result.successes[0];
+    assert_eq!(
+        session_success.item_type,
+        ExternalAgentConfigMigrationItemType::Sessions
+    );
+    assert_eq!(session_success.cwd, None);
+    let session_source = std::fs::canonicalize(&session_path)?.display().to_string();
+    assert_eq!(
+        session_success.source.as_deref(),
+        Some(session_source.as_str())
+    );
+    let imported_thread_id = session_success
+        .target
+        .as_deref()
+        .expect("session success should include imported thread id")
+        .to_string();
     let log_body = external_agent_import_log(codex_home.path(), &import_id).await?;
     assert!(log_body.contains(&import_id));
     assert!(log_body.contains("external agent config import completed"));
     assert!(log_body.contains(r#""itemType":"SESSIONS""#));
     assert!(log_body.contains(r#""successCount":1"#));
     assert!(log_body.contains(r#""errorCount":0"#));
-    assert!(log_body.contains(&session_path.display().to_string()));
+    assert!(log_body.contains(&session_source));
+    assert!(log_body.contains(&imported_thread_id));
 
     let request_id = mcp
         .send_thread_list_request(ThreadListParams {
@@ -415,6 +446,7 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
         .first()
         .expect("expected imported thread")
         .clone();
+    assert_eq!(imported_thread_id, thread.id.to_string());
     assert_eq!(thread.preview, "first request");
     assert_eq!(thread.name.as_deref(), Some("source session title"));
 

@@ -109,6 +109,7 @@ export type { ExternalAgentConfigImportParams } from "./ExternalAgentConfigImpor
 export type { ExternalAgentConfigImportProgressNotification } from "./ExternalAgentConfigImportProgressNotification";
 export type { ExternalAgentConfigImportRawError } from "./ExternalAgentConfigImportRawError";
 export type { ExternalAgentConfigImportResponse } from "./ExternalAgentConfigImportResponse";
+export type { ExternalAgentConfigImportSuccess } from "./ExternalAgentConfigImportSuccess";
 export type { ExternalAgentConfigImportTypeResult } from "./ExternalAgentConfigImportTypeResult";
 export type { ExternalAgentConfigMigrationItem } from "./ExternalAgentConfigMigrationItem";
 export type { ExternalAgentConfigMigrationItemType } from "./ExternalAgentConfigMigrationItemType";

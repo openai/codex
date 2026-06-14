@@ -32,6 +32,35 @@
       ],
       "type": "object"
     },
+    "ExternalAgentConfigImportSuccess": {
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "itemType": {
+          "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "itemType"
+      ],
+      "type": "object"
+    },
     "ExternalAgentConfigImportTypeResult": {
       "properties": {
         "errorCount": {
@@ -52,13 +81,20 @@
           "format": "uint32",
           "minimum": 0.0,
           "type": "integer"
+        },
+        "successes": {
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportSuccess"
+          },
+          "type": "array"
         }
       },
       "required": [
         "errorCount",
         "itemType",
         "rawErrors",
-        "successCount"
+        "successCount",
+        "successes"
       ],
       "type": "object"
     },

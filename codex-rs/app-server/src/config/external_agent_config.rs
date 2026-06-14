@@ -108,6 +108,7 @@ pub(crate) struct ExternalAgentConfigImportItemResult {
     pub cwd: Option<PathBuf>,
     pub success_count: u32,
     pub error_count: u32,
+    pub successes: Vec<ExternalAgentConfigImportSuccess>,
     pub raw_errors: Vec<ExternalAgentConfigImportRawError>,
 }
 
@@ -123,6 +124,7 @@ impl ExternalAgentConfigImportItemResult {
             cwd,
             success_count: 0,
             error_count: 0,
+            successes: Vec::new(),
             raw_errors: Vec::new(),
         }
     }
@@ -136,6 +138,24 @@ impl ExternalAgentConfigImportItemResult {
         self.error_count = self.error_count.saturating_add(1);
         self.raw_errors.push(raw_error);
     }
+
+    pub(crate) fn record_success(&mut self, source: Option<String>, target: Option<String>) {
+        self.success_count = self.success_count.saturating_add(1);
+        self.successes.push(ExternalAgentConfigImportSuccess {
+            item_type: self.item_type,
+            cwd: self.cwd.clone(),
+            source,
+            target,
+        });
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExternalAgentConfigImportSuccess {
+    pub item_type: ExternalAgentConfigMigrationItemType,
+    pub cwd: Option<PathBuf>,
+    pub source: Option<String>,
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -312,7 +332,10 @@ impl ExternalAgentConfigService {
                                     return Err(err);
                                 }
                             };
-                            item_result.record_successes(plugin_outcome.succeeded_plugin_ids.len());
+                            for plugin_id in plugin_outcome.succeeded_plugin_ids {
+                                item_result
+                                    .record_success(Some(plugin_id.clone()), Some(plugin_id));
+                            }
                             for raw_error in plugin_outcome.raw_errors {
                                 item_result.record_error(raw_error);
                             }

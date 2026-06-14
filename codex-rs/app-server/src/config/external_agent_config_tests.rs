@@ -961,6 +961,7 @@ async fn import_home_skips_empty_config_migration() {
             cwd: None,
             success_count: 0,
             error_count: 0,
+            successes: Vec::new(),
             raw_errors: Vec::new(),
         }]
     );
@@ -1042,6 +1043,12 @@ async fn import_local_plugins_returns_completed_status() {
             cwd: None,
             success_count: 1,
             error_count: 0,
+            successes: vec![ExternalAgentConfigImportSuccess {
+                item_type: ExternalAgentConfigMigrationItemType::Plugins,
+                cwd: None,
+                source: Some("cloudflare@my-plugins".to_string()),
+                target: Some("cloudflare@my-plugins".to_string()),
+            }],
             raw_errors: Vec::new(),
         }]
     );
@@ -1107,6 +1114,7 @@ async fn import_git_plugins_returns_pending_async_status() {
             cwd: None,
             success_count: 0,
             error_count: 0,
+            successes: Vec::new(),
             raw_errors: Vec::new(),
         }]
     );
@@ -1224,6 +1232,7 @@ async fn import_repo_agents_md_rewrites_terms_and_skips_non_empty_targets() {
                 cwd: Some(repo_root.clone()),
                 success_count: 1,
                 error_count: 0,
+                successes: Vec::new(),
                 raw_errors: Vec::new(),
             },
             ExternalAgentConfigImportItemResult {
@@ -1232,6 +1241,7 @@ async fn import_repo_agents_md_rewrites_terms_and_skips_non_empty_targets() {
                 cwd: Some(repo_with_existing_target.clone()),
                 success_count: 0,
                 error_count: 0,
+                successes: Vec::new(),
                 raw_errors: Vec::new(),
             },
         ]
@@ -1280,6 +1290,7 @@ async fn import_repo_agents_md_overwrites_empty_targets() {
             cwd: Some(repo_root.clone()),
             success_count: 1,
             error_count: 0,
+            successes: Vec::new(),
             raw_errors: Vec::new(),
         }]
     );
@@ -1372,6 +1383,7 @@ async fn import_repo_hooks_preserves_disabled_codex_hooks_feature() {
             cwd: Some(repo_root.clone()),
             success_count: 1,
             error_count: 0,
+            successes: Vec::new(),
             raw_errors: Vec::new(),
         }]
     );
@@ -1444,6 +1456,7 @@ async fn import_repo_mcp_uses_home_settings_toggles_when_repo_settings_missing()
             cwd: Some(repo_root.clone()),
             success_count: 1,
             error_count: 0,
+            successes: Vec::new(),
             raw_errors: Vec::new(),
         }]
     );

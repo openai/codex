@@ -512,7 +512,7 @@ impl MessageProcessor {
         );
         let external_agent_config_processor = ExternalAgentConfigRequestProcessor::new(
             outgoing.clone(),
-            log_db.clone(),
+            log_db,
             Arc::clone(&thread_manager),
             Arc::clone(&thread_store),
             config_manager.clone(),

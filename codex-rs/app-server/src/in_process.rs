@@ -917,6 +917,7 @@ mod tests {
                         cwd: None,
                         success_count: 1,
                         error_count: 0,
+                        successes: Vec::new(),
                         raw_errors: Vec::new(),
                     },
                 },

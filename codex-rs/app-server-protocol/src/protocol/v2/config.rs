@@ -686,12 +686,23 @@ pub struct ExternalAgentConfigImportRawError {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportSuccess {
+    pub item_type: ExternalAgentConfigMigrationItemType,
+    pub cwd: Option<PathBuf>,
+    pub source: Option<String>,
+    pub target: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigImportItemResult {
     pub item_type: ExternalAgentConfigMigrationItemType,
     pub description: String,
     pub cwd: Option<PathBuf>,
     pub success_count: u32,
     pub error_count: u32,
+    pub successes: Vec<ExternalAgentConfigImportSuccess>,
     pub raw_errors: Vec<ExternalAgentConfigImportRawError>,
 }
 
@@ -702,6 +713,7 @@ pub struct ExternalAgentConfigImportTypeResult {
     pub item_type: ExternalAgentConfigMigrationItemType,
     pub success_count: u32,
     pub error_count: u32,
+    pub successes: Vec<ExternalAgentConfigImportSuccess>,
     pub raw_errors: Vec<ExternalAgentConfigImportRawError>,
 }
 

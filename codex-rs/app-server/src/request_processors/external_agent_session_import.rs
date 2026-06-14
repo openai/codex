@@ -89,7 +89,10 @@ impl ExternalAgentSessionImporter {
         while let Some(result) = import_results.next().await {
             match result {
                 Ok(Some(completed_import)) => {
-                    item_result.record_successes(/*count*/ 1);
+                    item_result.record_success(
+                        Some(completed_import.source_path.display().to_string()),
+                        Some(completed_import.imported_thread_id.to_string()),
+                    );
                     completed_imports.push(completed_import);
                 }
                 Ok(None) => {}

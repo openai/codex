@@ -19,9 +19,12 @@ use codex_app_server_protocol::CommandMigration;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
+use codex_app_server_protocol::ExternalAgentConfigImportItemResult as ProtocolImportItemResult;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
+use codex_app_server_protocol::ExternalAgentConfigImportProgressNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportRawError as ProtocolImportRawError;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
+use codex_app_server_protocol::ExternalAgentConfigImportSuccess as ProtocolImportSuccess;
 use codex_app_server_protocol::ExternalAgentConfigImportTypeResult as ProtocolImportTypeResult;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
@@ -216,6 +219,8 @@ impl ExternalAgentConfigRequestProcessor {
         for item_result in import_outcome.item_results {
             completed_item_results.push(item_result);
         }
+        send_import_progress_notifications(&self.outgoing, &import_id, &completed_item_results)
+            .await;
 
         let has_background_imports = !import_outcome.pending_plugin_imports.is_empty()
             || !pending_session_imports.is_empty();
@@ -281,10 +286,14 @@ impl ExternalAgentConfigRequestProcessor {
                 item_results
             };
             let (session_result, plugin_results) = tokio::join!(session_imports, plugin_imports);
+            let mut background_item_results = Vec::new();
             if let Some(session_result) = session_result {
-                completed_item_results.push(session_result);
+                background_item_results.push(session_result);
             }
-            completed_item_results.extend(plugin_results);
+            background_item_results.extend(plugin_results);
+            send_import_progress_notifications(&outgoing, &import_id, &background_item_results)
+                .await;
+            completed_item_results.extend(background_item_results);
             if has_plugin_imports {
                 thread_manager.plugins_manager().clear_cache();
                 thread_manager.skills_manager().clear_cache();
@@ -483,6 +492,23 @@ impl ExternalAgentConfigRequestProcessor {
     }
 }
 
+async fn send_import_progress_notifications(
+    outgoing: &OutgoingMessageSender,
+    import_id: &str,
+    item_results: &[CoreImportItemResult],
+) {
+    for item_result in item_results {
+        outgoing
+            .send_server_notification(ServerNotification::ExternalAgentConfigImportProgress(
+                ExternalAgentConfigImportProgressNotification {
+                    import_id: import_id.to_string(),
+                    item_result: protocol_import_item_result(item_result),
+                },
+            ))
+            .await;
+    }
+}
+
 async fn send_completed_import_notification(
     outgoing: &OutgoingMessageSender,
     log_db: Option<&LogDbLayer>,
@@ -533,6 +559,11 @@ fn completed_notification(
             .iter()
             .map(protocol_import_raw_error)
             .collect::<Vec<_>>();
+        let item_successes = item_result
+            .successes
+            .iter()
+            .map(protocol_import_success)
+            .collect::<Vec<_>>();
         let item_type = protocol_migration_item_type(item_result.item_type);
         if let Some(type_result) = protocol_type_results
             .iter_mut()
@@ -544,12 +575,14 @@ fn completed_notification(
             type_result.error_count = type_result
                 .error_count
                 .saturating_add(item_result.error_count);
+            type_result.successes.extend(item_successes);
             type_result.raw_errors.extend(item_raw_errors);
         } else {
             protocol_type_results.push(ProtocolImportTypeResult {
                 item_type,
                 success_count: item_result.success_count,
                 error_count: item_result.error_count,
+                successes: item_successes,
                 raw_errors: item_raw_errors,
             });
         }
@@ -569,6 +602,37 @@ fn completed_notification(
     ExternalAgentConfigImportCompletedNotification {
         import_id,
         item_results: protocol_type_results,
+    }
+}
+
+fn protocol_import_item_result(item_result: &CoreImportItemResult) -> ProtocolImportItemResult {
+    ProtocolImportItemResult {
+        item_type: protocol_migration_item_type(item_result.item_type),
+        description: item_result.description.clone(),
+        cwd: item_result.cwd.clone(),
+        success_count: item_result.success_count,
+        error_count: item_result.error_count,
+        successes: item_result
+            .successes
+            .iter()
+            .map(protocol_import_success)
+            .collect(),
+        raw_errors: item_result
+            .raw_errors
+            .iter()
+            .map(protocol_import_raw_error)
+            .collect(),
+    }
+}
+
+fn protocol_import_success(
+    success: &crate::config::external_agent_config::ExternalAgentConfigImportSuccess,
+) -> ProtocolImportSuccess {
+    ProtocolImportSuccess {
+        item_type: protocol_migration_item_type(success.item_type),
+        cwd: success.cwd.clone(),
+        source: success.source.clone(),
+        target: success.target.clone(),
     }
 }
 
@@ -604,7 +668,9 @@ fn apply_plugin_outcome_to_item_result(
     item_result: &mut CoreImportItemResult,
     plugin_outcome: PluginImportOutcome,
 ) {
-    item_result.record_successes(plugin_outcome.succeeded_plugin_ids.len());
+    for plugin_id in plugin_outcome.succeeded_plugin_ids {
+        item_result.record_success(Some(plugin_id.clone()), Some(plugin_id));
+    }
     for raw_error in plugin_outcome.raw_errors {
         item_result.record_error(raw_error);
     }
