@@ -1031,9 +1031,20 @@ jobs:
           path: codex-rs/dist/${{ matrix.target }}/*
           if-no-files-found: error
 
-  build-windows:
+  build-windows-x64:
     needs: tag-check
     uses: ./.github/workflows/rust-release-windows.yml
+    with:
+      runner: windows-x64
+      target: x86_64-pc-windows-msvc
+    secrets: inherit
+
+  build-windows-arm64:
+    needs: tag-check
+    uses: ./.github/workflows/rust-release-windows.yml
+    with:
+      runner: windows-arm64
+      target: aarch64-pc-windows-msvc
     secrets: inherit
 
   argument-comment-lint-release-assets:
@@ -1053,7 +1064,8 @@ jobs:
       - tag-check
       - build
       - finalize-macos
-      - build-windows
+      - build-windows-x64
+      - build-windows-arm64
       - argument-comment-lint-release-assets
       - zsh-release-assets
     if: >-
@@ -1062,7 +1074,8 @@ jobs:
         needs.tag-check.result == 'success' &&
         needs.build.result == 'success' &&
         needs.finalize-macos.result == 'success' &&
-        needs.build-windows.result == 'success' &&
+        needs.build-windows-x64.result == 'success' &&
+        needs.build-windows-arm64.result == 'success' &&
         needs.argument-comment-lint-release-assets.result == 'success' &&
         needs.zsh-release-assets.result == 'success'
       }}

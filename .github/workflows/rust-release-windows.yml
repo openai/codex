@@ -2,6 +2,15 @@ name: rust-release-windows
 
 on:
   workflow_call:
+    inputs:
+      runner:
+        description: Runner architecture used to build the target.
+        required: true
+        type: string
+      target:
+        description: Rust target triple to build and package.
+        required: true
+        type: string
 
 # Cargo's libgit2 transport has been flaky when fetching git dependencies with
 # nested submodules. Prefer the system git CLI across every Cargo invocation.
@@ -11,8 +20,10 @@ env:
 
 jobs:
   build-windows-binaries:
-    name: Build Windows binaries - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
-    runs-on: ${{ matrix.runs_on }}
+    name: Build Windows binaries - ${{ inputs.runner }} - ${{ inputs.target }} - ${{ matrix.bundle }}
+    runs-on:
+      group: ${{ github.event.repository.name }}-runners
+      labels: ${{ github.event.repository.name }}-${{ inputs.runner }}
     # Windows release builds can exceed an hour, so keep the timeout aligned
     # with the top-level release build headroom.
     timeout-minutes: 90
@@ -25,48 +36,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: windows-x64
-            target: x86_64-pc-windows-msvc
-            bundle: primary
+          - bundle: primary
             binaries: "codex codex-responses-api-proxy"
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
-          - runner: windows-arm64
-            target: aarch64-pc-windows-msvc
-            bundle: primary
-            binaries: "codex codex-responses-api-proxy"
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-arm64
-          - runner: windows-x64
-            target: x86_64-pc-windows-msvc
-            bundle: helpers
+          - bundle: helpers
             binaries: "codex-windows-sandbox-setup codex-command-runner"
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
-          - runner: windows-arm64
-            target: aarch64-pc-windows-msvc
-            bundle: helpers
-            binaries: "codex-windows-sandbox-setup codex-command-runner"
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-arm64
-          - runner: windows-x64
-            target: x86_64-pc-windows-msvc
-            bundle: app-server
+          - bundle: app-server
             binaries: "codex-app-server"
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
-          - runner: windows-arm64
-            target: aarch64-pc-windows-msvc
-            bundle: app-server
-            binaries: "codex-app-server"
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-arm64
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -88,17 +63,17 @@ jobs:
           Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize Name, @{Name='Size(GB)';Expression={[math]::Round(($_.Used + $_.Free) / 1GB, 1)}}, @{Name='Free(GB)';Expression={[math]::Round($_.Free / 1GB, 1)}}
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ inputs.target }}
 
       - name: Configure LLVM linker
         uses: ./.github/actions/setup-msvc-env
         with:
-          target: ${{ matrix.target }}
+          target: ${{ inputs.target }}
 
       - name: Cargo build (Windows binaries)
         shell: bash
         run: |
-          target="${{ matrix.target }}"
+          target="${{ inputs.target }}"
           if [[ "$target" == "x86_64-pc-windows-msvc" ]]; then
             export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
           fi
@@ -111,14 +86,14 @@ jobs:
       - name: Upload Cargo timings
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: cargo-timings-rust-release-windows-${{ matrix.target }}-${{ matrix.bundle }}
+          name: cargo-timings-rust-release-windows-${{ inputs.target }}-${{ matrix.bundle }}
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
           if-no-files-found: warn
 
       - name: Stage Windows binaries
         shell: bash
         run: |
-          release_dir="target/${{ matrix.target }}/release"
+          release_dir="target/${{ inputs.target }}/release"
           output_dir="$release_dir/staged-${{ matrix.bundle }}"
           mkdir -p "$output_dir"
           for binary in ${{ matrix.binaries }}; do
@@ -139,14 +114,14 @@ jobs:
       - name: Upload Windows binaries
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: windows-binaries-${{ matrix.target }}-${{ matrix.bundle }}
+          name: windows-binaries-${{ inputs.target }}-${{ matrix.bundle }}
           path: |
-            codex-rs/target/${{ matrix.target }}/release/staged-${{ matrix.bundle }}/*
+            codex-rs/target/${{ inputs.target }}/release/staged-${{ matrix.bundle }}/*
 
   build-windows-symbols:
     needs:
       - build-windows-binaries
-    name: Build Windows symbols - ${{ matrix.target }}
+    name: Build Windows symbols - ${{ inputs.target }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -154,12 +129,6 @@ jobs:
     defaults:
       run:
         working-directory: codex-rs
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - aarch64-pc-windows-msvc
-          - x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -167,30 +136,32 @@ jobs:
       - name: Download prebuilt Windows binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: windows-binaries-${{ matrix.target }}-*
+          pattern: windows-binaries-${{ inputs.target }}-*
           merge-multiple: true
-          path: codex-rs/target/${{ matrix.target }}/release
+          path: codex-rs/target/${{ inputs.target }}/release
       - name: Build symbols archive
         shell: bash
         run: |
           bash "${GITHUB_WORKSPACE}/.github/scripts/archive-release-symbols-and-strip-binaries.sh" \
-            --target "${{ matrix.target }}" \
-            --artifact-name "${{ matrix.target }}" \
-            --release-dir "target/${{ matrix.target }}/release" \
-            --archive-dir "symbols-dist/${{ matrix.target }}" \
+            --target "${{ inputs.target }}" \
+            --artifact-name "${{ inputs.target }}" \
+            --release-dir "target/${{ inputs.target }}/release" \
+            --archive-dir "symbols-dist/${{ inputs.target }}" \
             --binaries "${WINDOWS_BINARIES}"
       - name: Upload symbols archive
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: ${{ matrix.target }}-symbols
-          path: codex-rs/symbols-dist/${{ matrix.target }}/*
+          name: ${{ inputs.target }}-symbols
+          path: codex-rs/symbols-dist/${{ inputs.target }}/*
           if-no-files-found: error
 
   build-windows:
     needs:
       - build-windows-binaries
-    name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
-    runs-on: ${{ matrix.runs_on }}
+    name: Build - ${{ inputs.runner }} - ${{ inputs.target }}
+    runs-on:
+      group: ${{ github.event.repository.name }}-runners
+      labels: ${{ github.event.repository.name }}-${{ inputs.runner }}
     environment:
       name: azure-artifact-signing
       deployment: false
@@ -201,21 +172,6 @@ jobs:
     defaults:
       run:
         working-directory: codex-rs
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: windows-x64
-            target: x86_64-pc-windows-msvc
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
-          - runner: windows-x64
-            target: aarch64-pc-windows-msvc
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
-
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -224,33 +180,33 @@ jobs:
       - name: Download prebuilt Windows primary binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: windows-binaries-${{ matrix.target }}-primary
-          path: codex-rs/target/${{ matrix.target }}/release
+          name: windows-binaries-${{ inputs.target }}-primary
+          path: codex-rs/target/${{ inputs.target }}/release
 
       - name: Download prebuilt Windows helper binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: windows-binaries-${{ matrix.target }}-helpers
-          path: codex-rs/target/${{ matrix.target }}/release
+          name: windows-binaries-${{ inputs.target }}-helpers
+          path: codex-rs/target/${{ inputs.target }}/release
 
       - name: Download prebuilt Windows app-server binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: windows-binaries-${{ matrix.target }}-app-server
-          path: codex-rs/target/${{ matrix.target }}/release
+          name: windows-binaries-${{ inputs.target }}-app-server
+          path: codex-rs/target/${{ inputs.target }}/release
 
       - name: Verify binaries
         shell: bash
         run: |
           set -euo pipefail
           for binary in ${WINDOWS_BINARIES}; do
-            ls -lh "target/${{ matrix.target }}/release/${binary}.exe"
+            ls -lh "target/${{ inputs.target }}/release/${binary}.exe"
           done
 
       - name: Sign Windows binaries with Azure Trusted Signing
         uses: ./.github/actions/windows-code-sign
         with:
-          target: ${{ matrix.target }}
+          target: ${{ inputs.target }}
           binaries: ${{ env.WINDOWS_BINARIES }}
           client-id: ${{ secrets.AZURE_ARTIFACT_SIGNING_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_ARTIFACT_SIGNING_TENANT_ID }}
@@ -262,12 +218,12 @@ jobs:
       - name: Stage artifacts
         shell: bash
         run: |
-          dest="dist/${{ matrix.target }}"
+          dest="dist/${{ inputs.target }}"
           mkdir -p "$dest"
 
           for binary in ${WINDOWS_BINARIES}; do
-            cp "target/${{ matrix.target }}/release/${binary}.exe" \
-              "$dest/${binary}-${{ matrix.target }}.exe"
+            cp "target/${{ inputs.target }}/release/${binary}.exe" \
+              "$dest/${binary}-${{ inputs.target }}.exe"
           done
 
       - name: Install DotSlash
@@ -277,7 +233,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          target="${{ matrix.target }}"
+          target="${{ inputs.target }}"
           archive_script="${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh"
           temp_root="${RUNNER_TEMP}/codex-package-archives"
 
@@ -301,7 +257,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          case "${{ matrix.target }}" in
+          case "${{ inputs.target }}" in
             aarch64-pc-windows-msvc)
               platform_tag="win_arm64"
               ;;
@@ -309,7 +265,7 @@ jobs:
               platform_tag="win_amd64"
               ;;
             *)
-              echo "No Python runtime wheel platform tag for ${{ matrix.target }}"
+              echo "No Python runtime wheel platform tag for ${{ inputs.target }}"
               exit 1
               ;;
           esac
@@ -317,12 +273,12 @@ jobs:
           python -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
           "${RUNNER_TEMP}/python-runtime-build-venv/Scripts/python.exe" -m pip install build
 
-          stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ matrix.target }}"
-          wheel_dir="${GITHUB_WORKSPACE}/python-runtime-dist/${{ matrix.target }}"
+          stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ inputs.target }}"
+          wheel_dir="${GITHUB_WORKSPACE}/python-runtime-dist/${{ inputs.target }}"
           python "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py" \
             stage-runtime \
             "$stage_dir" \
-            "dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.gz" \
+            "dist/${{ inputs.target }}/codex-package-${{ inputs.target }}.tar.gz" \
             --codex-version "${GITHUB_REF_NAME}" \
             --platform-tag "$platform_tag"
           "${RUNNER_TEMP}/python-runtime-build-venv/Scripts/python.exe" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
@@ -330,18 +286,18 @@ jobs:
       - name: Upload Python runtime wheel
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: python-runtime-wheel-${{ matrix.target }}
-          path: python-runtime-dist/${{ matrix.target }}/*.whl
+          name: python-runtime-wheel-${{ inputs.target }}
+          path: python-runtime-dist/${{ inputs.target }}/*.whl
           if-no-files-found: error
 
       - name: Compress artifacts
         shell: bash
         run: |
           # Path that contains the uncompressed binaries for the current
-          # ${{ matrix.target }}
-          dest="dist/${{ matrix.target }}"
+          # ${{ inputs.target }}
+          dest="dist/${{ inputs.target }}"
           repo_root=$PWD
-          target="${{ matrix.target }}"
+          target="${{ inputs.target }}"
           export dest repo_root target
 
           # For compatibility with environments that lack the `zstd` tool we
@@ -405,6 +361,6 @@ jobs:
 
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: ${{ matrix.target }}
+          name: ${{ inputs.target }}
           path: |
-            codex-rs/dist/${{ matrix.target }}/*
+            codex-rs/dist/${{ inputs.target }}/*
