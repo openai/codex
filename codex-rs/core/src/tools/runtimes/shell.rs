@@ -44,6 +44,7 @@ use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxablePreference;
+use codex_shell_command::powershell::parse_powershell_command_into_plain_commands;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
@@ -203,6 +204,85 @@ impl Approvable<ShellRequest> for ShellRuntime {
     }
 }
 
+fn maybe_add_windows_powershell_path_hint(
+    output: &mut ExecToolCallOutput,
+    command: &[String],
+    cwd: &AbsolutePathBuf,
+    env: &HashMap<String, String>,
+) {
+    if !looks_like_powershell_command_not_found(output) {
+        return;
+    }
+
+    let Some((program, resolved_path)) = find_powershell_path_resolved_command(command, cwd, env)
+    else {
+        return;
+    };
+
+    let note = format!(
+        "Codex note: `{program}` resolves on PATH to `{}`, but PowerShell reported it as not found. In the Windows Sandbox this usually means execution was blocked by sandbox policy rather than the binary being missing.",
+        resolved_path.display()
+    );
+    append_note(&mut output.stderr.text, &note);
+    append_note(&mut output.aggregated_output.text, &note);
+}
+
+fn looks_like_powershell_command_not_found(output: &ExecToolCallOutput) -> bool {
+    if output.exit_code == 0 {
+        return false;
+    }
+
+    let combined = format!(
+        "{}\n{}\n{}",
+        output.stderr.text, output.stdout.text, output.aggregated_output.text
+    )
+    .to_ascii_lowercase();
+
+    [
+        "commandnotfoundexception",
+        "is not recognized as the name of a cmdlet",
+        "was not found, but does exist in the current location",
+    ]
+    .iter()
+    .any(|needle| combined.contains(needle))
+}
+
+fn find_powershell_path_resolved_command(
+    command: &[String],
+    cwd: &AbsolutePathBuf,
+    env: &HashMap<String, String>,
+) -> Option<(String, std::path::PathBuf)> {
+    let parsed_commands = parse_powershell_command_into_plain_commands(command)?;
+    let search_path = env
+        .iter()
+        .find_map(|(key, value)| key.eq_ignore_ascii_case("PATH").then_some(value.as_str()));
+
+    parsed_commands.into_iter().find_map(|plain_command| {
+        let executable = plain_command.first()?.trim();
+        if !should_probe_path_lookup(executable) {
+            return None;
+        }
+
+        let resolved = which::which_in(executable, search_path, cwd.as_path()).ok()?;
+        Some((executable.to_string(), resolved))
+    })
+}
+
+fn should_probe_path_lookup(executable: &str) -> bool {
+    !executable.is_empty() && !executable.starts_with('.') && !executable.contains(['\\', '/', ':'])
+}
+
+fn append_note(target: &mut String, note: &str) {
+    if target.contains(note) {
+        return;
+    }
+    if !target.is_empty() && !target.ends_with('\n') {
+        target.push('\n');
+    }
+    target.push_str(note);
+    target.push('\n');
+}
+
 impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
     fn network_approval_spec(
         &self,
@@ -311,9 +391,136 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let env = attempt
             .env_for(command, options, managed_network)
             .map_err(ToolError::Codex)?;
-        let out = execute_env(env, Self::stdout_stream(ctx))
+        let diagnostic_env = env.env.clone();
+        let mut out = execute_env(env, Self::stdout_stream(ctx))
             .await
             .map_err(ToolError::Codex)?;
+        if matches!(session_shell.shell_type, ShellType::PowerShell) {
+            maybe_add_windows_powershell_path_hint(
+                &mut out,
+                &req.command,
+                &req.cwd,
+                &diagnostic_env,
+            );
+        }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::append_note;
+    use super::find_powershell_path_resolved_command;
+    use super::looks_like_powershell_command_not_found;
+    use super::maybe_add_windows_powershell_path_hint;
+    use codex_protocol::exec_output::ExecToolCallOutput;
+    use codex_protocol::exec_output::StreamOutput;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use std::collections::HashMap;
+    #[cfg(windows)]
+    use std::fs;
+    #[cfg(windows)]
+    use tempfile::tempdir;
+
+    #[test]
+    fn detects_powershell_command_not_found_output() {
+        let output = ExecToolCallOutput {
+            exit_code: 1,
+            stderr: StreamOutput::new(
+                "go : The term 'go' is not recognized as the name of a cmdlet".to_string(),
+            ),
+            ..ExecToolCallOutput::default()
+        };
+
+        assert!(looks_like_powershell_command_not_found(&output));
+    }
+
+    #[test]
+    fn append_note_adds_single_copy() {
+        let mut text = String::from("prefix");
+        append_note(&mut text, "Codex note: hello");
+        append_note(&mut text, "Codex note: hello");
+        assert_eq!(text, "prefix\nCodex note: hello\n");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn finds_path_resolved_powershell_command() {
+        let dir = tempdir().expect("tempdir");
+        let command_path = dir.path().join("go.cmd");
+        fs::write(&command_path, "@echo off\r\nexit /b 0\r\n").expect("write stub");
+
+        let cwd = AbsolutePathBuf::from_absolute_path(dir.path()).expect("absolute cwd");
+        let mut env = HashMap::new();
+        env.insert("PATH".to_string(), dir.path().display().to_string());
+
+        let resolved = find_powershell_path_resolved_command(
+            &[
+                "powershell.exe".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "go version".to_string(),
+            ],
+            &cwd,
+            &env,
+        )
+        .expect("resolved command");
+
+        assert_eq!(resolved.0, "go");
+        assert_eq!(resolved.1, command_path);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn appends_windows_sandbox_hint_when_path_command_resolves() {
+        let dir = tempdir().expect("tempdir");
+        let command_path = dir.path().join("go.cmd");
+        fs::write(&command_path, "@echo off\r\nexit /b 0\r\n").expect("write stub");
+
+        let cwd = AbsolutePathBuf::from_absolute_path(dir.path()).expect("absolute cwd");
+        let mut env = HashMap::new();
+        env.insert("PATH".to_string(), dir.path().display().to_string());
+
+        let mut output = ExecToolCallOutput {
+            exit_code: 1,
+            stderr: StreamOutput::new(
+                "go : The term 'go' is not recognized as the name of a cmdlet".to_string(),
+            ),
+            aggregated_output: StreamOutput::new(
+                "go : The term 'go' is not recognized as the name of a cmdlet".to_string(),
+            ),
+            ..ExecToolCallOutput::default()
+        };
+
+        maybe_add_windows_powershell_path_hint(
+            &mut output,
+            &[
+                "powershell.exe".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "go version".to_string(),
+            ],
+            &cwd,
+            &env,
+        );
+
+        assert!(
+            output
+                .stderr
+                .text
+                .contains("Codex note: `go` resolves on PATH")
+        );
+        assert!(
+            output
+                .stderr
+                .text
+                .contains(command_path.to_string_lossy().as_ref())
+        );
+        assert!(
+            output
+                .aggregated_output
+                .text
+                .contains("execution was blocked by sandbox policy")
+        );
     }
 }

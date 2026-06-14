@@ -823,9 +823,10 @@ pub(crate) fn is_likely_sandbox_denied(
     // 2: misuse of shell builtins
     // 126: permission denied
     // 127: command not found
-    const SANDBOX_DENIED_KEYWORDS: [&str; 7] = [
+    const SANDBOX_DENIED_KEYWORDS: [&str; 8] = [
         "operation not permitted",
         "permission denied",
+        "access is denied",
         "read-only file system",
         "seccomp",
         "sandbox",

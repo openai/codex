@@ -51,6 +51,12 @@ fn sandbox_detection_respects_quick_reject_exit_codes() {
 }
 
 #[test]
+fn sandbox_detection_keeps_windows_access_denied_signal_even_with_quick_reject_exit_code() {
+    let output = make_exec_output(/*exit_code*/ 126, "", "Access is denied", "");
+    assert!(is_likely_sandbox_denied(SandboxType::LinuxSeccomp, &output));
+}
+
+#[test]
 fn sandbox_detection_ignores_non_sandbox_mode() {
     let output = make_exec_output(/*exit_code*/ 1, "", "Operation not permitted", "");
     assert!(!is_likely_sandbox_denied(SandboxType::None, &output));
