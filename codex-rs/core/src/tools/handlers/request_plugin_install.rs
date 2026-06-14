@@ -174,7 +174,7 @@ impl RequestPluginInstallHandler {
         } else {
             requested_entries
                 .iter()
-                .map(|entry| entry.result(false))
+                .map(|entry| entry.result(/*completed*/ false))
                 .collect()
         };
         let completed_connector_ids = requested_entries
@@ -284,7 +284,7 @@ fn validate_request_plugin_install_picker_args<'a>(
         (Some(entries), None) => {
             for entry in entries {
                 resolved_entries.push(validate_request_plugin_install_picker_entry(
-                    None,
+                    /*category_index*/ None,
                     entry,
                     discoverable_tools,
                     app_server_client_name,
