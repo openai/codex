@@ -58,6 +58,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
+use codex_utils_path_uri::PathUri;
 use tracing::Span;
 
 use crate::rollout::recorder::RolloutRecorder;
@@ -4705,7 +4706,7 @@ async fn cwd_update_rewrites_sticky_environment_cwd() {
     assert_eq!(state.session_configuration.cwd(), &updated_cwd);
     assert_eq!(
         state.session_configuration.environment_selections()[0].cwd,
-        codex_utils_path_uri::PathUri::from_abs_path(&updated_cwd)
+        PathUri::from_abs_path(&updated_cwd)
     );
     assert_ne!(environment_cwd, updated_cwd);
 }

@@ -23,6 +23,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
+use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::responses::mount_models_once;
@@ -331,7 +332,7 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
             parent_trace: None,
             environments: vec![TurnEnvironmentSelection {
                 environment_id: "local".to_string(),
-                cwd: codex_utils_path_uri::PathUri::from_abs_path(&config.cwd),
+                cwd: PathUri::from_abs_path(&config.cwd),
             }],
             thread_extension_init: Default::default(),
         })
@@ -594,7 +595,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     std::fs::create_dir_all(&selected_cwd).expect("create selected cwd");
     let environments = vec![TurnEnvironmentSelection {
         environment_id: "local".to_string(),
-        cwd: codex_utils_path_uri::PathUri::from_abs_path(&selected_cwd),
+        cwd: PathUri::from_abs_path(&selected_cwd),
     }];
     let default_cwd = config.cwd.clone();
     let mut source_config = config.clone();

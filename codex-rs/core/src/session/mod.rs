@@ -149,6 +149,7 @@ use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
 use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use futures::future::Shared;
 use futures::prelude::*;
@@ -2366,7 +2367,7 @@ impl Session {
             });
         };
         let mut environment = turn_environment.selection();
-        environment.cwd = codex_utils_path_uri::PathUri::from_abs_path(&cwd);
+        environment.cwd = PathUri::from_abs_path(&cwd);
         self.request_permissions_for_environment(
             turn_context,
             call_id,

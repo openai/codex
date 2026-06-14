@@ -4,6 +4,7 @@ use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
+use codex_utils_path_uri::PathUri;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -1292,7 +1293,7 @@ impl ThreadRequestProcessor {
                 .into_iter()
                 .map(|environment| TurnEnvironmentSelection {
                     environment_id: environment.environment_id,
-                    cwd: codex_utils_path_uri::PathUri::from_abs_path(&environment.cwd),
+                    cwd: PathUri::from_abs_path(&environment.cwd),
                 })
                 .collect::<Vec<_>>()
         });

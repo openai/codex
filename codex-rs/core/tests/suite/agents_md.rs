@@ -646,11 +646,11 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
             environments: vec![
                 TurnEnvironmentSelection {
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                    cwd: codex_utils_path_uri::PathUri::from_abs_path(&test.config.cwd),
+                    cwd: PathUri::from_abs_path(&test.config.cwd),
                 },
                 TurnEnvironmentSelection {
                     environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                    cwd: codex_utils_path_uri::PathUri::from_path(local_root.path())?,
+                    cwd: PathUri::from_path(local_root.path())?,
                 },
             ],
             thread_extension_init: Default::default(),

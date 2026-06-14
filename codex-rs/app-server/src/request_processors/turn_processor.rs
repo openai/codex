@@ -4,6 +4,7 @@ use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_utils_path_uri::PathUri;
 
 const DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR: &str =
     "direct app-server input is not allowed for multi-agent v2 sub-agents";
@@ -339,7 +340,7 @@ impl TurnRequestProcessor {
                 .into_iter()
                 .map(|environment| TurnEnvironmentSelection {
                     environment_id: environment.environment_id,
-                    cwd: codex_utils_path_uri::PathUri::from_abs_path(&environment.cwd),
+                    cwd: PathUri::from_abs_path(&environment.cwd),
                 })
                 .collect::<Vec<_>>()
         });

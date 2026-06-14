@@ -7,6 +7,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
@@ -20,7 +21,7 @@ pub(crate) fn default_thread_environment_selections(
         .into_iter()
         .map(|environment_id| TurnEnvironmentSelection {
             environment_id,
-            cwd: codex_utils_path_uri::PathUri::from_abs_path(cwd),
+            cwd: PathUri::from_abs_path(cwd),
         })
         .collect()
 }
