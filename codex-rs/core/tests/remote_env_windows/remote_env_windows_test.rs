@@ -335,6 +335,18 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
             )
             .await??;
 
+            let requests = server
+                .received_requests()
+                .await
+                .context("failed to fetch received requests")?;
+            let model_request_includes_remote_instructions = requests.iter().any(|request| {
+                request
+                    .body_json::<serde_json::Value>()
+                    .is_ok_and(|body| body.to_string().contains(AGENTS_INSTRUCTIONS))
+            });
+            // TODO(anp): Load remote workspace instructions into the model context.
+            assert!(!model_request_includes_remote_instructions);
+
             Ok(())
         })
         .await
