@@ -10,6 +10,7 @@ use codex_api::ApiError;
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
 use codex_login::AuthManager;
+use codex_login::AuthMode;
 use codex_login::CodexAuth;
 use codex_login::auth::BedrockApiKeyAuth;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_4_MODEL_ID;
@@ -39,13 +40,13 @@ use mantle::runtime_base_url;
 pub(crate) struct AmazonBedrockModelProvider {
     pub(crate) info: ModelProviderInfo,
     pub(crate) aws: ModelProviderAwsAuthInfo,
-    auth_manager: Option<Arc<AuthManager>>,
+    managed_auth: Option<BedrockApiKeyAuth>,
 }
 
 impl AmazonBedrockModelProvider {
     pub(crate) fn new(
         provider_info: ModelProviderInfo,
-        auth_manager: Option<Arc<AuthManager>>,
+        managed_auth: Option<BedrockApiKeyAuth>,
     ) -> Self {
         let aws = provider_info
             .aws
@@ -57,26 +58,16 @@ impl AmazonBedrockModelProvider {
         Self {
             info: provider_info,
             aws,
-            auth_manager,
+            managed_auth,
         }
     }
 
     fn managed_auth(&self) -> Option<BedrockApiKeyAuth> {
-        self.auth_manager
-            .as_ref()
-            .and_then(|auth_manager| auth_manager.auth_cached())
-            .and_then(|auth| match auth {
-                CodexAuth::BedrockApiKey(auth) => Some(auth),
-                CodexAuth::ApiKey(_)
-                | CodexAuth::Chatgpt(_)
-                | CodexAuth::ChatgptAuthTokens(_)
-                | CodexAuth::AgentIdentity(_)
-                | CodexAuth::PersonalAccessToken(_) => None,
-            })
+        self.managed_auth.clone()
     }
 
     async fn auth(&self) -> Option<CodexAuth> {
-        self.managed_auth().map(CodexAuth::BedrockApiKey)
+        None
     }
 
     async fn api_provider(&self) -> Result<Provider> {
@@ -126,12 +117,15 @@ impl ModelProvider for AmazonBedrockModelProvider {
     }
 
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
-        self.managed_auth()
-            .and_then(|_| self.auth_manager.as_ref().cloned())
+        None
     }
 
     fn auth(&self) -> ModelProviderFuture<'_, Option<CodexAuth>> {
         Box::pin(AmazonBedrockModelProvider::auth(self))
+    }
+
+    fn auth_mode(&self, _auth: Option<&CodexAuth>) -> Option<AuthMode> {
+        self.managed_auth().map(|_| AuthMode::BedrockApiKey)
     }
 
     fn account_state(&self) -> ProviderAccountResult {
@@ -207,25 +201,20 @@ mod tests {
             api_key: "managed-bedrock-api-key".to_string(),
             region: "us-east-1".to_string(),
         };
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::BedrockApiKey(managed_auth.clone()));
         let provider = AmazonBedrockModelProvider::new(
             ModelProviderInfo::create_amazon_bedrock_provider(Some(ModelProviderAwsAuthInfo {
                 profile: Some("aws-profile-that-should-not-be-loaded".to_string()),
                 region: Some("us-west-2".to_string()),
             })),
-            Some(auth_manager.clone()),
+            Some(managed_auth.clone()),
         );
 
-        assert!(Arc::ptr_eq(
-            &provider
-                .auth_manager()
-                .expect("managed Bedrock auth manager should be exposed"),
-            &auth_manager,
-        ));
+        assert!(provider.auth_manager().is_none());
+        let auth = provider.auth().await;
+        assert_eq!(auth, None);
         assert_eq!(
-            provider.auth().await,
-            Some(CodexAuth::BedrockApiKey(managed_auth))
+            provider.auth_mode(auth.as_ref()),
+            Some(AuthMode::BedrockApiKey)
         );
         assert_eq!(
             provider.account_state(),
@@ -255,16 +244,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn openai_auth_is_not_exposed_to_bedrock() {
+    async fn bedrock_without_managed_auth_uses_aws_account() {
         let provider = AmazonBedrockModelProvider::new(
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
-            Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
-                "openai-api-key",
-            ))),
+            /*managed_auth*/ None,
         );
 
         assert!(provider.auth_manager().is_none());
-        assert_eq!(provider.auth().await, None);
+        let auth = provider.auth().await;
+        assert_eq!(auth, None);
+        assert_eq!(provider.auth_mode(auth.as_ref()), None);
         assert_eq!(
             provider.account_state(),
             Ok(ProviderAccountState {
@@ -280,7 +269,7 @@ mod tests {
     fn capabilities_disable_unsupported_hosted_tools() {
         let provider = AmazonBedrockModelProvider::new(
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
-            /*auth_manager*/ None,
+            /*managed_auth*/ None,
         );
 
         assert_eq!(
@@ -297,7 +286,7 @@ mod tests {
     fn approval_review_preferred_model_uses_bedrock_gpt_5_4() {
         let provider = AmazonBedrockModelProvider::new(
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
-            /*auth_manager*/ None,
+            /*managed_auth*/ None,
         );
 
         assert_eq!(

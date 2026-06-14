@@ -14,6 +14,7 @@ use codex_login::AuthRouteConfig;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
 use codex_login::ServerOptions;
+use codex_login::load_auth_dot_json;
 use codex_login::login_with_access_token;
 use codex_login::login_with_api_key;
 use codex_login::logout_with_revoke;
@@ -434,8 +435,8 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     )
     .await
     {
-        Ok(Some(auth)) => match auth.auth_mode() {
-            AuthMode::ApiKey => match auth.get_token() {
+        Ok(Some(auth)) => match auth {
+            CodexAuth::ApiKey(_) => match auth.get_token() {
                 Ok(api_key) => {
                     eprintln!("Logged in using an API key - {}", safe_format_key(&api_key));
                     std::process::exit(0);
@@ -445,26 +446,38 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                     std::process::exit(1);
                 }
             },
-            AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => {
+            CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
                 eprintln!("Logged in using ChatGPT");
                 std::process::exit(0);
             }
-            AuthMode::AgentIdentity => {
+            CodexAuth::AgentIdentity(_) => {
                 eprintln!("Logged in using access token");
                 std::process::exit(0);
             }
-            AuthMode::PersonalAccessToken => {
+            CodexAuth::PersonalAccessToken(_) => {
                 eprintln!("Logged in using personal access token");
-                std::process::exit(0);
-            }
-            AuthMode::BedrockApiKey => {
-                eprintln!("Logged in using Amazon Bedrock API key");
                 std::process::exit(0);
             }
         },
         Ok(None) => {
-            eprintln!("Not logged in");
-            std::process::exit(1);
+            match load_auth_dot_json(
+                &config.codex_home,
+                config.cli_auth_credentials_store_mode,
+                config.auth_keyring_backend_kind(),
+            ) {
+                Ok(Some(auth)) if auth.is_bedrock_api_key() => {
+                    eprintln!("Logged in using Amazon Bedrock API key");
+                    std::process::exit(0);
+                }
+                Ok(_) => {
+                    eprintln!("Not logged in");
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    eprintln!("Error checking login status: {e}");
+                    std::process::exit(1);
+                }
+            }
         }
         Err(e) => {
             eprintln!("Error checking login status: {e}");

@@ -8,6 +8,7 @@ use codex_api::ApiError;
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
 use codex_login::AuthManager;
+use codex_login::AuthMode;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::manager::OpenAiModelsManager;
@@ -58,7 +59,6 @@ pub struct ProviderAccountState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderAccountError {
     MissingChatgptAccountDetails,
-    UnsupportedBedrockApiKeyAuth,
 }
 
 impl fmt::Display for ProviderAccountError {
@@ -66,12 +66,6 @@ impl fmt::Display for ProviderAccountError {
         match self {
             Self::MissingChatgptAccountDetails => {
                 write!(f, "plan type is required for chatgpt authentication")
-            }
-            Self::UnsupportedBedrockApiKeyAuth => {
-                write!(
-                    f,
-                    "Bedrock API key auth is only supported by the Amazon Bedrock model provider"
-                )
             }
         }
     }
@@ -144,6 +138,11 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the current provider-scoped auth value, if one is configured.
     fn auth(&self) -> ModelProviderFuture<'_, Option<CodexAuth>>;
 
+    /// Returns the reporting mode for the resolved provider auth.
+    fn auth_mode(&self, auth: Option<&CodexAuth>) -> Option<AuthMode> {
+        auth.map(CodexAuth::auth_mode)
+    }
+
     /// Returns the current app-visible account state for this provider.
     fn account_state(&self) -> ProviderAccountResult;
 
@@ -156,8 +155,7 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     fn api_provider(&self) -> ModelProviderFuture<'_, codex_protocol::error::Result<Provider>> {
         Box::pin(async move {
             let auth = self.auth().await;
-            self.info()
-                .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))
+            self.info().to_api_provider(self.auth_mode(auth.as_ref()))
         })
     }
 
@@ -220,7 +218,10 @@ pub fn create_model_provider(
     auth_manager: Option<Arc<AuthManager>>,
 ) -> SharedModelProvider {
     if provider_info.is_amazon_bedrock() {
-        Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager))
+        let managed_auth = auth_manager
+            .as_ref()
+            .and_then(|auth_manager| auth_manager.bedrock_api_key_auth_cached());
+        Arc::new(AmazonBedrockModelProvider::new(provider_info, managed_auth))
     } else {
         Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager))
     }
@@ -281,9 +282,6 @@ impl ModelProvider for ConfiguredModelProvider {
                 })
                 .map(|auth| match &auth {
                     CodexAuth::ApiKey(_) => Ok(ProviderAccount::ApiKey),
-                    CodexAuth::BedrockApiKey(_) => {
-                        Err(ProviderAccountError::UnsupportedBedrockApiKeyAuth)
-                    }
                     CodexAuth::Chatgpt(_)
                     | CodexAuth::ChatgptAuthTokens(_)
                     | CodexAuth::AgentIdentity(_)
@@ -337,7 +335,6 @@ mod tests {
     use std::num::NonZeroU64;
 
     use codex_login::auth::AgentIdentityAuthPolicy;
-    use codex_login::auth::BedrockApiKeyAuth;
     use codex_model_provider_info::ModelProviderAwsAuthInfo;
     use codex_model_provider_info::WireApi;
     use codex_model_provider_info::create_oss_provider_with_base_url;
@@ -429,13 +426,6 @@ mod tests {
         .expect("valid model")
     }
 
-    fn bedrock_api_key_auth() -> CodexAuth {
-        CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
-            api_key: "bedrock-api-key-test".to_string(),
-            region: "us-east-1".to_string(),
-        })
-    }
-
     #[tokio::test]
     async fn scoped_auth_ignores_scope_for_non_openai_provider() {
         let provider = create_model_provider(
@@ -523,17 +513,6 @@ mod tests {
         assert!(provider.auth_manager().is_none());
     }
 
-    #[tokio::test]
-    async fn create_model_provider_uses_managed_auth_for_amazon_bedrock_provider() {
-        let auth = bedrock_api_key_auth();
-        let provider = create_model_provider(
-            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
-            Some(AuthManager::from_auth_for_testing(auth.clone())),
-        );
-
-        assert_eq!(provider.auth().await, Some(auth));
-    }
-
     #[test]
     fn openai_provider_returns_unauthenticated_openai_account_state() {
         let provider = create_model_provider(
@@ -586,19 +565,6 @@ mod tests {
                 }),
                 requires_openai_auth: true,
             })
-        );
-    }
-
-    #[test]
-    fn openai_provider_rejects_bedrock_api_key_account_state() {
-        let provider = create_model_provider(
-            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
-            Some(AuthManager::from_auth_for_testing(bedrock_api_key_auth())),
-        );
-
-        assert_eq!(
-            provider.account_state(),
-            Err(ProviderAccountError::UnsupportedBedrockApiKeyAuth)
         );
     }
 

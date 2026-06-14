@@ -4,8 +4,6 @@ use super::bedrock_auth::logout as logout_managed_bedrock;
 use super::*;
 use crate::auth_mode::auth_mode_to_api;
 use chrono::DateTime;
-use codex_login::auth::read_codex_api_key_from_env;
-use codex_login::read_codex_access_token_from_env;
 use codex_model_provider::is_supported_amazon_bedrock_region;
 
 mod rate_limit_resets;
@@ -357,14 +355,6 @@ impl AccountRequestProcessor {
             if self.auth_manager.is_external_chatgpt_auth_active() {
                 return Err(self.external_auth_active_error());
             }
-            if read_codex_access_token_from_env().is_some()
-                || (self.auth_manager.codex_api_key_env_enabled()
-                    && read_codex_api_key_from_env().is_some())
-            {
-                return Err(invalid_request(
-                    "Amazon Bedrock login is unavailable while Codex auth is supplied through the environment.",
-                ));
-            }
             if matches!(
                 self.config.forced_login_method,
                 Some(ForcedLoginMethod::Chatgpt)
@@ -393,6 +383,7 @@ impl AccountRequestProcessor {
             }
 
             login_managed_bedrock(&self.config, &self.config_manager, api_key, region).await?;
+            self.auth_manager.reload().await;
             Ok(LoginAccountResponse::AmazonBedrock {})
         }
         .await;
@@ -400,7 +391,7 @@ impl AccountRequestProcessor {
         self.outgoing.send_result(request_id, result).await;
 
         if logged_in {
-            self.emit_login_completed_notification(/*login_id*/ None)
+            self.send_login_success_notifications(/*login_id*/ None)
                 .await;
         }
     }
@@ -712,20 +703,6 @@ impl AccountRequestProcessor {
         )
         .await;
 
-        self.emit_login_success_notifications(login_id).await;
-    }
-
-    async fn emit_login_success_notifications(&self, login_id: Option<Uuid>) {
-        self.emit_login_completed_notification(login_id).await;
-
-        self.outgoing
-            .send_server_notification(ServerNotification::AccountUpdated(
-                self.current_account_updated_notification(),
-            ))
-            .await;
-    }
-
-    async fn emit_login_completed_notification(&self, login_id: Option<Uuid>) {
         let payload_login_completed = AccountLoginCompletedNotification {
             login_id: login_id.map(|id| id.to_string()),
             success: true,
@@ -734,6 +711,12 @@ impl AccountRequestProcessor {
         self.outgoing
             .send_server_notification(ServerNotification::AccountLoginCompleted(
                 payload_login_completed,
+            ))
+            .await;
+
+        self.outgoing
+            .send_server_notification(ServerNotification::AccountUpdated(
+                self.current_account_updated_notification(),
             ))
             .await;
     }
@@ -785,7 +768,7 @@ impl AccountRequestProcessor {
         }
     }
 
-    async fn logout_common(&self) -> Result<Option<AccountUpdatedNotification>, JSONRPCErrorError> {
+    async fn logout_common(&self) -> Result<Option<AuthMode>, JSONRPCErrorError> {
         // Cancel any active login attempt.
         {
             let mut guard = self.active_login.lock().await;
@@ -796,6 +779,7 @@ impl AccountRequestProcessor {
 
         if has_managed_bedrock_login(&self.config)? {
             logout_managed_bedrock(&self.config, &self.config_manager).await?;
+            self.auth_manager.reload().await;
             return Ok(None);
         }
         if self.config.model_provider.is_amazon_bedrock() {
@@ -817,20 +801,30 @@ impl AccountRequestProcessor {
         .await;
 
         // Reflect the current auth method after logout (likely None).
-        Ok(Some(AccountUpdatedNotification {
-            auth_mode: self
-                .auth_manager
-                .auth_cached()
-                .as_ref()
-                .map(CodexAuth::api_auth_mode)
-                .map(auth_mode_to_api),
-            plan_type: None,
-        }))
+        Ok(self
+            .auth_manager
+            .auth_cached()
+            .as_ref()
+            .map(CodexAuth::api_auth_mode)
+            .map(auth_mode_to_api))
     }
 
     async fn logout_v2(&self, request_id: ConnectionRequestId) -> Result<(), JSONRPCErrorError> {
+        let skip_account_updated = matches!(has_managed_bedrock_login(&self.config), Ok(true))
+            || self.config.model_provider.is_amazon_bedrock();
         let result = self.logout_common().await;
-        let account_updated = result.as_ref().ok().cloned().flatten();
+        let account_updated = if skip_account_updated {
+            None
+        } else {
+            result
+                .as_ref()
+                .ok()
+                .cloned()
+                .map(|auth_mode| AccountUpdatedNotification {
+                    auth_mode,
+                    plan_type: None,
+                })
+        };
         self.outgoing
             .send_result(request_id, result.map(|_| LogoutAccountResponse {}))
             .await;
