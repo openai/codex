@@ -14,12 +14,12 @@ use ts_rs::TS;
 /// Supports storing arbitrary strings read from the API and converting to and
 /// from [`PathUri`] using an explicitly selected native path convention.
 ///
-/// "Native" refers to the supplied [`PathConvention`], which may be foreign to
-/// the operating system running this process. The inner string is private so
-/// path-producing code must render through [`Self::from_path_uri`] rather than
-/// accidentally applying the current host's path rules. Opaque fallback paths
-/// are decoded using the supplied convention and converted to UTF-8 lossily at
-/// this API boundary because the value is serialized as a JSON string.
+/// When converting from [`PathUri`], "native" refers to the supplied
+/// [`PathConvention`], which may be foreign to the operating system running
+/// this process. The inner string is private so path-producing code must use
+/// [`Self::from_abs_path`] or [`Self::from_path_uri`] instead of bypassing the
+/// intended conversion boundary. Non-UTF-8 paths are converted to UTF-8
+/// lossily because this API value is serialized as a JSON string.
 ///
 /// Deserialization accepts any UTF-8 string without interpreting or validating
 /// it. That unrestricted construction path is intentionally available only to
@@ -33,13 +33,9 @@ use ts_rs::TS;
 pub struct ApiPathString(String);
 
 impl ApiPathString {
-    /// Converts an absolute path to a [`PathUri`] before rendering it using the
-    /// requested native path convention.
-    pub fn from_abs_path(
-        path: &AbsolutePathBuf,
-        convention: PathConvention,
-    ) -> Result<Self, ApiPathStringError> {
-        Self::from_path_uri(&PathUri::from_abs_path(path), convention)
+    /// Renders an absolute path using the current host's path convention.
+    pub fn from_abs_path(path: &AbsolutePathBuf) -> Self {
+        Self(path.to_string_lossy().into_owned())
     }
 
     /// Renders a path URI using the requested native path convention.

@@ -435,25 +435,17 @@ fn foreign_absolute_syntax_deserializes_without_host_interpretation() {
 }
 
 #[test]
-fn renders_an_absolute_path_using_the_explicit_convention() {
+fn renders_an_absolute_path_using_the_host_convention() {
     #[cfg(unix)]
-    let (native_path, convention, expected) = (
-        "/workspace/a file.rs",
-        PathConvention::Posix,
-        "/workspace/a file.rs",
-    );
+    let native_path = "/workspace/a file.rs";
     #[cfg(windows)]
-    let (native_path, convention, expected) = (
-        r"C:\workspace\a file.rs",
-        PathConvention::Windows,
-        r"C:\workspace\a file.rs",
-    );
+    let native_path = r"C:\workspace\a file.rs";
     let path = AbsolutePathBuf::from_absolute_path_checked(native_path)
         .expect("native path should be absolute");
 
     assert_eq!(
-        ApiPathString::from_abs_path(&path, convention),
-        Ok(ApiPathString(expected.to_string()))
+        ApiPathString::from_abs_path(&path),
+        ApiPathString(native_path.to_string())
     );
 }
 
@@ -468,7 +460,15 @@ fn renders_native_non_unicode_windows_fallback_lossily() {
             .chain([0xd800])
             .collect::<Vec<_>>(),
     ));
-    let path = PathUri::from_path(native_path).expect("absolute native path");
+    let native_path =
+        AbsolutePathBuf::from_absolute_path_checked(native_path).expect("absolute native path");
+
+    assert_eq!(
+        ApiPathString::from_abs_path(&native_path),
+        ApiPathString(r"C:\bad\�".to_string())
+    );
+
+    let path = PathUri::from_abs_path(&native_path);
 
     assert_eq!(
         ApiPathString::from_path_uri(&path, PathConvention::Windows),

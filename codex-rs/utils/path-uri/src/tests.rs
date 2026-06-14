@@ -66,10 +66,12 @@ fn infers_path_conventions_from_uri_shape() {
         ("file:///C:/Users/Alice/src", Some(PathConvention::Windows)),
         ("file:///d:", Some(PathConvention::Windows)),
         ("file://server/share/src", Some(PathConvention::Windows)),
+        // Opaque fallback for POSIX bytes `/tmp/null-\0-\xff-byte`.
         (
             "file:///%00/bad/path/L3RtcC9udWxsLQAt_y1ieXRl",
             Some(PathConvention::Posix),
         ),
+        // Opaque fallback for Windows UTF-16LE `\\.\COM1\`.
         (
             "file:///%00/bad/path/XABcAC4AXABDAE8ATQAxAFwA",
             Some(PathConvention::Windows),
