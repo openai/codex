@@ -238,7 +238,7 @@ fn read_only_sandbox(readable_root: PathBuf) -> FileSystemSandboxContext<PathUri
             NetworkSandboxPolicy::Restricted,
         ),
     )
-    .into_path_uri()
+    .into()
 }
 
 fn workspace_write_sandbox(writable_root: PathBuf) -> FileSystemSandboxContext<PathUri> {
@@ -254,7 +254,7 @@ fn workspace_write_sandbox(writable_root: PathBuf) -> FileSystemSandboxContext<P
             NetworkSandboxPolicy::Restricted,
         ),
     )
-    .into_path_uri()
+    .into()
 }
 
 fn assert_normalized_path_rejected(error: &std::io::Error) {

@@ -477,7 +477,7 @@ mod tests {
             "sandbox": legacy_sandbox,
         }))
         .expect("legacy absolute path should deserialize");
-        let expected_sandbox = native_sandbox.into_path_uri();
+        let expected_sandbox: FileSystemSandboxContext<PathUri> = native_sandbox.into();
         let expected = FsReadFileParams {
             path: PathUri::from_path(legacy_path).expect("path URI"),
             sandbox: Some(expected_sandbox.clone()),

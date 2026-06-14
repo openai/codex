@@ -182,20 +182,22 @@ pub struct FileSystemSandboxEntry<PathType = AbsolutePathBuf> {
     pub access: FileSystemAccessMode,
 }
 
-impl FileSystemSandboxEntry<AbsolutePathBuf> {
-    pub fn into_path_uri(self) -> FileSystemSandboxEntry<PathUri> {
+impl From<FileSystemSandboxEntry<AbsolutePathBuf>> for FileSystemSandboxEntry<PathUri> {
+    fn from(value: FileSystemSandboxEntry<AbsolutePathBuf>) -> Self {
         FileSystemSandboxEntry {
-            path: self.path.into_path_uri(),
-            access: self.access,
+            path: value.path.into(),
+            access: value.access,
         }
     }
 }
 
-impl FileSystemSandboxEntry<PathUri> {
-    pub fn into_abs_path(self) -> io::Result<FileSystemSandboxEntry<AbsolutePathBuf>> {
+impl TryFrom<FileSystemSandboxEntry<PathUri>> for FileSystemSandboxEntry<AbsolutePathBuf> {
+    type Error = io::Error;
+
+    fn try_from(value: FileSystemSandboxEntry<PathUri>) -> Result<Self, Self::Error> {
         Ok(FileSystemSandboxEntry {
-            path: self.path.into_abs_path()?,
-            access: self.access,
+            path: value.path.try_into()?,
+            access: value.access,
         })
     }
 }
@@ -371,26 +373,28 @@ pub enum FileSystemPath<PathType = AbsolutePathBuf> {
     },
 }
 
-impl FileSystemPath<AbsolutePathBuf> {
-    pub fn into_path_uri(self) -> FileSystemPath<PathUri> {
-        match self {
-            Self::Path { path } => FileSystemPath::Path {
+impl From<FileSystemPath<AbsolutePathBuf>> for FileSystemPath<PathUri> {
+    fn from(value: FileSystemPath<AbsolutePathBuf>) -> Self {
+        match value {
+            FileSystemPath::Path { path } => FileSystemPath::Path {
                 path: PathUri::from_abs_path(&path),
             },
-            Self::GlobPattern { pattern } => FileSystemPath::GlobPattern { pattern },
-            Self::Special { value } => FileSystemPath::Special { value },
+            FileSystemPath::GlobPattern { pattern } => FileSystemPath::GlobPattern { pattern },
+            FileSystemPath::Special { value } => FileSystemPath::Special { value },
         }
     }
 }
 
-impl FileSystemPath<PathUri> {
-    pub fn into_abs_path(self) -> io::Result<FileSystemPath<AbsolutePathBuf>> {
-        Ok(match self {
-            Self::Path { path } => FileSystemPath::Path {
+impl TryFrom<FileSystemPath<PathUri>> for FileSystemPath<AbsolutePathBuf> {
+    type Error = io::Error;
+
+    fn try_from(value: FileSystemPath<PathUri>) -> Result<Self, Self::Error> {
+        Ok(match value {
+            FileSystemPath::Path { path } => FileSystemPath::Path {
                 path: path.to_abs_path()?,
             },
-            Self::GlobPattern { pattern } => FileSystemPath::GlobPattern { pattern },
-            Self::Special { value } => FileSystemPath::Special { value },
+            FileSystemPath::GlobPattern { pattern } => FileSystemPath::GlobPattern { pattern },
+            FileSystemPath::Special { value } => FileSystemPath::Special { value },
         })
     }
 }

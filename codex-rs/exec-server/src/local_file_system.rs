@@ -704,7 +704,8 @@ fn reject_platform_sandbox_context(
 pub(crate) fn should_run_in_platform_sandbox(
     sandbox: &FileSystemSandboxContext<PathUri>,
 ) -> io::Result<bool> {
-    Ok(sandbox.clone().into_abs_path()?.should_run_in_sandbox())
+    let sandbox: FileSystemSandboxContext<AbsolutePathBuf> = sandbox.clone().try_into()?;
+    Ok(sandbox.should_run_in_sandbox())
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> io::Result<()> {

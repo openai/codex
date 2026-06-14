@@ -66,9 +66,10 @@ impl FileSystemSandboxRunner {
         request: FsHelperRequest,
     ) -> Result<FsHelperPayload, JSONRPCErrorError> {
         let cwd = sandbox_cwd(sandbox)?;
-        let native_sandbox = sandbox.clone().into_abs_path().map_err(|err| {
-            invalid_request(format!("invalid sandbox permission path URI: {err}"))
-        })?;
+        let native_sandbox: FileSystemSandboxContext<AbsolutePathBuf> =
+            sandbox.clone().try_into().map_err(|err| {
+                invalid_request(format!("invalid sandbox permission path URI: {err}"))
+            })?;
         let mut file_system_policy = native_sandbox.permissions.file_system_sandbox_policy();
         let helper_read_roots = if sandbox.use_legacy_landlock {
             Vec::new()
@@ -586,7 +587,7 @@ mod tests {
         let sandbox_context = codex_file_system::FileSystemSandboxContext::from_permission_profile(
             PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
         )
-        .into_path_uri();
+        .into();
 
         let err = sandbox_cwd(&sandbox_context).expect_err("missing cwd should be rejected");
 
@@ -660,7 +661,7 @@ mod tests {
             PermissionProfile::from_runtime_permissions(policy, NetworkSandboxPolicy::Restricted),
             cwd,
         )
-        .into_path_uri()
+        .into()
     }
 
     fn non_native_cwd() -> PathUri {

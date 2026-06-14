@@ -114,5 +114,5 @@ fn sandbox_context(entries: Vec<FileSystemSandboxEntry>) -> FileSystemSandboxCon
             NetworkSandboxPolicy::Restricted,
         ),
     )
-    .into_path_uri()
+    .into()
 }

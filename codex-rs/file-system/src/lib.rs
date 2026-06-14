@@ -113,14 +113,16 @@ impl FileSystemSandboxContext<AbsolutePathBuf> {
         matches!(file_system_policy.kind, FileSystemSandboxKind::Restricted)
             && !file_system_policy.has_full_disk_write_access()
     }
+}
 
-    pub fn into_path_uri(self) -> FileSystemSandboxContext<PathUri> {
+impl From<FileSystemSandboxContext<AbsolutePathBuf>> for FileSystemSandboxContext<PathUri> {
+    fn from(value: FileSystemSandboxContext<AbsolutePathBuf>) -> Self {
         FileSystemSandboxContext {
-            permissions: self.permissions.into_path_uri(),
-            cwd: self.cwd,
-            windows_sandbox_level: self.windows_sandbox_level,
-            windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
-            use_legacy_landlock: self.use_legacy_landlock,
+            permissions: value.permissions.into(),
+            cwd: value.cwd,
+            windows_sandbox_level: value.windows_sandbox_level,
+            windows_sandbox_private_desktop: value.windows_sandbox_private_desktop,
+            use_legacy_landlock: value.use_legacy_landlock,
         }
     }
 }
@@ -155,14 +157,16 @@ impl<PathType> FileSystemSandboxContext<PathType> {
     }
 }
 
-impl FileSystemSandboxContext<PathUri> {
-    pub fn into_abs_path(self) -> io::Result<FileSystemSandboxContext<AbsolutePathBuf>> {
+impl TryFrom<FileSystemSandboxContext<PathUri>> for FileSystemSandboxContext<AbsolutePathBuf> {
+    type Error = io::Error;
+
+    fn try_from(value: FileSystemSandboxContext<PathUri>) -> Result<Self, Self::Error> {
         Ok(FileSystemSandboxContext {
-            permissions: self.permissions.into_abs_path()?,
-            cwd: self.cwd,
-            windows_sandbox_level: self.windows_sandbox_level,
-            windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
-            use_legacy_landlock: self.use_legacy_landlock,
+            permissions: value.permissions.try_into()?,
+            cwd: value.cwd,
+            windows_sandbox_level: value.windows_sandbox_level,
+            windows_sandbox_private_desktop: value.windows_sandbox_private_desktop,
+            use_legacy_landlock: value.use_legacy_landlock,
         })
     }
 }

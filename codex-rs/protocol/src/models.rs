@@ -69,28 +69,30 @@ pub struct FileSystemPermissions<PathType = AbsolutePathBuf> {
     pub glob_scan_max_depth: Option<NonZeroUsize>,
 }
 
-impl FileSystemPermissions<AbsolutePathBuf> {
-    pub fn into_path_uri(self) -> FileSystemPermissions<PathUri> {
+impl From<FileSystemPermissions<AbsolutePathBuf>> for FileSystemPermissions<PathUri> {
+    fn from(value: FileSystemPermissions<AbsolutePathBuf>) -> Self {
         FileSystemPermissions {
-            entries: self
+            entries: value
                 .entries
                 .into_iter()
-                .map(FileSystemSandboxEntry::<AbsolutePathBuf>::into_path_uri)
+                .map(FileSystemSandboxEntry::<PathUri>::from)
                 .collect(),
-            glob_scan_max_depth: self.glob_scan_max_depth,
+            glob_scan_max_depth: value.glob_scan_max_depth,
         }
     }
 }
 
-impl FileSystemPermissions<PathUri> {
-    pub fn into_abs_path(self) -> io::Result<FileSystemPermissions<AbsolutePathBuf>> {
+impl TryFrom<FileSystemPermissions<PathUri>> for FileSystemPermissions<AbsolutePathBuf> {
+    type Error = io::Error;
+
+    fn try_from(value: FileSystemPermissions<PathUri>) -> Result<Self, Self::Error> {
         Ok(FileSystemPermissions {
-            entries: self
+            entries: value
                 .entries
                 .into_iter()
-                .map(FileSystemSandboxEntry::<PathUri>::into_abs_path)
+                .map(FileSystemSandboxEntry::<AbsolutePathBuf>::try_from)
                 .collect::<io::Result<_>>()?,
-            glob_scan_max_depth: self.glob_scan_max_depth,
+            glob_scan_max_depth: value.glob_scan_max_depth,
         })
     }
 }
@@ -315,38 +317,46 @@ pub enum ManagedFileSystemPermissions<PathType = AbsolutePathBuf> {
     Unrestricted,
 }
 
-impl ManagedFileSystemPermissions<AbsolutePathBuf> {
-    pub fn into_path_uri(self) -> ManagedFileSystemPermissions<PathUri> {
-        match self {
-            Self::Restricted {
+impl From<ManagedFileSystemPermissions<AbsolutePathBuf>> for ManagedFileSystemPermissions<PathUri> {
+    fn from(value: ManagedFileSystemPermissions<AbsolutePathBuf>) -> Self {
+        match value {
+            ManagedFileSystemPermissions::Restricted {
                 entries,
                 glob_scan_max_depth,
             } => ManagedFileSystemPermissions::Restricted {
                 entries: entries
                     .into_iter()
-                    .map(FileSystemSandboxEntry::<AbsolutePathBuf>::into_path_uri)
+                    .map(FileSystemSandboxEntry::<PathUri>::from)
                     .collect(),
                 glob_scan_max_depth,
             },
-            Self::Unrestricted => ManagedFileSystemPermissions::Unrestricted,
+            ManagedFileSystemPermissions::Unrestricted => {
+                ManagedFileSystemPermissions::Unrestricted
+            }
         }
     }
 }
 
-impl ManagedFileSystemPermissions<PathUri> {
-    pub fn into_abs_path(self) -> io::Result<ManagedFileSystemPermissions<AbsolutePathBuf>> {
-        Ok(match self {
-            Self::Restricted {
+impl TryFrom<ManagedFileSystemPermissions<PathUri>>
+    for ManagedFileSystemPermissions<AbsolutePathBuf>
+{
+    type Error = io::Error;
+
+    fn try_from(value: ManagedFileSystemPermissions<PathUri>) -> Result<Self, Self::Error> {
+        Ok(match value {
+            ManagedFileSystemPermissions::Restricted {
                 entries,
                 glob_scan_max_depth,
             } => ManagedFileSystemPermissions::Restricted {
                 entries: entries
                     .into_iter()
-                    .map(FileSystemSandboxEntry::<PathUri>::into_abs_path)
+                    .map(FileSystemSandboxEntry::<AbsolutePathBuf>::try_from)
                     .collect::<io::Result<_>>()?,
                 glob_scan_max_depth,
             },
-            Self::Unrestricted => ManagedFileSystemPermissions::Unrestricted,
+            ManagedFileSystemPermissions::Unrestricted => {
+                ManagedFileSystemPermissions::Unrestricted
+            }
         })
     }
 }
@@ -411,34 +421,36 @@ pub enum PermissionProfile<PathType = AbsolutePathBuf> {
     External { network: NetworkSandboxPolicy },
 }
 
-impl PermissionProfile<AbsolutePathBuf> {
-    pub fn into_path_uri(self) -> PermissionProfile<PathUri> {
-        match self {
-            Self::Managed {
+impl From<PermissionProfile<AbsolutePathBuf>> for PermissionProfile<PathUri> {
+    fn from(value: PermissionProfile<AbsolutePathBuf>) -> Self {
+        match value {
+            PermissionProfile::Managed {
                 file_system,
                 network,
             } => PermissionProfile::Managed {
-                file_system: file_system.into_path_uri(),
+                file_system: file_system.into(),
                 network,
             },
-            Self::Disabled => PermissionProfile::Disabled,
-            Self::External { network } => PermissionProfile::External { network },
+            PermissionProfile::Disabled => PermissionProfile::Disabled,
+            PermissionProfile::External { network } => PermissionProfile::External { network },
         }
     }
 }
 
-impl PermissionProfile<PathUri> {
-    pub fn into_abs_path(self) -> io::Result<PermissionProfile<AbsolutePathBuf>> {
-        Ok(match self {
-            Self::Managed {
+impl TryFrom<PermissionProfile<PathUri>> for PermissionProfile<AbsolutePathBuf> {
+    type Error = io::Error;
+
+    fn try_from(value: PermissionProfile<PathUri>) -> Result<Self, Self::Error> {
+        Ok(match value {
+            PermissionProfile::Managed {
                 file_system,
                 network,
             } => PermissionProfile::Managed {
-                file_system: file_system.into_abs_path()?,
+                file_system: file_system.try_into()?,
                 network,
             },
-            Self::Disabled => PermissionProfile::Disabled,
-            Self::External { network } => PermissionProfile::External { network },
+            PermissionProfile::Disabled => PermissionProfile::Disabled,
+            PermissionProfile::External { network } => PermissionProfile::External { network },
         })
     }
 }
