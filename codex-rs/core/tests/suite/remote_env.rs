@@ -4,7 +4,7 @@ use codex_config::types::ApprovalsReviewer;
 use codex_core::config::Constrained;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
-use codex_exec_server::FileSystemSandboxContext;
+use codex_exec_server::ExecFileSystemSandboxContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::RemoveOptions;
@@ -225,31 +225,35 @@ fn absolute_path(path: PathBuf) -> AbsolutePathBuf {
     }
 }
 
-fn read_only_sandbox(readable_root: PathBuf) -> FileSystemSandboxContext {
+fn read_only_sandbox(readable_root: PathBuf) -> ExecFileSystemSandboxContext {
     let readable_root = absolute_path(readable_root);
-    FileSystemSandboxContext::from_permission_profile(PermissionProfile::from_runtime_permissions(
-        &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-            path: FileSystemPath::Path {
-                path: readable_root,
-            },
-            access: FileSystemAccessMode::Read,
-        }]),
-        NetworkSandboxPolicy::Restricted,
-    ))
+    codex_file_system::AppFileSystemSandboxContext::from_permission_profile(
+        PermissionProfile::from_runtime_permissions(
+            &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: readable_root,
+                },
+                access: FileSystemAccessMode::Read,
+            }]),
+            NetworkSandboxPolicy::Restricted,
+        ),
+    )
     .into_path_uri()
 }
 
-fn workspace_write_sandbox(writable_root: PathBuf) -> FileSystemSandboxContext {
+fn workspace_write_sandbox(writable_root: PathBuf) -> ExecFileSystemSandboxContext {
     let writable_root = absolute_path(writable_root);
-    FileSystemSandboxContext::from_permission_profile(PermissionProfile::from_runtime_permissions(
-        &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-            path: FileSystemPath::Path {
-                path: writable_root,
-            },
-            access: FileSystemAccessMode::Write,
-        }]),
-        NetworkSandboxPolicy::Restricted,
-    ))
+    codex_file_system::AppFileSystemSandboxContext::from_permission_profile(
+        PermissionProfile::from_runtime_permissions(
+            &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: writable_root,
+                },
+                access: FileSystemAccessMode::Write,
+            }]),
+            NetworkSandboxPolicy::Restricted,
+        ),
+    )
     .into_path_uri()
 }
 

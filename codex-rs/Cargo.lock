@@ -2589,6 +2589,7 @@ dependencies = [
  "codex-extension-api",
  "codex-features",
  "codex-feedback",
+ "codex-file-system",
  "codex-git-utils",
  "codex-home",
  "codex-hooks",

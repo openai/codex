@@ -20,7 +20,8 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::AppliedPatchDelta;
 use codex_apply_patch::ApplyPatchAction;
-use codex_exec_server::FileSystemSandboxContext;
+use codex_exec_server::ExecFileSystemSandboxContext;
+use codex_file_system::AppFileSystemSandboxContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -89,7 +90,7 @@ impl ApplyPatchRuntime {
     fn file_system_sandbox_context_for_attempt(
         req: &ApplyPatchRequest,
         attempt: &SandboxAttempt<'_>,
-    ) -> Option<FileSystemSandboxContext> {
+    ) -> Option<ExecFileSystemSandboxContext> {
         if attempt.sandbox == SandboxType::None {
             return None;
         }
@@ -97,7 +98,7 @@ impl ApplyPatchRuntime {
         let permissions =
             effective_permission_profile(attempt.permissions, req.additional_permissions.as_ref());
         Some(
-            FileSystemSandboxContext::<AbsolutePathBuf> {
+            AppFileSystemSandboxContext {
                 permissions,
                 cwd: Some(attempt.sandbox_cwd.clone()),
                 windows_sandbox_level: attempt.windows_sandbox_level,

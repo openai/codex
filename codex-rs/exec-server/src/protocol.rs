@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use crate::FileSystemSandboxContext;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_file_system::FileSystemSandboxContext;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
@@ -454,15 +454,8 @@ mod base64_bytes {
 mod tests {
     use super::FsReadFileParams;
     use super::HttpRequestParams;
-    use crate::FileSystemSandboxContext;
-    use codex_protocol::config_types::WindowsSandboxLevel;
-    use codex_protocol::models::ManagedFileSystemPermissions;
+    use codex_file_system::AppFileSystemSandboxContext;
     use codex_protocol::models::PermissionProfile;
-    use codex_protocol::models::PermissionProfileFor;
-    use codex_protocol::permissions::FileSystemAccessMode;
-    use codex_protocol::permissions::FileSystemPath;
-    use codex_protocol::permissions::FileSystemSandboxEntry;
-    use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
 
@@ -472,7 +465,7 @@ mod tests {
             .expect("current directory")
             .join("legacy-file.txt");
         let legacy_cwd = std::env::current_dir().expect("current directory");
-        let native_sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+        let native_sandbox = AppFileSystemSandboxContext::from_permission_profile_with_cwd(
             PermissionProfile::default(),
             PathUri::from_path(&legacy_cwd).expect("cwd URI"),
         );
@@ -499,41 +492,6 @@ mod tests {
                     .expect("sandbox should serialize"),
             })
         );
-    }
-
-    #[test]
-    fn filesystem_protocol_propagates_explicit_path_uri_type() {
-        let path = PathUri::from_path(
-            std::env::current_dir()
-                .expect("current directory")
-                .join("generic-file.txt"),
-        )
-        .expect("path URI");
-        let params = FsReadFileParams {
-            path: path.clone(),
-            sandbox: Some(FileSystemSandboxContext::<PathUri> {
-                permissions: PermissionProfileFor::Managed {
-                    file_system: ManagedFileSystemPermissions::Restricted {
-                        entries: vec![FileSystemSandboxEntry {
-                            path: FileSystemPath::Path { path },
-                            access: FileSystemAccessMode::Read,
-                        }],
-                        glob_scan_max_depth: None,
-                    },
-                    network: NetworkSandboxPolicy::Restricted,
-                },
-                cwd: None,
-                windows_sandbox_level: WindowsSandboxLevel::Disabled,
-                windows_sandbox_private_desktop: false,
-                use_legacy_landlock: false,
-            }),
-        };
-
-        let serialized = serde_json::to_value(&params).expect("params should serialize");
-        let deserialized = serde_json::from_value::<FsReadFileParams>(serialized)
-            .expect("params should deserialize");
-
-        assert_eq!(deserialized, params);
     }
 
     #[test]

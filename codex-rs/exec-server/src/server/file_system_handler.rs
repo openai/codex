@@ -194,7 +194,6 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::FileSystemSandboxContext;
     use crate::protocol::FsReadFileParams;
     use crate::protocol::FsWriteFileParams;
 
@@ -209,7 +208,7 @@ mod tests {
         let handler = FileSystemHandler::new(runtime_paths);
         let sandbox_cwd = PathUri::from_path(temp_dir.path()).expect("tempdir URI");
         let sandbox_context = |sandbox_policy| {
-            FileSystemSandboxContext::from_legacy_sandbox_policy(
+            codex_file_system::AppFileSystemSandboxContext::from_legacy_sandbox_policy(
                 sandbox_policy,
                 sandbox_cwd.clone(),
             )

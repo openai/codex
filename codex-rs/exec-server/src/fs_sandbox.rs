@@ -19,8 +19,8 @@ use codex_utils_path_uri::PathUri;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
+use crate::ExecFileSystemSandboxContext;
 use crate::ExecServerRuntimePaths;
-use crate::FileSystemSandboxContext;
 use crate::fs_helper::CODEX_FS_HELPER_ARG1;
 use crate::fs_helper::FsHelperPayload;
 use crate::fs_helper::FsHelperRequest;
@@ -62,7 +62,7 @@ impl FileSystemSandboxRunner {
 
     pub(crate) async fn run(
         &self,
-        sandbox: &FileSystemSandboxContext,
+        sandbox: &ExecFileSystemSandboxContext,
         request: FsHelperRequest,
     ) -> Result<FsHelperPayload, JSONRPCErrorError> {
         let cwd = sandbox_cwd(sandbox)?;
@@ -96,7 +96,7 @@ impl FileSystemSandboxRunner {
         &self,
         permission_profile: &PermissionProfile,
         cwd: &PathUri,
-        sandbox_context: &FileSystemSandboxContext,
+        sandbox_context: &ExecFileSystemSandboxContext,
     ) -> Result<SandboxExecRequest, JSONRPCErrorError> {
         let helper = &self.runtime_paths.codex_self_exe;
         let sandbox_manager = SandboxManager::new();
@@ -132,7 +132,7 @@ impl FileSystemSandboxRunner {
     }
 }
 
-fn sandbox_cwd(sandbox: &FileSystemSandboxContext) -> Result<SandboxCwd, JSONRPCErrorError> {
+fn sandbox_cwd(sandbox: &ExecFileSystemSandboxContext) -> Result<SandboxCwd, JSONRPCErrorError> {
     if let Some(uri) = &sandbox.cwd {
         return Ok(SandboxCwd {
             native: native_sandbox_cwd(uri)?,
@@ -581,10 +581,14 @@ mod tests {
             },
             access: FileSystemAccessMode::Write,
         }]);
-        let sandbox_context = crate::FileSystemSandboxContext::from_permission_profile(
-            PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
-        )
-        .into_path_uri();
+        let sandbox_context =
+            codex_file_system::AppFileSystemSandboxContext::from_permission_profile(
+                PermissionProfile::from_runtime_permissions(
+                    &policy,
+                    NetworkSandboxPolicy::Restricted,
+                ),
+            )
+            .into_path_uri();
 
         let err = sandbox_cwd(&sandbox_context).expect_err("missing cwd should be rejected");
 
@@ -653,8 +657,8 @@ mod tests {
     fn sandbox_context_with_cwd(
         policy: &FileSystemSandboxPolicy,
         cwd: PathUri,
-    ) -> crate::FileSystemSandboxContext {
-        crate::FileSystemSandboxContext::from_permission_profile_with_cwd(
+    ) -> crate::ExecFileSystemSandboxContext {
+        codex_file_system::AppFileSystemSandboxContext::from_permission_profile_with_cwd(
             PermissionProfile::from_runtime_permissions(policy, NetworkSandboxPolicy::Restricted),
             cwd,
         )

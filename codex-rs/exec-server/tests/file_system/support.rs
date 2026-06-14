@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use codex_exec_server::Environment;
+use codex_exec_server::ExecFileSystemSandboxContext;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_exec_server::ExecutorFileSystem;
-use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LocalFileSystem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -82,7 +82,7 @@ pub(crate) fn absolute_path(path: std::path::PathBuf) -> AbsolutePathBuf {
     }
 }
 
-pub(crate) fn read_only_sandbox(readable_root: std::path::PathBuf) -> FileSystemSandboxContext {
+pub(crate) fn read_only_sandbox(readable_root: std::path::PathBuf) -> ExecFileSystemSandboxContext {
     let readable_root = absolute_path(readable_root);
     sandbox_context(vec![FileSystemSandboxEntry {
         path: FileSystemPath::Path {
@@ -94,7 +94,7 @@ pub(crate) fn read_only_sandbox(readable_root: std::path::PathBuf) -> FileSystem
 
 pub(crate) fn workspace_write_sandbox(
     writable_root: std::path::PathBuf,
-) -> FileSystemSandboxContext {
+) -> ExecFileSystemSandboxContext {
     let writable_root = absolute_path(writable_root);
     sandbox_context(vec![FileSystemSandboxEntry {
         path: FileSystemPath::Path {
@@ -104,10 +104,12 @@ pub(crate) fn workspace_write_sandbox(
     }])
 }
 
-fn sandbox_context(entries: Vec<FileSystemSandboxEntry>) -> FileSystemSandboxContext {
-    FileSystemSandboxContext::from_permission_profile(PermissionProfile::from_runtime_permissions(
-        &FileSystemSandboxPolicy::restricted(entries),
-        NetworkSandboxPolicy::Restricted,
-    ))
+fn sandbox_context(entries: Vec<FileSystemSandboxEntry>) -> ExecFileSystemSandboxContext {
+    codex_file_system::AppFileSystemSandboxContext::from_permission_profile(
+        PermissionProfile::from_runtime_permissions(
+            &FileSystemSandboxPolicy::restricted(entries),
+            NetworkSandboxPolicy::Restricted,
+        ),
+    )
     .into_path_uri()
 }

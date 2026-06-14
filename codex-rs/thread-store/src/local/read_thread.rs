@@ -1,6 +1,6 @@
 use chrono::DateTime;
 use chrono::Utc;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::AppPermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
@@ -416,7 +416,7 @@ fn stored_thread_from_meta_line(
         agent_path: meta_line.meta.agent_path,
         git_info: meta_line.git,
         approval_mode: AskForApproval::OnRequest,
-        permission_profile: PermissionProfile::read_only(),
+        permission_profile: AppPermissionProfile::read_only(),
         token_usage: None,
         first_user_message: None,
         history: None,
@@ -732,7 +732,7 @@ mod tests {
         builder.cwd = home.path().to_path_buf();
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.sandbox_policy =
-            serde_json::to_string(&PermissionProfile::Disabled).expect("serialize profile");
+            serde_json::to_string(&AppPermissionProfile::Disabled).expect("serialize profile");
         runtime
             .upsert_thread(&metadata)
             .await
@@ -748,7 +748,7 @@ mod tests {
             .expect("read thread");
 
         assert_eq!(thread.preview, "Hello from user");
-        assert_eq!(thread.permission_profile, PermissionProfile::Disabled);
+        assert_eq!(thread.permission_profile, AppPermissionProfile::Disabled);
     }
 
     #[tokio::test]
@@ -786,7 +786,7 @@ mod tests {
             .await
             .expect("read thread");
 
-        assert_eq!(thread.permission_profile, PermissionProfile::Disabled);
+        assert_eq!(thread.permission_profile, AppPermissionProfile::Disabled);
     }
 
     #[tokio::test]
@@ -872,7 +872,7 @@ mod tests {
         };
         assert_eq!(
             thread.permission_profile,
-            PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+            AppPermissionProfile::from_legacy_sandbox_policy_for_cwd(
                 &legacy_policy,
                 rollout_cwd.as_path()
             )

@@ -1,6 +1,7 @@
 use super::*;
 use codex_file_system::CopyOptions;
 use codex_file_system::CreateDirectoryOptions;
+use codex_file_system::ExecFileSystemSandboxContext;
 use codex_file_system::ExecutorFileSystemFuture;
 use codex_file_system::FileMetadata;
 use codex_file_system::ReadDirectoryEntry;
@@ -9,15 +10,13 @@ use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
-type FileSystemSandboxContext = codex_file_system::FileSystemSandboxContext<PathUri>;
-
 struct TestFileSystem;
 
 impl ExecutorFileSystem for TestFileSystem {
     fn canonicalize<'a>(
         &'a self,
         path: &'a PathUri,
-        _sandbox: Option<&'a FileSystemSandboxContext>,
+        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, PathUri> {
         Box::pin(async move {
             let path = path.to_abs_path()?;
@@ -29,7 +28,7 @@ impl ExecutorFileSystem for TestFileSystem {
     fn read_file<'a>(
         &'a self,
         path: &'a PathUri,
-        _sandbox: Option<&'a FileSystemSandboxContext>,
+        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
         Box::pin(async move {
             let path = path.to_abs_path()?;
@@ -41,7 +40,7 @@ impl ExecutorFileSystem for TestFileSystem {
         &'a self,
         _path: &'a PathUri,
         _contents: Vec<u8>,
-        _sandbox: Option<&'a FileSystemSandboxContext>,
+        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(async move { unimplemented!("test filesystem only supports reads") })
     }
@@ -50,7 +49,7 @@ impl ExecutorFileSystem for TestFileSystem {
         &'a self,
         _path: &'a PathUri,
         _create_directory_options: CreateDirectoryOptions,
-        _sandbox: Option<&'a FileSystemSandboxContext>,
+        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(async move { unimplemented!("test filesystem only supports reads") })
     }
@@ -58,7 +57,7 @@ impl ExecutorFileSystem for TestFileSystem {
     fn get_metadata<'a>(
         &'a self,
         _path: &'a PathUri,
-        _sandbox: Option<&'a FileSystemSandboxContext>,
+        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(async move { unimplemented!("test filesystem only supports reads") })
     }
@@ -66,7 +65,7 @@ impl ExecutorFileSystem for TestFileSystem {
     fn read_directory<'a>(
         &'a self,
         _path: &'a PathUri,
-        _sandbox: Option<&'a FileSystemSandboxContext>,
+        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
         Box::pin(async move { unimplemented!("test filesystem only supports reads") })
     }
@@ -75,7 +74,7 @@ impl ExecutorFileSystem for TestFileSystem {
         &'a self,
         _path: &'a PathUri,
         _remove_options: RemoveOptions,
-        _sandbox: Option<&'a FileSystemSandboxContext>,
+        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(async move { unimplemented!("test filesystem only supports reads") })
     }
@@ -85,7 +84,7 @@ impl ExecutorFileSystem for TestFileSystem {
         _source_path: &'a PathUri,
         _destination_path: &'a PathUri,
         _copy_options: CopyOptions,
-        _sandbox: Option<&'a FileSystemSandboxContext>,
+        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(async move { unimplemented!("test filesystem only supports reads") })
     }

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_preserving_symlinks;
+use codex_utils_path_uri::PathUri;
 use globset::GlobBuilder;
 use globset::GlobMatcher;
 use schemars::JsonSchema;
@@ -181,6 +182,9 @@ pub struct FileSystemSandboxEntry<PathType = AbsolutePathBuf> {
     pub access: FileSystemAccessMode,
 }
 
+pub type AppFileSystemSandboxEntry = FileSystemSandboxEntry<AbsolutePathBuf>;
+pub type ExecFileSystemSandboxEntry = FileSystemSandboxEntry<PathUri>;
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, Default, JsonSchema, TS,
 )]
@@ -351,6 +355,9 @@ pub enum FileSystemPath<PathType = AbsolutePathBuf> {
         value: FileSystemSpecialPath,
     },
 }
+
+pub type AppFileSystemPath = FileSystemPath<AbsolutePathBuf>;
+pub type ExecFileSystemPath = FileSystemPath<PathUri>;
 
 const PROJECT_ROOTS_GLOB_PATTERN_PREFIX: &str = "codex-project-roots://";
 

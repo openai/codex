@@ -23,6 +23,7 @@ use crate::protocol::SandboxPolicy;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::ImageProcessingError;
+use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 
 use crate::mcp::CallToolResult;
@@ -68,6 +69,9 @@ pub struct FileSystemPermissions<PathType = AbsolutePathBuf> {
     pub glob_scan_max_depth: Option<NonZeroUsize>,
 }
 
+pub type AppFileSystemPermissions = FileSystemPermissions<AbsolutePathBuf>;
+pub type ExecFileSystemPermissions = FileSystemPermissions<PathUri>;
+
 impl<PathType> Default for FileSystemPermissions<PathType> {
     fn default() -> Self {
         Self {
@@ -79,6 +83,8 @@ impl<PathType> Default for FileSystemPermissions<PathType> {
 
 pub type LegacyReadWriteRoots<PathType = AbsolutePathBuf> =
     (Option<Vec<PathType>>, Option<Vec<PathType>>);
+pub type AppLegacyReadWriteRoots = LegacyReadWriteRoots<AbsolutePathBuf>;
+pub type ExecLegacyReadWriteRoots = LegacyReadWriteRoots<PathUri>;
 
 impl<PathType> FileSystemPermissions<PathType> {
     pub fn is_empty(&self) -> bool {
@@ -289,6 +295,9 @@ pub enum ManagedFileSystemPermissions<PathType = AbsolutePathBuf> {
     Unrestricted,
 }
 
+pub type AppManagedFileSystemPermissions = ManagedFileSystemPermissions<AbsolutePathBuf>;
+pub type ExecManagedFileSystemPermissions = ManagedFileSystemPermissions<PathUri>;
+
 impl ManagedFileSystemPermissions {
     fn from_sandbox_policy(file_system_sandbox_policy: &FileSystemSandboxPolicy) -> Self {
         match file_system_sandbox_policy.kind {
@@ -333,9 +342,7 @@ pub const BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS: &str = ":danger-full-a
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(tag = "type")]
-#[schemars(rename = "PermissionProfile")]
-#[ts(rename = "PermissionProfile")]
-pub enum PermissionProfileFor<PathType = AbsolutePathBuf> {
+pub enum PermissionProfile<PathType = AbsolutePathBuf> {
     /// Codex owns sandbox construction for this profile.
     #[serde(rename_all = "snake_case")]
     #[ts(rename_all = "snake_case")]
@@ -351,7 +358,8 @@ pub enum PermissionProfileFor<PathType = AbsolutePathBuf> {
     External { network: NetworkSandboxPolicy },
 }
 
-pub type PermissionProfile = PermissionProfileFor<AbsolutePathBuf>;
+pub type AppPermissionProfile = PermissionProfile<AbsolutePathBuf>;
+pub type ExecPermissionProfile = PermissionProfile<PathUri>;
 
 /// Metadata for the named or implicit built-in permissions profile that
 /// produced the active `PermissionProfile`.
@@ -386,7 +394,7 @@ impl ActivePermissionProfile {
     }
 }
 
-impl<PathType> Default for PermissionProfileFor<PathType> {
+impl<PathType> Default for PermissionProfile<PathType> {
     fn default() -> Self {
         Self::Managed {
             file_system: ManagedFileSystemPermissions::Restricted {
@@ -398,7 +406,7 @@ impl<PathType> Default for PermissionProfileFor<PathType> {
     }
 }
 
-impl PermissionProfileFor {
+impl PermissionProfile {
     /// Managed read-only filesystem access with restricted network access.
     pub fn read_only() -> Self {
         let file_system = FileSystemSandboxPolicy::read_only();
@@ -587,7 +595,7 @@ enum TaggedPermissionProfile<PathType = AbsolutePathBuf> {
     },
 }
 
-impl<PathType> From<TaggedPermissionProfile<PathType>> for PermissionProfileFor<PathType> {
+impl<PathType> From<TaggedPermissionProfile<PathType>> for PermissionProfile<PathType> {
     fn from(value: TaggedPermissionProfile<PathType>) -> Self {
         match value {
             TaggedPermissionProfile::Managed {
@@ -612,7 +620,7 @@ struct LegacyPermissionProfile<PathType = AbsolutePathBuf> {
     file_system: Option<FileSystemPermissions<PathType>>,
 }
 
-impl<PathType> From<LegacyPermissionProfile<PathType>> for PermissionProfileFor<PathType> {
+impl<PathType> From<LegacyPermissionProfile<PathType>> for PermissionProfile<PathType> {
     fn from(value: LegacyPermissionProfile<PathType>) -> Self {
         let file_system = value.file_system.map_or_else(
             || ManagedFileSystemPermissions::Restricted {
@@ -648,7 +656,7 @@ enum PermissionProfileDe<PathType = AbsolutePathBuf> {
     Legacy(LegacyPermissionProfile<PathType>),
 }
 
-impl<'de, PathType> Deserialize<'de> for PermissionProfileFor<PathType>
+impl<'de, PathType> Deserialize<'de> for PermissionProfile<PathType>
 where
     PathType: Deserialize<'de>,
 {

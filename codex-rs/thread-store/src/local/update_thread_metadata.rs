@@ -613,7 +613,7 @@ fn rollout_path_is_archived(store: &LocalThreadStore, path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use codex_protocol::models::PermissionProfile;
+    use codex_protocol::models::AppPermissionProfile;
     use pretty_assertions::assert_eq;
     use serde_json::Value;
     use serde_json::json;
@@ -872,7 +872,7 @@ mod tests {
             .update_thread_metadata(UpdateThreadMetadataParams {
                 thread_id,
                 patch: ThreadMetadataPatch {
-                    permission_profile: Some(PermissionProfile::Disabled),
+                    permission_profile: Some(AppPermissionProfile::Disabled),
                     ..Default::default()
                 },
                 include_archived: false,
@@ -880,7 +880,7 @@ mod tests {
             .await
             .expect("set permission profile");
 
-        assert_eq!(thread.permission_profile, PermissionProfile::Disabled);
+        assert_eq!(thread.permission_profile, AppPermissionProfile::Disabled);
         let metadata = runtime
             .get_thread(thread_id)
             .await
@@ -888,7 +888,7 @@ mod tests {
             .expect("sqlite metadata");
         assert_eq!(
             metadata.sandbox_policy,
-            serde_json::to_string(&PermissionProfile::Disabled).expect("serialize profile")
+            serde_json::to_string(&AppPermissionProfile::Disabled).expect("serialize profile")
         );
     }
 

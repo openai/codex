@@ -4,6 +4,7 @@ use crate::agents_md::LoadedAgentsMd;
 use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use codex_core_skills::HostLoadedSkills;
+use codex_file_system::AppFileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
@@ -324,7 +325,7 @@ impl TurnContext {
         &self,
         additional_permissions: Option<AdditionalPermissionProfile>,
         cwd: &PathUri,
-    ) -> FileSystemSandboxContext {
+    ) -> ExecFileSystemSandboxContext {
         let (base_file_system_sandbox_policy, base_network_sandbox_policy) =
             self.permission_profile.to_runtime_permissions();
         let file_system_sandbox_policy = effective_file_system_sandbox_policy(
@@ -340,7 +341,7 @@ impl TurnContext {
             &file_system_sandbox_policy,
             network_sandbox_policy,
         );
-        FileSystemSandboxContext::<AbsolutePathBuf> {
+        AppFileSystemSandboxContext {
             permissions,
             cwd: Some(cwd.clone()),
             windows_sandbox_level: self.windows_sandbox_level,

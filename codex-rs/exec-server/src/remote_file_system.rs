@@ -6,12 +6,12 @@ use tracing::trace;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
+use crate::ExecFileSystemSandboxContext;
 use crate::ExecServerError;
 use crate::ExecutorFileSystem;
 use crate::ExecutorFileSystemFuture;
 use crate::FileMetadata;
 use crate::FileSystemResult;
-use crate::FileSystemSandboxContext;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
 use crate::client::LazyRemoteExecServerClient;
@@ -40,7 +40,7 @@ impl RemoteFileSystem {
     async fn canonicalize(
         &self,
         path: &PathUri,
-        sandbox: Option<&FileSystemSandboxContext>,
+        sandbox: Option<&ExecFileSystemSandboxContext>,
     ) -> FileSystemResult<PathUri> {
         trace!("remote fs canonicalize");
         let client = self.client.get().await.map_err(map_remote_error)?;
@@ -57,7 +57,7 @@ impl RemoteFileSystem {
     async fn read_file(
         &self,
         path: &PathUri,
-        sandbox: Option<&FileSystemSandboxContext>,
+        sandbox: Option<&ExecFileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
         trace!("remote fs read_file");
         let client = self.client.get().await.map_err(map_remote_error)?;
@@ -80,7 +80,7 @@ impl RemoteFileSystem {
         &self,
         path: &PathUri,
         contents: Vec<u8>,
-        sandbox: Option<&FileSystemSandboxContext>,
+        sandbox: Option<&ExecFileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         trace!("remote fs write_file");
         let client = self.client.get().await.map_err(map_remote_error)?;
@@ -99,7 +99,7 @@ impl RemoteFileSystem {
         &self,
         path: &PathUri,
         options: CreateDirectoryOptions,
-        sandbox: Option<&FileSystemSandboxContext>,
+        sandbox: Option<&ExecFileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         trace!("remote fs create_directory");
         let client = self.client.get().await.map_err(map_remote_error)?;
@@ -117,7 +117,7 @@ impl RemoteFileSystem {
     async fn get_metadata(
         &self,
         path: &PathUri,
-        sandbox: Option<&FileSystemSandboxContext>,
+        sandbox: Option<&ExecFileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
         trace!("remote fs get_metadata");
         let client = self.client.get().await.map_err(map_remote_error)?;
@@ -141,7 +141,7 @@ impl RemoteFileSystem {
     async fn read_directory(
         &self,
         path: &PathUri,
-        sandbox: Option<&FileSystemSandboxContext>,
+        sandbox: Option<&ExecFileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         trace!("remote fs read_directory");
         let client = self.client.get().await.map_err(map_remote_error)?;
@@ -167,7 +167,7 @@ impl RemoteFileSystem {
         &self,
         path: &PathUri,
         options: RemoveOptions,
-        sandbox: Option<&FileSystemSandboxContext>,
+        sandbox: Option<&ExecFileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         trace!("remote fs remove");
         let client = self.client.get().await.map_err(map_remote_error)?;
@@ -188,7 +188,7 @@ impl RemoteFileSystem {
         source_path: &PathUri,
         destination_path: &PathUri,
         options: CopyOptions,
-        sandbox: Option<&FileSystemSandboxContext>,
+        sandbox: Option<&ExecFileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         trace!("remote fs copy");
         let client = self.client.get().await.map_err(map_remote_error)?;
@@ -209,7 +209,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
     fn canonicalize<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
+        sandbox: Option<&'a ExecFileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, PathUri> {
         Box::pin(RemoteFileSystem::canonicalize(self, path, sandbox))
     }
@@ -217,7 +217,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
     fn read_file<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
+        sandbox: Option<&'a ExecFileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
         Box::pin(RemoteFileSystem::read_file(self, path, sandbox))
     }
@@ -226,7 +226,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
         &'a self,
         path: &'a PathUri,
         contents: Vec<u8>,
-        sandbox: Option<&'a FileSystemSandboxContext>,
+        sandbox: Option<&'a ExecFileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(RemoteFileSystem::write_file(self, path, contents, sandbox))
     }
@@ -235,7 +235,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
         &'a self,
         path: &'a PathUri,
         options: CreateDirectoryOptions,
-        sandbox: Option<&'a FileSystemSandboxContext>,
+        sandbox: Option<&'a ExecFileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(RemoteFileSystem::create_directory(
             self, path, options, sandbox,
@@ -245,7 +245,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
     fn get_metadata<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
+        sandbox: Option<&'a ExecFileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(RemoteFileSystem::get_metadata(self, path, sandbox))
     }
@@ -253,7 +253,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
     fn read_directory<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext>,
+        sandbox: Option<&'a ExecFileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
         Box::pin(RemoteFileSystem::read_directory(self, path, sandbox))
     }
@@ -262,7 +262,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
         &'a self,
         path: &'a PathUri,
         options: RemoveOptions,
-        sandbox: Option<&'a FileSystemSandboxContext>,
+        sandbox: Option<&'a ExecFileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(RemoteFileSystem::remove(self, path, options, sandbox))
     }
@@ -272,7 +272,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
         source_path: &'a PathUri,
         destination_path: &'a PathUri,
         options: CopyOptions,
-        sandbox: Option<&'a FileSystemSandboxContext>,
+        sandbox: Option<&'a ExecFileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(RemoteFileSystem::copy(
             self,
@@ -285,11 +285,11 @@ impl ExecutorFileSystem for RemoteFileSystem {
 }
 
 fn remote_sandbox_context(
-    sandbox: Option<&FileSystemSandboxContext>,
-) -> Option<FileSystemSandboxContext> {
+    sandbox: Option<&ExecFileSystemSandboxContext>,
+) -> Option<ExecFileSystemSandboxContext> {
     sandbox
         .cloned()
-        .map(FileSystemSandboxContext::drop_cwd_if_unused)
+        .map(ExecFileSystemSandboxContext::drop_cwd_if_unused)
 }
 
 fn map_remote_error(error: ExecServerError) -> io::Error {
@@ -337,11 +337,12 @@ mod tests {
         }]);
         let permissions =
             PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
-        let sandbox_context = FileSystemSandboxContext::from_permission_profile_with_cwd(
-            permissions,
-            path_uri("host-checkout"),
-        )
-        .into_path_uri();
+        let sandbox_context =
+            codex_file_system::AppFileSystemSandboxContext::from_permission_profile_with_cwd(
+                permissions,
+                path_uri("host-checkout"),
+            )
+            .into_path_uri();
 
         let remote_context =
             remote_sandbox_context(Some(&sandbox_context)).expect("remote sandbox context");
@@ -361,8 +362,11 @@ mod tests {
             PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
         let cwd = path_uri("host-checkout");
         let sandbox_context =
-            FileSystemSandboxContext::from_permission_profile_with_cwd(permissions, cwd.clone())
-                .into_path_uri();
+            codex_file_system::AppFileSystemSandboxContext::from_permission_profile_with_cwd(
+                permissions,
+                cwd.clone(),
+            )
+            .into_path_uri();
 
         let remote_context =
             remote_sandbox_context(Some(&sandbox_context)).expect("remote sandbox context");
