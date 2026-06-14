@@ -23,6 +23,7 @@ use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -705,7 +706,6 @@ async fn review_history_surfaces_in_parent_session() {
     let followup = "back to parent".to_string();
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: followup.clone(),
                 text_elements: Vec::new(),
@@ -821,7 +821,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     core_test_support::submit_thread_settings(
         &codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(repo_path.to_path_buf()),
+            environments: Some(local_selections(repo_path.to_path_buf().abs())),
             ..Default::default()
         },
     )

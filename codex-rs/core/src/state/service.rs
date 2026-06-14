@@ -15,12 +15,14 @@ use crate::tools::code_mode::CodeModeService;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
+use anyhow::Result;
 use arc_swap::ArcSwap;
 use arc_swap::ArcSwapOption;
 use codex_analytics::AnalyticsEventsClient;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
 use codex_hooks::Hooks;
 use codex_login::AuthManager;
@@ -34,12 +36,12 @@ use codex_thread_store::ThreadStore;
 use std::path::PathBuf;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
-use tokio::sync::RwLock;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
-    pub(crate) mcp_connection_manager: Arc<RwLock<McpConnectionManager>>,
+    /// The latest manager; callers retain an owned handle while performing MCP I/O.
+    pub(crate) mcp_connection_manager: Arc<ArcSwap<McpConnectionManager>>,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     #[cfg_attr(not(unix), allow(dead_code))]
@@ -66,6 +68,7 @@ pub(crate) struct SessionServices {
     pub(crate) extensions: Arc<ExtensionRegistry<crate::config::Config>>,
     pub(crate) session_extension_data: ExtensionData,
     pub(crate) thread_extension_data: ExtensionData,
+    pub(crate) mcp_thread_init: ExtensionDataInit,
     pub(crate) agent_control: AgentControl,
     pub(crate) network_proxy: ArcSwapOption<StartedNetworkProxy>,
     pub(crate) network_proxy_audit_metadata: NetworkProxyAuditMetadata,
@@ -81,4 +84,19 @@ pub(crate) struct SessionServices {
     /// Shared process-level environment registry. Sessions carry an `Arc` handle so they can pass
     /// the same manager through child-thread spawn paths without reconstructing it.
     pub(crate) environment_manager: Arc<EnvironmentManager>,
+}
+
+impl SessionServices {
+    /// Installs the manager before validating required servers so startup-time elicitation can
+    /// resolve through the session's manager while validation waits.
+    pub(crate) async fn install_mcp_connection_manager(
+        &self,
+        manager: McpConnectionManager,
+    ) -> Result<()> {
+        self.mcp_connection_manager.store(Arc::new(manager));
+        self.mcp_connection_manager
+            .load_full()
+            .validate_required_servers()
+            .await
+    }
 }

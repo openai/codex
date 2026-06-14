@@ -122,7 +122,7 @@ pub(crate) fn get_command(
             let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
             Ok(ResolvedCommand {
                 command: shell.derive_exec_args(&args.cmd, use_login_shell),
-                shell_type: shell.shell_type.clone(),
+                shell_type: shell.shell_type,
             })
         }
         UnifiedExecShellMode::ZshFork(zsh_fork_config) => {

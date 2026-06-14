@@ -58,13 +58,11 @@ impl ChatWidget {
     pub(crate) fn set_windows_sandbox_mode(&mut self, mode: Option<WindowsSandboxModeToml>) {
         self.config.permissions.windows_sandbox_mode = mode;
         #[cfg(target_os = "windows")]
-        self.bottom_pane.set_windows_degraded_sandbox_active(
-            crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                && matches!(
-                    WindowsSandboxLevel::from_config(&self.config),
-                    WindowsSandboxLevel::RestrictedToken
-                ),
-        );
+        self.bottom_pane
+            .set_windows_degraded_sandbox_active(matches!(
+                crate::windows_sandbox::level_from_config(&self.config),
+                WindowsSandboxLevel::RestrictedToken
+            ));
     }
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -77,18 +75,6 @@ impl ChatWidget {
             );
         }
         let enabled = self.config.features.enabled(feature);
-        if feature == Feature::RealtimeConversation {
-            let realtime_conversation_enabled = self.realtime_conversation_enabled();
-            self.bottom_pane
-                .set_realtime_conversation_enabled(realtime_conversation_enabled);
-            self.bottom_pane
-                .set_audio_device_selection_enabled(self.realtime_audio_device_selection_enabled());
-            if !realtime_conversation_enabled && self.realtime_conversation.is_live() {
-                self.request_realtime_conversation_close(Some(
-                    "Realtime voice mode was closed because the feature was disabled.".to_string(),
-                ));
-            }
-        }
         if feature == Feature::FastMode {
             self.refresh_effective_service_tier();
             self.sync_service_tier_commands();
@@ -121,13 +107,11 @@ impl ChatWidget {
             feature,
             Feature::WindowsSandbox | Feature::WindowsSandboxElevated
         ) {
-            self.bottom_pane.set_windows_degraded_sandbox_active(
-                crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                    && matches!(
-                        WindowsSandboxLevel::from_config(&self.config),
-                        WindowsSandboxLevel::RestrictedToken
-                    ),
-            );
+            self.bottom_pane
+                .set_windows_degraded_sandbox_active(matches!(
+                    crate::windows_sandbox::level_from_config(&self.config),
+                    WindowsSandboxLevel::RestrictedToken
+                ));
         }
         enabled
     }
@@ -159,7 +143,7 @@ impl ChatWidget {
     /// so the footer reflects it without waiting for the next mode switch.
     /// Passing `None` resets to the Plan-mode preset default.
     pub(crate) fn set_plan_mode_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
-        self.config.plan_mode_reasoning_effort = effort;
+        self.config.plan_mode_reasoning_effort = effort.clone();
         if self.collaboration_modes_enabled()
             && let Some(mask) = self.active_collaboration_mask.as_mut()
             && mask.mode == Some(ModeKind::Plan)
@@ -182,7 +166,7 @@ impl ChatWidget {
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
             /*model*/ None,
-            Some(effort),
+            Some(effort.clone()),
             /*developer_instructions*/ None,
         );
         if self.collaboration_modes_enabled()
@@ -222,28 +206,31 @@ impl ChatWidget {
         self.has_chatgpt_account
     }
 
+    pub(crate) fn has_codex_backend_auth(&self) -> bool {
+        self.has_codex_backend_auth
+    }
+
     pub(crate) fn update_account_state(
         &mut self,
         status_account_display: Option<StatusAccountDisplay>,
         plan_type: Option<PlanType>,
         has_chatgpt_account: bool,
+        has_codex_backend_auth: bool,
     ) {
+        let account_state_changed = self.status_account_display != status_account_display
+            || self.has_chatgpt_account != has_chatgpt_account
+            || self.has_codex_backend_auth != has_codex_backend_auth;
+        if account_state_changed {
+            self.clear_pending_token_activity_refreshes();
+        }
         self.status_account_display = status_account_display;
         self.plan_type = plan_type;
         self.has_chatgpt_account = has_chatgpt_account;
+        self.has_codex_backend_auth = has_codex_backend_auth;
         self.bottom_pane
             .set_connectors_enabled(self.connectors_enabled());
-    }
-
-    pub(crate) fn set_realtime_audio_device(
-        &mut self,
-        kind: RealtimeAudioDeviceKind,
-        name: Option<String>,
-    ) {
-        match kind {
-            RealtimeAudioDeviceKind::Microphone => self.config.realtime_audio.microphone = name,
-            RealtimeAudioDeviceKind::Speaker => self.config.realtime_audio.speaker = name,
-        }
+        self.bottom_pane
+            .set_token_activity_command_enabled(has_codex_backend_auth);
     }
 
     /// Set the syntax theme override in the widget's config copy.
@@ -275,28 +262,6 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.model.as_deref())
             .unwrap_or_else(|| self.current_collaboration_mode.model())
-    }
-
-    pub(crate) fn realtime_conversation_is_live(&self) -> bool {
-        self.realtime_conversation.is_live()
-    }
-
-    pub(super) fn current_realtime_audio_device_name(
-        &self,
-        kind: RealtimeAudioDeviceKind,
-    ) -> Option<String> {
-        match kind {
-            RealtimeAudioDeviceKind::Microphone => self.config.realtime_audio.microphone.clone(),
-            RealtimeAudioDeviceKind::Speaker => self.config.realtime_audio.speaker.clone(),
-        }
-    }
-
-    pub(super) fn current_realtime_audio_selection_label(
-        &self,
-        kind: RealtimeAudioDeviceKind,
-    ) -> String {
-        self.current_realtime_audio_device_name(kind)
-            .unwrap_or_else(|| "System default".to_string())
     }
 
     pub(super) fn sync_personality_command_enabled(&mut self) {
@@ -471,7 +436,7 @@ impl ChatWidget {
         let current_effort = self.current_collaboration_mode.reasoning_effort();
         self.active_collaboration_mask
             .as_ref()
-            .and_then(|mask| mask.reasoning_effort)
+            .and_then(|mask| mask.reasoning_effort.clone())
             .unwrap_or(current_effort)
     }
 
@@ -590,7 +555,7 @@ impl ChatWidget {
             name: mode_kind.display_name().to_string(),
             mode: Some(mode_kind),
             model: Some(settings.model.clone()),
-            reasoning_effort: Some(settings.reasoning_effort),
+            reasoning_effort: Some(settings.reasoning_effort.clone()),
             developer_instructions: Some(settings.developer_instructions),
         });
         self.update_collaboration_mode_indicator();
@@ -712,7 +677,7 @@ impl ChatWidget {
         let previous_model = self.current_model().to_string();
         let previous_effort = self.effective_reasoning_effort();
         if mask.mode == Some(ModeKind::Plan)
-            && let Some(effort) = self.config.plan_mode_reasoning_effort
+            && let Some(effort) = self.config.plan_mode_reasoning_effort.clone()
         {
             mask.reasoning_effort = Some(Some(effort));
         }
@@ -732,13 +697,9 @@ impl ChatWidget {
         {
             let mut message = format!("Model changed to {next_model}");
             if !next_model.starts_with("codex-auto-") {
-                let reasoning_label = match next_effort {
-                    Some(ReasoningEffortConfig::Minimal) => "minimal",
-                    Some(ReasoningEffortConfig::Low) => "low",
-                    Some(ReasoningEffortConfig::Medium) => "medium",
-                    Some(ReasoningEffortConfig::High) => "high",
-                    Some(ReasoningEffortConfig::XHigh) => "xhigh",
+                let reasoning_label = match next_effort.as_ref() {
                     None | Some(ReasoningEffortConfig::None) => "default",
+                    Some(effort) => effort.as_str(),
                 };
                 message.push(' ');
                 message.push_str(reasoning_label);

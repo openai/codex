@@ -6,7 +6,6 @@ use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "send_input")
@@ -23,7 +22,13 @@ impl ToolExecutor<ToolInvocation> for Handler {
         )
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl Handler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
@@ -42,8 +47,17 @@ impl ToolExecutor<ToolInvocation> for Handler {
         let receiver_agent = session
             .services
             .agent_control
-            .get_agent_metadata(receiver_thread_id)
-            .unwrap_or_default();
+            .get_agent_metadata(receiver_thread_id);
+        if receiver_agent.is_some() {
+            let resume_config = build_agent_resume_config(turn.as_ref())?;
+            session
+                .services
+                .agent_control
+                .ensure_v2_agent_loaded(resume_config, receiver_thread_id)
+                .await
+                .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
+        }
+        let receiver_agent = receiver_agent.unwrap_or_default();
         if args.interrupt {
             session
                 .services

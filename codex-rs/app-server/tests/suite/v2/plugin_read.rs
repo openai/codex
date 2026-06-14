@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
@@ -17,10 +16,14 @@ use axum::http::Uri;
 use axum::http::header::AUTHORIZATION;
 use axum::routing::get;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::AppMetadata;
+use codex_app_server_protocol::AppTemplateSummary;
+use codex_app_server_protocol::AppTemplateUnavailableReason;
 use codex_app_server_protocol::HookEventName;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
+use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
@@ -35,17 +38,6 @@ use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
-use rmcp::handler::server::ServerHandler;
-use rmcp::model::JsonObject;
-use rmcp::model::ListToolsResult;
-use rmcp::model::Meta;
-use rmcp::model::ServerCapabilities;
-use rmcp::model::ServerInfo;
-use rmcp::model::Tool;
-use rmcp::model::ToolAnnotations;
-use rmcp::transport::StreamableHttpServerConfig;
-use rmcp::transport::StreamableHttpService;
-use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -122,7 +114,7 @@ async fn plugin_read_rejects_multiple_read_sources() -> Result<()> {
 }
 
 #[tokio::test]
-async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_is_disabled() -> Result<()> {
+async fn plugin_read_returns_remote_mcp_servers_when_uninstalled() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     std::fs::write(
@@ -148,22 +140,31 @@ plugins = true
 
     let detail_body = r#"{
   "id": "plugins~Plugin_00000000000000000000000000000000",
-  "name": "linear",
+  "name": "example-plugin",
   "scope": "GLOBAL",
   "installation_policy": "AVAILABLE",
   "authentication_policy": "ON_USE",
   "release": {
-    "display_name": "Linear",
-    "description": "Track work in Linear",
+    "version": "1.2.1",
+    "display_name": "Example Plugin",
+    "description": "Example plugin",
     "app_ids": [],
     "keywords": [],
     "interface": {
-      "short_description": "Plan and track work",
+      "short_description": "Example plugin",
       "capabilities": [],
-      "default_prompt": "Use the legacy Linear prompt",
+      "default_prompt": "Use the legacy example prompt",
       "default_prompts": []
     },
-    "skills": []
+    "skills": [],
+    "mcp_servers": [
+      {
+        "key": "example-server",
+        "metadata": {
+          "command": "example-mcp"
+        }
+      }
+    ]
   }
 }"#;
     let installed_body = r#"{
@@ -211,12 +212,15 @@ plugins = true
     let response: PluginReadResponse = to_response(response)?;
 
     assert_eq!(response.plugin.marketplace_name, "openai-curated-remote");
-    assert_eq!(response.plugin.summary.id, "linear@openai-curated-remote");
+    assert_eq!(
+        response.plugin.summary.id,
+        "example-plugin@openai-curated-remote"
+    );
     assert_eq!(
         response.plugin.summary.remote_plugin_id.as_deref(),
         Some("plugins~Plugin_00000000000000000000000000000000")
     );
-    assert_eq!(response.plugin.summary.name, "linear");
+    assert_eq!(response.plugin.summary.name, "example-plugin");
     assert_eq!(response.plugin.summary.source, PluginSource::Remote);
     assert_eq!(response.plugin.summary.share_context, None);
     assert_eq!(
@@ -226,7 +230,11 @@ plugins = true
             .interface
             .as_ref()
             .and_then(|interface| interface.default_prompt.clone()),
-        Some(vec!["Use the legacy Linear prompt".to_string()])
+        Some(vec!["Use the legacy example prompt".to_string()])
+    );
+    assert_eq!(
+        response.plugin.mcp_servers,
+        vec!["example-server".to_string()]
     );
     Ok(())
 }
@@ -385,7 +393,7 @@ async fn plugin_read_returns_share_context_for_shared_remote_plugin() -> Result<
 }
 
 #[tokio::test]
-async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() -> Result<()> {
+async fn plugin_read_includes_share_url_for_admin_disabled_remote_plugin() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     write_remote_plugin_catalog_config(
@@ -403,27 +411,52 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
 
     let detail_body = r#"{
   "id": "plugins~Plugin_00000000000000000000000000000000",
-  "name": "linear",
+  "name": "example-plugin",
   "scope": "GLOBAL",
+  "share_url": "https://chatgpt.example/plugins/share/example-plugin",
+  "status": "DISABLED_BY_ADMIN",
   "installation_policy": "AVAILABLE",
   "authentication_policy": "ON_USE",
   "release": {
-    "display_name": "Linear",
-    "description": "Track work in Linear",
+    "display_name": "Example Plugin",
+    "description": "Exercise example workflows",
     "app_ids": [],
-    "keywords": ["issue-tracking", "project management"],
+    "app_templates": [
+      {
+        "template_id": "templated_apps_SourceControlEnterprise",
+        "name": "Source Control Enterprise",
+        "description": "Connect source control",
+        "category": "Developer Tools",
+        "canonical_connector_id": "source_control_enterprise",
+        "logo_url": "https://example.com/source-control-light.png",
+        "logo_url_dark": "https://example.com/source-control-dark.png",
+        "materialized_app_ids": ["asdk_app_source_control"],
+        "reason": null
+      },
+      {
+        "template_id": "templated_apps_DataWarehouse",
+        "name": "Data Warehouse",
+        "description": null,
+        "canonical_connector_id": null,
+        "logo_url": null,
+        "logo_url_dark": null,
+        "materialized_app_ids": [],
+        "reason": "NOT_CONFIGURED_FOR_WORKSPACE"
+      }
+    ],
+    "keywords": ["workflow", "example"],
     "interface": {
-      "short_description": "Plan and track work",
+      "short_description": "Run example workflows",
       "capabilities": ["Read", "Write"],
-      "default_prompt": "Use the legacy Linear prompt",
-      "default_prompts": ["Create a Linear issue", "Review my Linear projects"],
-      "logo_url": "https://example.com/linear.png",
-      "screenshot_urls": ["https://example.com/linear-shot.png"]
+      "default_prompt": "Use the legacy example prompt",
+      "default_prompts": ["Create an example item", "Review example projects"],
+      "logo_url": "https://example.com/example-plugin.png",
+      "screenshot_urls": ["https://example.com/example-plugin-shot.png"]
     },
     "skills": [
       {
         "name": "plan-work",
-        "description": "Plan work from Linear issues",
+        "description": "Plan example work",
         "plugin_release_skill_id": "skill-1",
         "interface": {
           "display_name": "Plan Work",
@@ -437,24 +470,24 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
   "plugins": [
     {
       "id": "plugins~Plugin_00000000000000000000000000000000",
-      "name": "linear",
+      "name": "example-plugin",
       "scope": "GLOBAL",
       "installation_policy": "AVAILABLE",
       "authentication_policy": "ON_USE",
       "release": {
-        "display_name": "Linear",
-        "description": "Track work in Linear",
+        "display_name": "Example Plugin",
+        "description": "Exercise example workflows",
         "app_ids": [],
         "interface": {
-          "short_description": "Plan and track work",
+          "short_description": "Run example workflows",
           "capabilities": ["Read", "Write"],
-          "logo_url": "https://example.com/linear.png",
-          "screenshot_urls": ["https://example.com/linear-shot.png"]
+          "logo_url": "https://example.com/example-plugin.png",
+          "screenshot_urls": ["https://example.com/example-plugin-shot.png"]
         },
         "skills": [
           {
             "name": "plan-work",
-            "description": "Plan work from Linear issues",
+            "description": "Plan example work",
             "plugin_release_skill_id": "skill-1",
             "interface": {
               "display_name": "Plan Work",
@@ -512,24 +545,33 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     assert_eq!(response.plugin.marketplace_name, "openai-curated-remote");
     assert_eq!(response.plugin.marketplace_path, None);
     assert_eq!(response.plugin.summary.source, PluginSource::Remote);
-    assert_eq!(response.plugin.summary.id, "linear@openai-curated-remote");
+    assert_eq!(
+        response.plugin.summary.id,
+        "example-plugin@openai-curated-remote"
+    );
     assert_eq!(
         response.plugin.summary.remote_plugin_id.as_deref(),
         Some("plugins~Plugin_00000000000000000000000000000000")
     );
-    assert_eq!(response.plugin.summary.name, "linear");
+    assert_eq!(response.plugin.summary.name, "example-plugin");
     assert_eq!(response.plugin.summary.installed, true);
     assert_eq!(response.plugin.summary.enabled, false);
     assert_eq!(
+        response.plugin.summary.availability,
+        PluginAvailability::DisabledByAdmin
+    );
+    assert_eq!(response.plugin.summary.share_context, None);
+    assert_eq!(
+        response.plugin.share_url.as_deref(),
+        Some("https://chatgpt.example/plugins/share/example-plugin")
+    );
+    assert_eq!(
         response.plugin.description.as_deref(),
-        Some("Track work in Linear")
+        Some("Exercise example workflows")
     );
     assert_eq!(
         response.plugin.summary.keywords,
-        vec![
-            "issue-tracking".to_string(),
-            "project management".to_string()
-        ]
+        vec!["workflow".to_string(), "example".to_string()]
     );
     assert_eq!(
         response
@@ -539,8 +581,8 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
             .as_ref()
             .and_then(|interface| interface.default_prompt.clone()),
         Some(vec![
-            "Create a Linear issue".to_string(),
-            "Review my Linear projects".to_string(),
+            "Create an example item".to_string(),
+            "Review example projects".to_string(),
         ])
     );
     assert_eq!(response.plugin.skills.len(), 1);
@@ -548,6 +590,33 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     assert_eq!(response.plugin.skills[0].path, None);
     assert_eq!(response.plugin.skills[0].enabled, false);
     assert_eq!(response.plugin.apps.len(), 0);
+    assert_eq!(
+        response.plugin.app_templates,
+        vec![
+            AppTemplateSummary {
+                template_id: "templated_apps_SourceControlEnterprise".to_string(),
+                name: "Source Control Enterprise".to_string(),
+                description: Some("Connect source control".to_string()),
+                category: Some("Developer Tools".to_string()),
+                canonical_connector_id: Some("source_control_enterprise".to_string()),
+                logo_url: Some("https://example.com/source-control-light.png".to_string()),
+                logo_url_dark: Some("https://example.com/source-control-dark.png".to_string()),
+                materialized_app_ids: vec!["asdk_app_source_control".to_string()],
+                reason: None,
+            },
+            AppTemplateSummary {
+                template_id: "templated_apps_DataWarehouse".to_string(),
+                name: "Data Warehouse".to_string(),
+                description: None,
+                category: None,
+                canonical_connector_id: None,
+                logo_url: None,
+                logo_url_dark: None,
+                materialized_app_ids: Vec::new(),
+                reason: Some(AppTemplateUnavailableReason::NotConfiguredForWorkspace),
+            },
+        ]
+    );
     Ok(())
 }
 
@@ -1248,7 +1317,8 @@ description: Visible only for ChatGPT
         r#"{
   "apps": {
     "gmail": {
-      "id": "gmail"
+      "id": "gmail",
+      "category": "Communication"
     }
   }
 }"#,
@@ -1418,14 +1488,17 @@ enabled = false
         response.plugin.apps[0].install_url.as_deref(),
         Some("https://chatgpt.com/apps/gmail/gmail")
     );
-    assert_eq!(response.plugin.apps[0].needs_auth, true);
+    assert_eq!(
+        response.plugin.apps[0].category.as_deref(),
+        Some("Communication")
+    );
     assert_eq!(response.plugin.mcp_servers.len(), 1);
     assert_eq!(response.plugin.mcp_servers[0], "demo");
     Ok(())
 }
 
 #[tokio::test]
-async fn plugin_read_returns_app_needs_auth() -> Result<()> {
+async fn plugin_read_returns_app_metadata_category() -> Result<()> {
     let connectors = vec![
         AppInfo {
             id: "alpha".to_string(),
@@ -1435,7 +1508,20 @@ async fn plugin_read_returns_app_needs_auth() -> Result<()> {
             logo_url_dark: None,
             distribution_channel: Some("featured".to_string()),
             branding: None,
-            app_metadata: None,
+            app_metadata: Some(AppMetadata {
+                review: None,
+                categories: Some(vec!["Productivity".to_string()]),
+                sub_categories: None,
+                seo_description: None,
+                screenshots: None,
+                developer: None,
+                version: None,
+                version_id: None,
+                version_notes: None,
+                first_party_type: None,
+                first_party_requires_install: None,
+                show_in_composer_when_unlinked: None,
+            }),
             labels: None,
             install_url: None,
             is_accessible: false,
@@ -1458,8 +1544,7 @@ async fn plugin_read_returns_app_needs_auth() -> Result<()> {
             plugin_display_names: Vec::new(),
         },
     ];
-    let tools = vec![connector_tool("beta", "Beta App")?];
-    let (server_url, server_handle) = start_apps_server(connectors, tools).await?;
+    let (server_url, server_handle) = start_apps_server(connectors).await?;
 
     let codex_home = TempDir::new()?;
     write_connectors_config(codex_home.path(), &server_url)?;
@@ -1506,9 +1591,9 @@ async fn plugin_read_returns_app_needs_auth() -> Result<()> {
             .plugin
             .apps
             .iter()
-            .map(|app| (app.id.as_str(), app.needs_auth))
+            .map(|app| (app.id.as_str(), app.category.as_deref()))
             .collect::<Vec<_>>(),
-        vec![("alpha", true), ("beta", false)]
+        vec![("alpha", Some("Productivity")), ("beta", None)]
     );
 
     server_handle.abort();
@@ -1786,70 +1871,22 @@ struct AppsServerState {
     response: Arc<StdMutex<serde_json::Value>>,
 }
 
-#[derive(Clone)]
-struct PluginReadMcpServer {
-    tools: Arc<StdMutex<Vec<Tool>>>,
-}
-
-impl ServerHandler for PluginReadMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-    }
-
-    fn list_tools(
-        &self,
-        _request: Option<rmcp::model::PaginatedRequestParams>,
-        _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
-    ) -> impl std::future::Future<Output = Result<ListToolsResult, rmcp::ErrorData>> + Send + '_
-    {
-        let tools = self.tools.clone();
-        async move {
-            let tools = tools
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
-            Ok(ListToolsResult {
-                tools,
-                next_cursor: None,
-                meta: None,
-            })
-        }
-    }
-}
-
-async fn start_apps_server(
-    connectors: Vec<AppInfo>,
-    tools: Vec<Tool>,
-) -> Result<(String, JoinHandle<()>)> {
+async fn start_apps_server(connectors: Vec<AppInfo>) -> Result<(String, JoinHandle<()>)> {
     let state = Arc::new(AppsServerState {
         response: Arc::new(StdMutex::new(
             json!({ "apps": connectors, "next_token": null }),
         )),
     });
-    let tools = Arc::new(StdMutex::new(tools));
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
-    let mcp_service = StreamableHttpService::new(
-        {
-            let tools = tools.clone();
-            move || {
-                Ok(PluginReadMcpServer {
-                    tools: tools.clone(),
-                })
-            }
-        },
-        Arc::new(LocalSessionManager::default()),
-        StreamableHttpServerConfig::default(),
-    );
     let router = Router::new()
         .route("/connectors/directory/list", get(list_directory_connectors))
         .route(
             "/connectors/directory/list_workspace",
             get(list_directory_connectors),
         )
-        .with_state(state)
-        .nest_service("/api/codex/apps", mcp_service);
+        .with_state(state);
 
     let handle = tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
@@ -1887,27 +1924,6 @@ async fn list_directory_connectors(
             .clone();
         Ok(Json(response))
     }
-}
-
-fn connector_tool(connector_id: &str, connector_name: &str) -> Result<Tool> {
-    let schema: JsonObject = serde_json::from_value(json!({
-        "type": "object",
-        "additionalProperties": false
-    }))?;
-    let mut tool = Tool::new(
-        Cow::Owned(format!("connector_{connector_id}")),
-        Cow::Borrowed("Connector test tool"),
-        Arc::new(schema),
-    );
-    tool.annotations = Some(ToolAnnotations::new().read_only(true));
-
-    let mut meta = Meta::new();
-    meta.0
-        .insert("connector_id".to_string(), json!(connector_id));
-    meta.0
-        .insert("connector_name".to_string(), json!(connector_name));
-    tool.meta = Some(meta);
-    Ok(tool)
 }
 
 fn write_connectors_config(codex_home: &std::path::Path, base_url: &str) -> std::io::Result<()> {

@@ -13,6 +13,7 @@ pub(super) struct RemoteControlTarget {
     pub(super) enroll_url: String,
     pub(super) refresh_url: String,
     pub(super) pair_url: String,
+    pub(super) pair_status_url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -50,6 +51,40 @@ pub(super) struct StartRemoteControlPairingResponse {
     pub(super) server_id: String,
     pub(super) environment_id: String,
     pub(super) expires_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct RemoteControlPairingStatusRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pairing_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) manual_pairing_code: Option<String>,
+}
+
+#[derive(Clone)]
+pub(super) enum RemoteControlPairingStatusCode {
+    PairingCode(String),
+    ManualPairingCode(String),
+}
+
+impl From<RemoteControlPairingStatusCode> for RemoteControlPairingStatusRequest {
+    fn from(code: RemoteControlPairingStatusCode) -> Self {
+        match code {
+            RemoteControlPairingStatusCode::PairingCode(pairing_code) => Self {
+                pairing_code: Some(pairing_code),
+                manual_pairing_code: None,
+            },
+            RemoteControlPairingStatusCode::ManualPairingCode(manual_pairing_code) => Self {
+                pairing_code: None,
+                manual_pairing_code: Some(manual_pairing_code),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RemoteControlPairingStatusResponse {
+    pub(super) claimed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -194,6 +229,9 @@ pub(super) fn normalize_remote_control_url(
     let pair_url = remote_control_url
         .join("wham/remote/control/server/pair")
         .map_err(map_url_parse_error)?;
+    let pair_status_url = remote_control_url
+        .join("wham/remote/control/server/pair/status")
+        .map_err(map_url_parse_error)?;
     let mut websocket_url = remote_control_url
         .join("wham/remote/control/server")
         .map_err(map_url_parse_error)?;
@@ -215,6 +253,7 @@ pub(super) fn normalize_remote_control_url(
         enroll_url: enroll_url.to_string(),
         refresh_url: refresh_url.to_string(),
         pair_url: pair_url.to_string(),
+        pair_status_url: pair_status_url.to_string(),
     })
 }
 
@@ -269,6 +308,9 @@ mod tests {
                     .to_string(),
                 pair_url: "https://chatgpt.com/backend-api/wham/remote/control/server/pair"
                     .to_string(),
+                pair_status_url:
+                    "https://chatgpt.com/backend-api/wham/remote/control/server/pair/status"
+                        .to_string(),
             }
         );
         assert_eq!(
@@ -286,6 +328,9 @@ mod tests {
                         .to_string(),
                 pair_url:
                     "https://api.chatgpt-staging.com/backend-api/wham/remote/control/server/pair"
+                        .to_string(),
+                pair_status_url:
+                    "https://api.chatgpt-staging.com/backend-api/wham/remote/control/server/pair/status"
                         .to_string(),
             }
         );
@@ -305,6 +350,9 @@ mod tests {
                     .to_string(),
                 pair_url: "http://localhost:8080/backend-api/wham/remote/control/server/pair"
                     .to_string(),
+                pair_status_url:
+                    "http://localhost:8080/backend-api/wham/remote/control/server/pair/status"
+                        .to_string(),
             }
         );
         assert_eq!(
@@ -320,6 +368,9 @@ mod tests {
                         .to_string(),
                 pair_url: "https://localhost:8443/backend-api/wham/remote/control/server/pair"
                     .to_string(),
+                pair_status_url:
+                    "https://localhost:8443/backend-api/wham/remote/control/server/pair/status"
+                        .to_string(),
             }
         );
     }

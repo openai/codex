@@ -1,25 +1,17 @@
 load("@crates//:data.bzl", "DEP_DATA")
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_platform//platform_data:defs.bzl", "platform_data")
 load("@rules_rust//cargo/private:cargo_build_script_wrapper.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_proc_macro", "rust_test")
 
-PLATFORMS = [
-    "linux_arm64_musl",
-    "linux_amd64_musl",
-    "macos_amd64",
-    "macos_arm64",
-    "windows_amd64",
-    "windows_arm64",
-]
-
 # Match Cargo's Windows linker behavior so Bazel-built binaries and tests use
 # the same stack reserve on both Windows ABIs and resolve UCRT imports on MSVC.
+WINDOWS_GNULLVM_RUSTC_LINK_FLAGS = [
+    "-C",
+    "link-arg=-Wl,--stack,8388608",  # 8 MiB
+]
+
 WINDOWS_RUSTC_LINK_FLAGS = select({
-    "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm": [
-        "-C",
-        "link-arg=-Wl,--stack,8388608",  # 8 MiB
-    ],
+    "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm": WINDOWS_GNULLVM_RUSTC_LINK_FLAGS,
     "@rules_rs//rs/experimental/platforms/constraints:windows_msvc": [
         "-C",
         "link-arg=/STACK:8388608",  # 8 MiB
@@ -52,21 +44,6 @@ MACOS_WEBRTC_RUSTC_LINK_FLAGS = select({
     ],
     "//conditions:default": [],
 })
-
-def multiplatform_binaries(name, platforms = PLATFORMS):
-    for platform in platforms:
-        platform_data(
-            name = name + "_" + platform,
-            platform = "@llvm//platforms:" + platform,
-            target = name,
-            tags = ["manual"],
-        )
-
-    native.filegroup(
-        name = "release_binaries",
-        srcs = [name + "_" + platform for platform in platforms],
-        tags = ["manual"],
-    )
 
 def _workspace_root_test_impl(ctx):
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])

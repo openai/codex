@@ -150,6 +150,7 @@ pub use thread_config::ThreadConfigContext;
 pub use thread_config::ThreadConfigLoadError;
 pub use thread_config::ThreadConfigLoadErrorCode;
 pub use thread_config::ThreadConfigLoader;
+pub use thread_config::ThreadConfigLoaderFuture;
 pub use thread_config::ThreadConfigSource;
 pub use thread_config::UserThreadConfig;
 pub use toml::Value as TomlValue;

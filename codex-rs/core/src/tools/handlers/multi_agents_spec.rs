@@ -17,6 +17,7 @@ const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str =
 const SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION: &str =
     "Service tier override for the new agent. Omit unless explicitly requested.";
 const MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT_DESCRIPTION: usize = 5;
+const MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION: usize = 64;
 
 #[derive(Debug, Clone, Default)]
 pub struct SpawnAgentToolOptions {
@@ -25,7 +26,6 @@ pub struct SpawnAgentToolOptions {
     pub hide_agent_type_model_reasoning: bool,
     pub include_usage_hint: bool,
     pub usage_hint_text: Option<String>,
-    pub max_concurrent_threads_per_session: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,7 +101,6 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions) -> ToolSpec {
             inherited_model_guidance,
             options.include_usage_hint,
             options.usage_hint_text,
-            options.max_concurrent_threads_per_session,
         ),
         strict: false,
         defer_loading: None,
@@ -166,7 +165,8 @@ pub fn create_send_message_tool() -> ToolSpec {
             "message".to_string(),
             JsonSchema::string(Some(
                 "Message text to queue on the target agent.".to_string(),
-            )),
+            ))
+            .with_encrypted(),
         ),
     ]);
 
@@ -198,13 +198,14 @@ pub fn create_followup_task_tool() -> ToolSpec {
             "message".to_string(),
             JsonSchema::string(Some(
                 "Message text to send to the target agent.".to_string(),
-            )),
+            ))
+            .with_encrypted(),
         ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "followup_task".to_string(),
-        description: "Send a follow-up task to an existing non-root target agent and trigger a turn in that target. If the target is currently mid-turn, the message is queued and will be used to start the target's next turn, after the current turn completes."
+        description: "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -299,26 +300,30 @@ pub fn create_close_agent_tool_v1() -> ToolSpec {
             strict: false,
             defer_loading: None,
             parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
-            output_schema: Some(close_agent_output_schema()),
+            output_schema: Some(agent_previous_status_output_schema(
+                "The agent status observed before shutdown was requested.",
+            )),
         })],
     })
 }
 
-pub fn create_close_agent_tool_v2() -> ToolSpec {
+pub fn create_interrupt_agent_tool_v2() -> ToolSpec {
     let properties = BTreeMap::from([(
         "target".to_string(),
         JsonSchema::string(Some(
-            "Agent id or canonical task name to close (from spawn_agent).".to_string(),
+            "Agent id or canonical task name to interrupt (from spawn_agent).".to_string(),
         )),
     )]);
 
     ToolSpec::Function(ResponsesApiTool {
-        name: "close_agent".to_string(),
-        description: "Close an agent and any open descendants when they are no longer needed, and return the target agent's previous status before shutdown was requested. Completed agents remain open and count toward the concurrency limit until closed. Don't keep agents open for too long if they are not needed anymore.".to_string(),
+        name: "interrupt_agent".to_string(),
+        description: "Interrupt an agent's current turn, if any, and return its previous status. The agent remains available for messages and follow-up tasks.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
-        output_schema: Some(close_agent_output_schema()),
+        output_schema: Some(agent_previous_status_output_schema(
+            "The agent status observed before the interrupt request was handled.",
+        )),
     })
 }
 
@@ -498,12 +503,12 @@ fn wait_output_schema_v2() -> Value {
     })
 }
 
-fn close_agent_output_schema() -> Value {
+fn agent_previous_status_output_schema(previous_status_description: &str) -> Value {
     json!({
         "type": "object",
         "properties": {
             "previous_status": {
-                "description": "The agent status observed before shutdown was requested.",
+                "description": previous_status_description,
                 "allOf": [agent_status_output_schema()]
             }
         },
@@ -594,7 +599,10 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
     BTreeMap::from([
         (
             "message".to_string(),
-            JsonSchema::string(Some("Initial plain-text task for the new agent.".to_string())),
+            JsonSchema::string(Some(
+                "Initial plain-text task for the new agent.".to_string(),
+            ))
+            .with_encrypted(),
         ),
         (
             "agent_type".to_string(),
@@ -672,15 +680,8 @@ fn spawn_agent_tool_description(
         {tool_description}
 This spawn_agent tool provides you access to sub-agents that inherit your current model by default. Do not set the `model` field unless the user explicitly asks for a different model or there is a clear task-specific reason. You should follow the rules and guidelines below to use this tool.
 
-Only use `spawn_agent` if and only if the user explicitly asks for sub-agents, delegation, or parallel agent work.
-Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not count as permission to spawn.
+Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work.
 {agent_role_usage_hint}
-
-### When to delegate vs. do the subtask yourself
-- First, quickly analyze the overall user task and form a succinct high-level plan. Identify which tasks are immediate blockers on the critical path, and which tasks are sidecar tasks that are needed but can run in parallel without blocking the next local step. As part of that plan, explicitly decide what immediate task you should do locally right now. Do this planning step before delegating to agents so you do not hand off the immediate blocking task to a submodel and then waste time waiting on it.
-- Use a subagent when a subtask is easy enough for it to handle and can run in parallel with your local work. Prefer delegating concrete, bounded sidecar tasks that materially advance the main task without blocking your immediate next local step.
-- Do not delegate urgent blocking work when your immediate next step depends on that result. If the very next action is blocked on that task, the main rollout should usually do it locally to keep the critical path moving.
-- Keep work local when the subtask is too difficult to delegate well and when it is tightly coupled, urgent, or likely to block your immediate next step.
 
 ### Designing delegated subtasks
 - Subtasks must be concrete, well-defined, and self-contained.
@@ -712,17 +713,9 @@ fn spawn_agent_tool_description_v2(
     inherited_model_guidance: Option<&str>,
     include_usage_hint: bool,
     usage_hint_text: Option<String>,
-    max_concurrent_threads_per_session: Option<usize>,
 ) -> String {
     let agent_role_guidance = available_models_description.unwrap_or_default();
     let inherited_model_guidance = inherited_model_guidance.unwrap_or_default();
-    let concurrency_guidance = max_concurrent_threads_per_session
-        .map(|limit| {
-            format!(
-                "This session is configured with `max_concurrent_threads_per_session = {limit}` for concurrently open agent threads."
-            )
-        })
-        .unwrap_or_default();
 
     let tool_description = format!(
         r#"
@@ -731,9 +724,9 @@ fn spawn_agent_tool_description_v2(
 You are then able to refer to this agent as `task_3` or `/root/task1/task_3` interchangeably. However an agent `/root/task2/task_3` would only be able to communicate with this agent via its canonical name `/root/task1/task_3`.
 The spawned agent will have the same tools as you and the ability to spawn its own subagents.
 {inherited_model_guidance}
+Only call this tool for a concrete, bounded subtask that can run independently alongside useful local work; otherwise continue locally.
 It will be able to send you and other running agents messages, and its final answer will be provided to you when it finishes.
-The new agent's canonical task name will be provided to it along with the message.
-{concurrency_guidance}"#
+The new agent's canonical task name will be provided to it along with the message."#
     );
 
     if !include_usage_hint {
@@ -762,13 +755,20 @@ fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
     let model_descriptions = visible_models
         .into_iter()
         .map(|model| {
-            let default_reasoning_effort = model.default_reasoning_effort;
+            let default_reasoning_effort = &model.default_reasoning_effort;
             let efforts = model
                 .supported_reasoning_efforts
                 .iter()
                 .map(|preset| {
-                    let effort = preset.effort;
-                    if effort == default_reasoning_effort {
+                    let effort = preset.effort.as_str();
+                    let effort = match effort
+                        .char_indices()
+                        .nth(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION)
+                    {
+                        Some((index, _)) => &effort[..index],
+                        None => effort,
+                    };
+                    if &preset.effort == default_reasoning_effort {
                         format!("{effort} (default)")
                     } else {
                         effort.to_string()

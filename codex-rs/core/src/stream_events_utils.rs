@@ -38,7 +38,8 @@ use tracing::warn;
 
 const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
 
-pub(crate) fn image_generation_artifact_path(
+/// Returns the host-owned default artifact path for a generated image.
+pub fn image_generation_artifact_path(
     codex_home: &AbsolutePathBuf,
     session_id: &str,
     call_id: &str,
@@ -577,7 +578,9 @@ pub(crate) async fn finalize_turn_item(
             agent_message.memory_citation = memory_citation;
         }
     }
-    if let TurnItem::ImageGeneration(image_item) = &mut *turn_item {
+    if let TurnItem::ImageGeneration(image_item) = &mut *turn_item
+        && image_item.status == "completed"
+    {
         persist_image_generation_item(sess, turn_context, image_item).await;
     }
 }

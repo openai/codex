@@ -4,25 +4,33 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
-use codex_core::config::Config;
-use codex_core::config::ConfigBuilder;
 use codex_core_skills::HostLoadedSkills;
-use codex_core_skills::SkillsLoadInput;
-use codex_core_skills::SkillsManager;
+use codex_core_skills::SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS;
+use codex_core_skills::SKILLS_INTRO_WITH_ABSOLUTE_PATHS;
+use codex_core_skills::SkillLoadOutcome;
+use codex_core_skills::SkillMetadata;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
 use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TurnInputContext;
-use codex_extension_api::TurnInputEnvironment;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SkillScope;
 use codex_protocol::user_input::UserInput;
 use codex_skills_extension::SkillProviders;
+use codex_skills_extension::SkillsExtensionConfig;
 use codex_skills_extension::catalog::SkillAuthority;
 use codex_skills_extension::catalog::SkillCatalog;
 use codex_skills_extension::catalog::SkillCatalogEntry;
 use codex_skills_extension::catalog::SkillPackageId;
+use codex_skills_extension::catalog::SkillProviderError;
 use codex_skills_extension::catalog::SkillReadResult;
 use codex_skills_extension::catalog::SkillResourceId;
 use codex_skills_extension::catalog::SkillSearchResult;
@@ -34,14 +42,17 @@ use codex_skills_extension::provider::SkillProvider;
 use codex_skills_extension::provider::SkillProviderFuture;
 use codex_skills_extension::provider::SkillReadRequest;
 use codex_skills_extension::provider::SkillSearchRequest;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 static NEXT_CODEX_HOME_ID: AtomicUsize = AtomicUsize::new(0);
+const DEMO_SKILL_CONTENTS: &str =
+    "---\nname: demo\ndescription: Demo skill.\n---\n# Demo\n\nUse the demo skill.\n";
 
 #[tokio::test]
-async fn installed_extension_loads_host_skills_from_legacy_roots() -> TestResult {
+async fn installed_extension_uses_host_loaded_skills() -> TestResult {
     let codex_home = test_codex_home();
     let skill_path = codex_home.join("skills").join("demo").join("SKILL.md");
     std::fs::create_dir_all(
@@ -49,18 +60,11 @@ async fn installed_extension_loads_host_skills_from_legacy_roots() -> TestResult
             .parent()
             .ok_or("skill path should have a parent")?,
     )?;
-    std::fs::write(
-        &skill_path,
-        "---\nname: demo\ndescription: Demo skill.\n---\n# Demo\n\nUse the demo skill.\n",
-    )?;
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.clone())
-        .fallback_cwd(Some(codex_home.clone()))
-        .build()
-        .await?;
+    std::fs::write(&skill_path, DEMO_SKILL_CONTENTS)?;
+    let config = default_config();
 
     let mut builder = ExtensionRegistryBuilder::new();
-    install(&mut builder);
+    install(&mut builder, skills_extension_config);
     let registry = builder.build();
     let session_store = ExtensionData::new("session");
     let thread_store = ExtensionData::new("thread");
@@ -75,22 +79,21 @@ async fn installed_extension_loads_host_skills_from_legacy_roots() -> TestResult
         })
         .await;
 
-    let manager = SkillsManager::new(config.codex_home.clone(), config.bundled_skills_enabled());
-    let input = SkillsLoadInput::new(
-        config.cwd.clone(),
-        Vec::new(),
-        config.config_layer_stack.clone(),
-        config.bundled_skills_enabled(),
-    );
-    let loaded_skills = Arc::new(manager.skills_for_config(&input, /*fs*/ None).await);
-    let skill_path_string = loaded_skills
-        .skills
-        .iter()
-        .find(|skill| skill.name == "demo")
-        .ok_or("demo skill should load")?
-        .path_to_skills_md
-        .to_string_lossy()
-        .into_owned();
+    let skill_path = AbsolutePathBuf::try_from(skill_path)?;
+    let skill_path_string = skill_path.to_string_lossy().into_owned();
+    let mut outcome = SkillLoadOutcome::default();
+    outcome.skills.push(SkillMetadata {
+        name: "demo".to_string(),
+        description: "Demo skill.".to_string(),
+        short_description: None,
+        interface: None,
+        dependencies: None,
+        policy: None,
+        path_to_skills_md: skill_path,
+        scope: SkillScope::User,
+        plugin_id: None,
+    });
+    let loaded_skills = Arc::new(outcome);
     let skill_prompt_path = skill_path_string.replace('\\', "/");
     let turn_store = ExtensionData::new("turn-1");
     turn_store.insert(HostLoadedSkills::new(Arc::clone(&loaded_skills)));
@@ -111,13 +114,19 @@ async fn installed_extension_loads_host_skills_from_legacy_roots() -> TestResult
         )
         .await;
 
-    assert_eq!(2, fragments.len());
-    assert!(fragments[0].render().contains("demo"));
-    assert!(fragments[0].render().contains(&skill_prompt_path));
-    assert_eq!("user", fragments[1].role());
-    assert!(fragments[1].render().contains("<name>demo</name>"));
-    assert!(fragments[1].render().contains("# Demo"));
-    assert!(fragments[1].render().contains(&skill_prompt_path));
+    let expected_catalog = format!(
+        "{SKILLS_INSTRUCTIONS_OPEN_TAG}\n## Skills\n{SKILLS_INTRO_WITH_ABSOLUTE_PATHS}\n### Available skills\n- demo: Demo skill. (file: {skill_prompt_path})\n### How to use skills\n{SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS}\n{SKILLS_INSTRUCTIONS_CLOSE_TAG}"
+    );
+    let expected_skill = format!(
+        "<skill>\n<name>demo</name>\n<path>{skill_prompt_path}</path>\n{DEMO_SKILL_CONTENTS}\n</skill>"
+    );
+    assert_eq!(
+        vec![("developer", expected_catalog), ("user", expected_skill),],
+        fragments
+            .iter()
+            .map(|fragment| (fragment.role(), fragment.render()))
+            .collect::<Vec<_>>()
+    );
     let injected_host_skill_prompts = turn_store
         .get::<InjectedHostSkillPrompts>()
         .ok_or("host skill prompt marker should be set")?;
@@ -128,44 +137,39 @@ async fn installed_extension_loads_host_skills_from_legacy_roots() -> TestResult
 }
 
 #[tokio::test]
-async fn installed_extension_injects_available_catalog_and_selected_entrypoint() -> TestResult {
-    let host_read_requests = Arc::new(Mutex::new(Vec::new()));
-    let remote_read_requests = Arc::new(Mutex::new(Vec::new()));
-    let host_provider = Arc::new(StaticSkillProvider {
+async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_input() -> TestResult
+{
+    let read_requests = Arc::new(Mutex::new(Vec::new()));
+    let executor_provider = Arc::new(StaticSkillProvider {
         catalog: SkillCatalog {
             entries: vec![test_entry(
-                SkillSourceKind::Host,
-                "host",
-                "host/lint-fix",
+                SkillSourceKind::Executor,
+                "env-1",
+                "executor/lint-fix",
                 "lint-fix/SKILL.md",
             )],
             warnings: Vec::new(),
         },
-        read_requests: Arc::clone(&host_read_requests),
+        read_requests: Arc::clone(&read_requests),
+        list_calls: None,
+        fail_first_list: false,
     });
-    let remote_provider = Arc::new(StaticSkillProvider {
-        catalog: SkillCatalog {
-            entries: vec![test_entry(
-                SkillSourceKind::Remote,
-                "remote",
-                "remote/lint-fix",
-                "lint-fix/SKILL.md",
-            )],
-            warnings: Vec::new(),
-        },
-        read_requests: Arc::clone(&remote_read_requests),
-    });
-    let providers = SkillProviders::new()
-        .with_host_provider(host_provider)
-        .with_remote_provider(remote_provider);
+    let providers = SkillProviders::new().with_executor_provider(executor_provider);
     let mut builder = ExtensionRegistryBuilder::new();
-    install_with_providers(&mut builder, providers);
+    install_with_providers(&mut builder, providers, skills_extension_config);
     let registry = builder.build();
 
     let session_store = ExtensionData::new("session");
     let thread_store = ExtensionData::new("thread");
+    thread_store.insert(vec![SelectedCapabilityRoot {
+        id: "lint-fix".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "env-1".to_string(),
+            path: "/skills/lint-fix".to_string(),
+        },
+    }]);
     let session_source = SessionSource::Cli;
-    let config = default_config().await?;
+    let config = default_config();
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
             config: &config,
@@ -176,6 +180,22 @@ async fn installed_extension_injects_available_catalog_and_selected_entrypoint()
         })
         .await;
 
+    let prompt_fragments = registry.context_contributors()[0]
+        .contribute(&session_store, &thread_store)
+        .await;
+    assert_eq!(1, prompt_fragments.len());
+    assert!(
+        prompt_fragments[0]
+            .text()
+            .starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG)
+    );
+    assert!(prompt_fragments[0].text().contains("lint-fix"));
+    assert!(
+        prompt_fragments[0]
+            .text()
+            .contains("(environment resource: skill://executor/lint-fix/SKILL.md)")
+    );
+
     let turn_store = ExtensionData::new("turn-1");
     let fragments = registry.turn_input_contributors()[0]
         .contribute(
@@ -185,11 +205,7 @@ async fn installed_extension_injects_available_catalog_and_selected_entrypoint()
                     text: "$lint-fix please".to_string(),
                     text_elements: Vec::new(),
                 }],
-                environments: vec![TurnInputEnvironment {
-                    environment_id: "env-1".to_string(),
-                    cwd: std::env::temp_dir(),
-                    is_primary: true,
-                }],
+                environments: Vec::new(),
             },
             &session_store,
             &thread_store,
@@ -197,31 +213,23 @@ async fn installed_extension_injects_available_catalog_and_selected_entrypoint()
         )
         .await;
 
-    assert_eq!(2, fragments.len());
-    assert_eq!("developer", fragments[0].role());
-    assert!(
-        fragments[0]
-            .render()
-            .starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG)
-    );
-    assert!(fragments[0].render().contains("lint-fix"));
-    assert_eq!("user", fragments[1].role());
-    assert!(fragments[1].render().contains("<name>lint-fix</name>"));
-    assert!(fragments[1].render().contains("# Lint Fix"));
+    assert_eq!(1, fragments.len());
+    assert_eq!("user", fragments[0].role());
+    assert!(fragments[0].render().contains("<name>lint-fix</name>"));
+    assert!(fragments[0].render().contains("# Lint Fix"));
     assert_eq!(
         vec![(
-            SkillAuthority::new(SkillSourceKind::Host, "host"),
-            SkillPackageId("host/lint-fix".to_string()),
-            SkillResourceId("lint-fix/SKILL.md".to_string()),
+            SkillAuthority::new(SkillSourceKind::Executor, "env-1"),
+            SkillPackageId("executor/lint-fix".to_string()),
+            SkillResourceId::new("lint-fix/SKILL.md"),
         )],
-        read_request_keys(&host_read_requests)
+        read_request_keys(&read_requests)
     );
-    assert!(
-        remote_read_requests
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_empty()
-    );
+    let rebuilt_prompt_fragments = registry.context_contributors()[0]
+        .contribute(&session_store, &thread_store)
+        .await;
+    assert_eq!(1, rebuilt_prompt_fragments.len());
+    assert!(rebuilt_prompt_fragments[0].text().contains("lint-fix"));
 
     let next_turn_store = ExtensionData::new("turn-2");
     let next_fragments = registry.turn_input_contributors()[0]
@@ -240,9 +248,165 @@ async fn installed_extension_injects_available_catalog_and_selected_entrypoint()
         )
         .await;
 
-    assert_eq!(1, next_fragments.len());
-    assert_eq!("developer", next_fragments[0].role());
-    assert!(next_fragments[0].render().contains("lint-fix"));
+    assert!(next_fragments.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
+    let list_calls = Arc::new(AtomicUsize::new(0));
+    let providers =
+        SkillProviders::new().with_orchestrator_provider(Arc::new(StaticSkillProvider {
+            catalog: SkillCatalog {
+                entries: vec![test_entry(
+                    SkillSourceKind::Orchestrator,
+                    "codex_apps",
+                    "orchestrator/first",
+                    "skill://orchestrator/first/SKILL.md",
+                )],
+                warnings: Vec::new(),
+            },
+            read_requests: Arc::new(Mutex::new(Vec::new())),
+            list_calls: Some(Arc::clone(&list_calls)),
+            fail_first_list: true,
+        }));
+    let (event_tx, event_rx) = std::sync::mpsc::channel();
+    let mut builder =
+        ExtensionRegistryBuilder::with_event_sink(Arc::new(ChannelEventSink(event_tx)));
+    install_with_providers(&mut builder, providers, skills_extension_config);
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    let session_source = SessionSource::Cli;
+    let config = default_config();
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &session_source,
+            persistent_thread_state_available: true,
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+
+    let initial_fragments = registry.context_contributors()[0]
+        .contribute(&session_store, &thread_store)
+        .await;
+    assert!(initial_fragments.is_empty());
+    let EventMsg::Warning(warning) = event_rx.try_recv()?.msg else {
+        panic!("expected warning event");
+    };
+    assert_eq!(
+        warning.message,
+        "orchestrator skills unavailable: temporary orchestrator failure"
+    );
+
+    for turn_id in ["turn-1", "turn-2"] {
+        let fragments = registry.turn_input_contributors()[0]
+            .contribute(
+                TurnInputContext {
+                    turn_id: turn_id.to_string(),
+                    user_input: vec![UserInput::Text {
+                        text: "$first".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    environments: Vec::new(),
+                },
+                &session_store,
+                &thread_store,
+                &ExtensionData::new(turn_id),
+            )
+            .await;
+        assert!(fragments.is_empty());
+    }
+    assert_eq!(1, list_calls.load(Ordering::Relaxed));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> TestResult {
+    let read_requests = Arc::new(Mutex::new(Vec::new()));
+    let root_a_locator = "skill://root-a/shared/lint-fix/SKILL.md";
+    let root_b_locator = "skill://root-b/shared/lint-fix/SKILL.md";
+    let executor_provider = Arc::new(StaticSkillProvider {
+        catalog: SkillCatalog {
+            entries: [("root-a", root_a_locator), ("root-b", root_b_locator)]
+                .into_iter()
+                .map(|(root_id, locator)| {
+                    SkillCatalogEntry::new(
+                        SkillPackageId(locator.to_string()),
+                        SkillAuthority::new(SkillSourceKind::Executor, root_id),
+                        "lint-fix",
+                        "Fix lint errors.",
+                        SkillResourceId::new(locator),
+                    )
+                    .with_display_path(locator)
+                })
+                .collect(),
+            warnings: Vec::new(),
+        },
+        read_requests: Arc::clone(&read_requests),
+        list_calls: None,
+        fail_first_list: false,
+    });
+    let providers = SkillProviders::new().with_executor_provider(executor_provider);
+    let mut builder = ExtensionRegistryBuilder::new();
+    install_with_providers(&mut builder, providers, skills_extension_config);
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    thread_store.insert(
+        [("root-a", "/skills/root-a"), ("root-b", "/skills/root-b")]
+            .into_iter()
+            .map(|(id, path)| SelectedCapabilityRoot {
+                id: id.to_string(),
+                location: CapabilityRootLocation::Environment {
+                    environment_id: "env-1".to_string(),
+                    path: path.to_string(),
+                },
+            })
+            .collect::<Vec<_>>(),
+    );
+    let session_source = SessionSource::Cli;
+    let config = default_config();
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &session_source,
+            persistent_thread_state_available: true,
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+
+    let fragments = registry.turn_input_contributors()[0]
+        .contribute(
+            TurnInputContext {
+                turn_id: "turn-1".to_string(),
+                user_input: vec![UserInput::Mention {
+                    name: "lint-fix".to_string(),
+                    path: root_b_locator.to_string(),
+                }],
+                environments: Vec::new(),
+            },
+            &session_store,
+            &thread_store,
+            &ExtensionData::new("turn-1"),
+        )
+        .await;
+
+    assert_eq!(1, fragments.len());
+    assert!(fragments[0].render().contains(root_b_locator));
+    assert_eq!(
+        vec![(
+            SkillAuthority::new(SkillSourceKind::Executor, "root-b"),
+            SkillPackageId(root_b_locator.to_string()),
+            SkillResourceId::new(root_b_locator),
+        )],
+        read_request_keys(&read_requests)
+    );
 
     Ok(())
 }
@@ -270,15 +434,17 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
             warnings: Vec::new(),
         },
         read_requests: Arc::clone(&read_requests),
+        list_calls: None,
+        fail_first_list: false,
     });
     let providers = SkillProviders::new().with_host_provider(provider);
     let mut builder = ExtensionRegistryBuilder::new();
-    install_with_providers(&mut builder, providers);
+    install_with_providers(&mut builder, providers, skills_extension_config);
     let registry = builder.build();
     let session_store = ExtensionData::new("session");
     let thread_store = ExtensionData::new("thread");
     let session_source = SessionSource::Cli;
-    let config = default_config().await?;
+    let config = default_config();
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
             config: &config,
@@ -306,15 +472,14 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
         .await;
 
     assert_eq!(2, fragments.len());
-    let catalog_fragment = fragments[0].render();
-    assert!(catalog_fragment.contains("visible-skill"));
-    assert!(!catalog_fragment.contains("hidden-skill"));
+    assert!(fragments[0].render().contains("visible-skill"));
+    assert!(!fragments[0].render().contains("hidden-skill"));
     assert!(fragments[1].render().contains("<name>hidden-skill</name>"));
     assert_eq!(
         vec![(
             SkillAuthority::new(SkillSourceKind::Host, "host"),
             SkillPackageId("host/hidden-skill".to_string()),
-            SkillResourceId("hidden-skill/SKILL.md".to_string()),
+            SkillResourceId::new("hidden-skill/SKILL.md"),
         )],
         read_request_keys(&read_requests)
     );
@@ -326,15 +491,32 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
 struct StaticSkillProvider {
     catalog: SkillCatalog,
     read_requests: Arc<Mutex<Vec<SkillReadRequest>>>,
+    list_calls: Option<Arc<AtomicUsize>>,
+    fail_first_list: bool,
+}
+
+struct ChannelEventSink(std::sync::mpsc::Sender<Event>);
+
+impl ExtensionEventSink for ChannelEventSink {
+    fn emit(&self, event: Event) {
+        let _ = self.0.send(event);
+    }
 }
 
 impl SkillProvider for StaticSkillProvider {
-    fn list(&self, query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
+    fn list(&self, _query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
+        let list_call = self
+            .list_calls
+            .as_ref()
+            .map(|list_calls| list_calls.fetch_add(1, Ordering::Relaxed));
+        let fail = self.fail_first_list && list_call == Some(0);
         let catalog = self.catalog.clone();
         Box::pin(async move {
-            assert!(query.include_host_skills);
-            assert!(query.include_bundled_skills);
-            Ok(catalog)
+            if fail {
+                Err(SkillProviderError::new("temporary orchestrator failure"))
+            } else {
+                Ok(catalog)
+            }
         })
     }
 
@@ -369,18 +551,29 @@ fn test_entry(
         SkillAuthority::new(kind, authority_id),
         name,
         "Fix lint errors.",
-        SkillResourceId(main_prompt.to_string()),
+        SkillResourceId::new(main_prompt),
     )
     .with_display_path(format!("skill://{package_id}/SKILL.md"))
 }
 
-async fn default_config() -> std::io::Result<Config> {
-    let codex_home = test_codex_home();
-    std::fs::create_dir_all(&codex_home)?;
-    let config =
-        Config::load_default_with_cli_overrides_for_codex_home(codex_home.clone(), vec![]).await?;
-    std::fs::remove_dir_all(codex_home)?;
-    Ok(config)
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TestConfig {
+    include_instructions: bool,
+    bundled_skills_enabled: bool,
+}
+
+fn default_config() -> TestConfig {
+    TestConfig {
+        include_instructions: true,
+        bundled_skills_enabled: true,
+    }
+}
+
+fn skills_extension_config(config: &TestConfig) -> SkillsExtensionConfig {
+    SkillsExtensionConfig {
+        include_instructions: config.include_instructions,
+        bundled_skills_enabled: config.bundled_skills_enabled,
+    }
 }
 
 fn test_codex_home() -> PathBuf {
