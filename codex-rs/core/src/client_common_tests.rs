@@ -104,13 +104,11 @@ fn responses_lite_request_copies_strip_image_details() {
 
 #[test]
 fn serializes_text_verbosity_when_set() {
-    let input: Vec<ResponseItem> = vec![];
-    let tools: Vec<serde_json::Value> = vec![];
     let req = ResponsesApiRequest {
         model: "gpt-5.4".to_string(),
         instructions: "i".to_string(),
-        input,
-        tools,
+        input: vec![],
+        tools: Some(vec![]),
         tool_choice: "auto".to_string(),
         parallel_tool_calls: true,
         reasoning: None,
@@ -137,8 +135,6 @@ fn serializes_text_verbosity_when_set() {
 
 #[test]
 fn serializes_text_schema_with_strict_format() {
-    let input: Vec<ResponseItem> = vec![];
-    let tools: Vec<serde_json::Value> = vec![];
     let schema = serde_json::json!({
         "type": "object",
         "properties": {
@@ -156,8 +152,8 @@ fn serializes_text_schema_with_strict_format() {
     let req = ResponsesApiRequest {
         model: "gpt-5.4".to_string(),
         instructions: "i".to_string(),
-        input,
-        tools,
+        input: vec![],
+        tools: Some(vec![]),
         tool_choice: "auto".to_string(),
         parallel_tool_calls: true,
         reasoning: None,
@@ -212,13 +208,11 @@ fn serializes_text_schema_with_non_strict_format() {
 
 #[test]
 fn omits_text_when_not_set() {
-    let input: Vec<ResponseItem> = vec![];
-    let tools: Vec<serde_json::Value> = vec![];
     let req = ResponsesApiRequest {
         model: "gpt-5.4".to_string(),
         instructions: "i".to_string(),
-        input,
-        tools,
+        input: vec![],
+        tools: Some(vec![]),
         tool_choice: "auto".to_string(),
         parallel_tool_calls: true,
         reasoning: None,
@@ -241,7 +235,7 @@ fn serializes_flex_service_tier_when_set() {
         model: "gpt-5.4".to_string(),
         instructions: "i".to_string(),
         input: vec![],
-        tools: vec![],
+        tools: Some(vec![]),
         tool_choice: "auto".to_string(),
         parallel_tool_calls: true,
         reasoning: None,

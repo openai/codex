@@ -52,7 +52,8 @@ pub(crate) fn prepare_response_items(items: &mut [ResponseItem]) {
                     prepare_tool_output_content(content);
                 }
             }
-            ResponseItem::Reasoning { .. }
+            ResponseItem::AdditionalTools { .. }
+            | ResponseItem::Reasoning { .. }
             | ResponseItem::AgentMessage { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::FunctionCall { .. }
