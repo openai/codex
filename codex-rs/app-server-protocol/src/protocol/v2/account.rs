@@ -100,6 +100,11 @@ pub enum LoginAccountParams {
         #[ts(optional = nullable)]
         chatgpt_plan_type: Option<String>,
     },
+    /// [UNSTABLE] Managed Amazon Bedrock login is experimental.
+    #[experimental("account/login/start.amazonBedrock")]
+    #[serde(rename = "amazonBedrock", rename_all = "camelCase")]
+    #[ts(rename = "amazonBedrock", rename_all = "camelCase")]
+    AmazonBedrock { api_key: String, region: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -133,6 +138,9 @@ pub enum LoginAccountResponse {
     #[serde(rename = "chatgptAuthTokens", rename_all = "camelCase")]
     #[ts(rename = "chatgptAuthTokens", rename_all = "camelCase")]
     ChatgptAuthTokens {},
+    #[serde(rename = "amazonBedrock", rename_all = "camelCase")]
+    #[ts(rename = "amazonBedrock", rename_all = "camelCase")]
+    AmazonBedrock {},
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -1,6 +1,12 @@
+use super::bedrock_auth::has_managed_login as has_managed_bedrock_login;
+use super::bedrock_auth::login as login_managed_bedrock;
+use super::bedrock_auth::logout as logout_managed_bedrock;
 use super::*;
 use crate::auth_mode::auth_mode_to_api;
 use chrono::DateTime;
+use codex_login::auth::read_codex_api_key_from_env;
+use codex_login::read_codex_access_token_from_env;
+use codex_model_provider::is_supported_amazon_bedrock_region;
 
 mod rate_limit_resets;
 
@@ -274,6 +280,10 @@ impl AccountRequestProcessor {
                 )
                 .await;
             }
+            LoginAccountParams::AmazonBedrock { api_key, region } => {
+                self.login_amazon_bedrock_v2(request_id, api_key, region)
+                    .await;
+            }
         }
         Ok(())
     }
@@ -333,6 +343,64 @@ impl AccountRequestProcessor {
 
         if logged_in {
             self.send_login_success_notifications(/*login_id*/ None)
+                .await;
+        }
+    }
+
+    async fn login_amazon_bedrock_v2(
+        &self,
+        request_id: ConnectionRequestId,
+        api_key: String,
+        region: String,
+    ) {
+        let result = async {
+            if self.auth_manager.is_external_chatgpt_auth_active() {
+                return Err(self.external_auth_active_error());
+            }
+            if read_codex_access_token_from_env().is_some()
+                || (self.auth_manager.codex_api_key_env_enabled()
+                    && read_codex_api_key_from_env().is_some())
+            {
+                return Err(invalid_request(
+                    "Amazon Bedrock login is unavailable while Codex auth is supplied through the environment.",
+                ));
+            }
+            if matches!(
+                self.config.forced_login_method,
+                Some(ForcedLoginMethod::Chatgpt)
+            ) {
+                return Err(invalid_request(
+                    "Amazon Bedrock login is disabled. Use ChatGPT login instead.",
+                ));
+            }
+
+            let api_key = api_key.trim();
+            if api_key.is_empty() {
+                return Err(invalid_request("Amazon Bedrock API key must not be empty."));
+            }
+            let region = region.trim();
+            if !is_supported_amazon_bedrock_region(region) {
+                return Err(invalid_request(format!(
+                    "Amazon Bedrock Mantle does not support region `{region}`"
+                )));
+            }
+
+            {
+                let mut guard = self.active_login.lock().await;
+                if let Some(active) = guard.take() {
+                    drop(active);
+                }
+            }
+
+            login_managed_bedrock(&self.config, &self.config_manager, api_key, region).await?;
+            Ok(LoginAccountResponse::AmazonBedrock {})
+        }
+        .await;
+        let logged_in = result.is_ok();
+        self.outgoing.send_result(request_id, result).await;
+
+        if logged_in {
+            self.emit_login_completed_notification(/*login_id*/ None)
                 .await;
         }
     }
@@ -644,6 +712,20 @@ impl AccountRequestProcessor {
         )
         .await;
 
+        self.emit_login_success_notifications(login_id).await;
+    }
+
+    async fn emit_login_success_notifications(&self, login_id: Option<Uuid>) {
+        self.emit_login_completed_notification(login_id).await;
+
+        self.outgoing
+            .send_server_notification(ServerNotification::AccountUpdated(
+                self.current_account_updated_notification(),
+            ))
+            .await;
+    }
+
+    async fn emit_login_completed_notification(&self, login_id: Option<Uuid>) {
         let payload_login_completed = AccountLoginCompletedNotification {
             login_id: login_id.map(|id| id.to_string()),
             success: true,
@@ -652,12 +734,6 @@ impl AccountRequestProcessor {
         self.outgoing
             .send_server_notification(ServerNotification::AccountLoginCompleted(
                 payload_login_completed,
-            ))
-            .await;
-
-        self.outgoing
-            .send_server_notification(ServerNotification::AccountUpdated(
-                self.current_account_updated_notification(),
             ))
             .await;
     }
@@ -709,13 +785,21 @@ impl AccountRequestProcessor {
         }
     }
 
-    async fn logout_common(&self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
+    async fn logout_common(&self) -> Result<Option<AccountUpdatedNotification>, JSONRPCErrorError> {
         // Cancel any active login attempt.
         {
             let mut guard = self.active_login.lock().await;
             if let Some(active) = guard.take() {
                 drop(active);
             }
+        }
+
+        if has_managed_bedrock_login(&self.config)? {
+            logout_managed_bedrock(&self.config, &self.config_manager).await?;
+            return Ok(None);
+        }
+        if self.config.model_provider.is_amazon_bedrock() {
+            return Ok(None);
         }
 
         match self.auth_manager.logout_with_revoke().await {
@@ -733,25 +817,20 @@ impl AccountRequestProcessor {
         .await;
 
         // Reflect the current auth method after logout (likely None).
-        Ok(self
-            .auth_manager
-            .auth_cached()
-            .as_ref()
-            .map(CodexAuth::api_auth_mode)
-            .map(auth_mode_to_api))
+        Ok(Some(AccountUpdatedNotification {
+            auth_mode: self
+                .auth_manager
+                .auth_cached()
+                .as_ref()
+                .map(CodexAuth::api_auth_mode)
+                .map(auth_mode_to_api),
+            plan_type: None,
+        }))
     }
 
     async fn logout_v2(&self, request_id: ConnectionRequestId) -> Result<(), JSONRPCErrorError> {
         let result = self.logout_common().await;
-        let account_updated =
-            result
-                .as_ref()
-                .ok()
-                .cloned()
-                .map(|auth_mode| AccountUpdatedNotification {
-                    auth_mode,
-                    plan_type: None,
-                });
+        let account_updated = result.as_ref().ok().cloned().flatten();
         self.outgoing
             .send_result(request_id, result.map(|_| LogoutAccountResponse {}))
             .await;

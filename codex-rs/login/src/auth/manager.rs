@@ -1456,6 +1456,11 @@ fn refresh_token_endpoint() -> String {
 }
 
 impl AuthDotJson {
+    /// Returns whether this stored payload resolves to managed Amazon Bedrock API key auth.
+    pub fn is_bedrock_api_key(&self) -> bool {
+        self.resolved_mode() == ApiAuthMode::BedrockApiKey
+    }
+
     fn from_external_tokens(external: &ExternalAuthTokens) -> std::io::Result<Self> {
         let Some(chatgpt_metadata) = external.chatgpt_metadata() else {
             return Err(std::io::Error::other(
