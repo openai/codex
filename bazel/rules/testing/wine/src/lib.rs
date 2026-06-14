@@ -2,24 +2,17 @@
 compile_error!("wine_test_support can only run on Linux");
 
 use std::ffi::OsString;
-use std::collections::HashMap;
 use std::fs;
 use std::future::Future;
 use std::io::Write;
-use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command as StdCommand;
-use std::process::Output;
 use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_utils_pty::SpawnedProcess;
-use codex_utils_pty::TerminalSize;
-use codex_utils_pty::spawn_pipe_process_no_stdin;
-use codex_utils_pty::spawn_pty_process;
 use tempfile::TempDir;
 use tokio::process::Child;
 use tokio::process::ChildStdout;
@@ -28,20 +21,12 @@ use tokio::time::timeout;
 
 const ASYNC_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const BLOCKING_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
-const COMMAND_OUTPUT_TIMEOUT: Duration = Duration::from_secs(30);
-const POWERSHELL_EXE: &str = r"C:\Program Files\PowerShell\7\pwsh.exe";
-
-enum CommandOutputIo {
-    Pipes,
-    Pty,
-}
 
 /// Builds a command that runs a Windows executable in an isolated Wine prefix.
 pub struct WineTestCommand {
     executable: PathBuf,
     args: Vec<OsString>,
     env: Vec<(OsString, OsString)>,
-    output_io: CommandOutputIo,
 }
 
 /// Owns a Wine process and its isolated wineserver.
@@ -67,12 +52,6 @@ struct WineRuntimePaths {
     wineserver: PathBuf,
 }
 
-struct WineOutputEnvironment {
-    cleanup_complete: bool,
-    prefix: TempDir,
-    runtime: WineRuntimePaths,
-}
-
 impl WineTestCommand {
     /// Creates a Wine command for `executable`.
     pub fn new(executable: impl Into<PathBuf>) -> Self {
@@ -80,18 +59,7 @@ impl WineTestCommand {
             executable: executable.into(),
             args: Vec::new(),
             env: Vec::new(),
-            output_io: CommandOutputIo::Pipes,
         }
-    }
-
-    /// Creates a command for the pinned Windows PowerShell runtime.
-    pub fn powershell(script: impl Into<OsString>) -> Self {
-        Self::new(POWERSHELL_EXE)
-            .arg("-NoLogo")
-            .arg("-NoProfile")
-            .arg("-NonInteractive")
-            .arg("-Command")
-            .arg(script)
     }
 
     /// Adds an argument passed to the Windows executable.
@@ -108,115 +76,6 @@ impl WineTestCommand {
         self
     }
 
-    /// Attaches a PTY when [`Self::output`] runs the command.
-    #[must_use]
-    pub fn with_pty(mut self) -> Self {
-        self.output_io = CommandOutputIo::Pty;
-        self
-    }
-
-    /// Runs the command to completion and returns its exit status and output.
-    ///
-    /// Like [`std::process::Command::output`], a non-zero exit is represented
-    /// by [`Output::status`] rather than returned as an error. The default
-    /// transport uses ordinary pipes; call [`Self::with_pty`] for console-aware
-    /// programs. The isolated Wine prefix and wineserver are always torn down
-    /// before this method returns.
-    pub async fn output(self) -> Result<Output> {
-        let runtime = WineRuntimePaths::from_runfiles()?;
-        let prefix = TempDir::new().context("create isolated Wine prefix")?;
-        install_powershell_runtime(prefix.path(), &runtime.powershell_runtime)?;
-        let mut environment = WineOutputEnvironment {
-            cleanup_complete: false,
-            prefix,
-            runtime,
-        };
-        let mut env = wine_environment(&environment.runtime, environment.prefix.path());
-        for (key, value) in self.env {
-            let key = key
-                .into_string()
-                .map_err(|key| anyhow::anyhow!("Wine environment key is not UTF-8: {key:?}"))?;
-            let value = value.into_string().map_err(|value| {
-                anyhow::anyhow!("Wine environment value for {key} is not UTF-8: {value:?}")
-            })?;
-            env.insert(key, value);
-        }
-        let wine = environment.runtime.wine.to_string_lossy().into_owned();
-        let args = std::iter::once(self.executable.into_os_string())
-            .chain(self.args)
-            .map(|argument| {
-                argument
-                    .into_string()
-                    .map_err(|argument| anyhow::anyhow!("Wine argument is not UTF-8: {argument:?}"))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let spawned = match self.output_io {
-            CommandOutputIo::Pipes => {
-                spawn_pipe_process_no_stdin(
-                    &wine,
-                    &args,
-                    environment.prefix.path(),
-                    &env,
-                    /*arg0*/ &None,
-                )
-                .await?
-            }
-            CommandOutputIo::Pty => {
-                spawn_pty_process(
-                    &wine,
-                    &args,
-                    environment.prefix.path(),
-                    &env,
-                    /*arg0*/ &None,
-                    TerminalSize::default(),
-                )
-                .await?
-            }
-        };
-        let SpawnedProcess {
-            session,
-            mut stdout_rx,
-            mut stderr_rx,
-            exit_rx,
-        } = spawned;
-        let command_result = timeout(COMMAND_OUTPUT_TIMEOUT, async {
-            let stdout = async {
-                let mut output = Vec::new();
-                while let Some(chunk) = stdout_rx.recv().await {
-                    output.extend(chunk);
-                }
-                output
-            };
-            let stderr = async {
-                let mut output = Vec::new();
-                while let Some(chunk) = stderr_rx.recv().await {
-                    output.extend(chunk);
-                }
-                output
-            };
-            let (stdout, stderr, exit_code) = tokio::join!(stdout, stderr, exit_rx);
-            let exit_code = exit_code.context("wait for Wine command")?;
-            Ok(Output {
-                status: std::process::ExitStatus::from_raw(exit_code << 8),
-                stdout,
-                stderr,
-            })
-        })
-        .await
-        .context("Wine command timed out")
-        .and_then(std::convert::identity);
-
-        drop(session);
-        let shutdown_result = environment.shutdown().await;
-        match (command_result, shutdown_result) {
-            (Ok(output), Ok(())) => Ok(output),
-            (Err(error), Ok(())) => Err(error),
-            (Ok(_), Err(error)) => Err(error),
-            (Err(error), Err(shutdown_error)) => {
-                Err(error.context(format!("Wine teardown also failed: {shutdown_error:#}")))
-            }
-        }
-    }
 
     /// Starts the Windows executable with a fresh `WINEPREFIX`.
     pub fn spawn(self) -> Result<WineTestProcess> {
@@ -323,46 +182,6 @@ impl WineRuntimePaths {
             wine,
             wineserver,
         })
-    }
-}
-
-impl WineOutputEnvironment {
-    async fn shutdown(&mut self) -> Result<()> {
-        let mut command = self.wineserver_command();
-        command.args(["-k", "-w"]);
-        let mut command = TokioCommand::from(command);
-        command.kill_on_drop(true);
-        let status = timeout(ASYNC_SHUTDOWN_TIMEOUT, command.status())
-            .await
-            .context("stop isolated wineserver timed out")?
-            .context("stop isolated wineserver")?;
-        // The process adapter may already have stopped the server. Wine uses
-        // status 1 for that harmless no-server case.
-        anyhow::ensure!(
-            status.success() || status.code() == Some(1),
-            "wineserver exited with {status}"
-        );
-        self.cleanup_complete = true;
-        Ok(())
-    }
-
-    fn wineserver_command(&self) -> StdCommand {
-        let mut command = StdCommand::new(&self.runtime.wineserver);
-        configure_wine_environment(&mut command, &self.runtime, self.prefix.path());
-        command
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        command
-    }
-}
-
-impl Drop for WineOutputEnvironment {
-    fn drop(&mut self) {
-        if !self.cleanup_complete {
-            let mut command = self.wineserver_command();
-            command.arg("-k");
-            let _ = command.status();
-        }
     }
 }
 
@@ -517,44 +336,6 @@ fn configure_wine_environment(command: &mut StdCommand, runtime: &WineRuntimePat
         .env("LC_CTYPE", "C.UTF-8")
         .env("TEMP", r"C:\windows\temp")
         .env("TMP", r"C:\windows\temp");
-}
-
-fn wine_environment(runtime: &WineRuntimePaths, prefix: &Path) -> HashMap<String, String> {
-    let mut env = std::env::vars_os()
-        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
-        .collect::<HashMap<_, _>>();
-    env.remove("DISPLAY");
-    env.extend([
-        ("HOME".to_string(), prefix.to_string_lossy().into_owned()),
-        (
-            "XDG_RUNTIME_DIR".to_string(),
-            prefix.to_string_lossy().into_owned(),
-        ),
-        ("WINEARCH".to_string(), "win64".to_string()),
-        (
-            "WINEPREFIX".to_string(),
-            prefix.to_string_lossy().into_owned(),
-        ),
-        (
-            "WINEDLLPATH".to_string(),
-            runtime.dll_path.to_string_lossy().into_owned(),
-        ),
-        (
-            "WINESERVER".to_string(),
-            runtime.wineserver.to_string_lossy().into_owned(),
-        ),
-        ("WINEDEBUG".to_string(), "-all".to_string()),
-        (
-            "WINEDLLOVERRIDES".to_string(),
-            "mscoree,mshtml,winegstreamer=".to_string(),
-        ),
-        ("LANG".to_string(), "C.UTF-8".to_string()),
-        ("LC_ALL".to_string(), "C.UTF-8".to_string()),
-        ("LC_CTYPE".to_string(), "C.UTF-8".to_string()),
-        ("TEMP".to_string(), r"C:\windows\temp".to_string()),
-        ("TMP".to_string(), r"C:\windows\temp".to_string()),
-    ]);
-    env
 }
 
 /// Installs the complete pinned PowerShell distribution where Windows tooling
