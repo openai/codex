@@ -30,10 +30,8 @@ use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
-use tokio::io::AsyncBufReadExt;
-use tokio::io::BufReader;
 use tokio::time::timeout;
-use wine_test_support::WineTestCommand;
+use wine_exec_server_test_support::WineExecServer;
 
 const APP_SERVER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const CALL_ID: &str = "wine-cmd-smoke";
@@ -42,25 +40,8 @@ const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
-    let executable = codex_utils_cargo_bin::cargo_bin("wine-windows-exec-server")?;
-    let mut exec_server = WineTestCommand::new(executable)
-        .env("CODEX_HOME", r"C:\codex-home")
-        .spawn()?;
-    let stdout = exec_server.take_stdout();
-
-    exec_server
-        .scope(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            let exec_server_url = loop {
-                let line = lines
-                    .next_line()
-                    .await?
-                    .context("Wine exec-server exited before reporting its URL")?;
-                if line.starts_with("ws://") {
-                    break line;
-                }
-            };
-
+    WineExecServer
+        .scope(|exec_server_url| async move {
             let server = start_mock_server().await;
             let arguments = serde_json::to_string(&json!({
                 "cmd": COMMAND,
@@ -178,25 +159,8 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_server_rejects_windows_environment_cwd() -> Result<()> {
-    let executable = codex_utils_cargo_bin::cargo_bin("wine-windows-exec-server")?;
-    let mut exec_server = WineTestCommand::new(executable)
-        .env("CODEX_HOME", r"C:\codex-home")
-        .spawn()?;
-    let stdout = exec_server.take_stdout();
-
-    exec_server
-        .scope(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            let exec_server_url = loop {
-                let line = lines
-                    .next_line()
-                    .await?
-                    .context("Wine exec-server exited before reporting its URL")?;
-                if line.starts_with("ws://") {
-                    break line;
-                }
-            };
-
+    WineExecServer
+        .scope(|exec_server_url| async move {
             let codex_home = TempDir::new()?;
             let mut app_server = TestAppServer::new_with_env(
                 codex_home.path(),
