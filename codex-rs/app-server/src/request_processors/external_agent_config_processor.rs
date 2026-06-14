@@ -56,17 +56,29 @@ pub(crate) struct ExternalAgentConfigRequestProcessor {
     config_processor: ConfigRequestProcessor,
 }
 
+pub(crate) struct ExternalAgentConfigRequestProcessorArgs {
+    pub(crate) outgoing: Arc<OutgoingMessageSender>,
+    pub(crate) log_db: Option<LogDbLayer>,
+    pub(crate) thread_manager: Arc<ThreadManager>,
+    pub(crate) thread_store: Arc<dyn ThreadStore>,
+    pub(crate) config_manager: ConfigManager,
+    pub(crate) config_processor: ConfigRequestProcessor,
+    pub(crate) arg0_paths: Arg0DispatchPaths,
+    pub(crate) codex_home: PathBuf,
+}
+
 impl ExternalAgentConfigRequestProcessor {
-    pub(crate) fn new(
-        outgoing: Arc<OutgoingMessageSender>,
-        log_db: Option<LogDbLayer>,
-        thread_manager: Arc<ThreadManager>,
-        thread_store: Arc<dyn ThreadStore>,
-        config_manager: ConfigManager,
-        config_processor: ConfigRequestProcessor,
-        arg0_paths: Arg0DispatchPaths,
-        codex_home: PathBuf,
-    ) -> Self {
+    pub(crate) fn new(args: ExternalAgentConfigRequestProcessorArgs) -> Self {
+        let ExternalAgentConfigRequestProcessorArgs {
+            outgoing,
+            log_db,
+            thread_manager,
+            thread_store,
+            config_manager,
+            config_processor,
+            arg0_paths,
+            codex_home,
+        } = args;
         let session_importer = ExternalAgentSessionImporter::new(
             codex_home.clone(),
             Arc::clone(&thread_manager),

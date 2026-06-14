@@ -417,7 +417,8 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     assert!(log_body.contains(r#""itemType":"SESSIONS""#));
     assert!(log_body.contains(r#""successCount":1"#));
     assert!(log_body.contains(r#""errorCount":0"#));
-    assert!(log_body.contains(&session_source));
+    let escaped_session_source = serde_json::to_string(&session_source)?;
+    assert!(log_body.contains(escaped_session_source.trim_matches('"')));
     assert!(log_body.contains(&imported_thread_id));
 
     let request_id = mcp
