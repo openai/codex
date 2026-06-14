@@ -347,6 +347,7 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
                 .contains(AGENTS_INSTRUCTIONS);
             // TODO(anp): Load remote workspace instructions into the model context.
             assert!(!model_request_includes_remote_instructions);
+
             let first_request = requests
                 .iter()
                 .find(|request| request.url.path().ends_with("/responses"))
@@ -367,17 +368,26 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
             assert_eq!(
                 environment_context
                     .lines()
-                    .find(|line| line.trim_start().starts_with("<shell>")),
-                Some("  <shell>powershell</shell>"),
+                    .find(|line| line.trim_start().starts_with("<shell>"))
+                    .map(str::trim),
+                Some("<shell>powershell</shell>"),
             );
             // The model should see cwd using the remote environment's native path convention, not
             // the Linux app-server's host path convention.
             assert_eq!(
                 environment_context
                     .lines()
-                    .find(|line| line.trim_start().starts_with("<cwd>")),
-                Some(r"  <cwd>C:\windows</cwd>"),
+                    .find(|line| line.trim_start().starts_with("<cwd>"))
+                    .map(str::trim),
+                Some(r"<cwd>C:\windows</cwd>"),
             );
+            let host_workspace_roots = format!(
+                "<workspace_roots><root>{}</root></workspace_roots>",
+                codex_home.path().display()
+            );
+            // TODO(anp): Derive model-visible workspace roots from the selected remote environment
+            // and render them using its native path convention.
+            assert!(environment_context.contains(&host_workspace_roots));
 
             Ok(())
         })
