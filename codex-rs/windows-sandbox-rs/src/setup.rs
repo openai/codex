@@ -370,6 +370,25 @@ fn canonical_existing(paths: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
+fn path_read_roots(env_map: &HashMap<String, String>) -> Vec<PathBuf> {
+    let path_value = env_map
+        .get("PATH")
+        .cloned()
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_default();
+
+    path_value
+        .split(';')
+        .filter_map(|entry| {
+            let trimmed = entry.trim().trim_matches('"');
+            if trimmed.is_empty() {
+                return None;
+            }
+            Some(PathBuf::from(trimmed))
+        })
+        .collect()
+}
+
 fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
     let entries = match std::fs::read_dir(user_profile) {
         Ok(entries) => entries,
@@ -417,6 +436,7 @@ fn gather_full_read_roots_for_permissions(
             .into_iter()
             .map(|root| root.root),
     );
+    roots.extend(path_read_roots(env_map));
     canonical_existing(&roots)
 }
 
@@ -444,6 +464,7 @@ pub(crate) fn gather_read_roots(
         );
     }
     roots.extend(permissions.readable_roots_for_cwd(command_cwd));
+    roots.extend(path_read_roots(env_map));
     canonical_existing(&roots)
 }
 
@@ -1591,6 +1612,30 @@ mod tests {
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
 
         assert!(roots.contains(&expected));
+    }
+
+    #[test]
+    fn gather_read_roots_include_existing_path_entries() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let command_cwd = tmp.path().join("workspace");
+        let toolchain_bin = tmp.path().join("toolchain").join("bin");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        fs::create_dir_all(&toolchain_bin).expect("create toolchain bin");
+        let permission_profile = PermissionProfile::read_only();
+        let workspace_roots = workspace_roots_for(command_cwd.as_path());
+        let permissions = permissions_for(&permission_profile, workspace_roots.as_slice());
+        let mut env_map = HashMap::new();
+        env_map.insert(
+            "PATH".to_string(),
+            format!("{};{}", toolchain_bin.display(), tmp.path().join("missing").display()),
+        );
+
+        let roots = gather_read_roots(&command_cwd, &permissions, &env_map, &codex_home);
+        let expected_toolchain =
+            dunce::canonicalize(&toolchain_bin).expect("canonical toolchain bin");
+
+        assert!(roots.contains(&expected_toolchain));
     }
 
     #[test]
