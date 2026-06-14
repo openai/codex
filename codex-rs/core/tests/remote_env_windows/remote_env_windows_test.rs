@@ -49,6 +49,7 @@ use core_test_support::wait_for_event;
 use codex_utils_path_uri::ApiPathString;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 use std::collections::BTreeMap;
 use tempfile::TempDir;
@@ -346,6 +347,37 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
                 .contains(AGENTS_INSTRUCTIONS);
             // TODO(anp): Load remote workspace instructions into the model context.
             assert!(!model_request_includes_remote_instructions);
+            let first_request = requests
+                .iter()
+                .find(|request| request.url.path().ends_with("/responses"))
+                .context("turn should send a Responses request")?;
+            let body = first_request.body_json::<Value>()?;
+            let environment_context = body["input"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|item| item.get("role").and_then(Value::as_str) == Some("user"))
+                .filter_map(|item| item.get("content").and_then(Value::as_array))
+                .flatten()
+                .filter_map(|content| content.get("text").and_then(Value::as_str))
+                .find(|text| text.starts_with("<environment_context>"))
+                .context("environment context should be model visible")?;
+            // The model should see the remote environment's shell, not the Linux app-server's
+            // host shell.
+            assert_eq!(
+                environment_context
+                    .lines()
+                    .find(|line| line.trim_start().starts_with("<shell>")),
+                Some("  <shell>powershell</shell>"),
+            );
+            // The model should see cwd using the remote environment's native path convention, not
+            // the Linux app-server's host path convention.
+            assert_eq!(
+                environment_context
+                    .lines()
+                    .find(|line| line.trim_start().starts_with("<cwd>")),
+                Some(r"  <cwd>C:\windows</cwd>"),
+            );
 
             Ok(())
         })
