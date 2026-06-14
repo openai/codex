@@ -4,10 +4,12 @@ mod bearer_auth_provider;
 mod models_endpoint;
 mod provider;
 
+pub use amazon_bedrock::is_supported_amazon_bedrock_region;
 pub use auth::auth_provider_from_auth;
 pub use auth::unauthenticated_auth_provider;
 pub use bearer_auth_provider::BearerAuthProvider;
 pub use bearer_auth_provider::BearerAuthProvider as CoreAuthProvider;
+pub use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 pub use codex_protocol::account::ProviderAccount;
 pub use provider::ModelProvider;
 pub use provider::ModelProviderFuture;

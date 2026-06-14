@@ -1879,16 +1879,17 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 
 - **API key (`apiKey`)**: Caller supplies an OpenAI API key via `account/login/start` with `type: "apiKey"`. The API key is saved and used for API requests.
 - **ChatGPT managed (`chatgpt`)** (recommended): Codex owns the ChatGPT OAuth flow and refresh tokens. Start via `account/login/start` with `type: "chatgpt"` for the browser flow or `type: "chatgptDeviceCode"` for device code; Codex persists tokens to disk and refreshes them automatically.
+- **Codex managed Amazon Bedrock auth (`amazonBedrock`, experimental)**: Caller supplies an Amazon Bedrock API key and region via `account/login/start` with `type: "amazonBedrock"`. The client must enable the `experimentalApi` initialization capability for Codex-managed Amazon Bedrock login. Codex saves the credential and writes `model_provider = "amazon-bedrock"` to the user config. The parameterless `account/logout` method clears managed Bedrock credentials on a best-effort basis.
 - **Personal access token (`personalAccessToken`)**: Codex uses a ChatGPT-backed personal access token loaded outside the app-server login RPCs, such as with `codex login --with-access-token` or `CODEX_ACCESS_TOKEN`.
 
 ### API Overview
 
 - `account/read` — fetch current account info; optionally refresh tokens.
-- `account/login/start` — begin login (`apiKey`, `chatgpt`, `chatgptDeviceCode`).
+- `account/login/start` — begin login (`apiKey`, `chatgpt`, `chatgptDeviceCode`, `amazonBedrock`).
 - `account/login/completed` (notify) — emitted when a login attempt finishes (success or error).
 - `account/login/cancel` — cancel a pending managed ChatGPT login by `loginId`.
-- `account/logout` — sign out; triggers `account/updated`.
-- `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, `personalAccessToken`, or `null`) and includes the current ChatGPT `planType` when available.
+- `account/logout` — sign out without params; also clears Codex-managed Amazon Bedrock credentials on a best-effort basis; triggers `account/updated` when the OpenAI auth mode changes.
+- `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `bedrockApiKey`, `chatgpt`, `personalAccessToken`, or `null`) and includes the current ChatGPT `planType` when available.
 - `account/rateLimits/read` — fetch ChatGPT rate limits, an optional effective monthly credit limit, and the number of earned rate-limit resets currently available. Rate-limit updates arrive via `account/rateLimits/updated` (notify); the reset count is snapshot-only.
 - `account/rateLimitResetCredit/consume` — consume one earned reset using a caller-provided idempotency key.
 - `account/usage/read` — fetch ChatGPT account token-activity summary and daily buckets.
@@ -1955,6 +1956,29 @@ Field notes:
    { "method": "account/login/completed", "params": { "loginId": "<uuid>", "success": true, "error": null } }
    { "method": "account/updated", "params": { "authMode": "chatgpt", "planType": "plus" } }
    ```
+
+### 3) Log in with an Amazon Bedrock API key
+
+This experimental flow requires the client to initialize with `experimentalApi: true`.
+
+1. Send:
+   ```json
+   {
+     "method": "account/login/start",
+     "id": 3,
+     "params": { "type": "amazonBedrock", "apiKey": "…", "region": "us-west-2" }
+   }
+   ```
+2. Expect:
+   ```json
+   { "id": 3, "result": { "type": "amazonBedrock" } }
+   ```
+3. Notifications:
+   ```json
+   { "method": "account/login/completed", "params": { "loginId": null, "success": true, "error": null } }
+   ```
+
+Codex stores the key and region in its configured auth store and writes `model_provider = "amazon-bedrock"` to the active user config.
 
 ### 4) Log in with ChatGPT (device code flow)
 
