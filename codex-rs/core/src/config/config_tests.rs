@@ -4,14 +4,17 @@ use crate::config::edit::apply_blocking;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerStack;
 use codex_config::ProfileV2Name;
 use codex_config::RequirementSource;
+use codex_config::Sourced;
 use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
 use codex_config::config_toml::AutoReviewToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ExperimentalRequestUserInput;
 use codex_config::config_toml::ProjectConfig;
+use codex_config::config_toml::RealtimeArchitecture;
 use codex_config::config_toml::RealtimeConfig;
 use codex_config::config_toml::RealtimeToml;
 use codex_config::config_toml::RealtimeTransport;
@@ -8313,6 +8316,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         allowed_web_search_modes: Some(vec![codex_config::WebSearchModeRequirement::Cached]),
         allow_managed_hooks_only: None,
         allow_appshots: None,
+        allow_remote_control: None,
         computer_use: None,
         windows: None,
         feature_requirements: None,
@@ -9578,12 +9582,15 @@ chatgpt_base_url = "https://user.example/backend-api"
         r#"
 cli_auth_credentials_store = "keyring"
 chatgpt_base_url = "https://managed.example/backend-api"
+
+[features]
+secret_auth_storage = true
 "#,
     )?;
     let mut loader_overrides = LoaderOverrides::without_managed_config_for_tests();
     loader_overrides.system_requirements_path = Some(requirements_path);
 
-    let config = load_bootstrap_config_as_toml_with_cli_and_load_options(
+    let bootstrap_config = load_bootstrap_config_toml_with_layer_stack(
         codex_home.path(),
         Some(&codex_home.path().abs()),
         Vec::new(),
@@ -9593,12 +9600,18 @@ chatgpt_base_url = "https://managed.example/backend-api"
         },
     )
     .await?;
+    let auth_keyring_backend_kind = resolve_bootstrap_auth_keyring_backend_kind(&bootstrap_config)?;
 
     assert_eq!(
-        (config.cli_auth_credentials_store, config.chatgpt_base_url,),
+        (
+            bootstrap_config.config_toml.cli_auth_credentials_store,
+            bootstrap_config.config_toml.chatgpt_base_url,
+            auth_keyring_backend_kind,
+        ),
         (
             Some(AuthCredentialsStoreMode::Keyring),
             Some("https://managed.example/backend-api".to_string()),
+            AuthKeyringBackendKind::Secrets,
         )
     );
     Ok(())
@@ -10808,8 +10821,8 @@ experimental_thread_config_endpoint = "http://127.0.0.1:8061"
 #[tokio::test]
 async fn experimental_realtime_ws_base_url_loads_from_config_toml() -> std::io::Result<()> {
     let cfg: ConfigToml = toml::from_str(
-        r#"
-experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
+        r#"experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
+experimental_realtime_webrtc_call_base_url = "http://127.0.0.1:8082/v1"
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -10818,7 +10831,10 @@ experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
         cfg.experimental_realtime_ws_base_url.as_deref(),
         Some("http://127.0.0.1:8011")
     );
-
+    assert_eq!(
+        cfg.experimental_realtime_webrtc_call_base_url.as_deref(),
+        Some("http://127.0.0.1:8082/v1")
+    );
     let codex_home = TempDir::new()?;
     let config = Config::load_from_base_config_with_overrides(
         cfg,
@@ -10830,6 +10846,10 @@ experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
     assert_eq!(
         config.experimental_realtime_ws_base_url.as_deref(),
         Some("http://127.0.0.1:8011")
+    );
+    assert_eq!(
+        config.experimental_realtime_webrtc_call_base_url.as_deref(),
+        Some("http://127.0.0.1:8082/v1")
     );
     Ok(())
 }
@@ -10954,6 +10974,7 @@ async fn realtime_loads_from_config_toml() -> std::io::Result<()> {
     let cfg: ConfigToml = toml::from_str(
         r#"
 [realtime]
+architecture = "avas"
 version = "v2"
 type = "transcription"
 transport = "webrtc"
@@ -10965,6 +10986,7 @@ voice = "cedar"
     assert_eq!(
         cfg.realtime,
         Some(RealtimeToml {
+            architecture: Some(RealtimeArchitecture::Avas),
             version: Some(RealtimeWsVersion::V2),
             session_type: Some(RealtimeWsMode::Transcription),
             transport: Some(RealtimeTransport::WebRtc),
@@ -10983,6 +11005,7 @@ voice = "cedar"
     assert_eq!(
         config.realtime,
         RealtimeConfig {
+            architecture: RealtimeArchitecture::Avas,
             version: RealtimeWsVersion::V2,
             session_type: RealtimeWsMode::Transcription,
             transport: RealtimeTransport::WebRtc,

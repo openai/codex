@@ -13,6 +13,7 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeSessionConfig;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
 use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use crate::endpoint::realtime_websocket::protocol::SessionUpdateSession;
+use codex_protocol::protocol::ConversationTextRole;
 use serde_json::Result as JsonResult;
 use serde_json::Value;
 use serde_json::to_value;
@@ -33,10 +34,11 @@ pub(super) fn normalized_session_mode(
 pub(super) fn conversation_item_create_message(
     event_parser: RealtimeEventParser,
     text: String,
+    role: ConversationTextRole,
 ) -> RealtimeOutboundMessage {
     match event_parser {
-        RealtimeEventParser::V1 => v1_conversation_item_create_message(text),
-        RealtimeEventParser::RealtimeV2 => v2_conversation_item_create_message(text),
+        RealtimeEventParser::V1 => v1_conversation_item_create_message(text, role),
+        RealtimeEventParser::RealtimeV2 => v2_conversation_item_create_message(text, role),
     }
 }
 

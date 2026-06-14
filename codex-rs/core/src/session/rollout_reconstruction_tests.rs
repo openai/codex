@@ -53,6 +53,31 @@ fn inter_agent_assistant_message(text: &str) -> ResponseItem {
 }
 
 #[tokio::test]
+async fn record_initial_history_reconstructs_typed_inter_agent_message() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let communication = InterAgentCommunication::new(
+        AgentPath::root().join("worker").expect("worker path"),
+        AgentPath::root(),
+        Vec::new(),
+        "child done".to_string(),
+        /*trigger_turn*/ false,
+    );
+
+    session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: vec![RolloutItem::InterAgentCommunication(communication.clone())],
+            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
+        }))
+        .await;
+
+    assert_eq!(
+        session.state.lock().await.clone_history().raw_items(),
+        &[communication.to_model_input_item()]
+    );
+}
+
+#[tokio::test]
 async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previous_turn_settings()
 {
     let (session, turn_context) = make_session_and_context().await;

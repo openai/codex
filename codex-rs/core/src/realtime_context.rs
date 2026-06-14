@@ -4,6 +4,7 @@ use crate::session::session::Session;
 use chrono::Utc;
 use codex_exec_server::LOCAL_FS;
 use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ResponseItem;
 use codex_thread_store::ListThreadsParams;
 use codex_thread_store::SortDirection;
@@ -136,6 +137,7 @@ async fn load_recent_threads(sess: &Session) -> Vec<StoredThread> {
             allowed_sources: Vec::new(),
             model_providers: None,
             cwd_filters: None,
+            parent_thread_id: None,
             archived: false,
             search_term: None,
             use_state_db_only: false,
@@ -237,6 +239,23 @@ fn build_current_thread_section(items: &[ResponseItem]) -> Option<String> {
                     continue;
                 }
                 current_assistant.push(text);
+            }
+            ResponseItem::AgentMessage {
+                author, content, ..
+            } => {
+                let text = content
+                    .iter()
+                    .filter_map(|content| match content {
+                        AgentMessageInputContent::InputText { text } => Some(text.as_str()),
+                        AgentMessageInputContent::EncryptedContent { .. } => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if text.trim().is_empty() || current_user.is_empty() && current_assistant.is_empty()
+                {
+                    continue;
+                }
+                current_assistant.push(format!("Agent message from {author}:\n{text}"));
             }
             _ => {}
         }
