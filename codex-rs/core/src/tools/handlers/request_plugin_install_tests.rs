@@ -119,14 +119,13 @@ fn validate_request_plugin_install_picker_args_supports_categories() {
     };
     let discoverable_tools = vec![connector_tool("connector_calendar", "Google Calendar")];
 
-    let resolved_entries =
-        validate_request_plugin_install_picker_args(
-            &args,
-            &discoverable_tools,
-            /*app_server_client_name*/ None,
-            ToolSuggestPresentation::ListTool,
-        )
-            .expect("categorized picker args");
+    let resolved_entries = validate_request_plugin_install_picker_args(
+        &args,
+        &discoverable_tools,
+        /*app_server_client_name*/ None,
+        ToolSuggestPresentation::ListTool,
+    )
+    .expect("categorized picker args");
 
     assert_eq!(resolved_entries.len(), 1);
     assert_eq!(resolved_entries[0].category_index, Some(0));
@@ -159,7 +158,7 @@ fn validate_request_plugin_install_picker_args_rejects_mixed_sources() {
             /*app_server_client_name*/ None,
             ToolSuggestPresentation::ListTool,
         )
-            .expect_err("mixed picker args"),
+        .expect_err("mixed picker args"),
         FunctionCallError::RespondToModel(
             "picker install requests must include exactly one of entries or categories".to_string(),
         ),
