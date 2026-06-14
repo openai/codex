@@ -399,10 +399,31 @@ ON CONFLICT(child_thread_id) DO NOTHING
         page_size: usize,
         filters: ThreadFilterOptions<'_>,
     ) -> anyhow::Result<crate::ThreadsPage> {
+        self.list_threads_matching(page_size, filters, /*parent_thread_id*/ None)
+            .await
+    }
+
+    /// List direct children of `parent_thread_id` using persisted spawn edges.
+    pub async fn list_threads_by_parent(
+        &self,
+        page_size: usize,
+        parent_thread_id: ThreadId,
+        filters: ThreadFilterOptions<'_>,
+    ) -> anyhow::Result<crate::ThreadsPage> {
+        self.list_threads_matching(page_size, filters, Some(parent_thread_id))
+            .await
+    }
+
+    async fn list_threads_matching(
+        &self,
+        page_size: usize,
+        filters: ThreadFilterOptions<'_>,
+        parent_thread_id: Option<ThreadId>,
+    ) -> anyhow::Result<crate::ThreadsPage> {
         let limit = page_size.saturating_add(1);
 
         let mut builder = QueryBuilder::<Sqlite>::new("");
-        push_list_threads_query(&mut builder, filters, limit);
+        push_list_threads_query(&mut builder, filters, parent_thread_id, limit);
 
         let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
         let mut items = rows
@@ -1022,11 +1043,19 @@ fn one_thread_id_from_rows(
 fn push_list_threads_query(
     builder: &mut QueryBuilder<Sqlite>,
     filters: ThreadFilterOptions<'_>,
+    parent_thread_id: Option<ThreadId>,
     limit: usize,
 ) {
     push_thread_select_columns(builder);
     builder.push(" FROM threads");
     push_thread_filters(builder, filters);
+    if let Some(parent_thread_id) = parent_thread_id {
+        builder.push(
+            " AND threads.id IN (SELECT child_thread_id FROM thread_spawn_edges WHERE parent_thread_id = ",
+        );
+        builder.push_bind(parent_thread_id.to_string());
+        builder.push(")");
+    }
     let order_by_index = match filters.cwd_filters {
         // Multi-cwd listing is supported but at the time of writing has no current use in production.
         // Preserve its query plan so the global timestamp index does not regress cwd filtering into a scan.
@@ -1701,6 +1730,7 @@ mod tests {
                         sort_direction: SortDirection::Desc,
                         search_term: None,
                     },
+                    /*parent_thread_id*/ None,
                     /*limit*/ 201,
                 );
                 let plan_details = builder
@@ -1727,6 +1757,98 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn list_threads_by_parent_filters_direct_children_with_keyset_pagination() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let parent_id = ThreadId::new();
+        let first_child_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000001").expect("valid thread id");
+        let second_child_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000002").expect("valid thread id");
+        let grandchild_id = ThreadId::new();
+
+        for (thread_id, created_at) in [
+            (first_child_id, 1_700_000_100),
+            (second_child_id, 1_700_000_200),
+            (grandchild_id, 1_700_000_300),
+        ] {
+            let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+            metadata.created_at =
+                DateTime::<Utc>::from_timestamp(created_at, 0).expect("valid timestamp");
+            metadata.updated_at = metadata.created_at;
+            runtime
+                .upsert_thread(&metadata)
+                .await
+                .expect("thread insert should succeed");
+        }
+        for (parent_thread_id, child_thread_id, status) in [
+            (
+                parent_id,
+                first_child_id,
+                DirectionalThreadSpawnEdgeStatus::Open,
+            ),
+            (
+                parent_id,
+                second_child_id,
+                DirectionalThreadSpawnEdgeStatus::Closed,
+            ),
+            (
+                first_child_id,
+                grandchild_id,
+                DirectionalThreadSpawnEdgeStatus::Open,
+            ),
+        ] {
+            runtime
+                .upsert_thread_spawn_edge(parent_thread_id, child_thread_id, status)
+                .await
+                .expect("spawn edge insert should succeed");
+        }
+
+        let filters = |anchor| ThreadFilterOptions {
+            archived_only: false,
+            allowed_sources: &[],
+            model_providers: None,
+            cwd_filters: None,
+            anchor,
+            sort_key: SortKey::CreatedAt,
+            sort_direction: SortDirection::Desc,
+            search_term: None,
+        };
+        let first_page = runtime
+            .list_threads_by_parent(/*page_size*/ 1, parent_id, filters(None))
+            .await
+            .expect("first page should succeed");
+        let second_page = runtime
+            .list_threads_by_parent(
+                /*page_size*/ 1,
+                parent_id,
+                filters(first_page.next_anchor.as_ref()),
+            )
+            .await
+            .expect("second page should succeed");
+
+        assert_eq!(
+            first_page
+                .items
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            vec![second_child_id]
+        );
+        assert_eq!(
+            second_page
+                .items
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            vec![first_child_id]
+        );
+        assert_eq!(second_page.next_anchor, None);
     }
 
     #[tokio::test]
