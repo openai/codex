@@ -26,9 +26,5 @@ uuid = { workspace = true }
 codex-git-utils = { workspace = true }
 pretty_assertions = { workspace = true }
 
-[package.metadata.cargo-shear]
-# This direct dependency constrains SQLx's bundled SQLite version.
-ignored = ["libsqlite3-sys"]
-
 [lints]
 workspace = true
