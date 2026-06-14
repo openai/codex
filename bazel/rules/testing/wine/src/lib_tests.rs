@@ -25,25 +25,6 @@ use super::WineTestProcess;
 use super::WineRuntimePaths;
 use super::install_powershell_runtime;
 
-// The marker makes the assertion resilient to Wine or PTY startup chatter.
-const POWERSHELL_SMOKE_MARKER: &str = "WINE_PWSH_SMOKE";
-// Besides proving that the pinned runtime starts, report the properties that
-// shell detection and command construction rely on: PowerShell 7 Core running
-// with Windows semantics and a backslash path separator.
-const POWERSHELL_SMOKE_SCRIPT: &str = concat!(
-    "$ErrorActionPreference = 'Stop'; ",
-    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); ",
-    "$separatorCode = [int]([System.IO.Path]::DirectorySeparatorChar); ",
-    "if ($PSVersionTable.PSVersion.Major -ne 7) { throw 'expected PowerShell 7' }; ",
-    "if ($PSVersionTable.PSEdition -ne 'Core') { throw 'expected PowerShell Core' }; ",
-    "if (-not $IsWindows) { throw 'expected Windows semantics' }; ",
-    "if ($separatorCode -ne 92) { throw 'expected backslash path separator' }; ",
-    "Write-Output ('WINE_PWSH_SMOKE|' + ",
-    "$PSVersionTable.PSVersion.ToString() + '|' + ",
-    "$PSVersionTable.PSEdition + '|' + ",
-    "$IsWindows.ToString().ToLowerInvariant() + '|' + $separatorCode)",
-);
-
 async fn waiting_smoke_process() -> Result<WineTestProcess> {
     let executable = codex_utils_cargo_bin::cargo_bin("wine-smoke")?;
     let mut process = WineTestCommand::new(executable).arg("--wait").spawn()?;
@@ -287,6 +268,24 @@ fn powershell_runtime_is_materialized_at_the_windows_fallback_path() -> Result<(
 async fn pinned_powershell_runs_under_wine_with_a_pty() -> Result<()> {
     // Keep this integration smoke test local to the Wine support crate. The
     // production-shaped PowerShell launch path belongs to exec-server tests.
+    // The marker makes the assertion resilient to Wine or PTY startup chatter.
+    const POWERSHELL_SMOKE_MARKER: &str = "WINE_PWSH_SMOKE";
+    // Besides proving that the pinned runtime starts, report the properties
+    // that shell detection and command construction rely on: PowerShell 7 Core
+    // running with Windows semantics and a backslash path separator.
+    const POWERSHELL_SMOKE_SCRIPT: &str = concat!(
+        "$ErrorActionPreference = 'Stop'; ",
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); ",
+        "$separatorCode = [int]([System.IO.Path]::DirectorySeparatorChar); ",
+        "if ($PSVersionTable.PSVersion.Major -ne 7) { throw 'expected PowerShell 7' }; ",
+        "if ($PSVersionTable.PSEdition -ne 'Core') { throw 'expected PowerShell Core' }; ",
+        "if (-not $IsWindows) { throw 'expected Windows semantics' }; ",
+        "if ($separatorCode -ne 92) { throw 'expected backslash path separator' }; ",
+        "Write-Output ('WINE_PWSH_SMOKE|' + ",
+        "$PSVersionTable.PSVersion.ToString() + '|' + ",
+        "$PSVersionTable.PSEdition + '|' + ",
+        "$IsWindows.ToString().ToLowerInvariant() + '|' + $separatorCode)",
+    );
     let runtime = WineRuntimePaths::from_runfiles()?;
     let prefix = TempDir::new()?;
     install_powershell_runtime(prefix.path(), &runtime.powershell_runtime)?;
