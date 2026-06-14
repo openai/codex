@@ -38,6 +38,25 @@ impl ApiPathString {
         Self(path.to_string_lossy().into_owned())
     }
 
+    /// Parses an absolute native path using the supplied convention.
+    ///
+    /// Unlike [`Self::from_abs_path`], this does not interpret the path using
+    /// the operating system running Codex, so it can construct foreign paths.
+    pub fn from_native_absolute_path(
+        path: &str,
+        convention: PathConvention,
+    ) -> Result<Self, ApiPathStringError> {
+        let path_uri = match convention {
+            PathConvention::Posix => parse_posix_path(path),
+            PathConvention::Windows => parse_windows_path(path),
+        }
+        .ok_or_else(|| ApiPathStringError::InvalidNativePath {
+            path: path.to_string(),
+            convention,
+        })?;
+        Self::from_path_uri(&path_uri, convention)
+    }
+
     /// Renders a path URI using the requested native path convention.
     ///
     /// Rendering fails when the URI shape does not match the convention, such

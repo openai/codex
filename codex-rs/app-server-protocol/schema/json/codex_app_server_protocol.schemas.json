@@ -7234,7 +7234,7 @@
                 "type": "string"
               },
               "path": {
-                "$ref": "#/definitions/v2/AbsolutePathBuf"
+                "$ref": "#/definitions/v2/ApiPathString"
               },
               "type": {
                 "enum": [

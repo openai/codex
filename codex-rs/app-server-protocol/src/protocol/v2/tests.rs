@@ -21,6 +21,7 @@ use codex_protocol::models::ImageDetail;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
 use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
+use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
 use codex_protocol::permissions::FileSystemAccessMode as CoreFileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath as CoreFileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry as CoreFileSystemSandboxEntry;
@@ -36,6 +37,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
 use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use serde_json::Value as JsonValue;
 use serde_json::json;
@@ -57,6 +60,34 @@ fn absolute_path(path: &str) -> AbsolutePathBuf {
 
 fn test_absolute_path() -> AbsolutePathBuf {
     absolute_path("readable")
+}
+
+#[test]
+fn command_action_read_resolves_paths_using_the_environment_convention() {
+    let cwd = PathUri::parse("file:///C:/codex%20runtime").expect("Windows cwd URI");
+    for (path, expected) in [
+        (r"C:\input\file.txt", r"C:\input\file.txt"),
+        (r"relative\file.txt", r"C:\codex runtime\relative\file.txt"),
+    ] {
+        let action = CommandAction::from_core_with_cwd_uri(
+            CoreParsedCommand::Read {
+                cmd: "Get-Content".to_string(),
+                name: "file.txt".to_string(),
+                path: PathBuf::from(path),
+            },
+            &cwd,
+        );
+
+        assert_eq!(
+            action,
+            CommandAction::Read {
+                command: "Get-Content".to_string(),
+                name: "file.txt".to_string(),
+                path: ApiPathString::from_native_absolute_path(expected, PathConvention::Windows,)
+                    .expect("absolute Windows API path"),
+            }
+        );
+    }
 }
 
 #[test]

@@ -114,7 +114,6 @@ use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::shlex_join;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::ApiPathString;
-use codex_utils_path_uri::PathConvention;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -567,22 +566,17 @@ pub(crate) async fn apply_bespoke_event_handling(
                 clippy::expect_used,
                 reason = "command approval paths are absolute and have an inferred convention"
             )]
-            let (api_cwd, cwd) = {
+            let api_cwd = {
                 let convention = cwd
                     .infer_path_convention()
                     .expect("command cwd should have a native path convention");
-                let api_cwd = ApiPathString::from_path_uri(&cwd, convention)
-                    .expect("command cwd should render using its native path convention");
-                let host_cwd = ApiPathString::from_path_uri(&cwd, PathConvention::native())
-                    .expect("command cwd should render using the app-server host path convention");
-                let host_cwd = AbsolutePathBuf::try_from(host_cwd.into_string())
-                    .expect("projected command cwd should be absolute on the app-server host");
-                (api_cwd, host_cwd)
+                ApiPathString::from_path_uri(&cwd, convention)
+                    .expect("command cwd should render using its native path convention")
             };
             let command_actions = parsed_cmd
                 .iter()
                 .cloned()
-                .map(|parsed| V2ParsedCommand::from_core_with_cwd(parsed, &cwd))
+                .map(|parsed| V2ParsedCommand::from_core_with_cwd_uri(parsed, &cwd))
                 .collect::<Vec<_>>();
             let presentation = if let Some(network_approval_context) =
                 network_approval_context.map(V2NetworkApprovalContext::from)
@@ -2218,6 +2212,7 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
+    use codex_utils_path_uri::PathConvention;
     use core_test_support::load_default_config_for_test;
     use pretty_assertions::assert_eq;
     use serde_json::json;

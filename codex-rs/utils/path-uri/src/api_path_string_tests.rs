@@ -449,6 +449,33 @@ fn renders_an_absolute_path_using_the_host_convention() {
     );
 }
 
+#[test]
+fn parses_foreign_absolute_paths_using_the_explicit_convention() {
+    for (path, convention) in [
+        ("/workspace/a file.rs", PathConvention::Posix),
+        (r"C:\workspace\a file.rs", PathConvention::Windows),
+        (r"\\server\share\a file.rs", PathConvention::Windows),
+    ] {
+        assert_eq!(
+            ApiPathString::from_native_absolute_path(path, convention),
+            Ok(ApiPathString(path.to_string()))
+        );
+    }
+}
+
+#[test]
+fn rejects_relative_native_paths() {
+    for convention in [PathConvention::Posix, PathConvention::Windows] {
+        assert_eq!(
+            ApiPathString::from_native_absolute_path("relative/path", convention),
+            Err(ApiPathStringError::InvalidNativePath {
+                path: "relative/path".to_string(),
+                convention,
+            })
+        );
+    }
+}
+
 #[cfg(windows)]
 #[test]
 fn renders_native_non_unicode_windows_fallback_lossily() {

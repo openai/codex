@@ -32,6 +32,8 @@ use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SubAgentActivityKind as CoreSubAgentActivityKind;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -110,7 +112,7 @@ pub enum CommandAction {
     Read {
         command: String,
         name: String,
-        path: AbsolutePathBuf,
+        path: ApiPathString,
     },
     ListFiles {
         command: String,
@@ -174,7 +176,7 @@ impl CommandAction {
             } => CoreParsedCommand::Read {
                 cmd,
                 name,
-                path: path.into_path_buf(),
+                path: PathBuf::from(path.into_string()),
             },
             CommandAction::ListFiles { command: cmd, path } => {
                 CoreParsedCommand::ListFiles { cmd, path }
@@ -189,12 +191,21 @@ impl CommandAction {
     }
 
     pub fn from_core_with_cwd(value: CoreParsedCommand, cwd: &AbsolutePathBuf) -> Self {
+        Self::from_core_with_cwd_uri(value, &PathUri::from_abs_path(cwd))
+    }
+
+    pub fn from_core_with_cwd_uri(value: CoreParsedCommand, cwd: &PathUri) -> Self {
         match value {
-            CoreParsedCommand::Read { cmd, name, path } => CommandAction::Read {
-                command: cmd,
-                name,
-                path: cwd.join(path),
-            },
+            CoreParsedCommand::Read { cmd, name, path } => {
+                let Some(path) = command_action_path(cwd, &path) else {
+                    return CommandAction::Unknown { command: cmd };
+                };
+                CommandAction::Read {
+                    command: cmd,
+                    name,
+                    path,
+                }
+            }
             CoreParsedCommand::ListFiles { cmd, path } => {
                 CommandAction::ListFiles { command: cmd, path }
             }
@@ -206,6 +217,21 @@ impl CommandAction {
             CoreParsedCommand::Unknown { cmd } => CommandAction::Unknown { command: cmd },
         }
     }
+}
+
+fn command_action_path(cwd: &PathUri, path: &std::path::Path) -> Option<ApiPathString> {
+    let convention = cwd.infer_path_convention()?;
+    let path = path.to_string_lossy();
+    if let Ok(path) = ApiPathString::from_native_absolute_path(&path, convention) {
+        return Some(path);
+    }
+
+    let relative_path = match convention {
+        PathConvention::Posix => path.into_owned(),
+        PathConvention::Windows => path.replace('\\', "/"),
+    };
+    let path = cwd.join(&relative_path).ok()?;
+    ApiPathString::from_path_uri(&path, convention).ok()
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
