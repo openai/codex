@@ -115,7 +115,7 @@ impl AppFileSystemSandboxContext {
             && !file_system_policy.has_full_disk_write_access()
     }
 
-    pub fn into_path_uri(self) -> ExecFileSystemSandboxContext {
+    pub fn into_exec(self) -> ExecFileSystemSandboxContext {
         FileSystemSandboxContext {
             permissions: map_permission_paths(self.permissions, |path| {
                 Ok::<_, std::convert::Infallible>(PathUri::from_abs_path(&path))
@@ -160,7 +160,7 @@ impl<PathType> FileSystemSandboxContext<PathType> {
 }
 
 impl ExecFileSystemSandboxContext {
-    pub fn try_into_native(self) -> io::Result<AppFileSystemSandboxContext> {
+    pub fn try_into_app(self) -> io::Result<AppFileSystemSandboxContext> {
         Ok(FileSystemSandboxContext {
             permissions: map_permission_paths(self.permissions, |path| path.to_abs_path())?,
             cwd: self.cwd,

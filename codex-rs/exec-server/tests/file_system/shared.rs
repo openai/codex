@@ -31,7 +31,7 @@ fn sandbox_context_from_profile_preserves_workspace_write_read_only_subpaths() -
 
     let sandbox = workspace_write_sandbox(writable_dir.clone());
     let policy = sandbox
-        .try_into_native()?
+        .try_into_app()?
         .permissions
         .file_system_sandbox_policy();
     let cwd = absolute_path(writable_dir.clone());
@@ -529,7 +529,7 @@ async fn file_system_sandboxed_write_allows_additional_write_root(
     std::fs::create_dir_all(&readable_dir)?;
     std::fs::create_dir_all(&writable_dir)?;
 
-    let mut sandbox = read_only_sandbox(readable_dir).try_into_native()?;
+    let mut sandbox = read_only_sandbox(readable_dir).try_into_app()?;
     let additional_permissions = AdditionalPermissionProfile {
         network: None,
         file_system: Some(FileSystemPermissions::from_read_write_roots(
@@ -550,7 +550,7 @@ async fn file_system_sandboxed_write_allows_additional_write_root(
         &file_system_policy,
         network_policy,
     );
-    let sandbox = sandbox.into_path_uri();
+    let sandbox = sandbox.into_exec();
 
     file_system
         .write_file(

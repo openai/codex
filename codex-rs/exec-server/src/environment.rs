@@ -891,7 +891,7 @@ mod tests {
                 codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
             ),
         )
-        .into_path_uri();
+        .into_exec();
 
         let err = environment
             .get_filesystem()
