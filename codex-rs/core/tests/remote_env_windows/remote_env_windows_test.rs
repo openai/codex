@@ -2,17 +2,23 @@
 
 use anyhow::Context;
 use anyhow::Result;
+use app_test_support::PathBufExt;
 use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
+use codex_app_server_protocol::AskForApproval as AppAskForApproval;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnEnvironmentParams;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_features::Feature;
@@ -44,12 +50,12 @@ use tokio::time::timeout;
 use wine_exec_server_test_support::WineExecServer;
 
 const APP_SERVER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-const CALL_ID: &str = "wine-cmd-smoke";
-const COMMAND: &str = r#"if ((Get-Location).Path -ne 'C:\windows') { exit 1 }"#;
-const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
+    const CALL_ID: &str = "wine-cmd-smoke";
+    const COMMAND: &str = r#"if ((Get-Location).Path -ne 'C:\windows') { exit 1 }"#;
+
     WineExecServer
         .scope(|exec_server_url| async move {
             let server = start_mock_server().await;
@@ -173,6 +179,9 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Result<()> {
+    const CALL_ID: &str = "wine-cmd-smoke";
+    const COMMAND: &str = r#"if ((Get-Location).Path -ne 'C:\windows') { exit 1 }"#;
+
     WineExecServer
         .scope(|exec_server_url| async move {
             let codex_home = TempDir::new()?;
@@ -232,23 +241,33 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
             .await??;
             let response: ThreadStartResponse = to_response(response)?;
             assert!(!response.thread.id.is_empty());
+            let host_cwd = codex_home.path().to_path_buf().abs();
+            // TODO(anp): Return environment-native values here once these app-server response
+            // fields support foreign paths and remote instruction/profile discovery.
+            assert_eq!(response.cwd, host_cwd);
+            assert_eq!(response.runtime_workspace_roots, vec![host_cwd]);
+            assert_eq!(response.instruction_sources, Vec::new());
+            assert_eq!(response.active_permission_profile, None);
 
             let turn_request_id = app_server
-                .send_raw_request(
-                    "turn/start",
-                    Some(json!({
-                        "threadId": response.thread.id,
-                        "input": [{"type": "text", "text": "run the Windows smoke command"}],
-                        "approvalPolicy": "never",
-                        "sandboxPolicy": {"type": "dangerFullAccess"},
-                    })),
-                )
+                .send_turn_start_request(TurnStartParams {
+                    thread_id: response.thread.id,
+                    client_user_message_id: None,
+                    input: vec![V2UserInput::Text {
+                        text: "run the Windows smoke command".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    approval_policy: Some(AppAskForApproval::Never),
+                    sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+                    ..Default::default()
+                })
                 .await?;
-            timeout(
+            let turn_response = timeout(
                 APP_SERVER_READ_TIMEOUT,
                 app_server.read_stream_until_response_message(RequestId::Integer(turn_request_id)),
             )
             .await??;
+            let _: TurnStartResponse = to_response(turn_response)?;
 
             let completed = timeout(APP_SERVER_READ_TIMEOUT, async {
                 loop {
