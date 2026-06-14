@@ -1,5 +1,7 @@
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
+#[cfg(target_os = "windows")]
+use std::ffi::OsString;
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -537,6 +539,113 @@ fn extract_create_process_as_user_error_code(err: &str) -> Option<String> {
 }
 
 #[cfg(target_os = "windows")]
+fn looks_like_command_not_found(output: &ExecToolCallOutput) -> bool {
+    [
+        &output.stderr.text,
+        &output.stdout.text,
+        &output.aggregated_output.text,
+    ]
+    .into_iter()
+    .any(|section| {
+        let lower = section.to_ascii_lowercase();
+        lower.contains("command not found")
+            || lower.contains("could not be found")
+            || lower.contains("is not recognized as the name of")
+            || lower.contains("not recognized as an internal or external command")
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn windows_path_candidates(command_name: &str, env: &HashMap<String, String>) -> Vec<PathBuf> {
+    if command_name.is_empty()
+        || command_name.contains('\\')
+        || command_name.contains('/')
+        || command_name.contains(':')
+    {
+        return Vec::new();
+    }
+
+    let path = env
+        .get("PATH")
+        .cloned()
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_default();
+    let pathext = env
+        .get("PATHEXT")
+        .cloned()
+        .or_else(|| std::env::var("PATHEXT").ok())
+        .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_string());
+
+    let has_extension = Path::new(command_name).extension().is_some();
+    let suffixes: Vec<String> = if has_extension {
+        vec![String::new()]
+    } else {
+        pathext
+            .split(';')
+            .filter(|entry| !entry.is_empty())
+            .map(ToOwned::to_owned)
+            .collect()
+    };
+
+    let mut candidates = Vec::new();
+    for entry in path.split(';').filter(|entry| !entry.is_empty()) {
+        let dir = Path::new(entry);
+        if has_extension {
+            candidates.push(dir.join(command_name));
+            continue;
+        }
+        for suffix in &suffixes {
+            candidates.push(dir.join(format!("{command_name}{suffix}")));
+        }
+    }
+    candidates
+}
+
+#[cfg(target_os = "windows")]
+fn first_windows_path_match(command_name: &str, env: &HashMap<String, String>) -> Option<PathBuf> {
+    windows_path_candidates(command_name, env)
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+}
+
+#[cfg(target_os = "windows")]
+fn maybe_annotate_windows_path_access_denied(
+    output: &mut ExecToolCallOutput,
+    command: &[String],
+    env: &HashMap<String, String>,
+) {
+    if output.exit_code != 127 && !looks_like_command_not_found(output) {
+        return;
+    }
+
+    let Some(command_name) = command.first() else {
+        return;
+    };
+    let Some(candidate) = first_windows_path_match(command_name, env) else {
+        return;
+    };
+
+    let note = format!(
+        "\n[codex] `{command_name}` exists on PATH at `{}`. Windows Sandbox may be denying execute or directory traversal access, so the shell can misreport this as a missing command. Try re-running outside the sandbox or adjusting sandbox permissions.\n",
+        candidate.display()
+    );
+
+    if !output.stderr.text.ends_with(b"\n") && !output.stderr.text.is_empty() {
+        output.stderr.text.push(b'\n');
+    }
+    output.stderr.text.extend_from_slice(note.as_bytes());
+
+    if !output.aggregated_output.text.ends_with(b"\n") && !output.aggregated_output.text.is_empty()
+    {
+        output.aggregated_output.text.push(b'\n');
+    }
+    output
+        .aggregated_output
+        .text
+        .extend_from_slice(note.as_bytes());
+}
+
+#[cfg(target_os = "windows")]
 fn windowsapps_path_kind(path: &str) -> &'static str {
     let lower = path.to_ascii_lowercase();
     if lower.contains("\\program files\\windowsapps\\") {
@@ -590,6 +699,54 @@ fn record_windows_sandbox_spawn_failure(
 }
 
 #[cfg(target_os = "windows")]
+fn windows_sandbox_path_denied_hint(
+    command: &[String],
+    env: &HashMap<String, String>,
+    cwd: &Path,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Option<String> {
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(stdout),
+        String::from_utf8_lossy(stderr)
+    )
+    .to_ascii_lowercase();
+    let looks_like_missing_command = [
+        "command not found",
+        "commandnotfoundexception",
+        "could not be found",
+        "is not recognized as the name of",
+    ]
+    .iter()
+    .any(|needle| combined.contains(needle));
+    if !looks_like_missing_command {
+        return None;
+    }
+
+    let attempted_command =
+        codex_shell_command::powershell::parse_powershell_command_into_plain_commands(command)
+            .or_else(|| codex_shell_command::bash::parse_shell_lc_plain_commands(command))
+            .and_then(|commands| commands.into_iter().next())
+            .or_else(|| (!command.is_empty()).then(|| command.to_vec()))?;
+    let candidate = attempted_command.first()?.clone();
+    if Path::new(&candidate).components().count() > 1 {
+        return None;
+    }
+
+    let search_path = env
+        .get("PATH")
+        .map(OsString::from)
+        .or_else(|| std::env::var_os("PATH"));
+    let resolved = which::which_in(&candidate, search_path, cwd).ok()?;
+
+    Some(format!(
+        "Codex note: `{candidate}` resolves on PATH to `{}` outside the Windows sandbox, so this is likely a sandbox execution/traversal denial rather than a missing installation. Try approving the command outside the sandbox or adjust sandbox permissions.\n",
+        resolved.display()
+    ))
+}
+
+#[cfg(target_os = "windows")]
 async fn exec_windows_sandbox(
     params: ExecParams,
     permission_profile: &PermissionProfile,
@@ -612,6 +769,9 @@ async fn exec_windows_sandbox(
         windows_sandbox_private_desktop,
         ..
     } = params;
+    let command_for_hint = command.clone();
+    let env_for_hint = env.clone();
+    let cwd_for_hint = cwd.clone();
     if let Some(network) = network.as_ref() {
         network.apply_to_env(&mut env);
     }
@@ -722,6 +882,15 @@ async fn exec_windows_sandbox(
         stdout_text.truncate(max_bytes);
     }
     let mut stderr_text = capture.stderr;
+    if let Some(note) = windows_sandbox_path_denied_hint(
+        &command_for_hint,
+        &env_for_hint,
+        cwd_for_hint.as_path(),
+        &stdout_text,
+        &stderr_text,
+    ) {
+        stderr_text.extend_from_slice(note.as_bytes());
+    }
     if let Some(max_bytes) = capture_policy.retained_bytes_cap()
         && stderr_text.len() > max_bytes
     {
@@ -736,12 +905,21 @@ async fn exec_windows_sandbox(
         truncated_after_lines: None,
     };
     let aggregated_output = aggregate_output(&stdout, &stderr, capture_policy.retained_bytes_cap());
-
-    Ok(RawExecToolCallOutput {
-        exit_status,
+    let mut output = ExecToolCallOutput {
+        exit_code: capture.exit_code,
         stdout,
         stderr,
         aggregated_output,
+        duration: Duration::default(),
+        timed_out: capture.timed_out,
+    };
+    maybe_annotate_windows_path_access_denied(&mut output, &command, &env);
+
+    Ok(RawExecToolCallOutput {
+        exit_status,
+        stdout: output.stdout,
+        stderr: output.stderr,
+        aggregated_output: output.aggregated_output,
         timed_out: capture.timed_out,
     })
 }

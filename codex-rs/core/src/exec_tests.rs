@@ -6,6 +6,8 @@ use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+#[cfg(windows)]
+use std::fs;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
@@ -56,6 +58,41 @@ fn sandbox_detection_ignores_non_sandbox_mode() {
     assert!(!is_likely_sandbox_denied(SandboxType::None, &output));
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_path_candidates_find_executable_without_extension() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let exe = temp.path().join("go.exe");
+    fs::write(&exe, b"").expect("write exe");
+
+    let mut env = HashMap::new();
+    env.insert("PATH".to_string(), temp.path().display().to_string());
+    env.insert("PATHEXT".to_string(), ".EXE;.BAT".to_string());
+
+    let match_path = first_windows_path_match("go", &env).expect("match");
+    assert_eq!(match_path, exe);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_path_hint_annotates_missing_command_when_binary_exists_on_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let exe = temp.path().join("go.exe");
+    fs::write(&exe, b"").expect("write exe");
+
+    let mut env = HashMap::new();
+    env.insert("PATH".to_string(), temp.path().display().to_string());
+    env.insert("PATHEXT".to_string(), ".EXE;.BAT".to_string());
+
+    let mut output = make_exec_output(/*exit_code*/ 127, "", "go : command not found", "");
+    maybe_annotate_windows_path_access_denied(&mut output, &["go".to_string()], &env);
+
+    let stderr = output.stderr.from_utf8_lossy();
+    assert!(stderr.contains("exists on PATH"));
+    assert!(stderr.contains("go.exe"));
+    assert!(stderr.contains("Windows Sandbox may be denying"));
+}
+
 #[test]
 fn sandbox_detection_ignores_network_policy_text_in_non_sandbox_mode() {
     let output = make_exec_output(
@@ -79,6 +116,59 @@ fn sandbox_detection_uses_aggregated_output() {
         SandboxType::MacosSeatbelt,
         &output
     ));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_sandbox_path_denied_hint_identifies_resolved_binary() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let bin_dir = tmp.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("bin dir");
+    let tool = bin_dir.join("go.exe");
+    std::fs::write(&tool, b"").expect("tool");
+
+    let mut env = HashMap::new();
+    env.insert("PATH".to_string(), bin_dir.display().to_string());
+
+    let note = windows_sandbox_path_denied_hint(
+        &[
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "go version".to_string(),
+        ],
+        &env,
+        tmp.path(),
+        b"",
+        b"go : The term 'go' is not recognized as the name of a cmdlet.",
+    )
+    .expect("path denial hint");
+
+    assert!(note.contains("sandbox"));
+    assert!(note.contains("go"));
+    assert!(note.contains(&tool.display().to_string()));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_sandbox_path_denied_hint_skips_missing_binary() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let env = HashMap::new();
+
+    let note = windows_sandbox_path_denied_hint(
+        &[
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "go version".to_string(),
+        ],
+        &env,
+        tmp.path(),
+        b"",
+        b"go : The term 'go' is not recognized as the name of a cmdlet.",
+    );
+
+    assert!(note.is_none());
 }
 
 #[test]
