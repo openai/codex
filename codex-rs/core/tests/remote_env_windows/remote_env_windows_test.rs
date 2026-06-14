@@ -115,6 +115,7 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
 
             let mut begin = None;
             let mut end = None;
+            let mut turn_complete = false;
             loop {
                 match wait_for_event(&test.codex, |_| true).await {
                     EventMsg::ExecCommandBegin(event) if event.call_id == CALL_ID => {
@@ -123,8 +124,11 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
                     EventMsg::ExecCommandEnd(event) if event.call_id == CALL_ID => {
                         end = Some(event)
                     }
-                    EventMsg::TurnComplete(_) => break,
+                    EventMsg::TurnComplete(_) => turn_complete = true,
                     _ => {}
+                }
+                if turn_complete && end.is_some() {
+                    break;
                 }
             }
 
