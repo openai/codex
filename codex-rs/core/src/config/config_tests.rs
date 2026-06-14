@@ -206,6 +206,36 @@ async fn load_config_normalizes_relative_cwd_override() -> std::io::Result<()> {
     Ok(())
 }
 
+#[test]
+fn normalize_current_dir_for_default_cwd_replaces_windowsapps_package_path() {
+    let codex_home = test_absolute_path(r"C:\Users\wang\.codex");
+    let current_dir = PathBuf::from(
+        r"C:\Program Files\WindowsApps\OpenAI.Codex_26.609.41114_x64__2p2nqsd0c76g0\app",
+    );
+
+    let resolved = super::normalize_current_dir_for_default_cwd(current_dir, codex_home.as_path());
+
+    assert_eq!(resolved, codex_home.to_path_buf());
+}
+
+#[test]
+fn normalize_current_dir_for_default_cwd_preserves_normal_workspace_path() {
+    let codex_home = test_absolute_path(r"C:\Users\wang\.codex");
+    let workspace = PathBuf::from(r"C:\Users\wang\src\project");
+
+    let resolved =
+        super::normalize_current_dir_for_default_cwd(workspace.clone(), codex_home.as_path());
+
+    assert_eq!(resolved, workspace);
+}
+
+#[test]
+fn is_windowsapps_package_path_accepts_verbatim_windows_prefix() {
+    assert!(super::is_windowsapps_package_path(Path::new(
+        r"\\?\C:\Program Files\WindowsApps\OpenAI.Codex_26.609.41114_x64__2p2nqsd0c76g0\app"
+    )));
+}
+
 #[tokio::test]
 async fn test_toml_parsing() {
     let history_with_persistence = r#"

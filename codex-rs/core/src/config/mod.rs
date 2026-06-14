@@ -267,6 +267,30 @@ fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     }
 }
 
+fn normalize_current_dir_for_default_cwd(current_dir: PathBuf, codex_home: &Path) -> PathBuf {
+    if is_windowsapps_package_path(&current_dir) {
+        default_cwd_fallback(codex_home)
+    } else {
+        current_dir
+    }
+}
+
+fn default_cwd_fallback(codex_home: &Path) -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| codex_home.to_path_buf())
+}
+
+fn is_windowsapps_package_path(path: &Path) -> bool {
+    let mut key = path.as_os_str().to_string_lossy().replace('\\', "/");
+    while let Some(stripped) = key.strip_prefix("//?/") {
+        key = stripped.to_string();
+    }
+    let key = key.to_ascii_lowercase();
+    key == "c:/program files/windowsapps" || key.starts_with("c:/program files/windowsapps/")
+}
+
 fn resolve_cli_auth_credentials_store_mode(
     configured: AuthCredentialsStoreMode,
     package_version: &str,
@@ -1217,7 +1241,10 @@ impl ConfigBuilder {
         let cwd_override = harness_overrides.cwd.as_deref().or(fallback_cwd.as_deref());
         let cwd = match cwd_override {
             Some(path) => AbsolutePathBuf::relative_to_current_dir(path)?,
-            None => AbsolutePathBuf::current_dir()?,
+            None => AbsolutePathBuf::try_from(normalize_current_dir_for_default_cwd(
+                std::env::current_dir()?,
+                codex_home.as_path(),
+            ))?,
         };
         harness_overrides.cwd = Some(cwd.to_path_buf());
         let config_layer_stack = load_config_layers_state(
@@ -2762,7 +2789,7 @@ impl Config {
             match cwd {
                 None => {
                     tracing::info!("cwd not set, using current dir");
-                    env::current_dir()?
+                    normalize_current_dir_for_default_cwd(env::current_dir()?, codex_home.as_path())
                 }
                 Some(p) if p.is_absolute() => p,
                 Some(p) => {
