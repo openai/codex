@@ -45,9 +45,9 @@ use codex_install_context::InstallMethod;
 use codex_install_context::StandalonePlatform;
 use codex_login::AuthDotJson;
 use codex_login::AuthManager;
+use codex_login::AuthMode;
 use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_login::CODEX_API_KEY_ENV_VAR;
-use codex_login::CodexAuth;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_login::default_client::build_reqwest_client;
 use codex_login::default_client::default_headers;
@@ -2302,9 +2302,10 @@ async fn websocket_reachability_check(
 
     let runtime_provider = create_model_provider(provider.clone(), auth_manager);
     let auth = runtime_provider.auth().await;
+    let auth_mode = runtime_provider.auth_mode(auth.as_ref());
     details.push(format!(
         "auth mode: {}",
-        auth.as_ref().map(auth_mode_name).unwrap_or("none")
+        auth_mode.map(auth_mode_name).unwrap_or("none")
     ));
 
     let api_provider = match runtime_provider.api_provider().await {
@@ -2442,14 +2443,14 @@ fn websocket_error_detail(err: &ApiError) -> String {
     }
 }
 
-fn auth_mode_name(auth: &CodexAuth) -> &'static str {
-    match auth.auth_mode() {
-        codex_app_server_protocol::AuthMode::ApiKey => "api_key",
-        codex_app_server_protocol::AuthMode::Chatgpt => "chatgpt",
-        codex_app_server_protocol::AuthMode::ChatgptAuthTokens => "chatgpt_auth_tokens",
-        codex_app_server_protocol::AuthMode::AgentIdentity => "agent_identity",
-        codex_app_server_protocol::AuthMode::PersonalAccessToken => "personal_access_token",
-        codex_app_server_protocol::AuthMode::BedrockApiKey => "bedrock_api_key",
+fn auth_mode_name(auth_mode: AuthMode) -> &'static str {
+    match auth_mode {
+        AuthMode::ApiKey => "api_key",
+        AuthMode::Chatgpt => "chatgpt",
+        AuthMode::ChatgptAuthTokens => "chatgpt_auth_tokens",
+        AuthMode::AgentIdentity => "agent_identity",
+        AuthMode::PersonalAccessToken => "personal_access_token",
+        AuthMode::BedrockApiKey => "bedrock_api_key",
     }
 }
 

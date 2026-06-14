@@ -33,6 +33,7 @@ pub(super) async fn login(
         api_key,
         region,
         config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
     )
     .map_err(|err| internal_error(format!("failed to save Amazon Bedrock auth: {err}")))?;
 
@@ -49,8 +50,12 @@ pub(super) async fn logout(
     config_manager: &ConfigManager,
 ) -> Result<(), JSONRPCErrorError> {
     let user_model_provider = user_model_provider_state(config_manager).await?;
-    logout_stored_auth(&config.codex_home, config.cli_auth_credentials_store_mode)
-        .map_err(|err| internal_error(format!("logout failed: {err}")))?;
+    logout_stored_auth(
+        &config.codex_home,
+        config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
+    )
+    .map_err(|err| internal_error(format!("logout failed: {err}")))?;
 
     if user_model_provider.model_provider.as_deref() == Some(AMAZON_BEDROCK_PROVIDER_ID) {
         write_user_model_provider(
@@ -65,9 +70,13 @@ pub(super) async fn logout(
 }
 
 fn load_stored_auth(config: &Config) -> Result<Option<AuthDotJson>, JSONRPCErrorError> {
-    load_auth_dot_json(&config.codex_home, config.cli_auth_credentials_store_mode)
-        .map(|auth| auth.filter(AuthDotJson::is_bedrock_api_key))
-        .map_err(|err| internal_error(format!("failed to read stored auth: {err}")))
+    load_auth_dot_json(
+        &config.codex_home,
+        config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
+    )
+    .map(|auth| auth.filter(AuthDotJson::is_bedrock_api_key))
+    .map_err(|err| internal_error(format!("failed to read stored auth: {err}")))
 }
 
 async fn user_model_provider_state(

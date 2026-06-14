@@ -22,6 +22,7 @@ pub use auth::AuthDotJson;
 pub use auth::AuthKeyringBackendKind;
 pub use auth::AuthManager;
 pub use auth::AuthManagerConfig;
+pub use auth::AuthMode;
 pub use auth::CLIENT_ID;
 pub use auth::CLIENT_ID_OVERRIDE_ENV_VAR;
 pub use auth::CODEX_ACCESS_TOKEN_ENV_VAR;

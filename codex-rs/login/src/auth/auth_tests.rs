@@ -1113,25 +1113,46 @@ async fn personal_access_token_does_not_offer_unauthorized_recovery() {
 #[serial(codex_auth_env)]
 async fn load_auth_keeps_codex_api_key_env_precedence() {
     let codex_home = tempdir().unwrap();
+    let bedrock_auth = BedrockApiKeyAuth {
+        api_key: "bedrock-api-key-test".to_string(),
+        region: "us-east-1".to_string(),
+    };
     let record = agent_identity_record(WORKSPACE_ID_ALLOWED);
     let agent_identity = fake_agent_identity_jwt(&record).expect("fake agent identity");
     let _access_token_guard = EnvVarGuard::set(CODEX_ACCESS_TOKEN_ENV_VAR, &agent_identity);
     let _api_key_guard = EnvVarGuard::set(CODEX_API_KEY_ENV_VAR, "sk-env");
 
-    let auth = super::load_auth(
-        codex_home.path(),
+    let auth_manager = AuthManager::new(
+        codex_home.path().to_path_buf(),
         /*enable_codex_api_key_env*/ true,
         AuthCredentialsStoreMode::File,
-        /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
         /*agent_identity_authapi_base_url*/ None,
     )
-    .await
-    .expect("env auth should load")
-    .expect("env auth should be present");
+    .await;
+    assert_eq!(auth_manager.bedrock_api_key_auth_cached(), None);
 
-    assert_eq!(auth.api_key(), Some("sk-env"));
+    crate::auth::login_with_bedrock_api_key(
+        codex_home.path(),
+        &bedrock_auth.api_key,
+        &bedrock_auth.region,
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::Direct,
+    )
+    .expect("seed Bedrock auth");
+    assert!(auth_manager.reload().await);
+
+    assert_eq!(
+        auth_manager
+            .auth_cached()
+            .and_then(|auth| auth.api_key().map(str::to_string)),
+        Some("sk-env".to_string())
+    );
+    assert_eq!(
+        auth_manager.bedrock_api_key_auth_cached(),
+        Some(bedrock_auth)
+    );
 }
 
 #[tokio::test]
