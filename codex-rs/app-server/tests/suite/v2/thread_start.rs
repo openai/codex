@@ -233,7 +233,58 @@ async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
     } = to_response::<ThreadStartResponse>(resp)?;
 
     assert_eq!(response_cwd.as_str(), cwd.to_string_lossy());
-    assert_eq!(runtime_workspace_roots, vec![extra_root.abs()]);
+    assert_eq!(
+        runtime_workspace_roots,
+        vec![ApiPathString::from_abs_path(
+            &extra_root.abs(),
+            PathConvention::native(),
+        )?]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_preserves_explicit_root_equal_to_host_fallback_with_selected_environment()
+-> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+
+    let fallback_cwd = TempDir::new()?;
+    let environment_cwd = TempDir::new()?;
+    let explicit_root = fallback_cwd.path().to_path_buf().abs();
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(fallback_cwd.path().display().to_string()),
+            runtime_workspace_roots: Some(vec![explicit_root.clone()]),
+            environments: Some(vec![TurnEnvironmentParams {
+                environment_id: "local".to_string(),
+                cwd: ApiPathString::from_abs_path(
+                    &environment_cwd.path().to_path_buf().abs(),
+                    PathConvention::native(),
+                )?,
+            }]),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ThreadStartResponse = to_response(response)?;
+
+    assert_eq!(
+        response.runtime_workspace_roots,
+        vec![ApiPathString::from_abs_path(
+            &explicit_root,
+            PathConvention::native(),
+        )?]
+    );
 
     Ok(())
 }
@@ -273,7 +324,10 @@ async fn thread_start_excludes_profile_workspace_roots_from_runtime_workspace_ro
 
     assert_eq!(
         runtime_workspace_roots,
-        vec![cwd.path().to_path_buf().abs()]
+        vec![ApiPathString::from_abs_path(
+            &cwd.path().to_path_buf().abs(),
+            PathConvention::native(),
+        )?]
     );
 
     Ok(())

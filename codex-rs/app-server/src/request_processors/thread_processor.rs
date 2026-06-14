@@ -1103,6 +1103,7 @@ impl ThreadRequestProcessor {
                 .map_err(|err| config_load_error(&err))?;
         }
 
+        let runtime_workspace_roots_explicit = config.workspace_roots_explicit;
         let environments = environments.unwrap_or_else(|| {
             listener_task_context
                 .thread_manager
@@ -1247,6 +1248,10 @@ impl ThreadRequestProcessor {
                 "could not render thread cwd `{cwd_uri}` using {cwd_convention}: {err}"
             ))
         })?;
+        let runtime_workspace_roots = thread_response_runtime_workspace_roots(
+            &config_snapshot,
+            runtime_workspace_roots_explicit,
+        )?;
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
 
@@ -1256,7 +1261,7 @@ impl ThreadRequestProcessor {
             model_provider: config_snapshot.model_provider_id,
             service_tier: config_snapshot.service_tier,
             cwd,
-            runtime_workspace_roots: config_snapshot.workspace_roots,
+            runtime_workspace_roots,
             instruction_sources,
             approval_policy: config_snapshot.approval_policy.into(),
             approvals_reviewer: config_snapshot.approvals_reviewer.into(),

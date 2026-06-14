@@ -161,7 +161,7 @@ pub struct ThreadStartResponse {
     /// `:workspace_roots`.
     #[experimental("thread/start.runtimeWorkspaceRoots")]
     #[serde(default)]
-    pub runtime_workspace_roots: Vec<AbsolutePathBuf>,
+    pub runtime_workspace_roots: Vec<ApiPathString>,
     /// Instruction source files currently loaded for this thread.
     #[serde(default)]
     pub instruction_sources: Vec<AbsolutePathBuf>,

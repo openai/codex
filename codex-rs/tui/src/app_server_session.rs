@@ -1540,18 +1540,14 @@ async fn thread_session_state_from_thread_start_response(
     config: &Config,
     thread_params_mode: ThreadParamsMode,
 ) -> Result<ThreadSessionState, String> {
-    let cwd_convention = response
-        .cwd
-        .infer_absolute_path_convention()
-        .ok_or_else(|| format!("thread cwd `{}` is not absolute", response.cwd.as_str()))?;
-    let cwd_uri = response
-        .cwd
-        .to_path_uri(cwd_convention)
+    let cwd = api_path_to_native_absolute_path(&response.cwd)
         .map_err(|err| format!("thread cwd is invalid: {err}"))?;
-    let cwd = ApiPathString::from_path_uri(&cwd_uri, PathConvention::native())
-        .map_err(|err| format!("thread cwd cannot be represented on this host: {err}"))?;
-    let cwd = AbsolutePathBuf::try_from(cwd.into_string())
-        .map_err(|err| format!("thread cwd is invalid on this host: {err}"))?;
+    let runtime_workspace_roots = response
+        .runtime_workspace_roots
+        .iter()
+        .map(api_path_to_native_runtime_workspace_root)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("runtime workspace root is invalid: {err}"))?;
     let permission_profile = display_permission_profile_from_thread_response(
         &response.sandbox,
         cwd.as_path(),
@@ -1571,12 +1567,45 @@ async fn thread_session_state_from_thread_start_response(
         permission_profile,
         response.active_permission_profile.clone().map(Into::into),
         cwd,
-        response.runtime_workspace_roots.clone(),
+        runtime_workspace_roots,
         response.instruction_sources.clone(),
         response.reasoning_effort.clone(),
         config,
     )
     .await
+}
+
+fn api_path_to_native_absolute_path(path: &ApiPathString) -> Result<AbsolutePathBuf, String> {
+    let convention = path
+        .infer_absolute_path_convention()
+        .ok_or_else(|| format!("path `{}` is not absolute", path.as_str()))?;
+    let path_uri = path
+        .to_path_uri(convention)
+        .map_err(|err| format!("path `{}` is invalid: {err}", path.as_str()))?;
+    let native_path =
+        ApiPathString::from_path_uri(&path_uri, PathConvention::native()).map_err(|err| {
+            format!(
+                "path `{}` cannot be represented on this host: {err}",
+                path.as_str()
+            )
+        })?;
+    AbsolutePathBuf::try_from(native_path.into_string())
+        .map_err(|err| format!("path `{}` is invalid on this host: {err}", path.as_str()))
+}
+
+fn api_path_to_native_runtime_workspace_root(
+    path: &ApiPathString,
+) -> Result<AbsolutePathBuf, String> {
+    let convention = path
+        .infer_absolute_path_convention()
+        .ok_or_else(|| format!("path `{}` is not absolute", path.as_str()))?;
+    if convention != PathConvention::native() {
+        return Err(format!(
+            "foreign path `{}` cannot be installed in the TUI's host-native config",
+            path.as_str()
+        ));
+    }
+    api_path_to_native_absolute_path(path)
 }
 
 async fn thread_session_state_from_thread_resume_response(
@@ -1779,6 +1808,23 @@ mod tests {
             .build()
             .await
             .expect("config should build")
+    }
+
+    #[test]
+    fn foreign_runtime_workspace_root_is_rejected_instead_of_projected_onto_the_tui_host() {
+        let (path, convention) = match PathConvention::native() {
+            PathConvention::Posix => (r"C:\workspace", PathConvention::Windows),
+            PathConvention::Windows => ("/workspace", PathConvention::Posix),
+        };
+        let root = ApiPathString::from_native_absolute_path(path, convention)
+            .expect("foreign path should be valid");
+
+        assert_eq!(
+            api_path_to_native_runtime_workspace_root(&root),
+            Err(format!(
+                "foreign path `{path}` cannot be installed in the TUI's host-native config"
+            ))
+        );
     }
 
     fn rate_limit_snapshot(limit_id: &str) -> RateLimitSnapshot {

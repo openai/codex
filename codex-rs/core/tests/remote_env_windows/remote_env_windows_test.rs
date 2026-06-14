@@ -2,7 +2,6 @@
 
 use anyhow::Context;
 use anyhow::Result;
-use app_test_support::PathBufExt;
 use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::to_response;
@@ -189,6 +188,7 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
     const AGENTS_INSTRUCTIONS: &str = "remote Windows workspace instructions";
     const CALL_ID: &str = "wine-cmd-smoke";
     const COMMAND: &str = "Get-Content AGENTS.md -ErrorAction Stop";
+    const NATIVE_CWD: &str = r"C:\windows";
 
     WineExecServer
         .scope(|exec_server_url| async move {
@@ -255,7 +255,7 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
                 .send_thread_start_request(ThreadStartParams {
                     environments: Some(vec![TurnEnvironmentParams {
                         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                        cwd: serde_json::from_value::<ApiPathString>(json!(r"C:\windows"))?,
+                        cwd: serde_json::from_value::<ApiPathString>(json!(NATIVE_CWD))?,
                     }]),
                     ..Default::default()
                 })
@@ -267,10 +267,8 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
             .await??;
             let response: ThreadStartResponse = to_response(response)?;
             assert!(!response.thread.id.is_empty());
-            let host_cwd = codex_home.path().to_path_buf().abs();
             assert_eq!(response.cwd.as_str(), NATIVE_CWD);
-            // TODO(anp): Derive runtime workspace roots from the selected remote environment.
-            assert_eq!(response.runtime_workspace_roots, vec![host_cwd]);
+            assert_eq!(response.runtime_workspace_roots, vec![response.cwd.clone()]);
             // TODO(anp): Discover and report instruction sources from the remote filesystem.
             assert_eq!(response.instruction_sources, Vec::new());
             // TODO(anp): Report the implicit built-in permission profile instead of None.
