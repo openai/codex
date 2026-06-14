@@ -60,6 +60,9 @@ where
         thread_store: _thread_store,
     } = dependencies;
     let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(event_sink);
+    // copybara:strip-for-public begin
+    codex_internal_persistent_mode::install(&mut builder, thread_manager.clone());
+    // copybara:strip-for-public end
     if let Some(state_db) = state_db {
         codex_goal_extension::install_with_backend(
             &mut builder,

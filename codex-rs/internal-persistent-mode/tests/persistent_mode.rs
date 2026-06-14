@@ -83,6 +83,7 @@ async fn stores_config_and_starts_configured_turn_after_idle() {
             SessionSource::Exec,
             Arc::new(EnvironmentManager::default_for_tests()),
             extensions,
+            Arc::new(codex_core::test_support::EmptyUserInstructionsProvider),
             /*analytics_events_client*/ None,
             Arc::clone(&thread_store),
             state_db.clone(),
