@@ -8,10 +8,11 @@ use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
-use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnEnvironmentParams;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_features::Feature;
@@ -33,6 +34,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
+use codex_utils_path_uri::ApiPathString;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -215,35 +217,19 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
             timeout(APP_SERVER_READ_TIMEOUT, app_server.initialize()).await??;
 
             let request_id = app_server
-                .send_raw_request(
-                    "thread/start",
-                    Some(json!({
-                        "environments": [{
-                            "environmentId": REMOTE_ENVIRONMENT_ID,
-                            "cwd": r"C:\windows",
-                        }],
-                    })),
-                )
+                .send_thread_start_request(ThreadStartParams {
+                    environments: Some(vec![TurnEnvironmentParams {
+                        environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                        cwd: serde_json::from_value::<ApiPathString>(json!(r"C:\windows"))?,
+                    }]),
+                    ..Default::default()
+                })
                 .await?;
-            let request_id = RequestId::Integer(request_id);
-            let message = timeout(APP_SERVER_READ_TIMEOUT, async {
-                loop {
-                    let message = app_server.read_next_message().await?;
-                    match &message {
-                        JSONRPCMessage::Response(response) if response.id == request_id => {
-                            return Ok::<JSONRPCMessage, anyhow::Error>(message);
-                        }
-                        JSONRPCMessage::Error(error) if error.id == request_id => {
-                            return Ok(message);
-                        }
-                        _ => {}
-                    }
-                }
-            })
+            let response = timeout(
+                APP_SERVER_READ_TIMEOUT,
+                app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+            )
             .await??;
-            let JSONRPCMessage::Response(response) = message else {
-                panic!("thread/start should succeed, got {message:?}");
-            };
             let response: ThreadStartResponse = to_response(response)?;
             assert!(!response.thread.id.is_empty());
 
