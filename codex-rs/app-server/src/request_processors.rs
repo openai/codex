@@ -554,7 +554,6 @@ async fn resolve_turn_environment_selections(
                 .into_iter()
                 .map(|environment| (environment.environment_id, environment.cwd)),
         )
-        .await
         .map(Some)
         .map_err(environment_selection_error)
 }

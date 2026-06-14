@@ -474,27 +474,13 @@ impl ThreadManager {
     }
 
     /// Resolves environment-native cwd strings without applying the Codex host's path rules.
-    pub async fn resolve_native_environment_selections(
+    pub fn resolve_native_environment_selections(
         &self,
         environments: impl IntoIterator<Item = (String, ApiPathString)>,
     ) -> CodexResult<Vec<TurnEnvironmentSelection>> {
         let environments = environments.into_iter();
-        let mut environment_ids = HashSet::new();
         let mut selections = Vec::with_capacity(environments.size_hint().0);
         for (environment_id, cwd) in environments {
-            if !environment_ids.insert(environment_id.clone()) {
-                return Err(CodexErr::InvalidRequest(format!(
-                    "duplicate turn environment id `{environment_id}`"
-                )));
-            }
-            self.state
-                .environment_manager
-                .get_environment(&environment_id)
-                .ok_or_else(|| {
-                    CodexErr::InvalidRequest(format!(
-                        "unknown turn environment id `{environment_id}`"
-                    ))
-                })?;
             let convention = cwd.infer_absolute_path_convention().ok_or_else(|| {
                 CodexErr::InvalidRequest(format!(
                     "invalid cwd for environment `{environment_id}`: path `{cwd}` does not use absolute POSIX or Windows path syntax"
@@ -510,6 +496,7 @@ impl ThreadManager {
                 cwd,
             });
         }
+        self.validate_environment_selections(&selections)?;
         Ok(selections)
     }
 
