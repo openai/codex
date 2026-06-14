@@ -286,10 +286,11 @@ impl ExecutorFileSystem for RemoteFileSystem {
 
 fn remote_sandbox_context(
     sandbox: Option<&FileSystemSandboxContext>,
-) -> Option<FileSystemSandboxContext> {
+) -> Option<FileSystemSandboxContext<PathUri>> {
     sandbox
         .cloned()
         .map(FileSystemSandboxContext::drop_cwd_if_unused)
+        .map(FileSystemSandboxContext::into_path_uri)
 }
 
 fn map_remote_error(error: ExecServerError) -> io::Error {

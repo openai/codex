@@ -1,8 +1,10 @@
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::PermissionProfileFor;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
@@ -118,6 +120,77 @@ impl FileSystemSandboxContext {
         }
         self
     }
+
+    pub fn into_path_uri(self) -> FileSystemSandboxContext<PathUri> {
+        FileSystemSandboxContext {
+            permissions: map_permission_paths(self.permissions, |path| {
+                Ok::<_, std::convert::Infallible>(PathUri::from_abs_path(&path))
+            })
+            .expect("mapping absolute paths to path URIs is infallible"),
+            cwd: self.cwd,
+            windows_sandbox_level: self.windows_sandbox_level,
+            windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
+            use_legacy_landlock: self.use_legacy_landlock,
+        }
+    }
+}
+
+impl FileSystemSandboxContext<PathUri> {
+    pub fn try_into_native(self) -> io::Result<FileSystemSandboxContext> {
+        Ok(FileSystemSandboxContext {
+            permissions: map_permission_paths(self.permissions, |path| path.to_abs_path())?,
+            cwd: self.cwd,
+            windows_sandbox_level: self.windows_sandbox_level,
+            windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
+            use_legacy_landlock: self.use_legacy_landlock,
+        })
+    }
+}
+
+fn map_permission_paths<SourcePath, TargetPath, Error>(
+    permissions: PermissionProfileFor<SourcePath>,
+    mut map_path: impl FnMut(SourcePath) -> Result<TargetPath, Error>,
+) -> Result<PermissionProfileFor<TargetPath>, Error> {
+    Ok(match permissions {
+        PermissionProfileFor::Managed {
+            file_system,
+            network,
+        } => PermissionProfileFor::Managed {
+            file_system: match file_system {
+                ManagedFileSystemPermissions::Restricted {
+                    entries,
+                    glob_scan_max_depth,
+                } => ManagedFileSystemPermissions::Restricted {
+                    entries: entries
+                        .into_iter()
+                        .map(|entry| {
+                            Ok(FileSystemSandboxEntry {
+                                path: match entry.path {
+                                    FileSystemPath::Path { path } => FileSystemPath::Path {
+                                        path: map_path(path)?,
+                                    },
+                                    FileSystemPath::GlobPattern { pattern } => {
+                                        FileSystemPath::GlobPattern { pattern }
+                                    }
+                                    FileSystemPath::Special { value } => {
+                                        FileSystemPath::Special { value }
+                                    }
+                                },
+                                access: entry.access,
+                            })
+                        })
+                        .collect::<Result<_, Error>>()?,
+                    glob_scan_max_depth,
+                },
+                ManagedFileSystemPermissions::Unrestricted => {
+                    ManagedFileSystemPermissions::Unrestricted
+                }
+            },
+            network,
+        },
+        PermissionProfileFor::Disabled => PermissionProfileFor::Disabled,
+        PermissionProfileFor::External { network } => PermissionProfileFor::External { network },
+    })
 }
 
 fn file_system_policy_has_cwd_dependent_entries(

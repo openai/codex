@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use crate::FileSystemSandboxContext;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use serde::Serialize;
@@ -200,7 +199,7 @@ pub struct TerminateResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsReadFileParams<PathType = AbsolutePathBuf> {
+pub struct FsReadFileParams<PathType = PathUri> {
     pub path: PathUri,
     pub sandbox: Option<FileSystemSandboxContext<PathType>>,
 }
@@ -213,7 +212,7 @@ pub struct FsReadFileResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsWriteFileParams<PathType = AbsolutePathBuf> {
+pub struct FsWriteFileParams<PathType = PathUri> {
     pub path: PathUri,
     pub data_base64: String,
     pub sandbox: Option<FileSystemSandboxContext<PathType>>,
@@ -225,7 +224,7 @@ pub struct FsWriteFileResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsCreateDirectoryParams<PathType = AbsolutePathBuf> {
+pub struct FsCreateDirectoryParams<PathType = PathUri> {
     pub path: PathUri,
     pub recursive: Option<bool>,
     pub sandbox: Option<FileSystemSandboxContext<PathType>>,
@@ -237,7 +236,7 @@ pub struct FsCreateDirectoryResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsGetMetadataParams<PathType = AbsolutePathBuf> {
+pub struct FsGetMetadataParams<PathType = PathUri> {
     pub path: PathUri,
     pub sandbox: Option<FileSystemSandboxContext<PathType>>,
 }
@@ -255,7 +254,7 @@ pub struct FsGetMetadataResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsCanonicalizeParams<PathType = AbsolutePathBuf> {
+pub struct FsCanonicalizeParams<PathType = PathUri> {
     pub path: PathUri,
     pub sandbox: Option<FileSystemSandboxContext<PathType>>,
 }
@@ -268,7 +267,7 @@ pub struct FsCanonicalizeResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsReadDirectoryParams<PathType = AbsolutePathBuf> {
+pub struct FsReadDirectoryParams<PathType = PathUri> {
     pub path: PathUri,
     pub sandbox: Option<FileSystemSandboxContext<PathType>>,
 }
@@ -289,7 +288,7 @@ pub struct FsReadDirectoryResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsRemoveParams<PathType = AbsolutePathBuf> {
+pub struct FsRemoveParams<PathType = PathUri> {
     pub path: PathUri,
     pub recursive: Option<bool>,
     pub force: Option<bool>,
@@ -302,7 +301,7 @@ pub struct FsRemoveResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsCopyParams<PathType = AbsolutePathBuf> {
+pub struct FsCopyParams<PathType = PathUri> {
     pub source_path: PathUri,
     pub destination_path: PathUri,
     pub recursive: bool,
@@ -473,18 +472,19 @@ mod tests {
             .expect("current directory")
             .join("legacy-file.txt");
         let legacy_cwd = std::env::current_dir().expect("current directory");
-        let expected_sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+        let native_sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
             PermissionProfile::default(),
             PathUri::from_path(&legacy_cwd).expect("cwd URI"),
         );
         let mut legacy_sandbox =
-            serde_json::to_value(&expected_sandbox).expect("sandbox should serialize");
+            serde_json::to_value(&native_sandbox).expect("sandbox should serialize");
         legacy_sandbox["cwd"] = serde_json::json!(legacy_cwd.to_string_lossy());
         let params: FsReadFileParams = serde_json::from_value(serde_json::json!({
             "path": legacy_path.to_string_lossy(),
             "sandbox": legacy_sandbox,
         }))
         .expect("legacy absolute path should deserialize");
+        let expected_sandbox = native_sandbox.into_path_uri();
         let expected = FsReadFileParams {
             path: PathUri::from_path(legacy_path).expect("path URI"),
             sandbox: Some(expected_sandbox.clone()),
@@ -509,7 +509,7 @@ mod tests {
                 .join("generic-file.txt"),
         )
         .expect("path URI");
-        let params = FsReadFileParams::<PathUri> {
+        let params = FsReadFileParams {
             path: path.clone(),
             sandbox: Some(FileSystemSandboxContext::<PathUri> {
                 permissions: PermissionProfileFor::Managed {
@@ -530,7 +530,7 @@ mod tests {
         };
 
         let serialized = serde_json::to_value(&params).expect("params should serialize");
-        let deserialized = serde_json::from_value::<FsReadFileParams<PathUri>>(serialized)
+        let deserialized = serde_json::from_value::<FsReadFileParams>(serialized)
             .expect("params should deserialize");
 
         assert_eq!(deserialized, params);

@@ -68,7 +68,7 @@ async fn remote_file_system_sends_path_and_sandbox_cwd_uris_without_native_conve
         .into_iter()
         .map(|path| FsReadFileParams {
             path,
-            sandbox: Some(sandbox.clone()),
+            sandbox: Some(sandbox.clone().into_path_uri()),
         })
         .collect::<Vec<_>>();
     assert_eq!(
