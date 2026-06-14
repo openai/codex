@@ -602,15 +602,9 @@ mod tests {
     use codex_config::ComputerUseRequirementsToml;
     use codex_config::ConfigRequirementsToml;
     use codex_config::WindowsRequirementsToml;
-    use codex_config::types::OtelConfigToml;
-    use codex_config::types::OtelExporterKind;
-    use codex_config::types::OtelHttpProtocol as CoreOtelHttpProtocol;
-    use codex_config::types::ShellEnvironmentPolicyToml;
-    use codex_protocol::config_types::ShellEnvironmentPolicyInherit as CoreShellEnvironmentPolicyInherit;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::collections::BTreeMap;
-    use std::collections::HashMap;
 
     #[test]
     fn requirements_api_includes_allow_managed_hooks_only() {
@@ -710,34 +704,28 @@ mod tests {
 
     #[test]
     fn requirements_api_preserves_otel_headers_and_shell_environment_policy() {
-        let headers = HashMap::from([("Authorization".to_string(), "Bearer secret".to_string())]);
-        let shell_set = HashMap::from([("MANAGED".to_string(), "true".to_string())]);
+        let requirements = toml::from_str(
+            r#"
+[otel]
+log_user_prompt = false
+environment = "production"
+exporter = { otlp-http = { endpoint = "https://otel.example.com/v1/logs", headers = { Authorization = "Bearer secret" }, protocol = "json" } }
 
-        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
-            otel: Some(OtelConfigToml {
-                log_user_prompt: Some(false),
-                environment: Some("production".to_string()),
-                exporter: Some(OtelExporterKind::OtlpHttp {
-                    endpoint: "https://otel.example.com/v1/logs".to_string(),
-                    headers,
-                    protocol: CoreOtelHttpProtocol::Json,
-                    tls: None,
-                }),
-                trace_exporter: None,
-                metrics_exporter: None,
-                span_attributes: Some(BTreeMap::from([("team".to_string(), "codex".to_string())])),
-                tracestate: None,
-            }),
-            shell_environment_policy: Some(ShellEnvironmentPolicyToml {
-                inherit: Some(CoreShellEnvironmentPolicyInherit::Core),
-                ignore_default_excludes: Some(false),
-                exclude: Some(vec!["*SECRET*".to_string()]),
-                r#set: Some(shell_set.clone()),
-                include_only: None,
-                experimental_use_profile: Some(false),
-            }),
-            ..ConfigRequirementsToml::default()
-        });
+[otel.span_attributes]
+team = "codex"
+
+[shell_environment_policy]
+inherit = "core"
+ignore_default_excludes = false
+exclude = ["*SECRET*"]
+experimental_use_profile = false
+
+[shell_environment_policy.set]
+MANAGED = "true"
+"#,
+        )
+        .expect("valid requirements TOML");
+        let mapped = map_requirements_toml_to_api(requirements);
 
         assert_eq!(
             mapped
@@ -752,7 +740,7 @@ mod tests {
                 "inherit": "core",
                 "ignore_default_excludes": false,
                 "exclude": ["*SECRET*"],
-                "set": shell_set,
+                "set": {"MANAGED": "true"},
                 "include_only": null,
                 "experimental_use_profile": false
             }))

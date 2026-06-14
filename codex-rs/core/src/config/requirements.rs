@@ -4,62 +4,15 @@ use codex_config::Sourced;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::FeedbackConfigToml;
-use codex_config::types::OtelConfigToml;
 use codex_config::types::ShellEnvironmentPolicyToml;
 use codex_protocol::config_types::ForcedLoginMethod;
 
 use super::otel;
 
 pub(super) struct AppliedConfigRequirements {
-    pub auth_credentials_store: AuthCredentialsStoreRequirement,
-}
-
-pub(super) enum AuthCredentialsStoreRequirement {
-    Exact,
-    UserConfigured,
-}
-
-impl AuthCredentialsStoreRequirement {
-    pub fn resolve(self, configured: AuthCredentialsStoreMode) -> AuthCredentialsStoreMode {
-        match self {
-            Self::Exact => configured,
-            Self::UserConfigured => super::resolve_cli_auth_credentials_store_mode(
-                configured,
-                env!("CARGO_PKG_VERSION"),
-            ),
-        }
-    }
-}
-
-pub(super) struct ResolvedAuthRestrictions {
+    pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
-}
-
-pub(super) struct ConfiguredAuthRestrictions {
-    forced_login_method: Option<ForcedLoginMethod>,
-    forced_chatgpt_workspace_id: Option<Vec<String>>,
-}
-
-impl ConfiguredAuthRestrictions {
-    pub fn from_config(config: &ConfigToml) -> Self {
-        let forced_chatgpt_workspace_id = config
-            .forced_chatgpt_workspace_id
-            .clone()
-            .map(codex_config::config_toml::ForcedChatgptWorkspaceIds::into_vec)
-            .map(|values| {
-                values
-                    .into_iter()
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .filter(|values| !values.is_empty());
-        Self {
-            forced_login_method: config.forced_login_method,
-            forced_chatgpt_workspace_id,
-        }
-    }
 }
 
 pub(super) fn apply_to_config(
@@ -91,8 +44,7 @@ pub(super) fn apply_to_config(
         startup_warnings,
     );
     if let Some(requirement) = requirements.otel.as_ref() {
-        validate_otel_requirement(&requirement.value)?;
-        apply_otel_requirement(&mut config.otel, requirement, startup_warnings);
+        otel::apply_requirement(&mut config.otel, requirement, startup_warnings)?;
     }
     apply_feedback_requirement(
         &mut config.feedback,
@@ -111,12 +63,22 @@ pub(super) fn apply_to_config(
         );
     }
 
+    let (forced_login_method, forced_chatgpt_workspace_id) =
+        resolve_auth_restrictions(config, requirements)?;
+    let configured_auth_credentials_store = config.cli_auth_credentials_store.unwrap_or_default();
+    let cli_auth_credentials_store_mode = if requirements.cli_auth_credentials_store.is_some() {
+        configured_auth_credentials_store
+    } else {
+        super::resolve_cli_auth_credentials_store_mode(
+            configured_auth_credentials_store,
+            env!("CARGO_PKG_VERSION"),
+        )
+    };
+
     Ok(AppliedConfigRequirements {
-        auth_credentials_store: if requirements.cli_auth_credentials_store.is_some() {
-            AuthCredentialsStoreRequirement::Exact
-        } else {
-            AuthCredentialsStoreRequirement::UserConfigured
-        },
+        cli_auth_credentials_store_mode,
+        forced_login_method,
+        forced_chatgpt_workspace_id,
     })
 }
 
@@ -147,6 +109,20 @@ fn apply_exact_requirement<T>(
     *configured_value = Some(value.clone());
 }
 
+pub(super) fn replace_required_leaf<T: Clone + PartialEq>(
+    configured: &mut Option<T>,
+    required: &Option<T>,
+) -> bool {
+    let Some(required) = required else {
+        return false;
+    };
+    let conflict = configured
+        .as_ref()
+        .is_some_and(|configured| configured != required);
+    *configured = Some(required.clone());
+    conflict
+}
+
 fn apply_shell_environment_policy_requirement(
     configured: &mut ShellEnvironmentPolicyToml,
     requirement: Option<&Sourced<ShellEnvironmentPolicyToml>>,
@@ -165,23 +141,17 @@ fn apply_shell_environment_policy_requirement(
     } = value;
     let mut conflict = false;
 
-    macro_rules! replace_leaf {
-        ($field:ident) => {
-            if let Some(required) = $field.as_ref() {
-                conflict |= configured
-                    .$field
-                    .as_ref()
-                    .is_some_and(|configured| configured != required);
-                configured.$field = Some(required.clone());
-            }
-        };
-    }
-
-    replace_leaf!(inherit);
-    replace_leaf!(ignore_default_excludes);
-    replace_leaf!(exclude);
-    replace_leaf!(include_only);
-    replace_leaf!(experimental_use_profile);
+    conflict |= replace_required_leaf(&mut configured.inherit, inherit);
+    conflict |= replace_required_leaf(
+        &mut configured.ignore_default_excludes,
+        ignore_default_excludes,
+    );
+    conflict |= replace_required_leaf(&mut configured.exclude, exclude);
+    conflict |= replace_required_leaf(&mut configured.include_only, include_only);
+    conflict |= replace_required_leaf(
+        &mut configured.experimental_use_profile,
+        experimental_use_profile,
+    );
 
     if let Some(required) = required_set.as_ref() {
         let configured_set = configured.r#set.get_or_insert_default();
@@ -211,117 +181,11 @@ fn apply_feedback_requirement(
     };
     let FeedbackConfigToml { enabled } = value;
     let configured = configured.get_or_insert_default();
-    let conflict = if let Some(required) = *enabled {
-        let conflict = configured
-            .enabled
-            .is_some_and(|configured| configured != required);
-        configured.enabled = Some(required);
-        conflict
-    } else {
-        false
-    };
+    let conflict = replace_required_leaf(&mut configured.enabled, enabled);
     push_leaf_override_warning("feedback", conflict, source, startup_warnings);
 }
 
-fn validate_otel_requirement(requirement: &OtelConfigToml) -> std::io::Result<()> {
-    if let Some(span_attributes) = requirement.span_attributes.as_ref() {
-        codex_otel::validate_span_attributes(span_attributes).map_err(|err| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("invalid required `otel.span_attributes`: {err}"),
-            )
-        })?;
-    }
-    if let Some(tracestate) = requirement.tracestate.as_ref() {
-        codex_otel::validate_tracestate_entries(tracestate).map_err(|err| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("invalid required `otel.tracestate`: {err}"),
-            )
-        })?;
-    }
-    Ok(())
-}
-
-fn apply_otel_requirement(
-    configured: &mut Option<OtelConfigToml>,
-    requirement: &Sourced<OtelConfigToml>,
-    startup_warnings: &mut Vec<String>,
-) {
-    let Sourced {
-        value: required,
-        source,
-    } = requirement;
-    let OtelConfigToml {
-        log_user_prompt,
-        environment,
-        exporter,
-        trace_exporter,
-        metrics_exporter,
-        span_attributes,
-        tracestate,
-    } = required;
-    let configured = configured.get_or_insert_default();
-    let mut conflict = false;
-
-    macro_rules! replace_leaf {
-        ($field:ident) => {
-            if let Some(required) = $field.as_ref() {
-                conflict |= configured
-                    .$field
-                    .as_ref()
-                    .is_some_and(|configured| configured != required);
-                configured.$field = Some(required.clone());
-            }
-        };
-    }
-
-    replace_leaf!(log_user_prompt);
-    replace_leaf!(environment);
-    replace_leaf!(exporter);
-    replace_leaf!(trace_exporter);
-    replace_leaf!(metrics_exporter);
-
-    if let Some(required) = span_attributes.as_ref() {
-        let configured = configured.span_attributes.get_or_insert_default();
-        conflict |= required
-            .iter()
-            .any(|(key, value)| configured.get(key).is_some_and(|current| current != value));
-        configured.extend(required.clone());
-    }
-    if let Some(required) = tracestate.as_ref() {
-        let configured_tracestate = configured.tracestate.take().unwrap_or_default();
-        conflict |= required.iter().any(|(member, required_fields)| {
-            configured_tracestate
-                .get(member)
-                .is_some_and(|configured_fields| {
-                    required_fields.iter().any(|(key, value)| {
-                        configured_fields
-                            .get(key)
-                            .is_some_and(|current| current != value)
-                    })
-                })
-        });
-        configured.tracestate = Some(otel::merge_required_tracestate(
-            configured_tracestate,
-            required.clone(),
-            source,
-            startup_warnings,
-        ));
-    }
-
-    if conflict {
-        tracing::warn!(
-            ?source,
-            "configured OTEL leaves are overridden by exact requirements"
-        );
-        startup_warnings.push(format!(
-            "Configured leaves under `otel` are overridden by requirements from {source}."
-        ));
-    }
-}
-
-fn push_leaf_override_warning(
+pub(super) fn push_leaf_override_warning(
     field_name: &str,
     conflict: bool,
     source: &RequirementSource,
@@ -339,12 +203,24 @@ fn push_leaf_override_warning(
     ));
 }
 
-pub(super) fn resolve_auth_restrictions(
-    configured: ConfiguredAuthRestrictions,
+fn resolve_auth_restrictions(
+    config: &ConfigToml,
     requirements: &ConfigRequirements,
-) -> std::io::Result<ResolvedAuthRestrictions> {
+) -> std::io::Result<(Option<ForcedLoginMethod>, Option<Vec<String>>)> {
+    let configured_forced_chatgpt_workspace_id = config
+        .forced_chatgpt_workspace_id
+        .clone()
+        .map(codex_config::config_toml::ForcedChatgptWorkspaceIds::into_vec)
+        .map(|values| {
+            values
+                .into_iter()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .filter(|values| !values.is_empty());
     let forced_chatgpt_workspace_id = match requirements.allowed_chatgpt_workspaces.as_ref() {
-        Some(requirement) => Some(match configured.forced_chatgpt_workspace_id {
+        Some(requirement) => Some(match configured_forced_chatgpt_workspace_id {
             Some(configured) => configured
                 .into_iter()
                 .filter(|workspace| requirement.value.get(workspace).copied().unwrap_or(false))
@@ -355,14 +231,14 @@ pub(super) fn resolve_auth_restrictions(
                 .filter_map(|(workspace, allowed)| allowed.then_some(workspace.clone()))
                 .collect(),
         }),
-        None => configured.forced_chatgpt_workspace_id,
+        None => configured_forced_chatgpt_workspace_id,
     };
 
     let forced_login_method = match requirements.allowed_login_methods.as_ref() {
         Some(requirement) => {
             let chatgpt_allowed = requirement.value.get("chatgpt").copied().unwrap_or(false);
             let api_allowed = requirement.value.get("api").copied().unwrap_or(false);
-            match configured.forced_login_method {
+            match config.forced_login_method {
                 Some(ForcedLoginMethod::Chatgpt) if chatgpt_allowed => {
                     Some(ForcedLoginMethod::Chatgpt)
                 }
@@ -392,11 +268,8 @@ pub(super) fn resolve_auth_restrictions(
                 },
             }
         }
-        None => configured.forced_login_method,
+        None => config.forced_login_method,
     };
 
-    Ok(ResolvedAuthRestrictions {
-        forced_login_method,
-        forced_chatgpt_workspace_id,
-    })
+    Ok((forced_login_method, forced_chatgpt_workspace_id))
 }

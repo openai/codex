@@ -1701,24 +1701,6 @@ pub async fn load_config_toml_with_layer_stack(
     })
 }
 
-/// Load the raw merged config needed to bootstrap cloud requirements, applying
-/// exact auth requirements from every layer available to this load.
-///
-/// The initial bootstrap call has no cloud loader, so system and MDM
-/// requirements determine how the cloud bundle is fetched. A later call may
-/// include cloud requirements, but those values cannot retroactively change
-/// the loader that fetched them.
-pub async fn load_bootstrap_config_as_toml_with_cli_and_load_options(
-    codex_home: &Path,
-    cwd: Option<&AbsolutePathBuf>,
-    cli_overrides: Vec<(String, TomlValue)>,
-    options: impl Into<ConfigLoadOptions>,
-) -> std::io::Result<ConfigToml> {
-    load_bootstrap_config_toml_with_layer_stack(codex_home, cwd, cli_overrides, options)
-        .await
-        .map(|result| result.config_toml)
-}
-
 /// Load the bootstrap config together with its layer stack, applying exact
 /// auth requirements needed before cloud requirements can be fetched.
 pub async fn load_bootstrap_config_toml_with_layer_stack(
@@ -2664,13 +2646,15 @@ impl Config {
             .startup_warnings()
             .unwrap_or_default()
             .to_vec();
-        let applied_config_requirements = requirements::apply_to_config(
+        let requirements::AppliedConfigRequirements {
+            cli_auth_credentials_store_mode,
+            forced_login_method,
+            forced_chatgpt_workspace_id,
+        } = requirements::apply_to_config(
             &mut cfg,
             config_layer_stack.requirements(),
             &mut startup_warnings,
         )?;
-        let configured_auth_restrictions =
-            requirements::ConfiguredAuthRestrictions::from_config(&cfg);
 
         // Destructure every field to ensure ConfigRequirements additions are
         // either applied above or handled while constructing the final Config.
@@ -3283,17 +3267,6 @@ impl Config {
 
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
 
-        let requirements::ResolvedAuthRestrictions {
-            forced_login_method,
-            forced_chatgpt_workspace_id,
-        } = requirements::resolve_auth_restrictions(
-            configured_auth_restrictions,
-            config_layer_stack.requirements(),
-        )?;
-        let requirements::AppliedConfigRequirements {
-            auth_credentials_store,
-        } = applied_config_requirements;
-
         let model = model.or(cfg.model);
         let notices = cfg.notice.unwrap_or_default();
         let service_tier = match service_tier_override {
@@ -3552,8 +3525,7 @@ impl Config {
             include_environment_context,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
-            cli_auth_credentials_store_mode: auth_credentials_store
-                .resolve(cfg.cli_auth_credentials_store.unwrap_or_default()),
+            cli_auth_credentials_store_mode,
             mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.

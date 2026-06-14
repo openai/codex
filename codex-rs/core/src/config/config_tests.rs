@@ -9300,6 +9300,20 @@ async fn explicit_approval_policy_falls_back_when_disallowed_by_requirements() -
     Ok(())
 }
 
+async fn load_with_enterprise_requirement(
+    codex_home: &TempDir,
+    requirements: impl Into<String>,
+) -> std::io::Result<Config> {
+    ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements),
+        )
+        .build()
+        .await
+}
+
 #[tokio::test]
 async fn exact_requirements_override_only_managed_leaves() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
@@ -9387,14 +9401,7 @@ sandbox_private_desktop = false
         required_log_dir.display(),
         catalog_path.display(),
     );
-    let config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements),
-        )
-        .build()
-        .await?;
+    let config = load_with_enterprise_requirement(&codex_home, requirements).await?;
 
     let expected_shell_environment_policy: ShellEnvironmentPolicy =
         codex_config::types::ShellEnvironmentPolicyToml {
@@ -9454,17 +9461,12 @@ sandbox_private_desktop = false
 #[tokio::test]
 async fn invalid_required_otel_trace_metadata_fails_closed() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
-    let err = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
-                "[otel.span_attributes]\n\"\" = \"missing-key\"\n",
-            ),
-        )
-        .build()
-        .await
-        .expect_err("invalid managed OTEL metadata should fail startup");
+    let err = load_with_enterprise_requirement(
+        &codex_home,
+        "[otel.span_attributes]\n\"\" = \"missing-key\"\n",
+    )
+    .await
+    .expect_err("invalid managed OTEL metadata should fail startup");
 
     assert_eq!(err.kind(), ErrorKind::InvalidInput);
     assert!(
@@ -9492,14 +9494,7 @@ zz_overflow = {configured_overflow:?}
     let required_value = "r".repeat(/*n*/ 120);
     let requirements = format!("[otel.tracestate.vendor]\nrequired = {required_value:?}\n");
 
-    let config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements),
-        )
-        .build()
-        .await?;
+    let config = load_with_enterprise_requirement(&codex_home, requirements).await?;
 
     assert_eq!(
         config.otel.tracestate,
@@ -9525,17 +9520,10 @@ async fn conflicting_login_method_requirements_fail_closed() -> std::io::Result<
         codex_home.path().join(CONFIG_TOML_FILE),
         "forced_login_method = \"api\"\n",
     )?;
-    let err = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
-                "[allowed_login_methods]\nchatgpt = true\n",
-            ),
-        )
-        .build()
-        .await
-        .expect_err("conflicting login restrictions should fail closed");
+    let err =
+        load_with_enterprise_requirement(&codex_home, "[allowed_login_methods]\nchatgpt = true\n")
+            .await
+            .expect_err("conflicting login restrictions should fail closed");
 
     assert_eq!(err.kind(), ErrorKind::InvalidInput);
     assert!(
@@ -9548,19 +9536,14 @@ async fn conflicting_login_method_requirements_fail_closed() -> std::io::Result<
 #[tokio::test]
 async fn workspace_requirements_can_disable_all_chatgpt_workspaces() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
-    let config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
-                r#"
+    let config = load_with_enterprise_requirement(
+        &codex_home,
+        r#"
 [allowed_chatgpt_workspaces]
 "A" = false
 "#,
-            ),
-        )
-        .build()
-        .await?;
+    )
+    .await?;
 
     assert_eq!(config.forced_chatgpt_workspace_id, Some(Vec::new()));
     Ok(())
