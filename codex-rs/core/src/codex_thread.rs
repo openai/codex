@@ -41,6 +41,7 @@ use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -543,7 +544,7 @@ impl CodexThread {
     }
 
     /// Returns the files that supplied the thread's loaded model instructions.
-    pub async fn instruction_sources(&self) -> Vec<AbsolutePathBuf> {
+    pub async fn instruction_sources(&self) -> Vec<PathUri> {
         self.codex.instruction_sources().await
     }
 

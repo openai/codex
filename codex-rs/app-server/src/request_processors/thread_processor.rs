@@ -1174,7 +1174,8 @@ impl ThreadRequestProcessor {
         )
         .await?;
 
-        let instruction_sources = thread.instruction_sources().await;
+        let instruction_sources =
+            thread_response_instruction_sources(&thread.instruction_sources().await)?;
         let config_snapshot = thread
             .config_snapshot()
             .instrument(tracing::info_span!(
@@ -2682,7 +2683,8 @@ impl ThreadRequestProcessor {
                     self.outgoing.send_error(request_id, err).await;
                     return Ok(());
                 }
-                let instruction_sources = codex_thread.instruction_sources().await;
+                let instruction_sources =
+                    thread_response_instruction_sources(&codex_thread.instruction_sources().await)?;
                 let SessionConfiguredEvent { rollout_path, .. } = session_configured;
                 let Some(rollout_path) = rollout_path else {
                     let error =
@@ -3421,7 +3423,8 @@ impl ThreadRequestProcessor {
                 .map_err(|err| core_thread_write_error("inherit source thread name", err))?;
         }
 
-        let instruction_sources = forked_thread.instruction_sources().await;
+        let instruction_sources =
+            thread_response_instruction_sources(&forked_thread.instruction_sources().await)?;
 
         // Auto-attach a conversation listener when forking a thread.
         log_listener_attach_result(

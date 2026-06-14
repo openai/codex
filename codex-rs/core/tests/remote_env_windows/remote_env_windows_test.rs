@@ -279,8 +279,13 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
             assert!(!response.thread.id.is_empty());
             assert_eq!(response.cwd.as_str(), NATIVE_CWD);
             assert_eq!(response.runtime_workspace_roots, vec![response.cwd.clone()]);
-            // TODO(anp): Discover and report instruction sources from the remote filesystem.
-            assert_eq!(response.instruction_sources, Vec::new());
+            assert_eq!(
+                response.instruction_sources,
+                vec![ApiPathString::from_native_absolute_path(
+                    r"C:\windows\AGENTS.md",
+                    PathConvention::Windows,
+                )?]
+            );
             assert_eq!(
                 response.active_permission_profile,
                 Some(ActivePermissionProfile::read_only())
@@ -355,13 +360,21 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
                 .received_requests()
                 .await
                 .context("failed to fetch received requests")?;
-            let initial_request = requests.first().context("missing initial model request")?;
-            let model_request_includes_remote_instructions = initial_request
-                .body_json::<serde_json::Value>()?
-                .to_string()
-                .contains(AGENTS_INSTRUCTIONS);
-            // TODO(anp): Load remote workspace instructions into the model context.
-            assert!(!model_request_includes_remote_instructions);
+            let remote_instructions = requests
+                .iter()
+                .filter_map(|request| request.body_json::<serde_json::Value>().ok())
+                .flat_map(|body| body["input"].as_array().cloned().unwrap_or_default())
+                .filter_map(|item| item.get("content").and_then(Value::as_array).cloned())
+                .flatten()
+                .filter_map(|content| {
+                    content
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .find(|text| text.contains(AGENTS_INSTRUCTIONS))
+                .context("remote workspace instructions should be model visible")?;
+            assert!(remote_instructions.contains(r"# AGENTS.md instructions for C:\windows"));
 
             let first_request = requests
                 .iter()

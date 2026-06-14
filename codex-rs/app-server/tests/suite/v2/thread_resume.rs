@@ -286,7 +286,13 @@ async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Resul
         ..
     } = to_response::<ThreadStartResponse>(start_resp)?;
     let project_agents = AbsolutePathBuf::try_from(project_agents)?;
-    assert_eq!(instruction_sources, vec![project_agents.clone()]);
+    assert_eq!(
+        instruction_sources,
+        vec![ApiPathString::from_abs_path(
+            &project_agents,
+            PathConvention::native(),
+        )?]
+    );
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
@@ -328,7 +334,13 @@ async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Resul
         ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
 
-    assert_eq!(instruction_sources, vec![project_agents]);
+    assert_eq!(
+        instruction_sources,
+        vec![ApiPathString::from_abs_path(
+            &project_agents,
+            PathConvention::native(),
+        )?]
+    );
 
     Ok(())
 }

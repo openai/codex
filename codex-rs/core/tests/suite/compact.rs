@@ -25,6 +25,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -281,6 +282,10 @@ fn write_global_file(
     let path = home.path().join(filename);
     std::fs::write(&path, contents)?;
     Ok(path.abs())
+}
+
+fn path_uri(path: &AbsolutePathBuf) -> PathUri {
+    PathUri::from_abs_path(path)
 }
 
 fn instruction_fragments(request: &responses::ResponsesRequest) -> Vec<String> {
@@ -4590,7 +4595,7 @@ async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Resu
     // Assert the pre-compaction source list points at the creation-time file.
     assert_eq!(
         test.codex.instruction_sources().await,
-        vec![source.clone()],
+        vec![path_uri(&source)],
         "thread reports the creation-time global source before compaction"
     );
 
@@ -4620,7 +4625,7 @@ async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Resu
     assert_single_instruction_fragment(&requests[2], &expected_fragment);
     assert_eq!(
         test.codex.instruction_sources().await,
-        vec![source],
+        vec![path_uri(&source)],
         "thread retains the creation-time global source after compaction"
     );
 
@@ -4670,7 +4675,7 @@ async fn mid_turn_compaction_keeps_the_creation_time_global_instructions() -> Re
     // Assert the pre-compaction source list points at the creation-time file.
     assert_eq!(
         test.codex.instruction_sources().await,
-        vec![source.clone()],
+        vec![path_uri(&source)],
         "thread reports the creation-time global source before mid-turn compaction"
     );
 
@@ -4692,7 +4697,7 @@ async fn mid_turn_compaction_keeps_the_creation_time_global_instructions() -> Re
     assert_single_instruction_fragment(&requests[2], &expected_fragment);
     assert_eq!(
         test.codex.instruction_sources().await,
-        vec![source],
+        vec![path_uri(&source)],
         "thread retains the creation-time global source after mid-turn compaction"
     );
 
@@ -4777,7 +4782,7 @@ async fn remote_v2_compaction_keeps_creation_time_instructions_after_same_path_m
     );
     assert_eq!(
         test.codex.instruction_sources().await,
-        vec![source.clone()],
+        vec![path_uri(&source)],
         "running thread retains the selected same-path source"
     );
     assert_eq!(
@@ -4826,7 +4831,7 @@ async fn remote_v2_compaction_keeps_creation_time_instructions_after_same_path_m
     );
     assert_eq!(
         resumed.codex.instruction_sources().await,
-        vec![source],
+        vec![path_uri(&source)],
         "cold-resumed thread reports the same rewritten source path"
     );
 

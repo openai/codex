@@ -599,6 +599,7 @@ use self::config_errors::*;
 use self::request_errors::*;
 use self::thread_goal_processor::api_thread_goal_from_state;
 use self::thread_lifecycle::*;
+use self::thread_response_paths::thread_response_instruction_sources;
 use self::thread_response_paths::thread_response_runtime_workspace_roots;
 use self::thread_resume_redaction::*;
 use self::thread_summary::*;

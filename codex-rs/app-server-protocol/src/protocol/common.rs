@@ -2518,7 +2518,9 @@ mod tests {
                 service_tier: None,
                 cwd: codex_utils_path_uri::ApiPathString::from_abs_path(&cwd),
                 runtime_workspace_roots: Vec::new(),
-                instruction_sources: vec![absolute_path("/tmp/AGENTS.md")],
+                instruction_sources: vec![codex_utils_path_uri::ApiPathString::from_abs_path(
+                    &absolute_path("/tmp/AGENTS.md"),
+                )],
                 approval_policy: v2::AskForApproval::OnFailure,
                 approvals_reviewer: v2::ApprovalsReviewer::User,
                 sandbox: v2::SandboxPolicy::DangerFullAccess,

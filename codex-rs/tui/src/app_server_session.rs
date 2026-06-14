@@ -122,6 +122,7 @@ use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::ApiPathString;
 use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -1548,6 +1549,12 @@ async fn thread_session_state_from_thread_start_response(
         .map(api_path_to_native_runtime_workspace_root)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| format!("runtime workspace root is invalid: {err}"))?;
+    let instruction_source_paths = response
+        .instruction_sources
+        .iter()
+        .map(api_path_to_path_uri)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("instruction source is invalid: {err}"))?;
     let permission_profile = display_permission_profile_from_thread_response(
         &response.sandbox,
         cwd.as_path(),
@@ -1568,7 +1575,7 @@ async fn thread_session_state_from_thread_start_response(
         response.active_permission_profile.clone().map(Into::into),
         cwd,
         runtime_workspace_roots,
-        response.instruction_sources.clone(),
+        instruction_source_paths,
         response.reasoning_effort.clone(),
         config,
     )
@@ -1608,11 +1615,25 @@ fn api_path_to_native_runtime_workspace_root(
     api_path_to_native_absolute_path(path)
 }
 
+fn api_path_to_path_uri(path: &ApiPathString) -> Result<PathUri, String> {
+    let convention = path
+        .infer_absolute_path_convention()
+        .ok_or_else(|| format!("path `{}` is not absolute", path.as_str()))?;
+    path.to_path_uri(convention)
+        .map_err(|err| format!("path `{}` is invalid: {err}", path.as_str()))
+}
+
 async fn thread_session_state_from_thread_resume_response(
     response: &ThreadResumeResponse,
     config: &Config,
     thread_params_mode: ThreadParamsMode,
 ) -> Result<ThreadSessionState, String> {
+    let instruction_source_paths = response
+        .instruction_sources
+        .iter()
+        .map(api_path_to_path_uri)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("instruction source is invalid: {err}"))?;
     let permission_profile = if matches!(thread_params_mode, ThreadParamsMode::Embedded)
         && response.active_permission_profile.is_none()
     {
@@ -1642,7 +1663,7 @@ async fn thread_session_state_from_thread_resume_response(
         response.active_permission_profile.clone().map(Into::into),
         response.cwd.clone(),
         response.runtime_workspace_roots.clone(),
-        response.instruction_sources.clone(),
+        instruction_source_paths,
         response.reasoning_effort.clone(),
         config,
     )
@@ -1654,6 +1675,12 @@ async fn thread_session_state_from_thread_fork_response(
     config: &Config,
     thread_params_mode: ThreadParamsMode,
 ) -> Result<ThreadSessionState, String> {
+    let instruction_source_paths = response
+        .instruction_sources
+        .iter()
+        .map(api_path_to_path_uri)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("instruction source is invalid: {err}"))?;
     let permission_profile = display_permission_profile_from_thread_response(
         &response.sandbox,
         response.cwd.as_path(),
@@ -1674,7 +1701,7 @@ async fn thread_session_state_from_thread_fork_response(
         response.active_permission_profile.clone().map(Into::into),
         response.cwd.clone(),
         response.runtime_workspace_roots.clone(),
-        response.instruction_sources.clone(),
+        instruction_source_paths,
         response.reasoning_effort.clone(),
         config,
     )
@@ -1713,7 +1740,7 @@ async fn thread_session_state_from_thread_response(
     active_permission_profile: Option<ActivePermissionProfile>,
     cwd: AbsolutePathBuf,
     runtime_workspace_roots: Vec<AbsolutePathBuf>,
-    instruction_source_paths: Vec<AbsolutePathBuf>,
+    instruction_source_paths: Vec<PathUri>,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     config: &Config,
 ) -> Result<ThreadSessionState, String> {
@@ -2423,7 +2450,9 @@ mod tests {
                 test_path_buf("/tmp/project").abs(),
                 test_path_buf("/tmp/project/extra").abs(),
             ],
-            instruction_sources: vec![test_path_buf("/tmp/project/AGENTS.md").abs()],
+            instruction_sources: vec![
+                ApiPathString::from_abs_path(&test_path_buf("/tmp/project/AGENTS.md").abs()),
+            ],
             approval_policy: codex_app_server_protocol::AskForApproval::Never,
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,
             sandbox: read_only_profile
@@ -2449,7 +2478,12 @@ mod tests {
         );
         assert_eq!(
             started.session.instruction_source_paths,
-            response.instruction_sources
+            response
+                .instruction_sources
+                .iter()
+                .map(api_path_to_path_uri)
+                .collect::<Result<Vec<_>, _>>()
+                .expect("instruction source paths")
         );
         assert_eq!(started.session.permission_profile, read_only_profile);
         assert_eq!(started.turns.len(), 1);

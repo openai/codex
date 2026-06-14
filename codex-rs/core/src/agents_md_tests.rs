@@ -237,7 +237,15 @@ async fn load_agents_md(config: &TestConfig) -> Option<LoadedAgentsMd> {
 }
 
 async fn agents_md_paths(config: &TestConfig) -> std::io::Result<Vec<AbsolutePathBuf>> {
-    super::agents_md_paths(&config.config, &config.cwd, LOCAL_FS.as_ref()).await
+    super::agents_md_paths(
+        &config.config,
+        &PathUri::from_abs_path(&config.cwd),
+        LOCAL_FS.as_ref(),
+    )
+    .await?
+    .into_iter()
+    .map(|path| path.to_abs_path())
+    .collect()
 }
 
 fn resolved_local_environments<const N: usize>(
@@ -263,12 +271,59 @@ fn resolved_local_environments<const N: usize>(
 
 fn project_provenance(path: AbsolutePathBuf, cwd: AbsolutePathBuf) -> InstructionProvenance {
     InstructionProvenance::Project {
-        source_path: path,
+        source_path: PathUri::from_abs_path(&path),
         environment_id: "local".to_string(),
-        cwd,
+        cwd: PathUri::from_abs_path(&cwd),
     }
 }
 
+#[test]
+fn path_uri_parent_walk_stops_at_the_owning_root() {
+    for (path, expected_parent) in [
+        ("file:///C:/workspace/project", Some("file:///C:/workspace")),
+        ("file:///C:/workspace", Some("file:///C:")),
+        ("file:///C:", None),
+        ("file://server/share/project", Some("file://server/share")),
+        ("file://server/share", None),
+        ("file:///workspace", Some("file:///")),
+        ("file:///", None),
+    ] {
+        let path = PathUri::parse(path).expect("path URI");
+        let convention = path.infer_path_convention().expect("path convention");
+        assert_eq!(
+            parent_within_path_root(&path, convention),
+            expected_parent.map(|parent| PathUri::parse(parent).expect("parent URI")),
+            "parent for {path}"
+        );
+    }
+}
+
+#[test]
+fn remote_agents_md_uses_environment_native_paths() {
+    let cwd = PathUri::parse("file:///C:/codex%20runtime").expect("Windows cwd URI");
+    let source_path = cwd.join("AGENTS.md").expect("AGENTS.md URI");
+    let loaded = LoadedAgentsMd {
+        user_instructions: None,
+        entries: vec![InstructionEntry {
+            contents: "remote instructions".to_string(),
+            provenance: InstructionProvenance::Project {
+                source_path: source_path.clone(),
+                environment_id: "remote".to_string(),
+                cwd,
+            },
+        }],
+    };
+
+    assert_eq!(
+        loaded.render(),
+        r#"# AGENTS.md instructions for C:\codex runtime
+
+<INSTRUCTIONS>
+remote instructions
+</INSTRUCTIONS>"#
+    );
+    assert_eq!(loaded.sources().collect::<Vec<_>>(), vec![source_path]);
+}
 /// Helper that returns a `Config` pointing at `root` and using `limit` as
 /// the maximum number of bytes to embed from AGENTS.md. The caller can
 /// optionally specify a custom `instructions` string – when `None` the
@@ -494,9 +549,14 @@ async fn read_agents_md_propagates_metadata_errors() {
     };
 
     let cwd = config.cwd.clone();
-    let err = read_agents_md(&config.config, &fs, "local", &cwd)
-        .await
-        .expect_err("metadata error");
+    let err = read_agents_md(
+        &config.config,
+        &fs,
+        "local",
+        &PathUri::from_abs_path(&cwd),
+    )
+    .await
+    .expect_err("metadata error");
 
     assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
 }
@@ -512,9 +572,14 @@ async fn read_agents_md_propagates_read_errors() {
     };
 
     let cwd = config.cwd.clone();
-    let err = read_agents_md(&config.config, &fs, "local", &cwd)
-        .await
-        .expect_err("read error");
+    let err = read_agents_md(
+        &config.config,
+        &fs,
+        "local",
+        &PathUri::from_abs_path(&cwd),
+    )
+    .await
+    .expect_err("read error");
 
     assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
 }
@@ -530,9 +595,14 @@ async fn read_agents_md_ignores_files_removed_after_discovery() {
     };
 
     let cwd = config.cwd.clone();
-    let loaded = read_agents_md(&config.config, &fs, "local", &cwd)
-        .await
-        .expect("removed file is recoverable");
+    let loaded = read_agents_md(
+        &config.config,
+        &fs,
+        "local",
+        &PathUri::from_abs_path(&cwd),
+    )
+    .await
+    .expect("removed file is recoverable");
 
     assert_eq!(loaded, None);
 }
@@ -645,17 +715,18 @@ secondary doc"#,
     );
     assert_eq!(loaded.render(), expected_fragment);
     assert_eq!(
-        loaded.sources().cloned().collect::<Vec<_>>(),
+        loaded.sources().collect::<Vec<_>>(),
         vec![
-            config
-                .user_instructions
-                .as_ref()
-                .expect("global instructions")
-                .source
-                .clone(),
-            primary.path().join("AGENTS.md").abs(),
-            primary_nested.join("AGENTS.md").abs(),
-            secondary.path().join("AGENTS.md").abs(),
+            PathUri::from_abs_path(
+                &config
+                    .user_instructions
+                    .as_ref()
+                    .expect("global instructions")
+                    .source,
+            ),
+            PathUri::from_abs_path(&primary.path().join("AGENTS.md").abs()),
+            PathUri::from_abs_path(&primary_nested.join("AGENTS.md").abs()),
+            PathUri::from_abs_path(&secondary.path().join("AGENTS.md").abs()),
         ]
     );
 }
@@ -884,7 +955,10 @@ async fn concatenates_root_and_cwd_docs() {
     assert_eq!(loaded.text(), "root doc\n\ncrate doc");
     assert_eq!(
         loaded.sources().collect::<Vec<_>>(),
-        vec![&root_agents, &crate_agents]
+        vec![
+            PathUri::from_abs_path(&root_agents),
+            PathUri::from_abs_path(&crate_agents),
+        ]
     );
 }
 
@@ -1036,7 +1110,10 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
     assert_eq!(loaded.user_instructions(), cfg.user_instructions.as_ref());
     assert_eq!(
         loaded.sources().collect::<Vec<_>>(),
-        vec![&global_agents, &project_agents]
+        vec![
+            PathUri::from_abs_path(&global_agents),
+            PathUri::from_abs_path(&project_agents),
+        ]
     );
     assert_eq!(
         loaded.text(),
@@ -1077,7 +1154,10 @@ async fn child_agents_message_after_project_docs_is_not_an_instruction_source() 
     assert_eq!(loaded, expected);
     assert_eq!(
         loaded.sources().collect::<Vec<_>>(),
-        vec![&global_agents, &project_agents]
+        vec![
+            PathUri::from_abs_path(&global_agents),
+            PathUri::from_abs_path(&project_agents),
+        ]
     );
     assert_eq!(
         loaded.text(),

@@ -164,7 +164,7 @@ pub struct ThreadStartResponse {
     pub runtime_workspace_roots: Vec<ApiPathString>,
     /// Instruction source files currently loaded for this thread.
     #[serde(default)]
-    pub instruction_sources: Vec<AbsolutePathBuf>,
+    pub instruction_sources: Vec<ApiPathString>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
@@ -378,7 +378,7 @@ pub struct ThreadResumeResponse {
     pub runtime_workspace_roots: Vec<AbsolutePathBuf>,
     /// Instruction source files currently loaded for this thread.
     #[serde(default)]
-    pub instruction_sources: Vec<AbsolutePathBuf>,
+    pub instruction_sources: Vec<ApiPathString>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
@@ -526,7 +526,7 @@ pub struct ThreadForkResponse {
     pub runtime_workspace_roots: Vec<AbsolutePathBuf>,
     /// Instruction source files currently loaded for this thread.
     #[serde(default)]
-    pub instruction_sources: Vec<AbsolutePathBuf>,
+    pub instruction_sources: Vec<ApiPathString>,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.

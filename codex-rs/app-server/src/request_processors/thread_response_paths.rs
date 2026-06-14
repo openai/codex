@@ -27,10 +27,30 @@ pub(super) fn thread_response_runtime_workspace_roots(
                         "could not infer the path convention for runtime workspace root `{environment_cwd}`"
                     ))
                 })?;
-                return render_path_uri(environment_cwd, convention);
+                return render_path_uri(environment_cwd, convention, "runtime workspace root");
             }
 
-            render_path_uri(&PathUri::from_abs_path(root), PathConvention::native())
+            render_path_uri(
+                &PathUri::from_abs_path(root),
+                PathConvention::native(),
+                "runtime workspace root",
+            )
+        })
+        .collect()
+}
+
+pub(super) fn thread_response_instruction_sources(
+    instruction_sources: &[PathUri],
+) -> Result<Vec<ApiPathString>, JSONRPCErrorError> {
+    instruction_sources
+        .iter()
+        .map(|source| {
+            let convention = source.infer_path_convention().ok_or_else(|| {
+                internal_error(format!(
+                    "could not infer the path convention for instruction source `{source}`"
+                ))
+            })?;
+            render_path_uri(source, convention, "instruction source")
         })
         .collect()
 }
@@ -38,10 +58,11 @@ pub(super) fn thread_response_runtime_workspace_roots(
 fn render_path_uri(
     path: &PathUri,
     convention: PathConvention,
+    description: &str,
 ) -> Result<ApiPathString, JSONRPCErrorError> {
     ApiPathString::from_path_uri(path, convention).map_err(|err| {
         internal_error(format!(
-            "could not render runtime workspace root `{path}` using {convention}: {err}"
+            "could not render {description} `{path}` using {convention}: {err}"
         ))
     })
 }

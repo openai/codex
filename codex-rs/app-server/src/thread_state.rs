@@ -13,7 +13,9 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_rollout::state_db::StateDbHandle;
+#[cfg(test)]
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -31,7 +33,7 @@ pub(crate) struct PendingThreadResumeRequest {
     pub(crate) request_id: ConnectionRequestId,
     pub(crate) history_items: Vec<RolloutItem>,
     pub(crate) config_snapshot: ThreadConfigSnapshot,
-    pub(crate) instruction_sources: Vec<AbsolutePathBuf>,
+    pub(crate) instruction_sources: Vec<PathUri>,
     pub(crate) thread_summary: codex_app_server_protocol::Thread,
     pub(crate) emit_thread_goal_update: bool,
     pub(crate) thread_goal_state_db: Option<StateDbHandle>,

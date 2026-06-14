@@ -29,6 +29,8 @@ use codex_extension_api::UserInstructions;
 use codex_features::Feature;
 use codex_prompts::HIERARCHICAL_AGENTS_MESSAGE;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use std::io;
 use toml::Value as TomlValue;
@@ -53,16 +55,11 @@ pub(crate) async fn load_project_instructions(
     let mut loaded = LoadedAgentsMd::from_user_instructions(user_instructions);
     for turn_environment in &environments.turn_environments {
         let filesystem = turn_environment.environment.get_filesystem();
-        // TODO(anp): Migrate AGENTS.md discovery to PathUri so instructions can be loaded from
-        // environment-native foreign working directories.
-        let Ok(cwd) = turn_environment.cwd().to_abs_path() else {
-            continue;
-        };
         match read_agents_md(
             config,
             filesystem.as_ref(),
             &turn_environment.environment_id,
-            &cwd,
+            turn_environment.cwd(),
         )
         .await
         {
@@ -97,7 +94,7 @@ async fn read_agents_md(
     config: &Config,
     fs: &dyn ExecutorFileSystem,
     environment_id: &str,
-    cwd: &AbsolutePathBuf,
+    cwd: &PathUri,
 ) -> io::Result<Option<LoadedAgentsMd>> {
     let max_total = config.project_doc_max_bytes;
 
@@ -118,15 +115,14 @@ async fn read_agents_md(
             break;
         }
 
-        let path_uri = PathUri::from_abs_path(&p);
-        match fs.get_metadata(&path_uri, /*sandbox*/ None).await {
+        match fs.get_metadata(&p, /*sandbox*/ None).await {
             Ok(metadata) if !metadata.is_file => continue,
             Ok(_) => {}
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
             Err(err) => return Err(err),
         }
 
-        let mut data = match fs.read_file(&path_uri, /*sandbox*/ None).await {
+        let mut data = match fs.read_file(&p, /*sandbox*/ None).await {
             Ok(data) => data,
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
             Err(err) => return Err(err),
@@ -139,7 +135,7 @@ async fn read_agents_md(
         if size > remaining {
             tracing::warn!(
                 "Project doc `{}` exceeds remaining budget ({} bytes) - truncating.",
-                p.display(),
+                render_path_uri(&p),
                 remaining,
             );
         }
@@ -169,10 +165,16 @@ async fn read_agents_md(
 /// directory, inclusive. Symlinks are allowed.
 async fn agents_md_paths(
     config: &Config,
-    cwd: &AbsolutePathBuf,
+    cwd: &PathUri,
     fs: &dyn ExecutorFileSystem,
-) -> io::Result<Vec<AbsolutePathBuf>> {
+) -> io::Result<Vec<PathUri>> {
     let dir = cwd.clone();
+    let convention = cwd.infer_path_convention().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("could not infer path convention for AGENTS.md cwd `{cwd}`"),
+        )
+    })?;
 
     let mut merged = TomlValue::Table(toml::map::Map::new());
     for layer in config.config_layer_stack.get_layers(
@@ -194,28 +196,28 @@ async fn agents_md_paths(
     };
     let mut project_root = None;
     if !project_root_markers.is_empty() {
-        for ancestor in dir.ancestors() {
+        let mut ancestor = Some(dir.clone());
+        while let Some(current) = ancestor {
             for marker in &project_root_markers {
-                let marker_path = ancestor.join(marker);
-                let marker_path_uri = PathUri::from_abs_path(&marker_path);
-                let marker_exists = match fs.get_metadata(&marker_path_uri, /*sandbox*/ None).await
-                {
+                let marker_path = current.join(marker).map_err(path_uri_error)?;
+                let marker_exists = match fs.get_metadata(&marker_path, /*sandbox*/ None).await {
                     Ok(_) => true,
                     Err(err) if err.kind() == io::ErrorKind::NotFound => false,
                     Err(err) => return Err(err),
                 };
                 if marker_exists {
-                    project_root = Some(ancestor.clone());
+                    project_root = Some(current.clone());
                     break;
                 }
             }
             if project_root.is_some() {
                 break;
             }
+            ancestor = parent_within_path_root(&current, convention);
         }
     }
 
-    let search_dirs: Vec<AbsolutePathBuf> = if let Some(root) = project_root {
+    let search_dirs: Vec<PathUri> = if let Some(root) = project_root {
         let mut dirs = Vec::new();
         let mut cursor = dir.clone();
         loop {
@@ -223,7 +225,7 @@ async fn agents_md_paths(
             if cursor == root {
                 break;
             }
-            let Some(parent) = cursor.parent() else {
+            let Some(parent) = parent_within_path_root(&cursor, convention) else {
                 break;
             };
             cursor = parent;
@@ -234,13 +236,12 @@ async fn agents_md_paths(
         vec![dir]
     };
 
-    let mut found: Vec<AbsolutePathBuf> = Vec::new();
+    let mut found: Vec<PathUri> = Vec::new();
     let candidate_filenames = candidate_filenames(config);
     for d in search_dirs {
         for name in &candidate_filenames {
-            let candidate = d.join(name);
-            let candidate_uri = PathUri::from_abs_path(&candidate);
-            match fs.get_metadata(&candidate_uri, /*sandbox*/ None).await {
+            let candidate = d.join(name).map_err(path_uri_error)?;
+            match fs.get_metadata(&candidate, /*sandbox*/ None).await {
                 Ok(md) if md.is_file => {
                     found.push(candidate);
                     break;
@@ -253,6 +254,20 @@ async fn agents_md_paths(
     }
 
     Ok(found)
+}
+
+fn parent_within_path_root(path: &PathUri, convention: PathConvention) -> Option<PathUri> {
+    let minimum_depth = usize::from(convention == PathConvention::Windows);
+    let depth = path
+        .encoded_path()
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .count();
+    (depth > minimum_depth).then(|| path.parent()).flatten()
+}
+
+fn path_uri_error(err: impl std::error::Error + Send + Sync + 'static) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, err)
 }
 
 fn candidate_filenames(config: &Config) -> Vec<&str> {
@@ -371,7 +386,7 @@ impl LoadedAgentsMd {
     fn environment_labeled_text(&self) -> String {
         let mut output = String::new();
         let mut has_previous = false;
-        let mut previous_environment: Option<(&str, &AbsolutePathBuf)> = None;
+        let mut previous_environment: Option<(&str, &PathUri)> = None;
         if let Some(instructions) = &self.user_instructions {
             output.push_str(&instructions.text);
             has_previous = true;
@@ -394,7 +409,7 @@ impl LoadedAgentsMd {
                         output.push_str(&format!(
                             "for `{}` with root {}\n\n",
                             environment_id,
-                            cwd.display()
+                            render_path_uri(cwd)
                         ));
                     }
                     output.push_str(&entry.contents);
@@ -420,8 +435,7 @@ impl LoadedAgentsMd {
         let directory = if self.has_multiple_project_environments() {
             None
         } else {
-            self.single_project_cwd()
-                .map(|cwd| cwd.to_string_lossy().into_owned())
+            self.single_project_cwd().map(render_path_uri)
         };
         ContextUserInstructions {
             directory,
@@ -436,10 +450,10 @@ impl LoadedAgentsMd {
     }
 
     /// Returns the AGENTS.md files that supplied instruction entries.
-    pub fn sources(&self) -> impl Iterator<Item = &AbsolutePathBuf> {
+    pub fn sources(&self) -> impl Iterator<Item = PathUri> + '_ {
         self.user_instructions
             .iter()
-            .map(|instructions| &instructions.source)
+            .map(|instructions| PathUri::from_abs_path(&instructions.source))
             .chain(
                 self.entries
                     .iter()
@@ -463,7 +477,7 @@ impl LoadedAgentsMd {
         })
     }
 
-    fn single_project_cwd(&self) -> Option<&AbsolutePathBuf> {
+    fn single_project_cwd(&self) -> Option<&PathUri> {
         self.entries
             .iter()
             .find_map(|entry| match &entry.provenance {
@@ -488,9 +502,9 @@ enum InstructionProvenance {
     /// Workspace instructions discovered from project AGENTS.md files.
     Project {
         /// Exact AGENTS.md file, distinct from the environment's selected cwd.
-        source_path: AbsolutePathBuf,
+        source_path: PathUri,
         environment_id: String,
-        cwd: AbsolutePathBuf,
+        cwd: PathUri,
     },
 
     /// Instructions without a file source, including internally defined guidance.
@@ -498,14 +512,22 @@ enum InstructionProvenance {
 }
 
 impl InstructionProvenance {
-    fn path(&self) -> Option<&AbsolutePathBuf> {
+    fn path(&self) -> Option<PathUri> {
         match self {
-            Self::Project { source_path, .. } => Some(source_path),
+            Self::Project { source_path, .. } => Some(source_path.clone()),
             Self::Internal => None,
         }
     }
 }
 
+fn render_path_uri(path: &PathUri) -> String {
+    let Some(convention) = path.infer_path_convention() else {
+        return path.to_string();
+    };
+    ApiPathString::from_path_uri(path, convention)
+        .map(ApiPathString::into_string)
+        .unwrap_or_else(|_| path.to_string())
+}
 #[cfg(test)]
 #[path = "agents_md_tests.rs"]
 mod tests;

@@ -426,7 +426,7 @@ async fn thread_start_response_includes_loaded_instruction_sources() -> Result<(
 
     let instruction_sources = instruction_sources
         .into_iter()
-        .map(normalize_path_for_comparison)
+        .map(|path| normalize_path_for_comparison(path.as_str()))
         .collect::<Vec<_>>();
     let expected_instruction_sources = vec![
         std::fs::canonicalize(global_agents_path)?,
@@ -473,7 +473,7 @@ async fn thread_start_response_excludes_empty_project_instruction_source() -> Re
 
     let instruction_sources = instruction_sources
         .into_iter()
-        .map(normalize_path_for_comparison)
+        .map(|path| normalize_path_for_comparison(path.as_str()))
         .collect::<Vec<_>>();
     let expected_instruction_sources = vec![normalize_path_for_comparison(std::fs::canonicalize(
         global_agents_path,
@@ -519,7 +519,7 @@ async fn thread_start_without_selected_environment_includes_only_global_instruct
     assert_eq!(
         instruction_sources
             .into_iter()
-            .map(normalize_path_for_comparison)
+            .map(|path| normalize_path_for_comparison(path.as_str()))
             .collect::<Vec<_>>(),
         vec![normalize_path_for_comparison(std::fs::canonicalize(
             global_agents_path,

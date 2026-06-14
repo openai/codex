@@ -819,15 +819,13 @@ impl Codex {
         state.session_configuration.thread_config_snapshot()
     }
 
-    pub(crate) async fn instruction_sources(&self) -> Vec<AbsolutePathBuf> {
+    pub(crate) async fn instruction_sources(&self) -> Vec<PathUri> {
         let state = self.session.state.lock().await;
         state
             .session_configuration
             .loaded_agents_md
             .as_ref()
-            .map_or_else(Vec::new, |instructions| {
-                instructions.sources().cloned().collect()
-            })
+            .map_or_else(Vec::new, |instructions| instructions.sources().collect())
     }
 
     pub(crate) async fn thread_environment_selections(&self) -> Vec<TurnEnvironmentSelection> {

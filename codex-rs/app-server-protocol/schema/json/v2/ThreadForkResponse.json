@@ -2328,7 +2328,7 @@
       "default": [],
       "description": "Instruction source files currently loaded for this thread.",
       "items": {
-        "$ref": "#/definitions/AbsolutePathBuf"
+        "$ref": "#/definitions/ApiPathString"
       },
       "type": "array"
     },

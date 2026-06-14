@@ -680,7 +680,7 @@ pub(crate) struct ChatWidget {
     // App-server-backed command runner for status-line workspace metadata lookups.
     workspace_command_runner: Option<WorkspaceCommandRunner>,
     // Instruction source files loaded for the current session, supplied by app-server.
-    instruction_source_paths: Vec<AbsolutePathBuf>,
+    instruction_source_paths: Vec<codex_utils_path_uri::PathUri>,
     // Runtime network proxy bind addresses from SessionConfigured.
     session_network_proxy: Option<SessionNetworkProxyRuntime>,
     // Shared latch so we only warn once about invalid status-line item IDs.

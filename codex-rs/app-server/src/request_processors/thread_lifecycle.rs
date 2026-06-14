@@ -641,7 +641,14 @@ pub(super) async fn handle_pending_thread_resume_request(
         reasoning_effort,
         ..
     } = config_snapshot;
-    let instruction_sources = pending.instruction_sources;
+    let instruction_sources =
+        match thread_response_instruction_sources(&pending.instruction_sources) {
+            Ok(instruction_sources) => instruction_sources,
+            Err(error) => {
+                outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
     let sandbox = thread_response_sandbox_policy(&permission_profile, cwd.as_path());
     let active_permission_profile =
         thread_response_active_permission_profile(active_permission_profile);
