@@ -1,6 +1,10 @@
 use anyhow::Result;
+use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::os::windows::ffi::OsStrExt;
+use std::path::Path;
+use std::path::PathBuf;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HLOCAL;
@@ -71,6 +75,25 @@ pub fn argv_to_command_line(argv: &[String]) -> String {
         .map(|arg| quote_windows_arg(arg))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(target_os = "windows")]
+pub fn resolve_application_path(
+    argv: &[String],
+    env_map: &HashMap<String, String>,
+    cwd: &Path,
+) -> Option<PathBuf> {
+    let program = argv.first().filter(|program| !program.is_empty())?;
+    let candidate = Path::new(program);
+    if candidate.components().count() > 1 {
+        return Some(candidate.to_path_buf());
+    }
+
+    let search_path = env_map
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("PATH"))
+        .map(|(_, value)| OsString::from(value));
+    which::which_in(program, search_path, cwd).ok()
 }
 
 // Produce a readable description for a Win32 error code.
@@ -208,7 +231,10 @@ fn sid_bytes_from_string(sid_str: &str) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::argv_to_command_line;
+    use super::resolve_application_path;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
+    use std::path::Path;
 
     #[test]
     fn argv_to_command_line_quotes_each_argument_independently() {
@@ -236,6 +262,21 @@ mod tests {
         assert_eq!(
             argv_to_command_line(&argv),
             "pwsh.exe -Command \"Write-Output \\\"hello world\\\"\""
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn resolve_application_path_preserves_explicit_paths() {
+        let resolved = resolve_application_path(
+            &[r"C:\Program Files\Git\cmd\git.exe".to_string()],
+            &HashMap::new(),
+            Path::new(r"C:\"),
+        );
+
+        assert_eq!(
+            resolved,
+            Some(PathBuf::from(r"C:\Program Files\Git\cmd\git.exe"))
         );
     }
 }

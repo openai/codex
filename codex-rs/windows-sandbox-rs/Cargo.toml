@@ -92,5 +92,8 @@ features = [
 ]
 version = "0.52"
 
+[target.'cfg(windows)'.dependencies.which]
+workspace = true
+
 [dev-dependencies]
 pretty_assertions = { workspace = true }
