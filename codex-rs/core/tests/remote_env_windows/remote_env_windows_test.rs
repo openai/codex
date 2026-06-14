@@ -132,7 +132,7 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
             assert!(
                 begin.command.first().is_some_and(|command| command
                     .to_ascii_lowercase()
-                    .ends_with("powershell.exe")),
+                    .ends_with("pwsh.exe")),
                 "unexpected command: {:?}",
                 begin.command
             );
