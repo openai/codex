@@ -408,6 +408,7 @@ mod status_surfaces;
 mod streaming;
 use self::status_surfaces::CachedProjectRootName;
 mod tokens;
+pub(crate) use self::tokens::TokenActivityView;
 mod tool_lifecycle;
 mod tool_requests;
 mod transcript;
@@ -415,6 +416,7 @@ use self::transcript::TranscriptState;
 mod turn_lifecycle;
 mod turn_runtime;
 use self::turn_lifecycle::TurnLifecycleState;
+mod usage;
 mod user_messages;
 use self::user_messages::PendingSteer;
 use self::user_messages::PendingSteerCompareKey;
@@ -551,6 +553,9 @@ pub(crate) struct ChatWidget {
     refreshing_token_activity_output: Option<tokens::PendingTokenActivityOutput>,
     completed_token_activity_output: Option<history_cell::CompositeHistoryCell>,
     next_token_activity_request_id: u64,
+    pending_rate_limit_reset_request_id: Option<u64>,
+    pending_rate_limit_reset_hint_request_id: Option<u64>,
+    next_rate_limit_reset_request_id: u64,
     plan_type: Option<PlanType>,
     codex_rate_limit_reached_type: Option<RateLimitReachedType>,
     rate_limit_warnings: RateLimitWarningState,

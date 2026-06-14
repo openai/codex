@@ -366,8 +366,9 @@ impl ChatWidget {
     }
 
     pub(super) fn on_rate_limit_error(&mut self, error_kind: RateLimitErrorKind, message: String) {
+        let usage_limit_error = matches!(error_kind, RateLimitErrorKind::UsageLimit);
         let rate_limit_reached_type = self.codex_rate_limit_reached_type.map(|kind| {
-            if matches!(error_kind, RateLimitErrorKind::UsageLimit) {
+            if usage_limit_error {
                 match kind {
                     RateLimitReachedType::WorkspaceOwnerCreditsDepleted => {
                         RateLimitReachedType::WorkspaceOwnerUsageLimitReached
@@ -382,6 +383,11 @@ impl ChatWidget {
             }
         });
         self.codex_rate_limit_reached_type = rate_limit_reached_type;
+        let should_check_reset_credits = usage_limit_error
+            && matches!(
+                rate_limit_reached_type,
+                Some(RateLimitReachedType::RateLimitReached)
+            );
 
         match rate_limit_reached_type {
             Some(RateLimitReachedType::WorkspaceOwnerCreditsDepleted) => {
@@ -407,6 +413,9 @@ impl ChatWidget {
             Some(RateLimitReachedType::RateLimitReached) | None => {
                 self.on_error(message);
             }
+        }
+        if should_check_reset_credits {
+            self.start_rate_limit_reset_hint_check();
         }
     }
 

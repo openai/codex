@@ -755,6 +755,9 @@ impl App {
                         RateLimitRefreshOrigin::StartupPrefetch => {
                             tui.frame_requester().schedule_frame();
                         }
+                        RateLimitRefreshOrigin::ResetConsume => {
+                            tui.frame_requester().schedule_frame();
+                        }
                         RateLimitRefreshOrigin::StatusCommand { request_id } => {
                             self.chat_widget
                                 .finish_status_rate_limit_refresh(request_id);
@@ -769,6 +772,78 @@ impl App {
                     }
                 }
             },
+            AppEvent::OpenTokenActivity => {
+                self.chat_widget
+                    .add_token_activity_output(crate::chatwidget::TokenActivityView::Daily);
+            }
+            AppEvent::OpenRateLimitResetCredits => {
+                let request_id = self.chat_widget.show_rate_limit_reset_loading_popup();
+                self.refresh_rate_limit_reset_credits(
+                    app_server,
+                    RateLimitResetCreditsRefreshOrigin::UsageMenu { request_id },
+                );
+            }
+            AppEvent::CheckRateLimitResetCredits { request_id } => {
+                self.refresh_rate_limit_reset_credits(
+                    app_server,
+                    RateLimitResetCreditsRefreshOrigin::UsageLimitHint { request_id },
+                );
+            }
+            AppEvent::RateLimitResetCreditsLoaded { origin, result } => match origin {
+                RateLimitResetCreditsRefreshOrigin::UsageMenu { request_id } => {
+                    if let Err(err) = &result {
+                        tracing::warn!(
+                            "account/rateLimitResetCredit/read failed during TUI refresh: {err}"
+                        );
+                    }
+                    self.chat_widget
+                        .finish_rate_limit_reset_credits_refresh(request_id, result);
+                }
+                RateLimitResetCreditsRefreshOrigin::UsageLimitHint { request_id } => {
+                    if let Err(err) = &result {
+                        tracing::warn!(
+                            "account/rateLimitResetCredit/read failed while checking usage-limit hint: {err}"
+                        );
+                    }
+                    self.chat_widget
+                        .finish_rate_limit_reset_hint_refresh(request_id, result);
+                }
+                RateLimitResetCreditsRefreshOrigin::PostConsume { request_id } => {
+                    if let Err(err) = &result {
+                        tracing::warn!(
+                            "account/rateLimitResetCredit/read failed after consuming reset: {err}"
+                        );
+                    }
+                    self.chat_widget
+                        .finish_post_consume_reset_credits_refresh(request_id, result);
+                }
+            },
+            AppEvent::ConsumeRateLimitResetCredit { redeem_request_id } => {
+                let request_id = self.chat_widget.show_rate_limit_reset_consuming_popup();
+                self.consume_rate_limit_reset_credit(app_server, request_id, redeem_request_id);
+            }
+            AppEvent::RateLimitResetCreditConsumed {
+                request_id,
+                redeem_request_id,
+                result,
+            } => {
+                if let Err(err) = &result {
+                    tracing::warn!(
+                        "account/rateLimitResetCredit/consume failed during TUI request: {err}"
+                    );
+                }
+                if self.chat_widget.finish_rate_limit_reset_consume(
+                    request_id,
+                    redeem_request_id,
+                    result,
+                ) {
+                    self.refresh_rate_limits(app_server, RateLimitRefreshOrigin::ResetConsume);
+                    self.refresh_rate_limit_reset_credits(
+                        app_server,
+                        RateLimitResetCreditsRefreshOrigin::PostConsume { request_id },
+                    );
+                }
+            }
             AppEvent::TokenActivityLoaded { request_id, result } => {
                 if let Err(err) = &result {
                     tracing::warn!("account/usage/read failed during TUI refresh: {err}");

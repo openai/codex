@@ -13,6 +13,8 @@ use std::path::PathBuf;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
+use codex_app_server_protocol::GetAccountRateLimitResetCreditsResponse;
 use codex_app_server_protocol::GetAccountTokenUsageResponse;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
@@ -117,6 +119,15 @@ pub(crate) enum RateLimitRefreshOrigin {
     /// User-initiated via `/status`; the `request_id` correlates with the
     /// status card that should be updated when the fetch completes.
     StatusCommand { request_id: u64 },
+    /// Refresh requested after a reset credit was successfully consumed.
+    ResetConsume,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RateLimitResetCreditsRefreshOrigin {
+    UsageMenu { request_id: u64 },
+    UsageLimitHint { request_id: u64 },
+    PostConsume { request_id: u64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -292,6 +303,35 @@ pub(crate) enum AppEvent {
     RateLimitsLoaded {
         origin: RateLimitRefreshOrigin,
         result: Result<Vec<RateLimitSnapshot>, String>,
+    },
+
+    /// Open the default token-activity view selected from the `/usage` menu.
+    OpenTokenActivity,
+
+    /// Open the reset-credit flow selected from the `/usage` menu.
+    OpenRateLimitResetCredits,
+
+    /// Check reset availability after a standard usage-limit failure.
+    CheckRateLimitResetCredits {
+        request_id: u64,
+    },
+
+    /// Result of reading the current reset-credit balance.
+    RateLimitResetCreditsLoaded {
+        origin: RateLimitResetCreditsRefreshOrigin,
+        result: Result<GetAccountRateLimitResetCreditsResponse, String>,
+    },
+
+    /// Consume one reset credit using a stable idempotency key.
+    ConsumeRateLimitResetCredit {
+        redeem_request_id: String,
+    },
+
+    /// Result of consuming one reset credit.
+    RateLimitResetCreditConsumed {
+        request_id: u64,
+        redeem_request_id: String,
+        result: Result<ConsumeAccountRateLimitResetCreditResponse, String>,
     },
 
     /// Fetch account-wide token activity for a `/usage` history card.
