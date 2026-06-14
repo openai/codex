@@ -34,7 +34,6 @@ use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_path_uri::ApiPathString;
-use codex_utils_path_uri::PathConvention;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -295,10 +294,7 @@ async fn thread_start_rejects_unknown_environment_as_invalid_request() -> Result
         .send_thread_start_request(ThreadStartParams {
             environments: Some(vec![TurnEnvironmentParams {
                 environment_id: "missing".to_string(),
-                cwd: ApiPathString::from_abs_path(
-                    &codex_home.path().to_path_buf().try_into()?,
-                    PathConvention::native(),
-                )?,
+                cwd: ApiPathString::from_abs_path(&codex_home.path().to_path_buf().try_into()?),
             }]),
             ..Default::default()
         })

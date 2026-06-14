@@ -24,7 +24,6 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_utils_path_uri::ApiPathString;
-use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
@@ -370,8 +369,7 @@ async fn native_environment_selections_preserve_selected_path_syntax() {
     let selections = manager
         .resolve_native_environment_selections([(
             "local".to_string(),
-            ApiPathString::from_abs_path(&config.cwd, PathConvention::native())
-                .expect("render native cwd"),
+            ApiPathString::from_abs_path(&config.cwd),
         )])
         .expect("resolve local selection");
 
@@ -398,8 +396,7 @@ async fn native_environment_selections_reject_duplicate_ids() {
         config.codex_home.to_path_buf(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     );
-    let native_cwd = ApiPathString::from_abs_path(&config.cwd, PathConvention::native())
-        .expect("render native cwd");
+    let native_cwd = ApiPathString::from_abs_path(&config.cwd);
     let error = manager
         .resolve_native_environment_selections([
             ("local".to_string(), native_cwd.clone()),
