@@ -188,9 +188,8 @@ pub struct McpServerRefreshConfig {
 pub struct ConversationStartParams {
     /// Overrides the configured realtime architecture for this session only.
     pub architecture: Option<RealtimeConversationArchitecture>,
-    /// Sends automatic backend Codex output as silent realtime context instead of speakable
-    /// handoff output.
-    pub auto_handoff_output_as_context: bool,
+    /// Inserts automatic Codex responses as silent realtime context instead of speakable output.
+    pub codex_responses_as_silent_context: bool,
     /// Overrides the configured realtime model for this session only.
     pub model: Option<String>,
     /// Selects whether the realtime session should produce text or audio output.
@@ -417,8 +416,13 @@ pub enum ConversationTextRole {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ConversationHandoffParams {
-    pub output_text: String,
+pub struct ConversationSilentContextParams {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConversationSpeechParams {
+    pub text: String,
 }
 
 /// Persistent thread-settings overrides that can be applied before user input or
@@ -517,8 +521,11 @@ pub enum Op {
     /// Send text input to the running realtime conversation stream.
     RealtimeConversationText(ConversationTextParams),
 
-    /// Append assistant output to the running realtime conversation stream.
-    RealtimeConversationHandoff(ConversationHandoffParams),
+    /// Append silent context to the running realtime conversation stream.
+    RealtimeConversationSilentContext(ConversationSilentContextParams),
+
+    /// Append speakable text to the running realtime conversation stream.
+    RealtimeConversationSpeech(ConversationSpeechParams),
 
     /// Close the running realtime conversation stream.
     RealtimeConversationClose,
@@ -773,7 +780,8 @@ impl Op {
             Self::RealtimeConversationStart(_) => "realtime_conversation_start",
             Self::RealtimeConversationAudio(_) => "realtime_conversation_audio",
             Self::RealtimeConversationText(_) => "realtime_conversation_text",
-            Self::RealtimeConversationHandoff(_) => "realtime_conversation_handoff",
+            Self::RealtimeConversationSilentContext(_) => "realtime_conversation_silent_context",
+            Self::RealtimeConversationSpeech(_) => "realtime_conversation_speech",
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::UserInput { .. } => "user_input",

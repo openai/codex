@@ -181,12 +181,22 @@ impl TurnRequestProcessor {
             .map(|response| response.map(Into::into))
     }
 
-    pub(crate) async fn thread_realtime_append_handoff(
+    pub(crate) async fn thread_realtime_append_silent_context(
         &self,
         request_id: &ConnectionRequestId,
-        params: ThreadRealtimeAppendHandoffParams,
+        params: ThreadRealtimeAppendSilentContextParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_realtime_append_handoff_inner(request_id, params)
+        self.thread_realtime_append_silent_context_inner(request_id, params)
+            .await
+            .map(|response| response.map(Into::into))
+    }
+
+    pub(crate) async fn thread_realtime_append_speech(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadRealtimeAppendSpeechParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_realtime_append_speech_inner(request_id, params)
             .await
             .map(|response| response.map(Into::into))
     }
@@ -945,8 +955,8 @@ impl TurnRequestProcessor {
             thread.as_ref(),
             Op::RealtimeConversationStart(ConversationStartParams {
                 architecture: params.architecture,
-                auto_handoff_output_as_context: params
-                    .auto_handoff_output_as_context
+                codex_responses_as_silent_context: params
+                    .codex_responses_as_silent_context
                     .unwrap_or(false),
                 model: params.model,
                 output_modality: params.output_modality,
@@ -1024,11 +1034,11 @@ impl TurnRequestProcessor {
         Ok(Some(ThreadRealtimeAppendTextResponse::default()))
     }
 
-    async fn thread_realtime_append_handoff_inner(
+    async fn thread_realtime_append_silent_context_inner(
         &self,
         request_id: &ConnectionRequestId,
-        params: ThreadRealtimeAppendHandoffParams,
-    ) -> Result<Option<ThreadRealtimeAppendHandoffResponse>, JSONRPCErrorError> {
+        params: ThreadRealtimeAppendSilentContextParams,
+    ) -> Result<Option<ThreadRealtimeAppendSilentContextResponse>, JSONRPCErrorError> {
         let Some((_, thread)) = self
             .prepare_realtime_conversation_thread(request_id, &params.thread_id)
             .await?
@@ -1038,17 +1048,42 @@ impl TurnRequestProcessor {
         self.submit_core_op(
             request_id,
             thread.as_ref(),
-            Op::RealtimeConversationHandoff(ConversationHandoffParams {
-                output_text: params.output_text,
+            Op::RealtimeConversationSilentContext(ConversationSilentContextParams {
+                text: params.text,
             }),
         )
         .await
         .map_err(|err| {
             internal_error(format!(
-                "failed to append realtime conversation handoff output: {err}"
+                "failed to append realtime conversation silent context: {err}"
             ))
         })?;
-        Ok(Some(ThreadRealtimeAppendHandoffResponse::default()))
+        Ok(Some(ThreadRealtimeAppendSilentContextResponse::default()))
+    }
+
+    async fn thread_realtime_append_speech_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadRealtimeAppendSpeechParams,
+    ) -> Result<Option<ThreadRealtimeAppendSpeechResponse>, JSONRPCErrorError> {
+        let Some((_, thread)) = self
+            .prepare_realtime_conversation_thread(request_id, &params.thread_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        self.submit_core_op(
+            request_id,
+            thread.as_ref(),
+            Op::RealtimeConversationSpeech(ConversationSpeechParams { text: params.text }),
+        )
+        .await
+        .map_err(|err| {
+            internal_error(format!(
+                "failed to append realtime conversation speech: {err}"
+            ))
+        })?;
+        Ok(Some(ThreadRealtimeAppendSpeechResponse::default()))
     }
 
     async fn thread_realtime_stop_inner(

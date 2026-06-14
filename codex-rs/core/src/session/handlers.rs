@@ -1,6 +1,7 @@
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
-use crate::realtime_conversation::handle_handoff as handle_realtime_conversation_handoff;
+use crate::realtime_conversation::handle_silent_context as handle_realtime_conversation_silent_context;
+use crate::realtime_conversation::handle_speech as handle_realtime_conversation_speech;
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use async_channel::Receiver;
@@ -738,8 +739,13 @@ pub(super) async fn submission_loop(
                     handle_realtime_conversation_text(&sess, sub.id.clone(), params).await;
                     false
                 }
-                Op::RealtimeConversationHandoff(params) => {
-                    handle_realtime_conversation_handoff(&sess, sub.id.clone(), params).await;
+                Op::RealtimeConversationSilentContext(params) => {
+                    handle_realtime_conversation_silent_context(&sess, sub.id.clone(), params)
+                        .await;
+                    false
+                }
+                Op::RealtimeConversationSpeech(params) => {
+                    handle_realtime_conversation_speech(&sess, sub.id.clone(), params).await;
                     false
                 }
                 Op::RealtimeConversationClose => {

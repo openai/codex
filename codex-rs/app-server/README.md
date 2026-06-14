@@ -165,10 +165,11 @@ Example with notification opt-out:
 - `thread/inject_items` — append raw Responses API items to a loaded thread’s model-visible history without starting a user turn; returns `{}` on success.
 - `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. `clientUserMessageId` is optional; when supplied, the corresponding `userMessage` item echoes it as `clientId`. Review and manual compaction turns reject `turn/steer`.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
-- `thread/realtime/start` — start a thread-scoped realtime session (experimental); pass `outputModality: "text"` or `outputModality: "audio"` to choose model output, and optionally pass `model` and `version` to override configured realtime selection for this session only. By default, automatic backend Codex text follows the legacy speakable handoff path. Pass `autoHandoffOutputAsContext: true` to send automatic backend Codex text as silent developer context, then use `thread/realtime/appendHandoff` when the app wants realtime to speak a backend update. Returns `{}` and streams `thread/realtime/*` notifications. Omit `transport` for the websocket transport, or pass `{ "type": "webrtc", "sdp": "..." }` to create a WebRTC session from a browser-generated SDP offer; the remote answer SDP is emitted as `thread/realtime/sdp`.
+- `thread/realtime/start` — start a thread-scoped realtime session (experimental); pass `outputModality: "text"` or `outputModality: "audio"` to choose model output, and optionally pass `model` and `version` to override configured realtime selection for this session only. By default, automatic Codex text follows the legacy speakable handoff path. Pass `codexResponsesAsSilentContext: true` to insert automatic Codex responses as silent developer context instead. Returns `{}` and streams `thread/realtime/*` notifications. Omit `transport` for the websocket transport, or pass `{ "type": "webrtc", "sdp": "..." }` to create a WebRTC session from a browser-generated SDP offer; the remote answer SDP is emitted as `thread/realtime/sdp`.
 - `thread/realtime/appendAudio` — append an input audio chunk to the active realtime session (experimental); returns `{}`.
 - `thread/realtime/appendText` — append text input to the active realtime session with a required `role` of `user` or `developer` (experimental); returns `{}`. Older clients that omit `role` default to `user`.
-- `thread/realtime/appendHandoff` — append assistant output to the active realtime session (experimental); returns `{}`. For v1 sessions this sends `conversation.handoff.append`.
+- `thread/realtime/appendSilentContext` — append silent developer context to the active realtime session (experimental); returns `{}` and does not request a realtime response.
+- `thread/realtime/appendSpeech` — append text that the realtime model should speak to the user (experimental); returns `{}`. For v1 sessions this sends `conversation.handoff.append`.
 - `thread/realtime/stop` — stop the active realtime session for the thread (experimental); returns `{}`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
@@ -853,12 +854,13 @@ Omit `prompt` to use Codex's default realtime backend prompt. Send `prompt: null
 `prompt: ""` when the session should start without that default backend prompt.
 Clients may also pass `model` and `version` on `thread/realtime/start` to select a
 different realtime session configuration without changing thread or user config.
-Pass `autoHandoffOutputAsContext: true` to inject automatic backend Codex output
-as silent developer context so the realtime model stays coherent without
+Pass `codexResponsesAsSilentContext: true` to inject automatic Codex responses as
+silent developer context so the realtime model stays coherent without
 automatically speaking backend preambles, progress, or final assistant text. Omit
 the field, or pass `false`, to preserve the legacy speakable handoff behavior.
-Call `thread/realtime/appendHandoff` when the app decides a realtime update
-should be spoken.
+Call `thread/realtime/appendSilentContext` to add app-provided silent context, or
+`thread/realtime/appendSpeech` when the app decides a realtime update should be
+spoken.
 
 ```javascript
 await pc.setRemoteDescription({

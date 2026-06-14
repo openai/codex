@@ -32,7 +32,8 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
-use codex_protocol::protocol::ConversationHandoffParams;
+use codex_protocol::protocol::ConversationSilentContextParams;
+use codex_protocol::protocol::ConversationSpeechParams;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
@@ -73,8 +74,12 @@ const STANDALONE_HANDOFF_ID: &str = "codex";
 const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime-1.5";
 pub(crate) const REALTIME_USER_TEXT_PREFIX: &str = "[USER] ";
 pub(crate) const REALTIME_BACKEND_TEXT_PREFIX: &str = "[BACKEND] ";
+const REALTIME_SILENT_CONTEXT_PREFIX: &str =
+    "Use the following context to inform future responses, but do not speak it to the user.";
 const REALTIME_V2_STEER_ACKNOWLEDGEMENT: &str =
     "This was sent to steer the previous background agent task.";
+const REALTIME_V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT: &str =
+    "Background agent finished. Use the preceding [BACKEND] messages as the result.";
 const REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX: &str =
     "Conversation already has an active response in progress:";
 
@@ -105,28 +110,35 @@ struct RealtimeHandoffState {
     output_tx: Sender<HandoffOutput>,
     active_handoff: Arc<Mutex<Option<String>>>,
     last_output_text: Arc<Mutex<Option<String>>>,
-    auto_handoff_output_as_context: bool,
+    codex_responses_as_silent_context: bool,
     session_kind: RealtimeSessionKind,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum HandoffOutput {
     StandaloneAssistantOutput {
-        as_context: bool,
         output_text: String,
     },
     ProgressUpdate {
-        as_context: bool,
         handoff_id: String,
         output_text: String,
     },
     FinalUpdate {
-        as_context: bool,
         handoff_id: String,
         output_text: String,
     },
-    SpokenAppend {
-        output_text: String,
+    SilentContext {
+        text: String,
+    },
+    SilentHandoffProgress {
+        handoff_id: String,
+        text: String,
+    },
+    SilentHandoffComplete {
+        handoff_id: String,
+    },
+    Speech {
+        text: String,
     },
 }
 
@@ -219,14 +231,14 @@ struct RealtimeInputChannels {
 impl RealtimeHandoffState {
     fn new(
         output_tx: Sender<HandoffOutput>,
-        auto_handoff_output_as_context: bool,
+        codex_responses_as_silent_context: bool,
         session_kind: RealtimeSessionKind,
     ) -> Self {
         Self {
             output_tx,
             active_handoff: Arc::new(Mutex::new(None)),
             last_output_text: Arc::new(Mutex::new(None)),
-            auto_handoff_output_as_context,
+            codex_responses_as_silent_context,
             session_kind,
         }
     }
@@ -247,7 +259,7 @@ struct RealtimeStart {
     api_provider: ApiProvider,
     architecture: RealtimeConversationArchitecture,
     extra_headers: Option<HeaderMap>,
-    auto_handoff_output_as_context: bool,
+    codex_responses_as_silent_context: bool,
     realtime_call_api_provider: Option<ApiProvider>,
     session_config: RealtimeSessionConfig,
     model_client: ModelClient,
@@ -302,7 +314,7 @@ impl RealtimeConversationManager {
             api_provider,
             architecture,
             extra_headers,
-            auto_handoff_output_as_context,
+            codex_responses_as_silent_context,
             realtime_call_api_provider,
             session_config,
             model_client,
@@ -326,7 +338,7 @@ impl RealtimeConversationManager {
         let realtime_active = Arc::new(AtomicBool::new(true));
         let handoff = RealtimeHandoffState::new(
             handoff_output_tx,
-            auto_handoff_output_as_context,
+            codex_responses_as_silent_context,
             session_kind,
         );
         let input_channels = RealtimeInputChannels {
@@ -499,17 +511,29 @@ impl RealtimeConversationManager {
             Some(handoff_id) => {
                 let output_text = realtime_backend_output(output_text, handoff.session_kind);
                 *handoff.last_output_text.lock().await = Some(output_text.clone());
-                HandoffOutput::ProgressUpdate {
-                    as_context: handoff.auto_handoff_output_as_context,
-                    handoff_id,
-                    output_text,
+                if handoff.codex_responses_as_silent_context {
+                    HandoffOutput::SilentHandoffProgress {
+                        handoff_id,
+                        text: realtime_silent_context(output_text),
+                    }
+                } else {
+                    HandoffOutput::ProgressUpdate {
+                        handoff_id,
+                        output_text,
+                    }
                 }
             }
             None if output_text.trim().is_empty() => return Ok(()),
-            None => HandoffOutput::StandaloneAssistantOutput {
-                as_context: handoff.auto_handoff_output_as_context,
-                output_text: realtime_backend_output(output_text, handoff.session_kind),
-            },
+            None => {
+                let output_text = realtime_backend_output(output_text, handoff.session_kind);
+                if handoff.codex_responses_as_silent_context {
+                    HandoffOutput::SilentContext {
+                        text: realtime_silent_context(output_text),
+                    }
+                } else {
+                    HandoffOutput::StandaloneAssistantOutput { output_text }
+                }
+            }
         };
         handoff
             .output_tx
@@ -519,8 +543,32 @@ impl RealtimeConversationManager {
         Ok(())
     }
 
-    pub(crate) async fn handoff_append(&self, output_text: String) -> CodexResult<()> {
-        if output_text.trim().is_empty() {
+    pub(crate) async fn append_silent_context(&self, text: String) -> CodexResult<()> {
+        if text.trim().is_empty() {
+            return Ok(());
+        }
+
+        let sender = {
+            let guard = self.state.lock().await;
+            let Some(state) = guard.as_ref() else {
+                return Err(CodexErr::InvalidRequest(
+                    "conversation is not running".to_string(),
+                ));
+            };
+            state.handoff.output_tx.clone()
+        };
+
+        sender
+            .send(HandoffOutput::SilentContext {
+                text: realtime_silent_context(text),
+            })
+            .await
+            .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
+        Ok(())
+    }
+
+    pub(crate) async fn append_speech(&self, text: String) -> CodexResult<()> {
+        if text.trim().is_empty() {
             return Ok(());
         }
 
@@ -536,8 +584,8 @@ impl RealtimeConversationManager {
 
         handoff
             .output_tx
-            .send(HandoffOutput::SpokenAppend {
-                output_text: realtime_backend_output(output_text, handoff.session_kind),
+            .send(HandoffOutput::Speech {
+                text: realtime_backend_output(text, handoff.session_kind),
             })
             .await
             .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
@@ -564,13 +612,18 @@ impl RealtimeConversationManager {
             return Ok(());
         };
 
-        handoff
-            .output_tx
-            .send(HandoffOutput::FinalUpdate {
-                as_context: handoff.auto_handoff_output_as_context,
+        let output = if handoff.codex_responses_as_silent_context {
+            HandoffOutput::SilentHandoffComplete { handoff_id }
+        } else {
+            HandoffOutput::FinalUpdate {
                 handoff_id,
                 output_text,
-            })
+            }
+        };
+
+        handoff
+            .output_tx
+            .send(output)
             .await
             .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))
     }
@@ -657,7 +710,7 @@ struct PreparedRealtimeConversationStart {
     api_provider: ApiProvider,
     architecture: RealtimeConversationArchitecture,
     extra_headers: Option<HeaderMap>,
-    auto_handoff_output_as_context: bool,
+    codex_responses_as_silent_context: bool,
     realtime_call_api_provider: Option<ApiProvider>,
     requested_realtime_session_id: Option<String>,
     version: RealtimeWsVersion,
@@ -733,7 +786,7 @@ async fn prepare_realtime_start(
         api_provider,
         architecture,
         extra_headers,
-        auto_handoff_output_as_context: params.auto_handoff_output_as_context,
+        codex_responses_as_silent_context: params.codex_responses_as_silent_context,
         realtime_call_api_provider,
         requested_realtime_session_id,
         version,
@@ -850,6 +903,11 @@ fn realtime_backend_output(output_text: String, session_kind: RealtimeSessionKin
     truncate_realtime_text_to_token_budget(&output_text, REALTIME_ASSISTANT_OUTPUT_TOKEN_BUDGET)
 }
 
+fn realtime_silent_context(text: String) -> String {
+    let text = format!("{REALTIME_SILENT_CONTEXT_PREFIX}\n\n{text}");
+    truncate_realtime_text_to_token_budget(&text, REALTIME_ASSISTANT_OUTPUT_TOKEN_BUDGET)
+}
+
 fn validate_realtime_voice(version: RealtimeWsVersion, voice: RealtimeVoice) -> CodexResult<()> {
     let voices = RealtimeVoicesList::builtin();
     let allowed = match version {
@@ -884,7 +942,7 @@ async fn handle_start_inner(
         api_provider,
         architecture,
         extra_headers,
-        auto_handoff_output_as_context,
+        codex_responses_as_silent_context,
         realtime_call_api_provider,
         requested_realtime_session_id,
         version,
@@ -900,7 +958,7 @@ async fn handle_start_inner(
         api_provider,
         architecture,
         extra_headers,
-        auto_handoff_output_as_context,
+        codex_responses_as_silent_context,
         realtime_call_api_provider,
         session_config,
         model_client: sess.services.model_client.clone(),
@@ -1129,16 +1187,33 @@ pub(crate) async fn handle_text(
     }
 }
 
-pub(crate) async fn handle_handoff(
+pub(crate) async fn handle_silent_context(
     sess: &Arc<Session>,
     sub_id: String,
-    params: ConversationHandoffParams,
+    params: ConversationSilentContextParams,
 ) {
-    debug!(text = %params.output_text, "[realtime-text] appending realtime handoff output");
-    if let Err(err) = sess.conversation.handoff_append(params.output_text).await {
-        error!("failed to append realtime handoff output: {err}");
+    debug!(text = %params.text, "[realtime-text] appending realtime silent context");
+    if let Err(err) = sess.conversation.append_silent_context(params.text).await {
+        error!("failed to append realtime silent context: {err}");
         if sess.conversation.running_state().await.is_some() {
-            warn!("realtime handoff append failed while the session was already ending");
+            warn!("realtime silent context append failed while the session was already ending");
+        } else {
+            send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest)
+                .await;
+        }
+    }
+}
+
+pub(crate) async fn handle_speech(
+    sess: &Arc<Session>,
+    sub_id: String,
+    params: ConversationSpeechParams,
+) {
+    debug!(text = %params.text, "[realtime-text] appending realtime speech");
+    if let Err(err) = sess.conversation.append_speech(params.text).await {
+        error!("failed to append realtime speech: {err}");
+        if sess.conversation.running_state().await.is_some() {
+            warn!("realtime speech append failed while the session was already ending");
         } else {
             send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest)
                 .await;
@@ -1324,45 +1399,8 @@ async fn handle_handoff_output(
 
     let result = match event_parser {
         RealtimeEventParser::V1 => match handoff_output {
-            HandoffOutput::StandaloneAssistantOutput {
-                as_context,
-                output_text,
-            } => {
-                if as_context {
-                    writer
-                        .send_conversation_context_item_create(output_text)
-                        .await
-                } else {
-                    writer
-                        .send_conversation_handoff_append(
-                            STANDALONE_HANDOFF_ID.to_string(),
-                            output_text,
-                        )
-                        .await
-                }
-            }
-            HandoffOutput::ProgressUpdate {
-                as_context,
-                handoff_id,
-                output_text,
-            }
-            | HandoffOutput::FinalUpdate {
-                as_context,
-                handoff_id,
-                output_text,
-            } => {
-                if as_context {
-                    writer
-                        .send_conversation_context_item_create(output_text)
-                        .await
-                } else {
-                    writer
-                        .send_conversation_function_call_output(handoff_id, output_text)
-                        .await
-                }
-            }
-            HandoffOutput::SpokenAppend { output_text } => {
-                // TODO(guinness): Use the new client event for standalone handoffs once the API changes are complete.
+            HandoffOutput::StandaloneAssistantOutput { output_text }
+            | HandoffOutput::Speech { text: output_text } => {
                 writer
                     .send_conversation_handoff_append(
                         STANDALONE_HANDOFF_ID.to_string(),
@@ -1370,17 +1408,27 @@ async fn handle_handoff_output(
                     )
                     .await
             }
-        },
-        RealtimeEventParser::RealtimeV2 => match handoff_output {
-            HandoffOutput::StandaloneAssistantOutput {
-                as_context,
+            HandoffOutput::ProgressUpdate {
+                handoff_id,
+                output_text,
+            }
+            | HandoffOutput::FinalUpdate {
+                handoff_id,
                 output_text,
             } => {
-                if as_context {
-                    writer
-                        .send_conversation_context_item_create(output_text)
-                        .await
-                } else if let Err(err) = writer
+                writer
+                    .send_conversation_function_call_output(handoff_id, output_text)
+                    .await
+            }
+            HandoffOutput::SilentContext { text }
+            | HandoffOutput::SilentHandoffProgress { text, .. } => {
+                writer.send_conversation_context_item_create(text).await
+            }
+            HandoffOutput::SilentHandoffComplete { .. } => Ok(()),
+        },
+        RealtimeEventParser::RealtimeV2 => match handoff_output {
+            HandoffOutput::StandaloneAssistantOutput { output_text } => {
+                if let Err(err) = writer
                     .send_conversation_item_create(output_text, ConversationTextRole::User)
                     .await
                 {
@@ -1392,7 +1440,6 @@ async fn handle_handoff_output(
                 }
             }
             HandoffOutput::ProgressUpdate {
-                as_context,
                 handoff_id,
                 output_text,
             } => {
@@ -1404,29 +1451,18 @@ async fn handle_handoff_output(
                         return Ok(());
                     }
                 }
-                if as_context {
-                    writer
-                        .send_conversation_context_item_create(output_text)
-                        .await
-                } else {
-                    writer
-                        .send_conversation_item_create(output_text, ConversationTextRole::User)
-                        .await
-                }
+                writer
+                    .send_conversation_item_create(output_text, ConversationTextRole::User)
+                    .await
             }
             HandoffOutput::FinalUpdate {
-                as_context,
                 handoff_id,
                 output_text: _,
             } => {
-                if as_context {
-                    writer
-                        .send_conversation_function_call_output(handoff_id, String::new())
-                        .await
-                } else if let Err(err) = writer
+                if let Err(err) = writer
                     .send_conversation_function_call_output(
                         handoff_id,
-                        REALTIME_V2_STEER_ACKNOWLEDGEMENT.to_string(),
+                        REALTIME_V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT.to_string(),
                     )
                     .await
                 {
@@ -1437,15 +1473,34 @@ async fn handle_handoff_output(
                         .await;
                 }
             }
-            HandoffOutput::SpokenAppend { output_text } => {
+            HandoffOutput::SilentContext { text } => {
+                writer.send_conversation_context_item_create(text).await
+            }
+            HandoffOutput::SilentHandoffProgress { handoff_id, text } => {
+                let active_handoff = handoff_state.active_handoff.lock().await.clone();
+                match active_handoff {
+                    Some(active_handoff) if active_handoff == handoff_id => {}
+                    Some(_) | None => {
+                        debug!("dropping stale realtime silent handoff progress update");
+                        return Ok(());
+                    }
+                }
+                writer.send_conversation_context_item_create(text).await
+            }
+            HandoffOutput::SilentHandoffComplete { handoff_id } => {
+                writer
+                    .send_conversation_function_call_output(handoff_id, String::new())
+                    .await
+            }
+            HandoffOutput::Speech { text } => {
                 if let Err(err) = writer
-                    .send_conversation_item_create(output_text, ConversationTextRole::User)
+                    .send_conversation_item_create(text, ConversationTextRole::User)
                     .await
                 {
                     Err(err)
                 } else {
                     return response_create_queue
-                        .request_create(writer, events_tx, "handoff append")
+                        .request_create(writer, events_tx, "speech append")
                         .await;
                 }
             }

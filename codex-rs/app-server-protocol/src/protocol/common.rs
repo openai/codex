@@ -819,11 +819,17 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadRealtimeAppendTextResponse,
     },
-    #[experimental("thread/realtime/appendHandoff")]
-    ThreadRealtimeAppendHandoff => "thread/realtime/appendHandoff" {
-        params: v2::ThreadRealtimeAppendHandoffParams,
+    #[experimental("thread/realtime/appendSilentContext")]
+    ThreadRealtimeAppendSilentContext => "thread/realtime/appendSilentContext" {
+        params: v2::ThreadRealtimeAppendSilentContextParams,
         serialization: thread_id(params.thread_id),
-        response: v2::ThreadRealtimeAppendHandoffResponse,
+        response: v2::ThreadRealtimeAppendSilentContextResponse,
+    },
+    #[experimental("thread/realtime/appendSpeech")]
+    ThreadRealtimeAppendSpeech => "thread/realtime/appendSpeech" {
+        params: v2::ThreadRealtimeAppendSpeechParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadRealtimeAppendSpeechResponse,
     },
     #[experimental("thread/realtime/stop")]
     ThreadRealtimeStop => "thread/realtime/stop" {
@@ -3020,7 +3026,7 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 architecture: Some(RealtimeConversationArchitecture::Avas),
-                auto_handoff_output_as_context: None,
+                codex_responses_as_silent_context: None,
                 thread_id: "thr_123".to_string(),
                 model: Some("realtime-treatment-model".to_string()),
                 output_modality: RealtimeOutputModality::Audio,
@@ -3038,7 +3044,7 @@ mod tests {
                 "params": {
                     "architecture": "avas",
                     "threadId": "thr_123",
-                    "autoHandoffOutputAsContext": null,
+                    "codexResponsesAsSilentContext": null,
                     "model": "realtime-treatment-model",
                     "outputModality": "audio",
                     "prompt": "You are on a call",
@@ -3059,7 +3065,7 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 architecture: None,
-                auto_handoff_output_as_context: None,
+                codex_responses_as_silent_context: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -3077,7 +3083,7 @@ mod tests {
                 "params": {
                     "architecture": null,
                     "threadId": "thr_123",
-                    "autoHandoffOutputAsContext": null,
+                    "codexResponsesAsSilentContext": null,
                     "model": null,
                     "outputModality": "audio",
                     "realtimeSessionId": null,
@@ -3093,7 +3099,7 @@ mod tests {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
                 architecture: None,
-                auto_handoff_output_as_context: None,
+                codex_responses_as_silent_context: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -3111,7 +3117,7 @@ mod tests {
                 "params": {
                     "architecture": null,
                     "threadId": "thr_123",
-                    "autoHandoffOutputAsContext": null,
+                    "codexResponsesAsSilentContext": null,
                     "model": null,
                     "outputModality": "audio",
                     "prompt": null,
@@ -3161,21 +3167,44 @@ mod tests {
     }
 
     #[test]
-    fn serialize_thread_realtime_append_handoff() -> Result<()> {
-        let request = ClientRequest::ThreadRealtimeAppendHandoff {
+    fn serialize_thread_realtime_append_silent_context() -> Result<()> {
+        let request = ClientRequest::ThreadRealtimeAppendSilentContext {
             request_id: RequestId::Integer(10),
-            params: v2::ThreadRealtimeAppendHandoffParams {
+            params: v2::ThreadRealtimeAppendSilentContextParams {
                 thread_id: "thr_123".to_string(),
-                output_text: "Short voice update".to_string(),
+                text: "Quiet context".to_string(),
             },
         };
         assert_eq!(
             json!({
-                "method": "thread/realtime/appendHandoff",
+                "method": "thread/realtime/appendSilentContext",
                 "id": 10,
                 "params": {
                     "threadId": "thr_123",
-                    "outputText": "Short voice update"
+                    "text": "Quiet context"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_realtime_append_speech() -> Result<()> {
+        let request = ClientRequest::ThreadRealtimeAppendSpeech {
+            request_id: RequestId::Integer(10),
+            params: v2::ThreadRealtimeAppendSpeechParams {
+                thread_id: "thr_123".to_string(),
+                text: "Short voice update".to_string(),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/realtime/appendSpeech",
+                "id": 10,
+                "params": {
+                    "threadId": "thr_123",
+                    "text": "Short voice update"
                 }
             }),
             serde_json::to_value(&request)?,
@@ -3293,7 +3322,7 @@ mod tests {
             request_id: RequestId::Integer(1),
             params: v2::ThreadRealtimeStartParams {
                 architecture: None,
-                auto_handoff_output_as_context: None,
+                codex_responses_as_silent_context: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,

@@ -70,10 +70,9 @@ pub struct ThreadRealtimeStartParams {
     /// Overrides the configured realtime architecture for this session only.
     #[ts(optional = nullable)]
     pub architecture: Option<RealtimeConversationArchitecture>,
-    /// Sends automatic backend Codex output as silent realtime context instead of speakable
-    /// handoff output.
+    /// Inserts automatic Codex responses as silent realtime context instead of speakable output.
     #[ts(optional = nullable)]
-    pub auto_handoff_output_as_context: Option<bool>,
+    pub codex_responses_as_silent_context: Option<bool>,
     /// Overrides the configured realtime model for this session only.
     #[ts(optional = nullable)]
     pub model: Option<String>,
@@ -150,20 +149,35 @@ pub struct ThreadRealtimeAppendTextParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeAppendTextResponse {}
 
-/// EXPERIMENTAL - append assistant output to thread realtime.
+/// EXPERIMENTAL - append silent context to thread realtime.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadRealtimeAppendHandoffParams {
+pub struct ThreadRealtimeAppendSilentContextParams {
     pub thread_id: String,
-    pub output_text: String,
+    pub text: String,
 }
 
-/// EXPERIMENTAL - response for appending realtime assistant output.
+/// EXPERIMENTAL - response for appending realtime silent context.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadRealtimeAppendHandoffResponse {}
+pub struct ThreadRealtimeAppendSilentContextResponse {}
+
+/// EXPERIMENTAL - append speakable text to thread realtime.
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeAppendSpeechParams {
+    pub thread_id: String,
+    pub text: String,
+}
+
+/// EXPERIMENTAL - response for appending realtime speech.
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeAppendSpeechResponse {}
 
 /// EXPERIMENTAL - stop thread realtime.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
