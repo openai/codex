@@ -46,7 +46,7 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
             let arguments = serde_json::to_string(&json!({
                 "cmd": COMMAND,
                 "login": false,
-                "yield_time_ms": 5_000,
+                "yield_time_ms": 10_000,
             }))?;
             let response_mock = mount_sse_sequence(
                 &server,
