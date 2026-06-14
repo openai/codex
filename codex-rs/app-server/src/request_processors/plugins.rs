@@ -8,6 +8,7 @@ use codex_app_server_protocol::PluginShareTargetRole;
 use codex_config::types::McpServerConfig;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginListBackgroundTaskOptions;
+use codex_core_plugins::remote::REMOTE_CREATED_BY_ME_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_WORKSPACE_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME;
@@ -159,6 +160,7 @@ fn remote_installed_plugin_visible_marketplaces(config: &Config) -> Vec<&'static
     }
     marketplaces.push(REMOTE_WORKSPACE_MARKETPLACE_NAME);
     if config.features.enabled(Feature::PluginSharing) {
+        marketplaces.push(REMOTE_CREATED_BY_ME_MARKETPLACE_NAME);
         marketplaces.push(REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME);
         marketplaces.push(REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME);
         marketplaces.push(REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME);
@@ -552,6 +554,8 @@ impl PluginRequestProcessor {
         let plugins_input = config.plugins_config_input();
         let include_shared_with_me =
             marketplace_kinds.contains(&PluginListMarketplaceKind::SharedWithMe);
+        let include_created_by_me_remote =
+            marketplace_kinds.contains(&PluginListMarketplaceKind::CreatedByMeRemote);
         let include_global_remote =
             !explicit_marketplace_kinds && config.features.enabled(Feature::RemotePlugin);
         let remote_plugin_service_config = RemotePluginServiceConfig {
@@ -661,6 +665,9 @@ impl PluginRequestProcessor {
         if include_global_remote {
             remote_sources.push(RemoteMarketplaceSource::Global);
         }
+        if include_created_by_me_remote && config.features.enabled(Feature::PluginSharing) {
+            remote_sources.push(RemoteMarketplaceSource::CreatedByMeRemote);
+        }
         if marketplace_kinds.contains(&PluginListMarketplaceKind::WorkspaceDirectory) {
             remote_sources.push(RemoteMarketplaceSource::WorkspaceDirectory);
         }
@@ -711,7 +718,11 @@ impl PluginRequestProcessor {
                 }
             }
         }
-        if include_local || include_shared_with_me || include_global_remote {
+        if include_local
+            || include_created_by_me_remote
+            || include_shared_with_me
+            || include_global_remote
+        {
             plugins_manager.maybe_start_plugin_list_background_tasks_for_config(
                 &plugins_input,
                 auth.clone(),

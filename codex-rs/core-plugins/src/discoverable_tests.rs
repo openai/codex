@@ -628,7 +628,7 @@ remote_plugin = true
     .await
     .expect("remote plugin catalog cache should write");
 
-    for scope in ["GLOBAL", "WORKSPACE"] {
+    for scope in ["GLOBAL", "USER", "WORKSPACE"] {
         Mock::given(method("GET"))
             .and(path("/backend-api/ps/plugins/installed"))
             .and(query_param("scope", scope))
