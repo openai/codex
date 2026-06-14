@@ -1375,7 +1375,7 @@ async fn completed_token_activity_refresh_waits_for_active_stream() {
 
     let request_id = dispatch_usage_and_expect_refresh(&mut chat, &mut rx);
     chat.on_agent_message_delta("partial response".to_string());
-    assert!(chat.token_activity_history_insertion_blocked());
+    assert!(chat.usage_history_insertion_blocked());
 
     assert!(
         chat.finish_token_activity_refresh(
@@ -1390,10 +1390,10 @@ async fn completed_token_activity_refresh_waits_for_active_stream() {
     );
 
     chat.finalize_turn();
-    assert!(!chat.token_activity_history_insertion_blocked());
+    assert!(!chat.usage_history_insertion_blocked());
     assert!(
         std::iter::from_fn(|| rx.try_recv().ok())
-            .any(|event| matches!(event, AppEvent::CommitCompletedTokenActivityOutput))
+            .any(|event| matches!(event, AppEvent::CommitPendingUsageOutputAfterStreamShutdown))
     );
     assert!(chat.take_completed_token_activity_output().is_some());
 }
@@ -1414,11 +1414,11 @@ async fn completed_token_activity_refresh_waits_for_queued_stream_consolidation(
             Err("token activity unavailable".to_string()),
         )
     );
-    assert!(chat.token_activity_history_insertion_blocked());
+    assert!(chat.usage_history_insertion_blocked());
 
     chat.note_stream_consolidation_completed();
 
-    assert!(!chat.token_activity_history_insertion_blocked());
+    assert!(!chat.usage_history_insertion_blocked());
 }
 
 #[tokio::test]
@@ -1436,15 +1436,12 @@ async fn completed_token_activity_refresh_waits_for_active_history_cell() {
             Err("token activity unavailable".to_string()),
         )
     );
-    assert!(chat.token_activity_history_insertion_blocked());
+    assert!(chat.usage_history_insertion_blocked());
 
     chat.flush_active_cell();
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::CommitCompletedTokenActivityOutput)
-    );
+    assert_matches!(rx.try_recv(), Ok(AppEvent::CommitPendingUsageOutput));
 }
 
 #[tokio::test]
@@ -1469,7 +1466,7 @@ async fn completed_token_activity_refresh_waits_for_active_hook() {
             Err("token activity unavailable".to_string()),
         )
     );
-    assert!(chat.token_activity_history_insertion_blocked());
+    assert!(chat.usage_history_insertion_blocked());
 
     handle_hook_completed(
         &mut chat,
@@ -1486,10 +1483,7 @@ async fn completed_token_activity_refresh_waits_for_active_hook() {
     );
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::CommitCompletedTokenActivityOutput)
-    );
+    assert_matches!(rx.try_recv(), Ok(AppEvent::CommitPendingUsageOutput));
 }
 
 #[tokio::test]
@@ -1516,7 +1510,7 @@ async fn completed_token_activity_refresh_retries_after_plan_item_completion() {
 
     assert!(
         std::iter::from_fn(|| rx.try_recv().ok())
-            .any(|event| matches!(event, AppEvent::CommitCompletedTokenActivityOutput))
+            .any(|event| matches!(event, AppEvent::CommitPendingUsageOutputAfterStreamShutdown))
     );
 }
 

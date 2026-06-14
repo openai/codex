@@ -210,12 +210,12 @@ impl ChatWidget {
         true
     }
 
-    /// Reports whether a completed token activity card must wait before insertion.
+    /// Reports whether completed asynchronous usage output must wait before insertion.
     ///
     /// Inserting while a stream, queued consolidation, or active transcript cell is
-    /// present can reorder the card relative to visible output, so callers retry once
+    /// present can reorder output relative to visible work, so callers retry once
     /// these barriers clear.
-    pub(crate) fn token_activity_history_insertion_blocked(&self) -> bool {
+    pub(crate) fn usage_history_insertion_blocked(&self) -> bool {
         self.stream_controller.is_some()
             || self.plan_stream_controller.is_some()
             || self.pending_stream_consolidations > 0
@@ -244,7 +244,7 @@ impl ChatWidget {
     /// Transfers the completed token activity card into the history insertion path.
     ///
     /// Callers should use this only after
-    /// [`ChatWidget::token_activity_history_insertion_blocked`] returns `false`;
+    /// [`ChatWidget::usage_history_insertion_blocked`] returns `false`;
     /// taking the card removes it from the transient render area.
     pub(crate) fn take_completed_token_activity_output(&mut self) -> Option<CompositeHistoryCell> {
         let output = self.completed_token_activity_output.take()?;
@@ -252,14 +252,24 @@ impl ChatWidget {
         Some(output)
     }
 
-    /// Requests another insertion attempt when a completed card is waiting.
+    /// Requests another insertion attempt when completed usage output is waiting.
     ///
     /// This is used after stream or history lifecycle events that may have cleared
-    /// the insertion barriers without directly owning the completed card.
-    pub(crate) fn request_completed_token_activity_output_insertion(&self) {
-        if self.completed_token_activity_output.is_some() {
+    /// the insertion barriers without directly owning the completed output.
+    pub(crate) fn request_pending_usage_output_insertion(&self) {
+        if self.completed_token_activity_output.is_some()
+            || self.pending_rate_limit_reset_hint().is_some()
+        {
+            self.app_event_tx.send(AppEvent::CommitPendingUsageOutput);
+        }
+    }
+
+    pub(crate) fn request_pending_usage_output_insertion_after_stream_shutdown(&self) {
+        if self.completed_token_activity_output.is_some()
+            || self.pending_rate_limit_reset_hint().is_some()
+        {
             self.app_event_tx
-                .send(AppEvent::CommitCompletedTokenActivityOutput);
+                .send(AppEvent::CommitPendingUsageOutputAfterStreamShutdown);
         }
     }
 

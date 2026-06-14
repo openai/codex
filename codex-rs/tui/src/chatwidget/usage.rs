@@ -1,6 +1,6 @@
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditCode;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
-use codex_app_server_protocol::GetAccountRateLimitResetCreditsResponse;
+use codex_app_server_protocol::RateLimitResetCreditsSummary;
 use uuid::Uuid;
 
 use super::*;
@@ -48,6 +48,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn show_rate_limit_reset_loading_popup(&mut self) -> u64 {
+        self.clear_pending_rate_limit_reset_hint();
         let request_id = self.take_next_rate_limit_reset_request_id();
         self.pending_rate_limit_reset_request_id = Some(request_id);
         self.bottom_pane.show_selection_view(SelectionViewParams {
@@ -68,7 +69,7 @@ impl ChatWidget {
     pub(crate) fn finish_rate_limit_reset_credits_refresh(
         &mut self,
         request_id: u64,
-        result: Result<GetAccountRateLimitResetCreditsResponse, String>,
+        result: Result<RateLimitResetCreditsSummary, String>,
     ) -> bool {
         if self.pending_rate_limit_reset_request_id != Some(request_id) {
             return false;
@@ -143,6 +144,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn show_rate_limit_reset_consuming_popup(&mut self) -> u64 {
+        self.clear_pending_rate_limit_reset_hint();
         let request_id = self.take_next_rate_limit_reset_request_id();
         self.pending_rate_limit_reset_request_id = Some(request_id);
         self.bottom_pane.show_selection_view(SelectionViewParams {
@@ -230,7 +232,7 @@ impl ChatWidget {
     pub(crate) fn finish_post_consume_reset_credits_refresh(
         &mut self,
         request_id: u64,
-        result: Result<GetAccountRateLimitResetCreditsResponse, String>,
+        result: Result<RateLimitResetCreditsSummary, String>,
     ) -> bool {
         if self.pending_rate_limit_reset_request_id != Some(request_id) {
             return false;
@@ -277,6 +279,7 @@ impl ChatWidget {
         if !self.has_codex_backend_auth {
             return;
         }
+        self.clear_pending_rate_limit_reset_hint();
         let request_id = self.take_next_rate_limit_reset_request_id();
         self.pending_rate_limit_reset_hint_request_id = Some(request_id);
         self.app_event_tx
@@ -286,7 +289,7 @@ impl ChatWidget {
     pub(crate) fn finish_rate_limit_reset_hint_refresh(
         &mut self,
         request_id: u64,
-        result: Result<GetAccountRateLimitResetCreditsResponse, String>,
+        result: Result<RateLimitResetCreditsSummary, String>,
     ) -> bool {
         if self.pending_rate_limit_reset_hint_request_id != Some(request_id) {
             return false;
@@ -296,30 +299,51 @@ impl ChatWidget {
             return false;
         }
         if let Ok(response) = result {
-            self.show_rate_limit_reset_available_hint(response.available_count);
+            self.set_rate_limit_reset_available_hint(response.available_count);
         }
         true
     }
 
-    pub(super) fn clear_pending_rate_limit_reset_requests(&mut self) {
+    pub(crate) fn clear_pending_rate_limit_reset_requests(&mut self) {
         self.pending_rate_limit_reset_request_id = None;
-        self.pending_rate_limit_reset_hint_request_id = None;
+        self.clear_pending_rate_limit_reset_hint();
         self.bottom_pane
             .dismiss_view_by_id(RATE_LIMIT_RESET_VIEW_ID);
         self.bottom_pane.dismiss_view_by_id(USAGE_MENU_VIEW_ID);
     }
 
-    fn show_rate_limit_reset_available_hint(&mut self, available_count: i64) {
+    pub(crate) fn clear_pending_rate_limit_reset_hint(&mut self) {
+        self.pending_rate_limit_reset_hint_request_id = None;
+        let cleared_hint = self.pending_rate_limit_reset_hint.take().is_some();
+        if cleared_hint {
+            self.bump_active_cell_revision();
+            self.request_redraw();
+        }
+    }
+
+    pub(super) fn pending_rate_limit_reset_hint(&self) -> Option<&PlainHistoryCell> {
+        self.pending_rate_limit_reset_hint.as_ref()
+    }
+
+    pub(crate) fn take_pending_rate_limit_reset_hint(&mut self) -> Option<PlainHistoryCell> {
+        let hint = self.pending_rate_limit_reset_hint.take()?;
+        self.bump_active_cell_revision();
+        Some(hint)
+    }
+
+    fn set_rate_limit_reset_available_hint(&mut self, available_count: i64) {
         if available_count <= 0 {
             return;
         }
-        self.add_info_message(
+        self.pending_rate_limit_reset_hint = Some(history_cell::new_info_event(
             format!(
                 "You have {available_count} {} available. Run /usage to use one.",
                 reset_label(available_count)
             ),
             /*hint*/ None,
-        );
+        ));
+        self.bump_active_cell_revision();
+        self.request_redraw();
     }
 
     fn take_next_rate_limit_reset_request_id(&mut self) -> u64 {

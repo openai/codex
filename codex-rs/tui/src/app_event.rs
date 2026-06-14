@@ -14,7 +14,7 @@ use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
-use codex_app_server_protocol::GetAccountRateLimitResetCreditsResponse;
+use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountTokenUsageResponse;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
@@ -27,7 +27,7 @@ use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
-use codex_app_server_protocol::RateLimitSnapshot;
+use codex_app_server_protocol::RateLimitResetCreditsSummary;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_file_search::FileMatch;
@@ -128,14 +128,13 @@ pub(crate) enum RateLimitRefreshOrigin {
     /// status card that should be updated when the fetch completes.
     StatusCommand { request_id: u64 },
     /// Refresh requested after a reset credit was successfully consumed.
-    ResetConsume,
+    ResetConsume { request_id: u64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RateLimitResetCreditsRefreshOrigin {
     UsageMenu { request_id: u64 },
     UsageLimitHint { request_id: u64 },
-    PostConsume { request_id: u64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -310,7 +309,7 @@ pub(crate) enum AppEvent {
     /// Result of refreshing rate limits.
     RateLimitsLoaded {
         origin: RateLimitRefreshOrigin,
-        result: Result<Vec<RateLimitSnapshot>, String>,
+        result: Result<GetAccountRateLimitsResponse, String>,
     },
 
     /// Open the default token-activity view selected from the `/usage` menu.
@@ -327,7 +326,7 @@ pub(crate) enum AppEvent {
     /// Result of reading the current reset-credit balance.
     RateLimitResetCreditsLoaded {
         origin: RateLimitResetCreditsRefreshOrigin,
-        result: Result<GetAccountRateLimitResetCreditsResponse, String>,
+        result: Result<RateLimitResetCreditsSummary, String>,
     },
 
     /// Consume one reset credit using a stable idempotency key.
@@ -353,8 +352,11 @@ pub(crate) enum AppEvent {
         result: Result<GetAccountTokenUsageResponse, String>,
     },
 
-    /// Commit a settled token activity card after a stream shutdown barrier.
-    CommitCompletedTokenActivityOutput,
+    /// Commit settled asynchronous usage output after active-output barriers clear.
+    CommitPendingUsageOutput,
+
+    /// Commit settled asynchronous usage output after stream shutdown.
+    CommitPendingUsageOutputAfterStreamShutdown,
 
     /// Send a user-confirmed request to notify the workspace owner.
     SendAddCreditsNudgeEmail {

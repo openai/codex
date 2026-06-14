@@ -1070,7 +1070,7 @@ impl BottomPaneView for ListSelectionView {
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         if !self.allow_cancel {
-            return CancellationEvent::Handled;
+            return CancellationEvent::NotHandled;
         }
         if let Some(cb) = &self.on_cancel {
             cb(&self.app_event_tx);

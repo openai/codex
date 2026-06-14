@@ -246,7 +246,7 @@ impl App {
                     deferred_history_cell,
                 )?;
                 self.chat_widget.note_stream_consolidation_completed();
-                self.insert_completed_token_activity_output_after_stream_shutdown(tui);
+                self.insert_pending_usage_output_after_stream_shutdown(tui);
             }
             AppEvent::ConsolidateProposedPlan(source) => {
                 let end = self.transcript_cells.len();
@@ -282,7 +282,7 @@ impl App {
                     self.maybe_finish_stream_reflow(tui)?;
                 }
                 self.chat_widget.note_stream_consolidation_completed();
-                self.insert_completed_token_activity_output_after_stream_shutdown(tui);
+                self.insert_pending_usage_output_after_stream_shutdown(tui);
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
@@ -750,15 +750,23 @@ impl App {
                     .finish_add_credits_nudge_email_request(result);
             }
             AppEvent::RateLimitsLoaded { origin, result } => match result {
-                Ok(snapshots) => {
-                    for snapshot in snapshots {
+                Ok(response) => {
+                    let rate_limit_reset_credits = response.rate_limit_reset_credits.clone();
+                    for snapshot in app_server_rate_limit_snapshots(response) {
                         self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
                     }
                     match origin {
                         RateLimitRefreshOrigin::StartupPrefetch => {
                             tui.frame_requester().schedule_frame();
                         }
-                        RateLimitRefreshOrigin::ResetConsume => {
+                        RateLimitRefreshOrigin::ResetConsume { request_id } => {
+                            self.chat_widget.finish_post_consume_reset_credits_refresh(
+                                request_id,
+                                rate_limit_reset_credits.ok_or_else(|| {
+                                    "account/rateLimits/read response did not include rateLimitResetCredits"
+                                        .to_string()
+                                }),
+                            );
                             tui.frame_requester().schedule_frame();
                         }
                         RateLimitRefreshOrigin::StatusCommand { request_id } => {
@@ -769,9 +777,16 @@ impl App {
                 }
                 Err(err) => {
                     tracing::warn!("account/rateLimits/read failed during TUI refresh: {err}");
-                    if let RateLimitRefreshOrigin::StatusCommand { request_id } = origin {
-                        self.chat_widget
-                            .finish_status_rate_limit_refresh(request_id);
+                    match origin {
+                        RateLimitRefreshOrigin::StartupPrefetch => {}
+                        RateLimitRefreshOrigin::ResetConsume { request_id } => {
+                            self.chat_widget
+                                .finish_post_consume_reset_credits_refresh(request_id, Err(err));
+                        }
+                        RateLimitRefreshOrigin::StatusCommand { request_id } => {
+                            self.chat_widget
+                                .finish_status_rate_limit_refresh(request_id);
+                        }
                     }
                 }
             },
@@ -796,7 +811,7 @@ impl App {
                 RateLimitResetCreditsRefreshOrigin::UsageMenu { request_id } => {
                     if let Err(err) = &result {
                         tracing::warn!(
-                            "account/rateLimitResetCredit/read failed during TUI refresh: {err}"
+                            "account/rateLimits/read failed during reset-credit refresh: {err}"
                         );
                     }
                     self.chat_widget
@@ -805,20 +820,15 @@ impl App {
                 RateLimitResetCreditsRefreshOrigin::UsageLimitHint { request_id } => {
                     if let Err(err) = &result {
                         tracing::warn!(
-                            "account/rateLimitResetCredit/read failed while checking usage-limit hint: {err}"
+                            "account/rateLimits/read failed while checking usage-limit hint: {err}"
                         );
                     }
-                    self.chat_widget
-                        .finish_rate_limit_reset_hint_refresh(request_id, result);
-                }
-                RateLimitResetCreditsRefreshOrigin::PostConsume { request_id } => {
-                    if let Err(err) = &result {
-                        tracing::warn!(
-                            "account/rateLimitResetCredit/read failed after consuming reset: {err}"
-                        );
+                    if self
+                        .chat_widget
+                        .finish_rate_limit_reset_hint_refresh(request_id, result)
+                    {
+                        self.insert_pending_usage_output_if_ready(tui);
                     }
-                    self.chat_widget
-                        .finish_post_consume_reset_credits_refresh(request_id, result);
                 }
             },
             AppEvent::ConsumeRateLimitResetCredit { redeem_request_id } => {
@@ -840,10 +850,9 @@ impl App {
                     redeem_request_id,
                     result,
                 ) {
-                    self.refresh_rate_limits(app_server, RateLimitRefreshOrigin::ResetConsume);
-                    self.refresh_rate_limit_reset_credits(
+                    self.refresh_rate_limits(
                         app_server,
-                        RateLimitResetCreditsRefreshOrigin::PostConsume { request_id },
+                        RateLimitRefreshOrigin::ResetConsume { request_id },
                     );
                 }
             }
@@ -860,11 +869,14 @@ impl App {
                     // active work, and flushing an in-progress tool cell would corrupt its lifecycle.
                     // If an answer stream is active, keep the settled card transient until its
                     // provisional transcript cells have been consolidated.
-                    self.insert_completed_token_activity_output_if_ready(tui);
+                    self.insert_pending_usage_output_if_ready(tui);
                 }
             }
-            AppEvent::CommitCompletedTokenActivityOutput => {
-                self.insert_completed_token_activity_output_after_stream_shutdown(tui);
+            AppEvent::CommitPendingUsageOutput => {
+                self.insert_pending_usage_output_if_ready(tui);
+            }
+            AppEvent::CommitPendingUsageOutputAfterStreamShutdown => {
+                self.insert_pending_usage_output_after_stream_shutdown(tui);
             }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);

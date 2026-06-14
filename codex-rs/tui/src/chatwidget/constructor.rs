@@ -131,6 +131,7 @@ impl ChatWidget {
             next_token_activity_request_id: 0,
             pending_rate_limit_reset_request_id: None,
             pending_rate_limit_reset_hint_request_id: None,
+            pending_rate_limit_reset_hint: None,
             next_rate_limit_reset_request_id: 0,
             plan_type: initial_plan_type,
             codex_rate_limit_reached_type: None,

@@ -12,7 +12,6 @@ use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditParams;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
-use codex_app_server_protocol::GetAccountRateLimitResetCreditsResponse;
 use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveParams;
@@ -20,6 +19,7 @@ use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::MarketplaceUpgradeParams;
 use codex_app_server_protocol::MarketplaceUpgradeResponse;
 
+use codex_app_server_protocol::RateLimitResetCreditsSummary;
 use codex_app_server_protocol::RequestId;
 
 use crate::hooks_rpc::fetch_hooks_list;
@@ -79,9 +79,19 @@ impl App {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
-            let result = fetch_account_rate_limits(request_handle)
-                .await
-                .map_err(|err| err.to_string());
+            let request = fetch_account_rate_limits(request_handle);
+            let result = match origin {
+                RateLimitRefreshOrigin::ResetConsume { .. } => {
+                    tokio::time::timeout(RATE_LIMIT_RESET_REQUEST_TIMEOUT, request)
+                        .await
+                        .map_err(|_| "account/rateLimits/read timed out in TUI".to_string())
+                        .and_then(|result| result.map_err(|err| err.to_string()))
+                }
+                RateLimitRefreshOrigin::StartupPrefetch
+                | RateLimitRefreshOrigin::StatusCommand { .. } => {
+                    request.await.map_err(|err| err.to_string())
+                }
+            };
             app_event_tx.send(AppEvent::RateLimitsLoaded { origin, result });
         });
     }
@@ -118,7 +128,7 @@ impl App {
                 fetch_rate_limit_reset_credits(request_handle),
             )
             .await
-            .map_err(|_| "account/rateLimitResetCredit/read timed out in TUI".to_string())
+            .map_err(|_| "account/rateLimits/read timed out in TUI".to_string())
             .and_then(|result| result.map_err(|err| err.to_string()));
             app_event_tx.send(AppEvent::RateLimitResetCreditsLoaded { origin, result });
         });
@@ -730,17 +740,15 @@ pub(super) async fn fetch_all_mcp_server_statuses(
 
 pub(super) async fn fetch_account_rate_limits(
     request_handle: AppServerRequestHandle,
-) -> Result<Vec<RateLimitSnapshot>> {
+) -> Result<GetAccountRateLimitsResponse> {
     let request_id = RequestId::String(format!("account-rate-limits-{}", Uuid::new_v4()));
-    let response: GetAccountRateLimitsResponse = request_handle
+    request_handle
         .request_typed(ClientRequest::GetAccountRateLimits {
             request_id,
             params: None,
         })
         .await
-        .wrap_err("account/rateLimits/read failed in TUI")?;
-
-    Ok(app_server_rate_limit_snapshots(response))
+        .wrap_err("account/rateLimits/read failed in TUI")
 }
 
 pub(super) async fn fetch_account_token_activity(
@@ -758,15 +766,20 @@ pub(super) async fn fetch_account_token_activity(
 
 pub(super) async fn fetch_rate_limit_reset_credits(
     request_handle: AppServerRequestHandle,
-) -> Result<GetAccountRateLimitResetCreditsResponse> {
+) -> Result<RateLimitResetCreditsSummary> {
     let request_id = RequestId::String(format!("account-rate-limit-resets-{}", Uuid::new_v4()));
-    request_handle
-        .request_typed(ClientRequest::GetAccountRateLimitResetCredits {
+    let response: GetAccountRateLimitsResponse = request_handle
+        .request_typed(ClientRequest::GetAccountRateLimits {
             request_id,
             params: None,
         })
         .await
-        .wrap_err("account/rateLimitResetCredit/read failed in TUI")
+        .wrap_err("account/rateLimits/read failed in TUI")?;
+    response.rate_limit_reset_credits.ok_or_else(|| {
+        color_eyre::eyre::eyre!(
+            "account/rateLimits/read response did not include rateLimitResetCredits"
+        )
+    })
 }
 
 pub(super) async fn consume_rate_limit_reset_credit_request(
