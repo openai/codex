@@ -9,6 +9,7 @@ use app_test_support::write_mock_responses_config_toml;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::AskForApproval as AppAskForApproval;
+use codex_app_server_protocol::ActivePermissionProfile;
 use codex_app_server_protocol::CommandAction;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
@@ -241,6 +242,14 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
                 "mock",
                 "compact",
             )?;
+            let config_path = codex_home.path().join("config.toml");
+            let config = std::fs::read_to_string(&config_path)?;
+            // Exercise the implicit built-in profile instead of the shared fixture's explicit
+            // legacy `sandbox_mode`, which intentionally has no active profile identity.
+            std::fs::write(
+                config_path,
+                config.replace("sandbox_mode = \"read-only\"\n", ""),
+            )?;
             let mut app_server = TestAppServer::new_with_env(
                 codex_home.path(),
                 &[(
@@ -271,8 +280,10 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
             assert_eq!(response.runtime_workspace_roots, vec![response.cwd.clone()]);
             // TODO(anp): Discover and report instruction sources from the remote filesystem.
             assert_eq!(response.instruction_sources, Vec::new());
-            // TODO(anp): Report the implicit built-in permission profile instead of None.
-            assert_eq!(response.active_permission_profile, None);
+            assert_eq!(
+                response.active_permission_profile,
+                Some(ActivePermissionProfile::read_only())
+            );
 
             let turn_request_id = app_server
                 .send_turn_start_request(TurnStartParams {
