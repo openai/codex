@@ -75,12 +75,12 @@ pub type AppFileSystemPermissions = FileSystemPermissions<AbsolutePathBuf>;
 pub type ExecFileSystemPermissions = FileSystemPermissions<PathUri>;
 
 impl AppFileSystemPermissions {
-    pub fn into_exec(self) -> ExecFileSystemPermissions {
+    pub fn into_path_uri(self) -> ExecFileSystemPermissions {
         FileSystemPermissions {
             entries: self
                 .entries
                 .into_iter()
-                .map(AppFileSystemSandboxEntry::into_exec)
+                .map(AppFileSystemSandboxEntry::into_path_uri)
                 .collect(),
             glob_scan_max_depth: self.glob_scan_max_depth,
         }
@@ -88,12 +88,12 @@ impl AppFileSystemPermissions {
 }
 
 impl ExecFileSystemPermissions {
-    pub fn into_app(self) -> io::Result<AppFileSystemPermissions> {
+    pub fn into_abs_path(self) -> io::Result<AppFileSystemPermissions> {
         Ok(FileSystemPermissions {
             entries: self
                 .entries
                 .into_iter()
-                .map(ExecFileSystemSandboxEntry::into_app)
+                .map(ExecFileSystemSandboxEntry::into_abs_path)
                 .collect::<io::Result<_>>()?,
             glob_scan_max_depth: self.glob_scan_max_depth,
         })
@@ -327,7 +327,7 @@ pub type AppManagedFileSystemPermissions = ManagedFileSystemPermissions<Absolute
 pub type ExecManagedFileSystemPermissions = ManagedFileSystemPermissions<PathUri>;
 
 impl AppManagedFileSystemPermissions {
-    pub fn into_exec(self) -> ExecManagedFileSystemPermissions {
+    pub fn into_path_uri(self) -> ExecManagedFileSystemPermissions {
         match self {
             Self::Restricted {
                 entries,
@@ -335,7 +335,7 @@ impl AppManagedFileSystemPermissions {
             } => ManagedFileSystemPermissions::Restricted {
                 entries: entries
                     .into_iter()
-                    .map(AppFileSystemSandboxEntry::into_exec)
+                    .map(AppFileSystemSandboxEntry::into_path_uri)
                     .collect(),
                 glob_scan_max_depth,
             },
@@ -345,7 +345,7 @@ impl AppManagedFileSystemPermissions {
 }
 
 impl ExecManagedFileSystemPermissions {
-    pub fn into_app(self) -> io::Result<AppManagedFileSystemPermissions> {
+    pub fn into_abs_path(self) -> io::Result<AppManagedFileSystemPermissions> {
         Ok(match self {
             Self::Restricted {
                 entries,
@@ -353,7 +353,7 @@ impl ExecManagedFileSystemPermissions {
             } => ManagedFileSystemPermissions::Restricted {
                 entries: entries
                     .into_iter()
-                    .map(ExecFileSystemSandboxEntry::into_app)
+                    .map(ExecFileSystemSandboxEntry::into_abs_path)
                     .collect::<io::Result<_>>()?,
                 glob_scan_max_depth,
             },
@@ -426,13 +426,13 @@ pub type AppPermissionProfile = PermissionProfile<AbsolutePathBuf>;
 pub type ExecPermissionProfile = PermissionProfile<PathUri>;
 
 impl AppPermissionProfile {
-    pub fn into_exec(self) -> ExecPermissionProfile {
+    pub fn into_path_uri(self) -> ExecPermissionProfile {
         match self {
             Self::Managed {
                 file_system,
                 network,
             } => PermissionProfile::Managed {
-                file_system: file_system.into_exec(),
+                file_system: file_system.into_path_uri(),
                 network,
             },
             Self::Disabled => PermissionProfile::Disabled,
@@ -442,13 +442,13 @@ impl AppPermissionProfile {
 }
 
 impl ExecPermissionProfile {
-    pub fn into_app(self) -> io::Result<AppPermissionProfile> {
+    pub fn into_abs_path(self) -> io::Result<AppPermissionProfile> {
         Ok(match self {
             Self::Managed {
                 file_system,
                 network,
             } => PermissionProfile::Managed {
-                file_system: file_system.into_app()?,
+                file_system: file_system.into_abs_path()?,
                 network,
             },
             Self::Disabled => PermissionProfile::Disabled,

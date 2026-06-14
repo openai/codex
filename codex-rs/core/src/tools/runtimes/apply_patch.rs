@@ -105,7 +105,7 @@ impl ApplyPatchRuntime {
                 windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
                 use_legacy_landlock: attempt.use_legacy_landlock,
             }
-            .into_exec(),
+            .into_path_uri(),
         )
     }
 }

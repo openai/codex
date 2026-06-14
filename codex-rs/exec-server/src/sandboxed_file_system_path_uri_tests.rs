@@ -21,7 +21,7 @@ async fn sandboxed_file_system_rejects_non_native_uri_as_invalid_input() {
             NetworkSandboxPolicy::Restricted,
         ),
     )
-    .into_exec();
+    .into_path_uri();
 
     let error = file_system
         .read_file(&non_native_uri(), Some(&sandbox))

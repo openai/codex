@@ -114,9 +114,9 @@ impl AppFileSystemSandboxContext {
             && !file_system_policy.has_full_disk_write_access()
     }
 
-    pub fn into_exec(self) -> ExecFileSystemSandboxContext {
+    pub fn into_path_uri(self) -> ExecFileSystemSandboxContext {
         FileSystemSandboxContext {
-            permissions: self.permissions.into_exec(),
+            permissions: self.permissions.into_path_uri(),
             cwd: self.cwd,
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
@@ -156,9 +156,9 @@ impl<PathType> FileSystemSandboxContext<PathType> {
 }
 
 impl ExecFileSystemSandboxContext {
-    pub fn into_app(self) -> io::Result<AppFileSystemSandboxContext> {
+    pub fn into_abs_path(self) -> io::Result<AppFileSystemSandboxContext> {
         Ok(FileSystemSandboxContext {
-            permissions: self.permissions.into_app()?,
+            permissions: self.permissions.into_abs_path()?,
             cwd: self.cwd,
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,

@@ -236,7 +236,7 @@ async fn file_system_sandbox_context_uses_active_attempt() {
     assert_eq!(
         sandbox
             .clone()
-            .into_app()
+            .into_abs_path()
             .expect("native sandbox context")
             .permissions,
         expected_permissions

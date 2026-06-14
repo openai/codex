@@ -351,7 +351,7 @@ impl TurnContext {
                 .windows_sandbox_private_desktop,
             use_legacy_landlock: self.features.use_legacy_landlock(),
         }
-        .into_exec()
+        .into_path_uri()
     }
 
     fn non_legacy_file_system_sandbox_policy(&self) -> Option<FileSystemSandboxPolicy> {

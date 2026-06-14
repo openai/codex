@@ -342,7 +342,7 @@ mod tests {
                 permissions,
                 path_uri("host-checkout"),
             )
-            .into_exec();
+            .into_path_uri();
 
         let remote_context =
             remote_sandbox_context(Some(&sandbox_context)).expect("remote sandbox context");
@@ -366,7 +366,7 @@ mod tests {
                 permissions,
                 cwd.clone(),
             )
-            .into_exec();
+            .into_path_uri();
 
         let remote_context =
             remote_sandbox_context(Some(&sandbox_context)).expect("remote sandbox context");
