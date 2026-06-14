@@ -177,7 +177,7 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn app_server_rejects_windows_environment_cwd_uri() -> Result<()> {
+async fn app_server_rejects_windows_environment_cwd() -> Result<()> {
     let executable = codex_utils_cargo_bin::cargo_bin("wine-windows-exec-server")?;
     let mut exec_server = WineTestCommand::new(executable)
         .env("CODEX_HOME", r"C:\codex-home")
@@ -214,7 +214,7 @@ async fn app_server_rejects_windows_environment_cwd_uri() -> Result<()> {
                     Some(json!({
                         "environments": [{
                             "environmentId": REMOTE_ENVIRONMENT_ID,
-                            "cwd": "file:///C:/windows",
+                            "cwd": r"C:\windows",
                         }],
                     })),
                 )
