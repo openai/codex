@@ -2573,26 +2573,25 @@ stream_max_retries = 0
 
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 2, "expected two Responses API requests");
-    let latest_permissions_instructions =
-        |request: &core_test_support::responses::ResponsesRequest| {
-            request
-                .message_input_texts("developer")
-                .into_iter()
-                .rev()
-                .find(|text| text.contains("<permissions instructions>"))
-                .expect("permissions instructions")
-        };
-    let first_permissions = latest_permissions_instructions(&requests[0]);
-    assert!(first_permissions.contains(&old_root_text));
+    let latest_environment_context = |request: &core_test_support::responses::ResponsesRequest| {
+        request
+            .message_input_texts("user")
+            .into_iter()
+            .rev()
+            .find(|text| text.contains("<environment_context>"))
+            .expect("environment context")
+    };
+    let first_environment_context = latest_environment_context(&requests[0]);
+    assert!(first_environment_context.contains(&old_root_text));
     assert!(
-        !first_permissions.contains(&new_root_text),
+        !first_environment_context.contains(&new_root_text),
         "first turn should materialize the initial runtime workspace root"
     );
 
-    let second_permissions = latest_permissions_instructions(&requests[1]);
-    assert!(second_permissions.contains(&new_root_text));
+    let second_environment_context = latest_environment_context(&requests[1]);
+    assert!(second_environment_context.contains(&new_root_text));
     assert!(
-        !second_permissions.contains(&old_root_text),
+        !second_environment_context.contains(&old_root_text),
         "second turn should rebind :workspace_roots to the updated runtime workspace root"
     );
 
