@@ -26,16 +26,45 @@ use codex_app_server_protocol::UserInput;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+use std::path::Path;
+use std::path::PathBuf;
 use tempfile::TempDir;
 #[cfg(unix)]
 use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+const IMPORT_LOG_TARGET: &str = "codex.external_agent_config.import";
 
 fn assert_import_response(response: ExternalAgentConfigImportResponse) -> String {
     assert!(!response.import_id.is_empty());
     response.import_id
+}
+
+async fn external_agent_import_log(codex_home: &Path, import_id: &str) -> Result<String> {
+    let sqlite_home = std::env::var_os(codex_state::SQLITE_HOME_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| codex_home.to_path_buf());
+    let state_db = codex_state::StateRuntime::init(sqlite_home, "mock_provider".into()).await?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let rows = state_db
+            .query_logs(&codex_state::LogQuery {
+                search: Some(import_id.to_string()),
+                limit: Some(100),
+                descending: true,
+                ..Default::default()
+            })
+            .await?;
+        if let Some(row) = rows.into_iter().find(|row| row.target == IMPORT_LOG_TARGET) {
+            return Ok(row.message.unwrap_or_default());
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for import log row for {import_id}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
 
 #[tokio::test]
@@ -352,6 +381,13 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
             raw_errors: Vec::new(),
         }]
     );
+    let log_body = external_agent_import_log(codex_home.path(), &import_id).await?;
+    assert!(log_body.contains(&import_id));
+    assert!(log_body.contains("external agent config import completed"));
+    assert!(log_body.contains(r#""itemType":"SESSIONS""#));
+    assert!(log_body.contains(r#""successCount":1"#));
+    assert!(log_body.contains(r#""errorCount":0"#));
+    assert!(log_body.contains(&session_path.display().to_string()));
 
     let request_id = mcp
         .send_thread_list_request(ThreadListParams {

@@ -34,6 +34,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::ThreadManager;
 use codex_external_agent_sessions::ExternalAgentSessionMigration as CoreSessionMigration;
+use codex_state::log_db::LogDbLayer;
 use codex_thread_store::ThreadStore;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -45,6 +46,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub(crate) struct ExternalAgentConfigRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
+    log_db: Option<LogDbLayer>,
     migration_service: ExternalAgentConfigService,
     session_importer: ExternalAgentSessionImporter,
     thread_manager: Arc<ThreadManager>,
@@ -54,6 +56,7 @@ pub(crate) struct ExternalAgentConfigRequestProcessor {
 impl ExternalAgentConfigRequestProcessor {
     pub(crate) fn new(
         outgoing: Arc<OutgoingMessageSender>,
+        log_db: Option<LogDbLayer>,
         thread_manager: Arc<ThreadManager>,
         thread_store: Arc<dyn ThreadStore>,
         config_manager: ConfigManager,
@@ -70,6 +73,7 @@ impl ExternalAgentConfigRequestProcessor {
         );
         Self {
             outgoing,
+            log_db,
             migration_service: ExternalAgentConfigService::new(codex_home),
             session_importer,
             thread_manager,
@@ -179,6 +183,7 @@ impl ExternalAgentConfigRequestProcessor {
         let import_id = Uuid::new_v4().to_string();
         let needs_runtime_refresh = migration_items_need_runtime_refresh(&params.migration_items);
         let has_migration_items = !params.migration_items.is_empty();
+        let migration_items = import_request_migration_items_json(&params.migration_items);
         let has_plugin_imports = params.migration_items.iter().any(|item| {
             matches!(
                 item.item_type,
@@ -215,17 +220,21 @@ impl ExternalAgentConfigRequestProcessor {
         let has_background_imports = !import_outcome.pending_plugin_imports.is_empty()
             || !pending_session_imports.is_empty();
         if !has_background_imports {
-            self.outgoing
-                .send_server_notification(ServerNotification::ExternalAgentConfigImportCompleted(
-                    completed_notification(import_id, &completed_item_results),
-                ))
-                .await;
+            send_completed_import_notification(
+                &self.outgoing,
+                self.log_db.as_ref(),
+                import_id,
+                &migration_items,
+                &completed_item_results,
+            )
+            .await;
             return Ok(());
         }
 
         let session_importer = self.session_importer.clone();
         let plugin_processor = self.clone();
         let outgoing = Arc::clone(&self.outgoing);
+        let log_db = self.log_db.clone();
         let thread_manager = Arc::clone(&self.thread_manager);
         let session_import_result = (!pending_session_imports.is_empty()).then(|| {
             CoreImportItemResult::new(
@@ -280,11 +289,14 @@ impl ExternalAgentConfigRequestProcessor {
                 thread_manager.plugins_manager().clear_cache();
                 thread_manager.skills_manager().clear_cache();
             }
-            outgoing
-                .send_server_notification(ServerNotification::ExternalAgentConfigImportCompleted(
-                    completed_notification(import_id, &completed_item_results),
-                ))
-                .await;
+            send_completed_import_notification(
+                &outgoing,
+                log_db.as_ref(),
+                import_id,
+                &migration_items,
+                &completed_item_results,
+            )
+            .await;
         });
 
         Ok(())
@@ -469,6 +481,45 @@ impl ExternalAgentConfigRequestProcessor {
             .await
             .map_err(|err| internal_error(err.to_string()))
     }
+}
+
+async fn send_completed_import_notification(
+    outgoing: &OutgoingMessageSender,
+    log_db: Option<&LogDbLayer>,
+    import_id: String,
+    migration_items: &str,
+    item_results: &[CoreImportItemResult],
+) {
+    let notification = completed_notification(import_id, item_results);
+    log_completed_import(&notification, migration_items);
+    if let Some(log_db) = log_db {
+        log_db.flush().await;
+    }
+    outgoing
+        .send_server_notification(ServerNotification::ExternalAgentConfigImportCompleted(
+            notification,
+        ))
+        .await;
+}
+
+fn log_completed_import(
+    notification: &ExternalAgentConfigImportCompletedNotification,
+    migration_items: &str,
+) {
+    let item_results = serde_json::to_string(&notification.item_results)
+        .unwrap_or_else(|err| format!(r#"[{{"serializationError":"{err}"}}]"#));
+    tracing::info!(
+        target: "codex.external_agent_config.import",
+        import_id = %notification.import_id,
+        migration_items = %migration_items,
+        item_results = %item_results,
+        "external agent config import completed"
+    );
+}
+
+fn import_request_migration_items_json(items: &[ExternalAgentConfigMigrationItem]) -> String {
+    serde_json::to_string(items)
+        .unwrap_or_else(|err| format!(r#"[{{"serializationError":"{err}"}}]"#))
 }
 
 fn completed_notification(

@@ -475,7 +475,7 @@ impl MessageProcessor {
             Arc::clone(&thread_list_state_permit),
             thread_goal_processor.clone(),
             state_db,
-            log_db,
+            log_db.clone(),
             Arc::clone(&skills_watcher),
         );
         let turn_processor = TurnRequestProcessor::new(
@@ -512,6 +512,7 @@ impl MessageProcessor {
         );
         let external_agent_config_processor = ExternalAgentConfigRequestProcessor::new(
             outgoing.clone(),
+            log_db.clone(),
             Arc::clone(&thread_manager),
             Arc::clone(&thread_store),
             config_manager.clone(),
