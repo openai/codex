@@ -1,5 +1,6 @@
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::PermissionProfileFor;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxKind;
@@ -7,6 +8,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::future::Future;
 use std::io;
@@ -49,8 +51,8 @@ pub struct ReadDirectoryEntry {
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FileSystemSandboxContext {
-    pub permissions: PermissionProfile,
+pub struct FileSystemSandboxContext<PathType = AbsolutePathBuf> {
+    pub permissions: PermissionProfileFor<PathType>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathUri>,
     pub windows_sandbox_level: WindowsSandboxLevel,

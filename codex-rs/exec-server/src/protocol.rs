@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::FileSystemSandboxContext;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use serde::Serialize;
@@ -199,9 +200,9 @@ pub struct TerminateResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsReadFileParams {
+pub struct FsReadFileParams<PathType = AbsolutePathBuf> {
     pub path: PathUri,
-    pub sandbox: Option<FileSystemSandboxContext>,
+    pub sandbox: Option<FileSystemSandboxContext<PathType>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -212,10 +213,10 @@ pub struct FsReadFileResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsWriteFileParams {
+pub struct FsWriteFileParams<PathType = AbsolutePathBuf> {
     pub path: PathUri,
     pub data_base64: String,
-    pub sandbox: Option<FileSystemSandboxContext>,
+    pub sandbox: Option<FileSystemSandboxContext<PathType>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -224,10 +225,10 @@ pub struct FsWriteFileResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsCreateDirectoryParams {
+pub struct FsCreateDirectoryParams<PathType = AbsolutePathBuf> {
     pub path: PathUri,
     pub recursive: Option<bool>,
-    pub sandbox: Option<FileSystemSandboxContext>,
+    pub sandbox: Option<FileSystemSandboxContext<PathType>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,9 +237,9 @@ pub struct FsCreateDirectoryResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsGetMetadataParams {
+pub struct FsGetMetadataParams<PathType = AbsolutePathBuf> {
     pub path: PathUri,
-    pub sandbox: Option<FileSystemSandboxContext>,
+    pub sandbox: Option<FileSystemSandboxContext<PathType>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -254,9 +255,9 @@ pub struct FsGetMetadataResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsCanonicalizeParams {
+pub struct FsCanonicalizeParams<PathType = AbsolutePathBuf> {
     pub path: PathUri,
-    pub sandbox: Option<FileSystemSandboxContext>,
+    pub sandbox: Option<FileSystemSandboxContext<PathType>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,9 +268,9 @@ pub struct FsCanonicalizeResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsReadDirectoryParams {
+pub struct FsReadDirectoryParams<PathType = AbsolutePathBuf> {
     pub path: PathUri,
-    pub sandbox: Option<FileSystemSandboxContext>,
+    pub sandbox: Option<FileSystemSandboxContext<PathType>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -288,11 +289,11 @@ pub struct FsReadDirectoryResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsRemoveParams {
+pub struct FsRemoveParams<PathType = AbsolutePathBuf> {
     pub path: PathUri,
     pub recursive: Option<bool>,
     pub force: Option<bool>,
-    pub sandbox: Option<FileSystemSandboxContext>,
+    pub sandbox: Option<FileSystemSandboxContext<PathType>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -301,11 +302,11 @@ pub struct FsRemoveResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsCopyParams {
+pub struct FsCopyParams<PathType = AbsolutePathBuf> {
     pub source_path: PathUri,
     pub destination_path: PathUri,
     pub recursive: bool,
-    pub sandbox: Option<FileSystemSandboxContext>,
+    pub sandbox: Option<FileSystemSandboxContext<PathType>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -455,7 +456,14 @@ mod tests {
     use super::FsReadFileParams;
     use super::HttpRequestParams;
     use crate::FileSystemSandboxContext;
+    use codex_protocol::config_types::WindowsSandboxLevel;
+    use codex_protocol::models::ManagedFileSystemPermissions;
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::models::PermissionProfileFor;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
 
@@ -491,6 +499,41 @@ mod tests {
                     .expect("sandbox should serialize"),
             })
         );
+    }
+
+    #[test]
+    fn filesystem_protocol_propagates_explicit_path_uri_type() {
+        let path = PathUri::from_path(
+            std::env::current_dir()
+                .expect("current directory")
+                .join("generic-file.txt"),
+        )
+        .expect("path URI");
+        let params = FsReadFileParams::<PathUri> {
+            path: path.clone(),
+            sandbox: Some(FileSystemSandboxContext::<PathUri> {
+                permissions: PermissionProfileFor::Managed {
+                    file_system: ManagedFileSystemPermissions::Restricted {
+                        entries: vec![FileSystemSandboxEntry {
+                            path: FileSystemPath::Path { path },
+                            access: FileSystemAccessMode::Read,
+                        }],
+                        glob_scan_max_depth: None,
+                    },
+                    network: NetworkSandboxPolicy::Restricted,
+                },
+                cwd: None,
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                windows_sandbox_private_desktop: false,
+                use_legacy_landlock: false,
+            }),
+        };
+
+        let serialized = serde_json::to_value(&params).expect("params should serialize");
+        let deserialized = serde_json::from_value::<FsReadFileParams<PathUri>>(serialized)
+            .expect("params should deserialize");
+
+        assert_eq!(deserialized, params);
     }
 
     #[test]

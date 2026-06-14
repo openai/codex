@@ -176,8 +176,8 @@ impl FileSystemSpecialPath {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
-pub struct FileSystemSandboxEntry {
-    pub path: FileSystemPath,
+pub struct FileSystemSandboxEntry<PathType = AbsolutePathBuf> {
+    pub path: FileSystemPath<PathType>,
     pub access: FileSystemAccessMode,
 }
 
@@ -338,9 +338,9 @@ enum InvalidDenyReadGlobBehavior {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(tag = "type")]
-pub enum FileSystemPath {
+pub enum FileSystemPath<PathType = AbsolutePathBuf> {
     Path {
-        path: AbsolutePathBuf,
+        path: PathType,
     },
     /// A git-style glob pattern. Pattern entries currently support
     /// FileSystemAccessMode::Deny only.
