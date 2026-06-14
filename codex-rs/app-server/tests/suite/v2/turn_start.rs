@@ -77,6 +77,7 @@ use codex_protocol::models::ImageDetail;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -1327,7 +1328,10 @@ async fn turn_start_rejects_unknown_environment_before_starting_turn() -> Result
             }],
             environments: Some(vec![TurnEnvironmentParams {
                 environment_id: "missing".to_string(),
-                cwd: ApiPathString::new(codex_home.path().to_string_lossy()),
+                cwd: ApiPathString::from_abs_path(
+                    &codex_home.path().to_path_buf().try_into()?,
+                    PathConvention::native(),
+                )?,
             }]),
             ..Default::default()
         })
@@ -2745,7 +2749,10 @@ fn environment_params(
             .map(|id| {
                 Ok(TurnEnvironmentParams {
                     environment_id: (*id).to_string(),
-                    cwd: ApiPathString::new(cwd.to_string_lossy()),
+                    cwd: ApiPathString::from_abs_path(
+                        &cwd.to_path_buf().try_into()?,
+                        PathConvention::native(),
+                    )?,
                 })
             })
             .collect()
