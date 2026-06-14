@@ -5,6 +5,8 @@ load("//:defs.bzl", "WINDOWS_GNULLVM_RUSTC_LINK_FLAGS")
 load(":foreign_platform_binary.bzl", "foreign_platform_binary")
 
 _WINE_RUNTIME_BINARIES = {
+    "pwsh": "@powershell_windows_x86_64//:pwsh",
+    "pwsh-runtime-marker": "@powershell_windows_x86_64//:runtime_marker",
     "wine": "@wine_linux_x86_64//:wine",
     "wine-runtime-marker": "@wine_linux_x86_64//:runtime_marker",
     "wineserver": "@wine_linux_x86_64//:wineserver",
@@ -28,6 +30,9 @@ def wine_rust_test(
     * `CARGO_BIN_EXE_wine` and `CARGO_BIN_EXE_wineserver` identify Wine tools.
     * `CARGO_BIN_EXE_wine-runtime-marker` identifies a file whose parent is the
       Wine DLL directory to use as `WINEDLLPATH`.
+    * `CARGO_BIN_EXE_pwsh` identifies the pinned PowerShell executable and
+      `CARGO_BIN_EXE_pwsh-runtime-marker` identifies a file whose parent is the
+      complete PowerShell runtime.
 
     These are Bazel runfile locations. Resolve binaries with
     `codex_utils_cargo_bin::cargo_bin`; `:wine_test_support` resolves the fixed
@@ -42,9 +47,14 @@ def wine_rust_test(
       **kwargs: Remaining attributes forwarded to `rust_test`.
     """
     binaries = dict(_WINE_RUNTIME_BINARIES)
+    runtime_data = [
+        "@powershell_windows_x86_64//:runtime",
+        "@wine_linux_x86_64//:runtime",
+    ]
+
     for binary_name in sorted(host_binaries.keys()):
         if binary_name in binaries:
-            fail("host test binary name collides with Wine runtime: {}".format(binary_name))
+            fail("host test binary name collides with test runtime: {}".format(binary_name))
         binaries[binary_name] = host_binaries[binary_name]
 
     for index, binary_name in enumerate(sorted(windows_binaries.keys())):
@@ -68,9 +78,7 @@ def wine_rust_test(
 
     rust_test(
         name = name,
-        data = data + [
-            "@wine_linux_x86_64//:runtime",
-        ] + [binary for binary in binaries.values()],
+        data = data + runtime_data + [binary for binary in binaries.values()],
         env = {
             "CARGO_BIN_EXE_{}".format(binary_name): "$(rlocationpath {})".format(binary)
             for binary_name, binary in binaries.items()

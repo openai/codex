@@ -16,6 +16,7 @@ rust_library(
     target_compatible_with = ["@platforms//os:linux"],
     deps = [
         "//codex-rs/utils/cargo-bin",
+        "//codex-rs/utils/pty",
         "@crates//:anyhow",
         "@crates//:tempfile",
         "@crates//:tokio",
