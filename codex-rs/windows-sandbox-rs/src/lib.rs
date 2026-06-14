@@ -64,6 +64,8 @@ mod logging;
 #[cfg(target_os = "windows")]
 mod path_normalization;
 #[cfg(target_os = "windows")]
+mod program_resolution;
+#[cfg(target_os = "windows")]
 mod process;
 #[cfg(target_os = "windows")]
 mod resolved_permissions;

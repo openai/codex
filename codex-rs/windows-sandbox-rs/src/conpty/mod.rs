@@ -7,6 +7,7 @@
 //! Windows sandbox flows that need a PTY.
 
 use crate::desktop::LaunchDesktop;
+use crate::program_resolution::resolve_bare_program_on_path;
 use crate::proc_thread_attr::ProcThreadAttributeList;
 use crate::winutil::format_last_error;
 use crate::winutil::quote_windows_arg;
@@ -98,7 +99,8 @@ pub fn spawn_conpty_process_as_user(
     use_private_desktop: bool,
     logs_base_dir: Option<&Path>,
 ) -> Result<(PROCESS_INFORMATION, ConptyInstance)> {
-    let cmdline_str = argv
+    let resolved_argv = resolve_bare_program_on_path(argv, cwd, env_map);
+    let cmdline_str = resolved_argv
         .iter()
         .map(|arg| quote_windows_arg(arg))
         .collect::<Vec<_>>()
