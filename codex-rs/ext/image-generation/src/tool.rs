@@ -342,9 +342,10 @@ async fn image_url(
     environment: &ToolEnvironment,
 ) -> Result<ImageUrl, FunctionCallError> {
     let path_uri = PathUri::from_abs_path(path);
+    let sandbox = environment.file_system_sandbox_context.clone().into();
     let bytes = environment
         .file_system
-        .read_file(&path_uri, Some(&environment.file_system_sandbox_context))
+        .read_file(&path_uri, Some(&sandbox))
         .await
         .map_err(|error| {
             FunctionCallError::RespondToModel(format!(

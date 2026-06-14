@@ -8,7 +8,6 @@ use codex_protocol::items::WebSearchItem;
 use codex_protocol::models::ResponseItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
-use codex_utils_path_uri::PathUri;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -63,7 +62,7 @@ pub struct ToolEnvironment {
     /// Filesystem implementation for this environment.
     pub file_system: Arc<dyn ExecutorFileSystem>,
     /// Sandbox context to use for filesystem operations.
-    pub file_system_sandbox_context: FileSystemSandboxContext<PathUri>,
+    pub file_system_sandbox_context: FileSystemSandboxContext,
 }
 
 /// Turn-item emitter used when a caller does not expose visible item emission.

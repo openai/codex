@@ -199,9 +199,9 @@ pub struct TerminateResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsReadFileParams<PathType = PathUri> {
+pub struct FsReadFileParams {
     pub path: PathUri,
-    pub sandbox: Option<FileSystemSandboxContext<PathType>>,
+    pub sandbox: Option<FileSystemSandboxContext<PathUri>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -212,10 +212,10 @@ pub struct FsReadFileResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsWriteFileParams<PathType = PathUri> {
+pub struct FsWriteFileParams {
     pub path: PathUri,
     pub data_base64: String,
-    pub sandbox: Option<FileSystemSandboxContext<PathType>>,
+    pub sandbox: Option<FileSystemSandboxContext<PathUri>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -224,10 +224,10 @@ pub struct FsWriteFileResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsCreateDirectoryParams<PathType = PathUri> {
+pub struct FsCreateDirectoryParams {
     pub path: PathUri,
     pub recursive: Option<bool>,
-    pub sandbox: Option<FileSystemSandboxContext<PathType>>,
+    pub sandbox: Option<FileSystemSandboxContext<PathUri>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,9 +236,9 @@ pub struct FsCreateDirectoryResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsGetMetadataParams<PathType = PathUri> {
+pub struct FsGetMetadataParams {
     pub path: PathUri,
-    pub sandbox: Option<FileSystemSandboxContext<PathType>>,
+    pub sandbox: Option<FileSystemSandboxContext<PathUri>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -254,9 +254,9 @@ pub struct FsGetMetadataResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsCanonicalizeParams<PathType = PathUri> {
+pub struct FsCanonicalizeParams {
     pub path: PathUri,
-    pub sandbox: Option<FileSystemSandboxContext<PathType>>,
+    pub sandbox: Option<FileSystemSandboxContext<PathUri>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,9 +267,9 @@ pub struct FsCanonicalizeResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsReadDirectoryParams<PathType = PathUri> {
+pub struct FsReadDirectoryParams {
     pub path: PathUri,
-    pub sandbox: Option<FileSystemSandboxContext<PathType>>,
+    pub sandbox: Option<FileSystemSandboxContext<PathUri>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -288,11 +288,11 @@ pub struct FsReadDirectoryResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsRemoveParams<PathType = PathUri> {
+pub struct FsRemoveParams {
     pub path: PathUri,
     pub recursive: Option<bool>,
     pub force: Option<bool>,
-    pub sandbox: Option<FileSystemSandboxContext<PathType>>,
+    pub sandbox: Option<FileSystemSandboxContext<PathUri>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -301,11 +301,11 @@ pub struct FsRemoveResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsCopyParams<PathType = PathUri> {
+pub struct FsCopyParams {
     pub source_path: PathUri,
     pub destination_path: PathUri,
     pub recursive: bool,
-    pub sandbox: Option<FileSystemSandboxContext<PathType>>,
+    pub sandbox: Option<FileSystemSandboxContext<PathUri>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
