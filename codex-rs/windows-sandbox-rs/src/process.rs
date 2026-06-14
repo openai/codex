@@ -3,6 +3,7 @@ use crate::logging;
 use crate::proc_thread_attr::ProcThreadAttributeList;
 use crate::winutil::argv_to_command_line;
 use crate::winutil::format_last_error;
+use crate::winutil::resolve_application_path;
 use crate::winutil::to_wide;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -86,6 +87,8 @@ pub unsafe fn create_process_as_user(
 ) -> Result<CreatedProcess> {
     let cmdline_str = argv_to_command_line(argv);
     let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
+    let application_path = resolve_application_path(argv, env_map, cwd);
+    let application_name = application_path.as_deref().map(to_wide);
     let env_block = make_env_block(env_map);
     let desktop = LaunchDesktop::prepare(use_private_desktop, logs_base_dir)?;
     let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
@@ -122,7 +125,9 @@ pub unsafe fn create_process_as_user(
             let creation_flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
             let ok = CreateProcessAsUserW(
                 h_token,
-                std::ptr::null(),
+                application_name
+                    .as_ref()
+                    .map_or(std::ptr::null(), |wide| wide.as_ptr()),
                 cmdline.as_mut_ptr(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -136,9 +141,12 @@ pub unsafe fn create_process_as_user(
             if ok == 0 {
                 let err = GetLastError() as i32;
                 let msg = format!(
-                    "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
+                    "CreateProcessAsUserW failed: {} ({}) | app={} | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
                     err,
                     format_last_error(err),
+                    application_path
+                        .as_deref()
+                        .map_or("<unresolved>", |path| path.to_string_lossy().as_ref()),
                     cwd.display(),
                     cmdline_str,
                     env_block_len,
@@ -163,7 +171,9 @@ pub unsafe fn create_process_as_user(
             let creation_flags = CREATE_UNICODE_ENVIRONMENT;
             let ok = CreateProcessAsUserW(
                 h_token,
-                std::ptr::null(),
+                application_name
+                    .as_ref()
+                    .map_or(std::ptr::null(), |wide| wide.as_ptr()),
                 cmdline.as_mut_ptr(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -177,9 +187,12 @@ pub unsafe fn create_process_as_user(
             if ok == 0 {
                 let err = GetLastError() as i32;
                 let msg = format!(
-                    "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
+                    "CreateProcessAsUserW failed: {} ({}) | app={} | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
                     err,
                     format_last_error(err),
+                    application_path
+                        .as_deref()
+                        .map_or("<unresolved>", |path| path.to_string_lossy().as_ref()),
                     cwd.display(),
                     cmdline_str,
                     env_block_len,
