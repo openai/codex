@@ -1,5 +1,5 @@
 use codex_protocol::parse_command::ParsedCommand;
-use codex_shell_command::bash::parse_plain_shell_script;
+use codex_shell_command::bash::parse_shell_script_into_commands;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_shell_command::parse_command::parse_shell_script;
 
@@ -27,7 +27,7 @@ impl MemoriesUsageKind {
 }
 
 pub fn memories_usage_kinds_from_command(command: &str) -> Vec<MemoriesUsageKind> {
-    let Some(commands) = parse_plain_shell_script(command) else {
+    let Some(commands) = parse_shell_script_into_commands(command) else {
         return Vec::new();
     };
     if !commands

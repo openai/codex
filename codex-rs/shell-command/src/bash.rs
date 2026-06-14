@@ -95,7 +95,7 @@ pub fn try_parse_word_only_commands_sequence(tree: &Tree, src: &str) -> Option<V
 }
 
 /// Parses a shell script consisting only of plain commands joined by safe operators.
-pub fn parse_plain_shell_script(script: &str) -> Option<Vec<Vec<String>>> {
+pub fn parse_shell_script_into_commands(script: &str) -> Option<Vec<Vec<String>>> {
     let tree = try_parse_shell(script)?;
     try_parse_word_only_commands_sequence(&tree, script)
 }
@@ -120,7 +120,7 @@ pub fn extract_bash_command(command: &[String]) -> Option<(&str, &str)> {
 /// joined by safe operators.
 pub fn parse_shell_lc_plain_commands(command: &[String]) -> Option<Vec<Vec<String>>> {
     let (_, script) = extract_bash_command(command)?;
-    parse_plain_shell_script(script)
+    parse_shell_script_into_commands(script)
 }
 
 /// Returns the parsed argv for a single shell command in a here-doc style
@@ -326,7 +326,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     fn parse_seq(src: &str) -> Option<Vec<Vec<String>>> {
-        parse_plain_shell_script(src)
+        parse_shell_script_into_commands(src)
     }
 
     #[test]
