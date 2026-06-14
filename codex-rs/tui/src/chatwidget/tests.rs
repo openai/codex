@@ -21,6 +21,7 @@ pub(super) use crate::legacy_core::config::ConfigBuilder;
 pub(super) use crate::model_catalog::ModelCatalog;
 pub(super) use crate::test_backend::VT100Backend;
 pub(super) use crate::test_support::PathBufExt;
+pub(super) use crate::test_support::test_api_path;
 pub(super) use crate::test_support::test_path_buf;
 pub(super) use crate::test_support::test_path_display;
 pub(super) use crate::token_usage::TokenUsage;

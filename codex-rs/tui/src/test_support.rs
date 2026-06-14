@@ -6,6 +6,8 @@ use codex_models_manager::bundled_models_response;
 use codex_protocol::openai_models::ModelPreset;
 pub(crate) use codex_utils_absolute_path::test_support::PathBufExt;
 pub(crate) use codex_utils_absolute_path::test_support::test_path_buf;
+use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -20,6 +22,11 @@ pub(crate) static TEST_MODEL_PRESETS: LazyLock<Vec<ModelPreset>> = LazyLock::new
 
 pub(crate) fn test_path_display(path: &str) -> String {
     test_path_buf(path).display().to_string()
+}
+
+pub(crate) fn test_api_path(path: &str) -> ApiPathString {
+    ApiPathString::from_abs_path(&test_path_buf(path).abs(), PathConvention::native())
+        .expect("API path")
 }
 
 pub(crate) fn session_source_cli<T>() -> T

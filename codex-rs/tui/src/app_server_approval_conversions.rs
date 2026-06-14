@@ -11,6 +11,9 @@ use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::GrantedPermissionProfile;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -47,6 +50,19 @@ pub(crate) fn file_update_changes_to_display(
             (path, file_change)
         })
         .collect()
+}
+
+pub(crate) fn command_approval_cwd_to_host(
+    cwd: Option<&ApiPathString>,
+    fallback_cwd: &AbsolutePathBuf,
+) -> AbsolutePathBuf {
+    cwd.and_then(|cwd| {
+        let convention = cwd.infer_absolute_path_convention()?;
+        let cwd = cwd.to_path_uri(convention).ok()?;
+        let cwd = ApiPathString::from_path_uri(&cwd, PathConvention::native()).ok()?;
+        AbsolutePathBuf::try_from(cwd.into_string()).ok()
+    })
+    .unwrap_or_else(|| fallback_cwd.clone())
 }
 
 #[cfg(test)]

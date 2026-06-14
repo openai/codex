@@ -2378,7 +2378,7 @@
         "cwd": {
           "anyOf": [
             {
-              "$ref": "#/definitions/v2/AbsolutePathBuf"
+              "$ref": "#/definitions/v2/ApiPathString"
             },
             {
               "type": "null"

@@ -335,6 +335,7 @@ impl ThreadEventChannel {
 mod tests {
     use super::*;
     use crate::test_support::PathBufExt;
+    use crate::test_support::test_api_path;
     use crate::test_support::test_path_buf;
     use codex_app_server_protocol::AskForApproval;
     use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
@@ -491,7 +492,7 @@ mod tests {
                 reason: Some("needs approval".to_string()),
                 network_approval_context: None,
                 command: Some("echo hello".to_string()),
-                cwd: Some(test_path_buf("/tmp/project").abs()),
+                cwd: Some(test_api_path("/tmp/project")),
                 command_actions: None,
                 additional_permissions: None,
                 proposed_execpolicy_amendment: None,

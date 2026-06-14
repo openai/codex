@@ -1987,7 +1987,7 @@ impl CodexClient {
             println!("< command: {command}");
         }
         if let Some(cwd) = cwd.as_ref() {
-            println!("< cwd: {}", cwd.display());
+            println!("< cwd: {cwd}");
         }
         if let Some(command_actions) = command_actions.as_ref()
             && !command_actions.is_empty()

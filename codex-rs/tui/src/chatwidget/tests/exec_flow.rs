@@ -62,7 +62,7 @@ fn app_server_exec_approval_request_splits_shell_wrapped_command() {
                 shlex::try_join(["/bin/zsh", "-lc", script])
                     .expect("round-trippable shell wrapper"),
             ),
-            cwd: Some(test_path_buf("/tmp").abs()),
+            cwd: Some(test_api_path("/tmp")),
             command_actions: None,
             additional_permissions: None,
             proposed_execpolicy_amendment: None,

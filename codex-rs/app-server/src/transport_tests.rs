@@ -5,6 +5,8 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio::time::Duration;
@@ -12,6 +14,10 @@ use tokio::time::timeout;
 
 fn absolute_path(path: &str) -> AbsolutePathBuf {
     AbsolutePathBuf::from_absolute_path(path).expect("absolute path")
+}
+
+fn api_path(path: &str) -> ApiPathString {
+    ApiPathString::from_abs_path(&absolute_path(path), PathConvention::native()).expect("API path")
 }
 
 fn thread_realtime_started_notification() -> ServerNotification {
@@ -253,7 +259,7 @@ async fn command_execution_request_approval_strips_additional_permissions_withou
                     reason: Some("Need extra read access".to_string()),
                     network_approval_context: None,
                     command: Some("cat file".to_string()),
-                    cwd: Some(absolute_path("/tmp")),
+                    cwd: Some(api_path("/tmp")),
                     command_actions: None,
                     additional_permissions: Some(
                         codex_app_server_protocol::AdditionalPermissionProfile {
@@ -318,7 +324,7 @@ async fn command_execution_request_approval_keeps_additional_permissions_with_ca
                     reason: Some("Need extra read access".to_string()),
                     network_approval_context: None,
                     command: Some("cat file".to_string()),
-                    cwd: Some(absolute_path("/tmp")),
+                    cwd: Some(api_path("/tmp")),
                     command_actions: None,
                     additional_permissions: Some(
                         codex_app_server_protocol::AdditionalPermissionProfile {

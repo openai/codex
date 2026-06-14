@@ -565,13 +565,19 @@ pub(crate) async fn apply_bespoke_event_handling(
             } = ev;
             #[expect(
                 clippy::expect_used,
-                reason = "legacy command approval payloads still require a host-native cwd"
+                reason = "command approval paths are absolute and have an inferred convention"
             )]
-            let cwd = {
-                let cwd = ApiPathString::from_path_uri(&cwd, PathConvention::native())
+            let (api_cwd, cwd) = {
+                let convention = cwd
+                    .infer_path_convention()
+                    .expect("command cwd should have a native path convention");
+                let api_cwd = ApiPathString::from_path_uri(&cwd, convention)
+                    .expect("command cwd should render using its native path convention");
+                let host_cwd = ApiPathString::from_path_uri(&cwd, PathConvention::native())
                     .expect("command cwd should render using the app-server host path convention");
-                AbsolutePathBuf::try_from(cwd.into_string())
-                    .expect("projected command cwd should be absolute on the app-server host")
+                let host_cwd = AbsolutePathBuf::try_from(host_cwd.into_string())
+                    .expect("projected command cwd should be absolute on the app-server host");
+                (api_cwd, host_cwd)
             };
             let command_actions = parsed_cmd
                 .iter()
@@ -599,7 +605,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     CommandExecutionApprovalPresentation::Command(completion_item) => (
                         None,
                         Some(completion_item.command.clone()),
-                        Some(completion_item.cwd.clone()),
+                        Some(api_cwd),
                         Some(completion_item.command_actions.clone()),
                         Some(completion_item),
                     ),

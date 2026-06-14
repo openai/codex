@@ -25,6 +25,7 @@ use crate::history_cell::UserHistoryCell;
 use crate::history_cell::new_session_info;
 use crate::multi_agents::AgentPickerThreadEntry;
 use crate::multi_agents::SubAgentActivityDisplay;
+use crate::test_support::test_api_path;
 use assert_matches::assert_matches;
 
 use crate::app_command::AppCommand as Op;
@@ -4693,7 +4694,7 @@ fn exec_approval_request(
             reason: Some("needs approval".to_string()),
             network_approval_context: None,
             command: Some("echo hello".to_string()),
-            cwd: Some(test_path_buf("/tmp/project").abs()),
+            cwd: Some(test_api_path("/tmp/project")),
             command_actions: None,
             additional_permissions: None,
             proposed_execpolicy_amendment: None,
