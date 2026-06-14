@@ -3723,8 +3723,14 @@ fn thread_settings_update_params_preserve_field_level_experimental_gates() {
 
 #[test]
 fn turn_start_params_round_trip_environments() {
+    // Use a path foreign to the test host so this exercises syntax preservation instead of the
+    // host-native conversion performed by test_absolute_path().
+    #[cfg(windows)]
+    let raw_cwd = "/workspace";
+    #[cfg(not(windows))]
+    let raw_cwd = r"C:\workspace";
     let cwd: ApiPathString =
-        serde_json::from_value(json!(r"C:\workspace")).expect("API path should deserialize");
+        serde_json::from_value(json!(raw_cwd)).expect("API path should deserialize");
     let params: TurnStartParams = serde_json::from_value(json!({
         "threadId": "thread_123",
         "input": [],
@@ -3803,29 +3809,6 @@ fn turn_start_params_treat_null_or_omitted_environments_as_default() {
     assert_eq!(
         crate::experimental_api::ExperimentalApi::experimental_reason(&omitted_environments),
         None
-    );
-}
-
-#[test]
-fn turn_start_params_preserve_relative_environment_cwd_for_boundary_validation() {
-    let params = serde_json::from_value::<TurnStartParams>(json!({
-        "threadId": "thread_123",
-        "input": [],
-        "environments": [
-            {
-                "environmentId": "local",
-                "cwd": "relative"
-            }
-        ],
-    }))
-    .expect("native cwd should deserialize without applying host rules");
-
-    assert_eq!(
-        params.environments,
-        Some(vec![TurnEnvironmentParams {
-            environment_id: "local".to_string(),
-            cwd: serde_json::from_value(json!("relative")).expect("API path should deserialize"),
-        }])
     );
 }
 

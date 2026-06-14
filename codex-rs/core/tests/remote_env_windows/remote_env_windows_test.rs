@@ -3,8 +3,15 @@
 use anyhow::Context;
 use anyhow::Result;
 use app_test_support::TestAppServer;
-use codex_app_server_protocol::JSONRPCError;
+use app_test_support::create_mock_responses_server_sequence;
+use app_test_support::to_response;
+use app_test_support::write_mock_responses_config_toml;
+use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::ItemCompletedNotification;
+use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadStartResponse;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_features::Feature;
@@ -29,6 +36,7 @@ use core_test_support::wait_for_event;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::BTreeMap;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use wine_exec_server_test_support::WineExecServer;
@@ -166,6 +174,36 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
     WineExecServer
         .scope(|exec_server_url| async move {
             let codex_home = TempDir::new()?;
+            let responses = vec![
+                sse(vec![
+                    ev_response_created("resp-1"),
+                    ev_function_call(
+                        CALL_ID,
+                        "exec_command",
+                        &serde_json::to_string(&json!({
+                            "cmd": COMMAND,
+                            "login": false,
+                            "yield_time_ms": 5_000,
+                        }))?,
+                    ),
+                    ev_completed("resp-1"),
+                ]),
+                sse(vec![
+                    ev_response_created("resp-2"),
+                    ev_assistant_message("msg-1", "done"),
+                    ev_completed("resp-2"),
+                ]),
+            ];
+            let server = create_mock_responses_server_sequence(responses).await;
+            write_mock_responses_config_toml(
+                codex_home.path(),
+                &server.uri(),
+                &BTreeMap::from([(Feature::UnifiedExec, true)]),
+                100_000,
+                /*requires_openai_auth*/ None,
+                "mock",
+                "compact",
+            )?;
             let mut app_server = TestAppServer::new_with_env(
                 codex_home.path(),
                 &[(
@@ -187,18 +225,75 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
                     })),
                 )
                 .await?;
-            let error: JSONRPCError = timeout(
+            let request_id = RequestId::Integer(request_id);
+            let message = timeout(APP_SERVER_READ_TIMEOUT, async {
+                loop {
+                    let message = app_server.read_next_message().await?;
+                    match &message {
+                        JSONRPCMessage::Response(response) if response.id == request_id => {
+                            return Ok::<JSONRPCMessage, anyhow::Error>(message);
+                        }
+                        JSONRPCMessage::Error(error) if error.id == request_id => {
+                            return Ok(message);
+                        }
+                        _ => {}
+                    }
+                }
+            })
+            .await??;
+            let JSONRPCMessage::Response(response) = message else {
+                panic!("thread/start should succeed, got {message:?}");
+            };
+            let response: ThreadStartResponse = to_response(response)?;
+            assert!(!response.thread.id.is_empty());
+
+            let turn_request_id = app_server
+                .send_raw_request(
+                    "turn/start",
+                    Some(json!({
+                        "threadId": response.thread.id,
+                        "input": [{"type": "text", "text": "run the Windows smoke command"}],
+                        "approvalPolicy": "never",
+                        "sandboxPolicy": {"type": "dangerFullAccess"},
+                    })),
+                )
+                .await?;
+            timeout(
                 APP_SERVER_READ_TIMEOUT,
-                app_server.read_stream_until_error_message(RequestId::Integer(request_id)),
+                app_server.read_stream_until_response_message(RequestId::Integer(turn_request_id)),
             )
             .await??;
 
-            assert_eq!(error.id, RequestId::Integer(request_id));
-            assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
-            assert_eq!(
-                error.error.message,
-                "Invalid request: AbsolutePathBuf deserialized without a base path"
-            );
+            let completed = timeout(APP_SERVER_READ_TIMEOUT, async {
+                loop {
+                    let notification = app_server
+                        .read_stream_until_notification_message("item/completed")
+                        .await?;
+                    let completed: ItemCompletedNotification = serde_json::from_value(
+                        notification.params.context("item/completed params")?,
+                    )?;
+                    if matches!(completed.item, ThreadItem::CommandExecution { .. }) {
+                        return Ok::<ThreadItem, anyhow::Error>(completed.item);
+                    }
+                }
+            })
+            .await??;
+            let ThreadItem::CommandExecution {
+                id,
+                status,
+                exit_code,
+                ..
+            } = completed
+            else {
+                unreachable!("loop returns only command execution items");
+            };
+            assert_eq!(id, CALL_ID);
+            assert_eq!((status, exit_code), (CommandExecutionStatus::Completed, Some(0)));
+            timeout(
+                APP_SERVER_READ_TIMEOUT,
+                app_server.read_stream_until_notification_message("turn/completed"),
+            )
+            .await??;
 
             Ok(())
         })
