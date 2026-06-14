@@ -176,6 +176,25 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
     Ok(())
 }
 
+#[test]
+fn build_tool_call_uses_canonical_tool_search_name() -> anyhow::Result<()> {
+    let call = ToolRouter::build_tool_call(ResponseItem::ToolSearchCall {
+        id: None,
+        call_id: Some("call-tool-search".to_string()),
+        status: None,
+        execution: "client".to_string(),
+        arguments: json!({ "query": "calendar" }),
+    })?
+    .expect("client tool_search_call should produce a tool call");
+
+    assert_eq!(
+        call.tool_name,
+        ToolName::namespaced("tool_search", "tool_search_tool")
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
