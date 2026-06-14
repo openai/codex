@@ -332,8 +332,7 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
                 unreachable!("loop returns only command execution items");
             };
             assert_eq!(id, CALL_ID);
-            // TODO(anp): Make command execution cwd a PathUri so this stays `C:\windows`.
-            assert_eq!(cwd, std::path::PathBuf::from("/C:/windows").abs());
+            assert_eq!(cwd.as_str(), r"C:\windows");
             // TODO(anp): Parse command actions using the selected environment's path convention so
             // their paths remain Windows-native instead of degrading the action to Unknown.
             assert_eq!(command_actions.len(), 1);

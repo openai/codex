@@ -352,7 +352,7 @@ async fn exec_end_without_begin_uses_event_command() {
         .into_iter()
         .map(|parsed| AppServerCommandAction::from_core_with_cwd(parsed, &chat.config.cwd))
         .collect();
-    let cwd = chat.config.cwd.clone();
+    let cwd = test_api_path("/tmp/project");
     handle_exec_end(
         &mut chat,
         AppServerThreadItem::CommandExecution {

@@ -3607,7 +3607,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         .cloned()
         .map(|parsed| AppServerCommandAction::from_core_with_cwd(parsed, &chat.config.cwd))
         .collect::<Vec<_>>();
-    let cwd = chat.config.cwd.clone();
+    let cwd = test_api_path("/tmp/project");
     handle_exec_begin(
         &mut chat,
         AppServerThreadItem::CommandExecution {

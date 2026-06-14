@@ -138,6 +138,7 @@ impl QueuedInterrupt {
 #[cfg(test)]
 mod tests {
     use crate::approval_events::ExecApprovalRequestEvent;
+    use crate::test_support::test_api_path;
     use codex_app_server_protocol::CommandExecutionSource;
     use codex_app_server_protocol::CommandExecutionStatus;
     use codex_app_server_protocol::ThreadItem;
@@ -176,7 +177,7 @@ mod tests {
         ThreadItem::CommandExecution {
             id: call_id.to_string(),
             command: "true".to_string(),
-            cwd: AbsolutePathBuf::current_dir().expect("current dir"),
+            cwd: test_api_path("/tmp"),
             process_id: None,
             source: CommandExecutionSource::Agent,
             status: CommandExecutionStatus::InProgress,

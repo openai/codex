@@ -1278,11 +1278,18 @@ mod tests {
     use codex_protocol::protocol::WebSearchEndEvent;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
+    use codex_utils_path_uri::ApiPathString;
+    use codex_utils_path_uri::PathConvention;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use std::time::Duration;
     use uuid::Uuid;
+
+    fn test_api_path(path: &str) -> ApiPathString {
+        ApiPathString::from_abs_path(&test_path_buf(path).abs(), PathConvention::native())
+            .expect("API path")
+    }
 
     #[test]
     fn builds_multiple_turns_with_reasoning_items() {
@@ -2124,7 +2131,7 @@ mod tests {
             ThreadItem::CommandExecution {
                 id: "exec-1".into(),
                 command: "echo 'hello world'".into(),
-                cwd: test_path_buf("/tmp").abs(),
+                cwd: test_api_path("/tmp"),
                 process_id: Some("pid-1".into()),
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Completed,
@@ -2355,7 +2362,7 @@ mod tests {
             ThreadItem::CommandExecution {
                 id: "exec-declined".into(),
                 command: "ls".into(),
-                cwd: test_path_buf("/tmp").abs(),
+                cwd: test_api_path("/tmp"),
                 process_id: Some("pid-2".into()),
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Declined,
@@ -2453,7 +2460,7 @@ mod tests {
             ThreadItem::CommandExecution {
                 id: "guardian-exec".into(),
                 command: "rm -rf /tmp/guardian".into(),
-                cwd: test_path_buf("/tmp").abs(),
+                cwd: test_api_path("/tmp"),
                 process_id: None,
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Declined,
@@ -2519,7 +2526,7 @@ mod tests {
             ThreadItem::CommandExecution {
                 id: "guardian-execve".into(),
                 command: "/bin/rm -f /tmp/file.sqlite".into(),
-                cwd: test_path_buf("/tmp").abs(),
+                cwd: test_api_path("/tmp"),
                 process_id: None,
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::InProgress,
@@ -2617,7 +2624,7 @@ mod tests {
             ThreadItem::CommandExecution {
                 id: "exec-late".into(),
                 command: "echo done".into(),
-                cwd: test_path_buf("/tmp").abs(),
+                cwd: test_api_path("/tmp"),
                 process_id: Some("pid-42".into()),
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Completed,

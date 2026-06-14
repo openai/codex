@@ -43,13 +43,28 @@ use std::path::PathBuf;
 
 #[expect(
     clippy::expect_used,
-    reason = "legacy app-server command items still require a host-native cwd"
+    reason = "command event paths are absolute and have an inferred convention"
 )]
-fn project_command_cwd_to_host(cwd: &PathUri) -> AbsolutePathBuf {
-    let cwd = ApiPathString::from_path_uri(cwd, PathConvention::native())
+fn command_cwd_for_api_and_actions(cwd: &PathUri) -> (ApiPathString, AbsolutePathBuf) {
+    let convention = cwd
+        .infer_path_convention()
+        .expect("command cwd should have a native path convention");
+    let api_cwd = ApiPathString::from_path_uri(cwd, convention)
+        .expect("command cwd should render using its native path convention");
+    let host_cwd = ApiPathString::from_path_uri(cwd, PathConvention::native())
         .expect("command cwd should render using the app-server host path convention");
-    AbsolutePathBuf::try_from(cwd.into_string())
-        .expect("projected command cwd should be absolute on the app-server host")
+    let host_cwd = AbsolutePathBuf::try_from(host_cwd.into_string())
+        .expect("projected command cwd should be absolute on the app-server host");
+    (api_cwd, host_cwd)
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "guardian command paths are native to the app-server host"
+)]
+fn api_path_from_host(cwd: &AbsolutePathBuf) -> ApiPathString {
+    ApiPathString::from_abs_path(cwd, PathConvention::native())
+        .expect("guardian command cwd should render using the host path convention")
 }
 
 pub fn build_file_change_approval_request_item(
@@ -81,11 +96,11 @@ pub fn build_file_change_end_item(payload: &PatchApplyEndEvent) -> ThreadItem {
 pub fn build_command_execution_approval_request_item(
     payload: &ExecApprovalRequestEvent,
 ) -> ThreadItem {
-    let cwd = project_command_cwd_to_host(&payload.cwd);
+    let (cwd, host_cwd) = command_cwd_for_api_and_actions(&payload.cwd);
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: cwd.clone(),
+        cwd,
         process_id: None,
         source: CommandExecutionSource::Agent,
         status: CommandExecutionStatus::InProgress,
@@ -93,7 +108,7 @@ pub fn build_command_execution_approval_request_item(
             .parsed_cmd
             .iter()
             .cloned()
-            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &cwd))
+            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &host_cwd))
             .collect(),
         aggregated_output: None,
         exit_code: None,
@@ -102,11 +117,11 @@ pub fn build_command_execution_approval_request_item(
 }
 
 pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> ThreadItem {
-    let cwd = project_command_cwd_to_host(&payload.cwd);
+    let (cwd, host_cwd) = command_cwd_for_api_and_actions(&payload.cwd);
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: cwd.clone(),
+        cwd,
         process_id: payload.process_id.clone(),
         source: payload.source.into(),
         status: CommandExecutionStatus::InProgress,
@@ -114,7 +129,7 @@ pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> Th
             .parsed_cmd
             .iter()
             .cloned()
-            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &cwd))
+            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &host_cwd))
             .collect(),
         aggregated_output: None,
         exit_code: None,
@@ -129,12 +144,12 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
         Some(payload.aggregated_output.clone())
     };
     let duration_ms = i64::try_from(payload.duration.as_millis()).unwrap_or(i64::MAX);
-    let cwd = project_command_cwd_to_host(&payload.cwd);
+    let (cwd, host_cwd) = command_cwd_for_api_and_actions(&payload.cwd);
 
     ThreadItem::CommandExecution {
         id: payload.call_id.clone(),
         command: shlex_join(&payload.command),
-        cwd: cwd.clone(),
+        cwd,
         process_id: payload.process_id.clone(),
         source: payload.source.into(),
         status: (&payload.status).into(),
@@ -142,7 +157,7 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
             .parsed_cmd
             .iter()
             .cloned()
-            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &cwd))
+            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &host_cwd))
             .collect(),
         aggregated_output,
         exit_code: Some(payload.exit_code),
@@ -168,7 +183,7 @@ pub fn build_item_from_guardian_event(
             Some(ThreadItem::CommandExecution {
                 id: id.clone(),
                 command,
-                cwd: cwd.clone(),
+                cwd: api_path_from_host(cwd),
                 process_id: None,
                 source: CommandExecutionSource::Agent,
                 status,
@@ -204,7 +219,7 @@ pub fn build_item_from_guardian_event(
             Some(ThreadItem::CommandExecution {
                 id: id.clone(),
                 command,
-                cwd: cwd.clone(),
+                cwd: api_path_from_host(cwd),
                 process_id: None,
                 source: CommandExecutionSource::Agent,
                 status,

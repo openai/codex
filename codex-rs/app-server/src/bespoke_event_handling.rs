@@ -131,7 +131,7 @@ enum CommandExecutionApprovalPresentation {
 #[derive(Debug, PartialEq)]
 struct CommandExecutionCompletionItem {
     command: String,
-    cwd: AbsolutePathBuf,
+    cwd: ApiPathString,
     command_actions: Vec<V2ParsedCommand>,
 }
 
@@ -592,7 +592,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let command_string = shlex_join(&command);
                 let completion_item = CommandExecutionCompletionItem {
                     command: command_string,
-                    cwd: cwd.clone(),
+                    cwd: api_cwd.clone(),
                     command_actions: command_actions.clone(),
                 };
                 CommandExecutionApprovalPresentation::Command(completion_item)
@@ -1370,7 +1370,7 @@ async fn start_command_execution_item(
     turn_id: String,
     item_id: String,
     command: String,
-    cwd: AbsolutePathBuf,
+    cwd: ApiPathString,
     command_actions: Vec<V2ParsedCommand>,
     source: CommandExecutionSource,
     outgoing: &ThreadScopedOutgoingMessageSender,
@@ -1414,7 +1414,7 @@ async fn complete_command_execution_item(
     turn_id: String,
     item_id: String,
     command: String,
-    cwd: AbsolutePathBuf,
+    cwd: ApiPathString,
     process_id: Option<String>,
     source: CommandExecutionSource,
     command_actions: Vec<V2ParsedCommand>,
@@ -2338,7 +2338,11 @@ mod tests {
     fn command_execution_completion_item(command: &str) -> CommandExecutionCompletionItem {
         CommandExecutionCompletionItem {
             command: command.to_string(),
-            cwd: test_path_buf("/tmp").abs(),
+            cwd: ApiPathString::from_abs_path(
+                &test_path_buf("/tmp").abs(),
+                PathConvention::native(),
+            )
+            .expect("API cwd"),
             command_actions: vec![V2ParsedCommand::Unknown {
                 command: command.to_string(),
             }],

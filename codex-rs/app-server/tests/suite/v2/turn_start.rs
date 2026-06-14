@@ -2439,7 +2439,11 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     else {
         unreachable!("loop ensures we break on command execution items");
     };
-    assert_eq!(cwd.as_path(), second_cwd.as_path());
+    let second_cwd = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(second_cwd)?;
+    assert_eq!(
+        cwd,
+        ApiPathString::from_abs_path(&second_cwd, PathConvention::native())?
+    );
     let expected_command = format_with_current_shell_display("echo second turn");
     assert_eq!(command, expected_command);
     assert_eq!(status, CommandExecutionStatus::InProgress);

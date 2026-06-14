@@ -257,7 +257,7 @@ pub enum ThreadItem {
         /// The command to be executed.
         command: String,
         /// The command's working directory.
-        cwd: AbsolutePathBuf,
+        cwd: ApiPathString,
         /// Identifier for the underlying PTY process (when available).
         process_id: Option<String>,
         #[serde(default)]

@@ -1,8 +1,8 @@
 use super::*;
+use crate::test_support::test_api_path;
 use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
-use codex_utils_absolute_path::AbsolutePathBuf;
 
 #[test]
 fn agent_status_uses_bounded_buffered_activity() {
@@ -12,7 +12,7 @@ fn agent_status_uses_bounded_buffered_activity() {
             item: ThreadItem::CommandExecution {
                 id: "command-1".to_string(),
                 command: "cargo test -p codex-tui".to_string(),
-                cwd: AbsolutePathBuf::try_from("/workspace").expect("absolute path"),
+                cwd: test_api_path("/workspace"),
                 process_id: None,
                 source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Completed,

@@ -35,6 +35,8 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
+use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -74,6 +76,12 @@ use codex_exec::TurnFailedEvent;
 use codex_exec::TurnStartedEvent;
 use codex_exec::Usage;
 use codex_exec::WebSearchItem;
+
+#[expect(clippy::expect_used, reason = "test paths are absolute")]
+fn api_path(path: &str) -> ApiPathString {
+    ApiPathString::from_abs_path(&test_path_buf(path).abs(), PathConvention::native())
+        .expect("API path")
+}
 
 #[test]
 fn map_todo_items_preserves_text_and_completion_state() {
@@ -170,7 +178,7 @@ fn command_execution_started_and_completed_translate_to_thread_events() {
     let command_item = ThreadItem::CommandExecution {
         id: "cmd-1".to_string(),
         command: "ls".to_string(),
-        cwd: test_path_buf("/tmp/project").abs(),
+        cwd: api_path("/tmp/project"),
         process_id: Some("123".to_string()),
         source: CommandExecutionSource::UserShell,
         status: ApiCommandExecutionStatus::InProgress,
@@ -210,7 +218,7 @@ fn command_execution_started_and_completed_translate_to_thread_events() {
             item: ThreadItem::CommandExecution {
                 id: "cmd-1".to_string(),
                 command: "ls".to_string(),
-                cwd: test_path_buf("/tmp/project").abs(),
+                cwd: api_path("/tmp/project"),
                 process_id: Some("123".to_string()),
                 source: CommandExecutionSource::UserShell,
                 status: ApiCommandExecutionStatus::Completed,
@@ -1321,7 +1329,7 @@ fn turn_completion_reconciles_started_items_from_turn_items() {
             item: ThreadItem::CommandExecution {
                 id: "cmd-1".to_string(),
                 command: "ls".to_string(),
-                cwd: test_path_buf("/tmp/project").abs(),
+                cwd: api_path("/tmp/project"),
                 process_id: Some("123".to_string()),
                 source: CommandExecutionSource::UserShell,
                 status: ApiCommandExecutionStatus::InProgress,
@@ -1361,7 +1369,7 @@ fn turn_completion_reconciles_started_items_from_turn_items() {
                 items: vec![ThreadItem::CommandExecution {
                     id: "cmd-1".to_string(),
                     command: "ls".to_string(),
-                    cwd: test_path_buf("/tmp/project").abs(),
+                    cwd: api_path("/tmp/project"),
                     process_id: Some("123".to_string()),
                     source: CommandExecutionSource::UserShell,
                     status: ApiCommandExecutionStatus::Completed,

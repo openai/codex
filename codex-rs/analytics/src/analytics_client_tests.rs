@@ -823,7 +823,7 @@ fn sample_command_execution_item_with_id(
     ThreadItem::CommandExecution {
         id: id.to_string(),
         command: "echo hi".to_string(),
-        cwd: test_path_buf("/tmp").abs(),
+        cwd: serde_json::from_value(json!("/tmp")).expect("API cwd should deserialize"),
         process_id: Some("pid-1".to_string()),
         source: CommandExecutionSource::Agent,
         status,
