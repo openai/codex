@@ -266,11 +266,13 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
             let response: ThreadStartResponse = to_response(response)?;
             assert!(!response.thread.id.is_empty());
             let host_cwd = codex_home.path().to_path_buf().abs();
-            // TODO(anp): Return environment-native values here once these app-server response
-            // fields support foreign paths and remote instruction/profile discovery.
+            // TODO(anp): Return the selected environment's native cwd from thread/start.
             assert_eq!(response.cwd, host_cwd);
+            // TODO(anp): Derive runtime workspace roots from the selected remote environment.
             assert_eq!(response.runtime_workspace_roots, vec![host_cwd]);
+            // TODO(anp): Discover and report instruction sources from the remote filesystem.
             assert_eq!(response.instruction_sources, Vec::new());
+            // TODO(anp): Report the implicit built-in permission profile instead of None.
             assert_eq!(response.active_permission_profile, None);
 
             let turn_request_id = app_server
