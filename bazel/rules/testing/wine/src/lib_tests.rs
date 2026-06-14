@@ -264,6 +264,28 @@ fn powershell_runtime_is_materialized_at_the_windows_fallback_path() -> Result<(
     Ok(())
 }
 
+#[test]
+fn powershell_runtime_follows_runfiles_symlinks() -> Result<()> {
+    let prefix = TempDir::new()?;
+    let runtime = TempDir::new()?;
+    let backing = TempDir::new()?;
+    let backing_file = backing.path().join("pwsh.exe");
+    fs::write(&backing_file, b"pwsh")?;
+    std::os::unix::fs::symlink(&backing_file, runtime.path().join("pwsh.exe"))?;
+
+    install_powershell_runtime(prefix.path(), runtime.path())?;
+
+    let installed = prefix
+        .path()
+        .join("drive_c")
+        .join("Program Files")
+        .join("PowerShell")
+        .join("7")
+        .join("pwsh.exe");
+    assert_eq!(fs::read(installed)?, b"pwsh");
+    Ok(())
+}
+
 #[tokio::test]
 async fn pinned_powershell_runs_under_wine_with_a_pty() -> Result<()> {
     // Keep this integration smoke test local to the Wine support crate. The

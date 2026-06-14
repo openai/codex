@@ -1,4 +1,20 @@
-load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
+
+rust_library(
+    name = "wine-exec-server-test-support",
+    testonly = True,
+    srcs = ["wine_exec_server.rs"],
+    crate_name = "wine_exec_server_test_support",
+    crate_root = "wine_exec_server.rs",
+    target_compatible_with = ["@platforms//os:linux"],
+    visibility = ["//codex-rs/core/tests/remote_env_windows:__pkg__"],
+    deps = [
+        "//bazel/rules/testing/wine:wine_test_support",
+        "//codex-rs/utils/cargo-bin",
+        "@crates//:anyhow",
+        "@crates//:tokio",
+    ],
+)
 
 rust_binary(
     name = "windows-exec-server",

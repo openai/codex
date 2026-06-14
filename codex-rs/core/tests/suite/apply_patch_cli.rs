@@ -1635,7 +1635,7 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
         local(shared_cwd.clone()),
         TurnEnvironmentSelection {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-            cwd: shared_cwd.clone(),
+            cwd: PathUri::from_abs_path(&shared_cwd),
         },
     ];
     test.codex
