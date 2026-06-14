@@ -1,5 +1,4 @@
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::models::AppPermissionProfile;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
@@ -63,10 +62,7 @@ pub struct FileSystemSandboxContext<PathType = AbsolutePathBuf> {
     pub use_legacy_landlock: bool,
 }
 
-pub type AppFileSystemSandboxContext = FileSystemSandboxContext<AbsolutePathBuf>;
-pub type ExecFileSystemSandboxContext = FileSystemSandboxContext<PathUri>;
-
-impl AppFileSystemSandboxContext {
+impl FileSystemSandboxContext<AbsolutePathBuf> {
     pub fn from_legacy_sandbox_policy(
         sandbox_policy: SandboxPolicy,
         cwd: PathUri,
@@ -79,26 +75,30 @@ impl AppFileSystemSandboxContext {
                 &sandbox_policy,
                 &native_cwd,
             );
-        let permissions = AppPermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-            &file_system_sandbox_policy,
-            NetworkSandboxPolicy::from(&sandbox_policy),
-        );
+        let permissions =
+            PermissionProfile::<AbsolutePathBuf>::from_runtime_permissions_with_enforcement(
+                SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+                &file_system_sandbox_policy,
+                NetworkSandboxPolicy::from(&sandbox_policy),
+            );
         Ok(Self::from_permission_profile_with_cwd(permissions, cwd))
     }
 
-    pub fn from_permission_profile(permissions: AppPermissionProfile) -> Self {
+    pub fn from_permission_profile(permissions: PermissionProfile<AbsolutePathBuf>) -> Self {
         Self::from_permissions_and_cwd(permissions, /*cwd*/ None)
     }
 
     pub fn from_permission_profile_with_cwd(
-        permissions: AppPermissionProfile,
+        permissions: PermissionProfile<AbsolutePathBuf>,
         cwd: PathUri,
     ) -> Self {
         Self::from_permissions_and_cwd(permissions, Some(cwd))
     }
 
-    fn from_permissions_and_cwd(permissions: AppPermissionProfile, cwd: Option<PathUri>) -> Self {
+    fn from_permissions_and_cwd(
+        permissions: PermissionProfile<AbsolutePathBuf>,
+        cwd: Option<PathUri>,
+    ) -> Self {
         Self {
             permissions,
             cwd,
@@ -114,7 +114,7 @@ impl AppFileSystemSandboxContext {
             && !file_system_policy.has_full_disk_write_access()
     }
 
-    pub fn into_path_uri(self) -> ExecFileSystemSandboxContext {
+    pub fn into_path_uri(self) -> FileSystemSandboxContext<PathUri> {
         FileSystemSandboxContext {
             permissions: self.permissions.into_path_uri(),
             cwd: self.cwd,
@@ -155,8 +155,8 @@ impl<PathType> FileSystemSandboxContext<PathType> {
     }
 }
 
-impl ExecFileSystemSandboxContext {
-    pub fn into_abs_path(self) -> io::Result<AppFileSystemSandboxContext> {
+impl FileSystemSandboxContext<PathUri> {
+    pub fn into_abs_path(self) -> io::Result<FileSystemSandboxContext<AbsolutePathBuf>> {
         Ok(FileSystemSandboxContext {
             permissions: self.permissions.into_abs_path()?,
             cwd: self.cwd,
@@ -180,20 +180,20 @@ pub trait ExecutorFileSystem: Send + Sync {
     fn canonicalize<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, PathUri>;
 
     fn read_file<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>>;
 
     /// Reads a file and decodes it as UTF-8 text.
     fn read_file_text<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, String> {
         Box::pin(async move {
             let bytes = self.read_file(path, sandbox).await?;
@@ -205,33 +205,33 @@ pub trait ExecutorFileSystem: Send + Sync {
         &'a self,
         path: &'a PathUri,
         contents: Vec<u8>,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()>;
 
     fn create_directory<'a>(
         &'a self,
         path: &'a PathUri,
         create_directory_options: CreateDirectoryOptions,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()>;
 
     fn get_metadata<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata>;
 
     fn read_directory<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>>;
 
     fn remove<'a>(
         &'a self,
         path: &'a PathUri,
         remove_options: RemoveOptions,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()>;
 
     fn copy<'a>(
@@ -239,6 +239,6 @@ pub trait ExecutorFileSystem: Send + Sync {
         source_path: &'a PathUri,
         destination_path: &'a PathUri,
         copy_options: CopyOptions,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()>;
 }

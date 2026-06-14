@@ -182,11 +182,8 @@ pub struct FileSystemSandboxEntry<PathType = AbsolutePathBuf> {
     pub access: FileSystemAccessMode,
 }
 
-pub type AppFileSystemSandboxEntry = FileSystemSandboxEntry<AbsolutePathBuf>;
-pub type ExecFileSystemSandboxEntry = FileSystemSandboxEntry<PathUri>;
-
-impl AppFileSystemSandboxEntry {
-    pub fn into_path_uri(self) -> ExecFileSystemSandboxEntry {
+impl FileSystemSandboxEntry<AbsolutePathBuf> {
+    pub fn into_path_uri(self) -> FileSystemSandboxEntry<PathUri> {
         FileSystemSandboxEntry {
             path: self.path.into_path_uri(),
             access: self.access,
@@ -194,8 +191,8 @@ impl AppFileSystemSandboxEntry {
     }
 }
 
-impl ExecFileSystemSandboxEntry {
-    pub fn into_abs_path(self) -> io::Result<AppFileSystemSandboxEntry> {
+impl FileSystemSandboxEntry<PathUri> {
+    pub fn into_abs_path(self) -> io::Result<FileSystemSandboxEntry<AbsolutePathBuf>> {
         Ok(FileSystemSandboxEntry {
             path: self.path.into_abs_path()?,
             access: self.access,
@@ -374,11 +371,8 @@ pub enum FileSystemPath<PathType = AbsolutePathBuf> {
     },
 }
 
-pub type AppFileSystemPath = FileSystemPath<AbsolutePathBuf>;
-pub type ExecFileSystemPath = FileSystemPath<PathUri>;
-
-impl AppFileSystemPath {
-    pub fn into_path_uri(self) -> ExecFileSystemPath {
+impl FileSystemPath<AbsolutePathBuf> {
+    pub fn into_path_uri(self) -> FileSystemPath<PathUri> {
         match self {
             Self::Path { path } => FileSystemPath::Path {
                 path: PathUri::from_abs_path(&path),
@@ -389,8 +383,8 @@ impl AppFileSystemPath {
     }
 }
 
-impl ExecFileSystemPath {
-    pub fn into_abs_path(self) -> io::Result<AppFileSystemPath> {
+impl FileSystemPath<PathUri> {
+    pub fn into_abs_path(self) -> io::Result<FileSystemPath<AbsolutePathBuf>> {
         Ok(match self {
             Self::Path { path } => FileSystemPath::Path {
                 path: path.to_abs_path()?,

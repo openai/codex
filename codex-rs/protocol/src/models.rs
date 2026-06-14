@@ -12,8 +12,6 @@ use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
-use crate::permissions::AppFileSystemSandboxEntry;
-use crate::permissions::ExecFileSystemSandboxEntry;
 use crate::permissions::FileSystemAccessMode;
 use crate::permissions::FileSystemPath;
 use crate::permissions::FileSystemSandboxEntry;
@@ -71,29 +69,26 @@ pub struct FileSystemPermissions<PathType = AbsolutePathBuf> {
     pub glob_scan_max_depth: Option<NonZeroUsize>,
 }
 
-pub type AppFileSystemPermissions = FileSystemPermissions<AbsolutePathBuf>;
-pub type ExecFileSystemPermissions = FileSystemPermissions<PathUri>;
-
-impl AppFileSystemPermissions {
-    pub fn into_path_uri(self) -> ExecFileSystemPermissions {
+impl FileSystemPermissions<AbsolutePathBuf> {
+    pub fn into_path_uri(self) -> FileSystemPermissions<PathUri> {
         FileSystemPermissions {
             entries: self
                 .entries
                 .into_iter()
-                .map(AppFileSystemSandboxEntry::into_path_uri)
+                .map(FileSystemSandboxEntry::<AbsolutePathBuf>::into_path_uri)
                 .collect(),
             glob_scan_max_depth: self.glob_scan_max_depth,
         }
     }
 }
 
-impl ExecFileSystemPermissions {
-    pub fn into_abs_path(self) -> io::Result<AppFileSystemPermissions> {
+impl FileSystemPermissions<PathUri> {
+    pub fn into_abs_path(self) -> io::Result<FileSystemPermissions<AbsolutePathBuf>> {
         Ok(FileSystemPermissions {
             entries: self
                 .entries
                 .into_iter()
-                .map(ExecFileSystemSandboxEntry::into_abs_path)
+                .map(FileSystemSandboxEntry::<PathUri>::into_abs_path)
                 .collect::<io::Result<_>>()?,
             glob_scan_max_depth: self.glob_scan_max_depth,
         })
@@ -111,9 +106,6 @@ impl<PathType> Default for FileSystemPermissions<PathType> {
 
 pub type LegacyReadWriteRoots<PathType = AbsolutePathBuf> =
     (Option<Vec<PathType>>, Option<Vec<PathType>>);
-pub type AppLegacyReadWriteRoots = LegacyReadWriteRoots<AbsolutePathBuf>;
-pub type ExecLegacyReadWriteRoots = LegacyReadWriteRoots<PathUri>;
-
 impl<PathType> FileSystemPermissions<PathType> {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
@@ -323,11 +315,8 @@ pub enum ManagedFileSystemPermissions<PathType = AbsolutePathBuf> {
     Unrestricted,
 }
 
-pub type AppManagedFileSystemPermissions = ManagedFileSystemPermissions<AbsolutePathBuf>;
-pub type ExecManagedFileSystemPermissions = ManagedFileSystemPermissions<PathUri>;
-
-impl AppManagedFileSystemPermissions {
-    pub fn into_path_uri(self) -> ExecManagedFileSystemPermissions {
+impl ManagedFileSystemPermissions<AbsolutePathBuf> {
+    pub fn into_path_uri(self) -> ManagedFileSystemPermissions<PathUri> {
         match self {
             Self::Restricted {
                 entries,
@@ -335,7 +324,7 @@ impl AppManagedFileSystemPermissions {
             } => ManagedFileSystemPermissions::Restricted {
                 entries: entries
                     .into_iter()
-                    .map(AppFileSystemSandboxEntry::into_path_uri)
+                    .map(FileSystemSandboxEntry::<AbsolutePathBuf>::into_path_uri)
                     .collect(),
                 glob_scan_max_depth,
             },
@@ -344,8 +333,8 @@ impl AppManagedFileSystemPermissions {
     }
 }
 
-impl ExecManagedFileSystemPermissions {
-    pub fn into_abs_path(self) -> io::Result<AppManagedFileSystemPermissions> {
+impl ManagedFileSystemPermissions<PathUri> {
+    pub fn into_abs_path(self) -> io::Result<ManagedFileSystemPermissions<AbsolutePathBuf>> {
         Ok(match self {
             Self::Restricted {
                 entries,
@@ -353,7 +342,7 @@ impl ExecManagedFileSystemPermissions {
             } => ManagedFileSystemPermissions::Restricted {
                 entries: entries
                     .into_iter()
-                    .map(ExecFileSystemSandboxEntry::into_abs_path)
+                    .map(FileSystemSandboxEntry::<PathUri>::into_abs_path)
                     .collect::<io::Result<_>>()?,
                 glob_scan_max_depth,
             },
@@ -422,11 +411,8 @@ pub enum PermissionProfile<PathType = AbsolutePathBuf> {
     External { network: NetworkSandboxPolicy },
 }
 
-pub type AppPermissionProfile = PermissionProfile<AbsolutePathBuf>;
-pub type ExecPermissionProfile = PermissionProfile<PathUri>;
-
-impl AppPermissionProfile {
-    pub fn into_path_uri(self) -> ExecPermissionProfile {
+impl PermissionProfile<AbsolutePathBuf> {
+    pub fn into_path_uri(self) -> PermissionProfile<PathUri> {
         match self {
             Self::Managed {
                 file_system,
@@ -441,8 +427,8 @@ impl AppPermissionProfile {
     }
 }
 
-impl ExecPermissionProfile {
-    pub fn into_abs_path(self) -> io::Result<AppPermissionProfile> {
+impl PermissionProfile<PathUri> {
+    pub fn into_abs_path(self) -> io::Result<PermissionProfile<AbsolutePathBuf>> {
         Ok(match self {
             Self::Managed {
                 file_system,

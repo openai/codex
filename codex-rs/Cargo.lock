@@ -3951,6 +3951,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-output-truncation",
+ "codex-utils-path-uri",
  "codex-utils-pty",
  "codex-utils-string",
  "jsonptr",

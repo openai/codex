@@ -10,12 +10,12 @@ use tokio::io;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
-use crate::ExecFileSystemSandboxContext;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::ExecutorFileSystemFuture;
 use crate::FileMetadata;
 use crate::FileSystemResult;
+use crate::FileSystemSandboxContext;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
 use crate::sandboxed_file_system::SandboxedFileSystem;
@@ -65,10 +65,10 @@ impl LocalFileSystem {
 
     fn file_system_for<'a>(
         &'a self,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> io::Result<(
         &'a dyn ExecutorFileSystem,
-        Option<&'a ExecFileSystemSandboxContext>,
+        Option<&'a FileSystemSandboxContext<PathUri>>,
     )> {
         if sandbox
             .map(should_run_in_platform_sandbox)
@@ -86,7 +86,7 @@ impl LocalFileSystem {
     async fn canonicalize(
         &self,
         path: &PathUri,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<PathUri> {
         let (file_system, sandbox) = self.file_system_for(sandbox)?;
         file_system.canonicalize(path, sandbox).await
@@ -95,7 +95,7 @@ impl LocalFileSystem {
     async fn read_file(
         &self,
         path: &PathUri,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<Vec<u8>> {
         let (file_system, sandbox) = self.file_system_for(sandbox)?;
         file_system.read_file(path, sandbox).await
@@ -105,7 +105,7 @@ impl LocalFileSystem {
         &self,
         path: &PathUri,
         contents: Vec<u8>,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<()> {
         let (file_system, sandbox) = self.file_system_for(sandbox)?;
         file_system.write_file(path, contents, sandbox).await
@@ -115,7 +115,7 @@ impl LocalFileSystem {
         &self,
         path: &PathUri,
         options: CreateDirectoryOptions,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<()> {
         let (file_system, sandbox) = self.file_system_for(sandbox)?;
         file_system.create_directory(path, options, sandbox).await
@@ -124,7 +124,7 @@ impl LocalFileSystem {
     async fn get_metadata(
         &self,
         path: &PathUri,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<FileMetadata> {
         let (file_system, sandbox) = self.file_system_for(sandbox)?;
         file_system.get_metadata(path, sandbox).await
@@ -133,7 +133,7 @@ impl LocalFileSystem {
     async fn read_directory(
         &self,
         path: &PathUri,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         let (file_system, sandbox) = self.file_system_for(sandbox)?;
         file_system.read_directory(path, sandbox).await
@@ -143,7 +143,7 @@ impl LocalFileSystem {
         &self,
         path: &PathUri,
         options: RemoveOptions,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<()> {
         let (file_system, sandbox) = self.file_system_for(sandbox)?;
         file_system.remove(path, options, sandbox).await
@@ -154,7 +154,7 @@ impl LocalFileSystem {
         source_path: &PathUri,
         destination_path: &PathUri,
         options: CopyOptions,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<()> {
         let (file_system, sandbox) = self.file_system_for(sandbox)?;
         file_system
@@ -167,7 +167,7 @@ impl ExecutorFileSystem for LocalFileSystem {
     fn canonicalize<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, PathUri> {
         Box::pin(LocalFileSystem::canonicalize(self, path, sandbox))
     }
@@ -175,7 +175,7 @@ impl ExecutorFileSystem for LocalFileSystem {
     fn read_file<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
         Box::pin(LocalFileSystem::read_file(self, path, sandbox))
     }
@@ -184,7 +184,7 @@ impl ExecutorFileSystem for LocalFileSystem {
         &'a self,
         path: &'a PathUri,
         contents: Vec<u8>,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(LocalFileSystem::write_file(self, path, contents, sandbox))
     }
@@ -193,7 +193,7 @@ impl ExecutorFileSystem for LocalFileSystem {
         &'a self,
         path: &'a PathUri,
         options: CreateDirectoryOptions,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(LocalFileSystem::create_directory(
             self, path, options, sandbox,
@@ -203,7 +203,7 @@ impl ExecutorFileSystem for LocalFileSystem {
     fn get_metadata<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(LocalFileSystem::get_metadata(self, path, sandbox))
     }
@@ -211,7 +211,7 @@ impl ExecutorFileSystem for LocalFileSystem {
     fn read_directory<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
         Box::pin(LocalFileSystem::read_directory(self, path, sandbox))
     }
@@ -220,7 +220,7 @@ impl ExecutorFileSystem for LocalFileSystem {
         &'a self,
         path: &'a PathUri,
         options: RemoveOptions,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(LocalFileSystem::remove(self, path, options, sandbox))
     }
@@ -230,7 +230,7 @@ impl ExecutorFileSystem for LocalFileSystem {
         source_path: &'a PathUri,
         destination_path: &'a PathUri,
         options: CopyOptions,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(LocalFileSystem::copy(
             self,
@@ -246,7 +246,7 @@ impl UnsandboxedFileSystem {
     async fn canonicalize(
         &self,
         path: &PathUri,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<PathUri> {
         reject_platform_sandbox_context(sandbox)?;
         self.file_system.canonicalize(path, /*sandbox*/ None).await
@@ -255,7 +255,7 @@ impl UnsandboxedFileSystem {
     async fn read_file(
         &self,
         path: &PathUri,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<Vec<u8>> {
         reject_platform_sandbox_context(sandbox)?;
         self.file_system.read_file(path, /*sandbox*/ None).await
@@ -265,7 +265,7 @@ impl UnsandboxedFileSystem {
         &self,
         path: &PathUri,
         contents: Vec<u8>,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<()> {
         reject_platform_sandbox_context(sandbox)?;
         self.file_system
@@ -277,7 +277,7 @@ impl UnsandboxedFileSystem {
         &self,
         path: &PathUri,
         options: CreateDirectoryOptions,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<()> {
         reject_platform_sandbox_context(sandbox)?;
         self.file_system
@@ -288,7 +288,7 @@ impl UnsandboxedFileSystem {
     async fn get_metadata(
         &self,
         path: &PathUri,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<FileMetadata> {
         reject_platform_sandbox_context(sandbox)?;
         self.file_system.get_metadata(path, /*sandbox*/ None).await
@@ -297,7 +297,7 @@ impl UnsandboxedFileSystem {
     async fn read_directory(
         &self,
         path: &PathUri,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         reject_platform_sandbox_context(sandbox)?;
         self.file_system
@@ -309,7 +309,7 @@ impl UnsandboxedFileSystem {
         &self,
         path: &PathUri,
         options: RemoveOptions,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<()> {
         reject_platform_sandbox_context(sandbox)?;
         self.file_system
@@ -322,7 +322,7 @@ impl UnsandboxedFileSystem {
         source_path: &PathUri,
         destination_path: &PathUri,
         options: CopyOptions,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<()> {
         reject_platform_sandbox_context(sandbox)?;
         self.file_system
@@ -340,7 +340,7 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
     fn canonicalize<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, PathUri> {
         Box::pin(UnsandboxedFileSystem::canonicalize(self, path, sandbox))
     }
@@ -348,7 +348,7 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
     fn read_file<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
         Box::pin(UnsandboxedFileSystem::read_file(self, path, sandbox))
     }
@@ -357,7 +357,7 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
         &'a self,
         path: &'a PathUri,
         contents: Vec<u8>,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(UnsandboxedFileSystem::write_file(
             self, path, contents, sandbox,
@@ -368,7 +368,7 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
         &'a self,
         path: &'a PathUri,
         options: CreateDirectoryOptions,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(UnsandboxedFileSystem::create_directory(
             self, path, options, sandbox,
@@ -378,7 +378,7 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
     fn get_metadata<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(UnsandboxedFileSystem::get_metadata(self, path, sandbox))
     }
@@ -386,7 +386,7 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
     fn read_directory<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
         Box::pin(UnsandboxedFileSystem::read_directory(self, path, sandbox))
     }
@@ -395,7 +395,7 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
         &'a self,
         path: &'a PathUri,
         options: RemoveOptions,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(UnsandboxedFileSystem::remove(self, path, options, sandbox))
     }
@@ -405,7 +405,7 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
         source_path: &'a PathUri,
         destination_path: &'a PathUri,
         options: CopyOptions,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(UnsandboxedFileSystem::copy(
             self,
@@ -421,7 +421,7 @@ impl DirectFileSystem {
     async fn canonicalize(
         &self,
         path: &PathUri,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<PathUri> {
         reject_sandbox_context(sandbox)?;
         let path = path.to_abs_path()?;
@@ -433,7 +433,7 @@ impl DirectFileSystem {
     async fn read_file(
         &self,
         path: &PathUri,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<Vec<u8>> {
         reject_sandbox_context(sandbox)?;
         let path = path.to_abs_path()?;
@@ -451,7 +451,7 @@ impl DirectFileSystem {
         &self,
         path: &PathUri,
         contents: Vec<u8>,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<()> {
         reject_sandbox_context(sandbox)?;
         let path = path.to_abs_path()?;
@@ -462,7 +462,7 @@ impl DirectFileSystem {
         &self,
         path: &PathUri,
         options: CreateDirectoryOptions,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<()> {
         reject_sandbox_context(sandbox)?;
         let path = path.to_abs_path()?;
@@ -477,7 +477,7 @@ impl DirectFileSystem {
     async fn get_metadata(
         &self,
         path: &PathUri,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<FileMetadata> {
         reject_sandbox_context(sandbox)?;
         let path = path.to_abs_path()?;
@@ -496,7 +496,7 @@ impl DirectFileSystem {
     async fn read_directory(
         &self,
         path: &PathUri,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         reject_sandbox_context(sandbox)?;
         let path = path.to_abs_path()?;
@@ -519,7 +519,7 @@ impl DirectFileSystem {
         &self,
         path: &PathUri,
         options: RemoveOptions,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<()> {
         reject_sandbox_context(sandbox)?;
         let path = path.to_abs_path()?;
@@ -547,7 +547,7 @@ impl DirectFileSystem {
         source_path: &PathUri,
         destination_path: &PathUri,
         options: CopyOptions,
-        sandbox: Option<&ExecFileSystemSandboxContext>,
+        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
     ) -> FileSystemResult<()> {
         reject_sandbox_context(sandbox)?;
         let source_path = source_path.to_abs_path()?.into_path_buf();
@@ -600,7 +600,7 @@ impl ExecutorFileSystem for DirectFileSystem {
     fn canonicalize<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, PathUri> {
         Box::pin(DirectFileSystem::canonicalize(self, path, sandbox))
     }
@@ -608,7 +608,7 @@ impl ExecutorFileSystem for DirectFileSystem {
     fn read_file<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
         Box::pin(DirectFileSystem::read_file(self, path, sandbox))
     }
@@ -617,7 +617,7 @@ impl ExecutorFileSystem for DirectFileSystem {
         &'a self,
         path: &'a PathUri,
         contents: Vec<u8>,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(DirectFileSystem::write_file(self, path, contents, sandbox))
     }
@@ -626,7 +626,7 @@ impl ExecutorFileSystem for DirectFileSystem {
         &'a self,
         path: &'a PathUri,
         options: CreateDirectoryOptions,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(DirectFileSystem::create_directory(
             self, path, options, sandbox,
@@ -636,7 +636,7 @@ impl ExecutorFileSystem for DirectFileSystem {
     fn get_metadata<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(DirectFileSystem::get_metadata(self, path, sandbox))
     }
@@ -644,7 +644,7 @@ impl ExecutorFileSystem for DirectFileSystem {
     fn read_directory<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
         Box::pin(DirectFileSystem::read_directory(self, path, sandbox))
     }
@@ -653,7 +653,7 @@ impl ExecutorFileSystem for DirectFileSystem {
         &'a self,
         path: &'a PathUri,
         options: RemoveOptions,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(DirectFileSystem::remove(self, path, options, sandbox))
     }
@@ -663,7 +663,7 @@ impl ExecutorFileSystem for DirectFileSystem {
         source_path: &'a PathUri,
         destination_path: &'a PathUri,
         options: CopyOptions,
-        sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(DirectFileSystem::copy(
             self,
@@ -675,7 +675,7 @@ impl ExecutorFileSystem for DirectFileSystem {
     }
 }
 
-fn reject_sandbox_context(sandbox: Option<&ExecFileSystemSandboxContext>) -> io::Result<()> {
+fn reject_sandbox_context(sandbox: Option<&FileSystemSandboxContext<PathUri>>) -> io::Result<()> {
     if sandbox.is_some() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -686,7 +686,7 @@ fn reject_sandbox_context(sandbox: Option<&ExecFileSystemSandboxContext>) -> io:
 }
 
 fn reject_platform_sandbox_context(
-    sandbox: Option<&ExecFileSystemSandboxContext>,
+    sandbox: Option<&FileSystemSandboxContext<PathUri>>,
 ) -> io::Result<()> {
     if sandbox
         .map(should_run_in_platform_sandbox)
@@ -702,7 +702,7 @@ fn reject_platform_sandbox_context(
 }
 
 pub(crate) fn should_run_in_platform_sandbox(
-    sandbox: &ExecFileSystemSandboxContext,
+    sandbox: &FileSystemSandboxContext<PathUri>,
 ) -> io::Result<bool> {
     Ok(sandbox.clone().into_abs_path()?.should_run_in_sandbox())
 }

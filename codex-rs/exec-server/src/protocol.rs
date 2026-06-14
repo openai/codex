@@ -454,7 +454,7 @@ mod base64_bytes {
 mod tests {
     use super::FsReadFileParams;
     use super::HttpRequestParams;
-    use codex_file_system::AppFileSystemSandboxContext;
+    use codex_file_system::FileSystemSandboxContext;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
@@ -465,7 +465,7 @@ mod tests {
             .expect("current directory")
             .join("legacy-file.txt");
         let legacy_cwd = std::env::current_dir().expect("current directory");
-        let native_sandbox = AppFileSystemSandboxContext::from_permission_profile_with_cwd(
+        let native_sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
             PermissionProfile::default(),
             PathUri::from_path(&legacy_cwd).expect("cwd URI"),
         );

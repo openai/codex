@@ -9,10 +9,10 @@ use codex_core_skills::loader::load_skills_from_roots;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::EnvironmentManager;
-use codex_exec_server::ExecFileSystemSandboxContext;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::ExecutorFileSystemFuture;
 use codex_exec_server::FileMetadata;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
 use codex_protocol::capabilities::CapabilityRootLocation;
@@ -96,7 +96,7 @@ impl ExecutorFileSystem for SyntheticFileSystem {
     fn canonicalize<'a>(
         &'a self,
         path: &'a PathUri,
-        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        _sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, PathUri> {
         Box::pin(SyntheticFileSystem::canonicalize(self, path))
     }
@@ -104,7 +104,7 @@ impl ExecutorFileSystem for SyntheticFileSystem {
     fn read_file<'a>(
         &'a self,
         path: &'a PathUri,
-        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        _sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
         Box::pin(SyntheticFileSystem::read_file(self, path))
     }
@@ -113,7 +113,7 @@ impl ExecutorFileSystem for SyntheticFileSystem {
         &'a self,
         _path: &'a PathUri,
         _contents: Vec<u8>,
-        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        _sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(async move { Err(io::Error::new(io::ErrorKind::Unsupported, "read only")) })
     }
@@ -122,7 +122,7 @@ impl ExecutorFileSystem for SyntheticFileSystem {
         &'a self,
         _path: &'a PathUri,
         _options: CreateDirectoryOptions,
-        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        _sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(async move { Err(io::Error::new(io::ErrorKind::Unsupported, "read only")) })
     }
@@ -130,7 +130,7 @@ impl ExecutorFileSystem for SyntheticFileSystem {
     fn get_metadata<'a>(
         &'a self,
         path: &'a PathUri,
-        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        _sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(async move { self.metadata(&path.to_abs_path()?) })
     }
@@ -138,7 +138,7 @@ impl ExecutorFileSystem for SyntheticFileSystem {
     fn read_directory<'a>(
         &'a self,
         path: &'a PathUri,
-        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        _sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
         Box::pin(SyntheticFileSystem::read_directory(self, path))
     }
@@ -147,7 +147,7 @@ impl ExecutorFileSystem for SyntheticFileSystem {
         &'a self,
         _path: &'a PathUri,
         _options: RemoveOptions,
-        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        _sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(async move { Err(io::Error::new(io::ErrorKind::Unsupported, "read only")) })
     }
@@ -157,7 +157,7 @@ impl ExecutorFileSystem for SyntheticFileSystem {
         _source_path: &'a PathUri,
         _destination_path: &'a PathUri,
         _options: CopyOptions,
-        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        _sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(async move { Err(io::Error::new(io::ErrorKind::Unsupported, "read only")) })
     }

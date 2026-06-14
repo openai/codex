@@ -159,8 +159,8 @@ mod tests {
     use chrono::DateTime;
     use chrono::Utc;
     use codex_protocol::ThreadId;
-    use codex_protocol::models::AppPermissionProfile;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::PermissionProfile;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::AskForApproval;
@@ -370,10 +370,10 @@ mod tests {
         );
 
         assert_eq!(metadata.cwd, PathBuf::from("/child/worktree"));
+        let permission_profile: PermissionProfile = PermissionProfile::Disabled;
         assert_eq!(
             metadata.sandbox_policy,
-            serde_json::to_string(&AppPermissionProfile::Disabled)
-                .expect("serialize permission profile")
+            serde_json::to_string(&permission_profile).expect("serialize permission profile")
         );
         assert_eq!(metadata.approval_mode, "never");
     }
@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn turn_context_sets_permission_profile_metadata() {
         let mut metadata = metadata_for_test();
-        let permission_profile = AppPermissionProfile::workspace_write();
+        let permission_profile = PermissionProfile::workspace_write();
 
         apply_rollout_item(
             &mut metadata,

@@ -5,11 +5,11 @@ use crate::manifest::parse_plugin_manifest;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::EnvironmentManager;
-use codex_exec_server::ExecFileSystemSandboxContext;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::ExecutorFileSystemFuture;
 use codex_exec_server::FileMetadata;
 use codex_exec_server::FileSystemResult;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
@@ -65,7 +65,7 @@ impl ExecutorFileSystem for SyntheticPluginFileSystem {
     fn canonicalize<'a>(
         &'a self,
         _path: &'a PathUri,
-        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        _sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, PathUri> {
         Box::pin(async { Self::unsupported() })
     }
@@ -73,7 +73,7 @@ impl ExecutorFileSystem for SyntheticPluginFileSystem {
     fn read_file<'a>(
         &'a self,
         path: &'a PathUri,
-        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        _sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
         Box::pin(async move {
             let path = path.to_abs_path()?;
@@ -93,7 +93,7 @@ impl ExecutorFileSystem for SyntheticPluginFileSystem {
         &'a self,
         _path: &'a PathUri,
         _contents: Vec<u8>,
-        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        _sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(async { Self::unsupported() })
     }
@@ -102,7 +102,7 @@ impl ExecutorFileSystem for SyntheticPluginFileSystem {
         &'a self,
         _path: &'a PathUri,
         _options: CreateDirectoryOptions,
-        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        _sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(async { Self::unsupported() })
     }
@@ -110,7 +110,7 @@ impl ExecutorFileSystem for SyntheticPluginFileSystem {
     fn get_metadata<'a>(
         &'a self,
         path: &'a PathUri,
-        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        _sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(async move {
             let path = path.to_abs_path()?;
@@ -139,7 +139,7 @@ impl ExecutorFileSystem for SyntheticPluginFileSystem {
     fn read_directory<'a>(
         &'a self,
         _path: &'a PathUri,
-        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        _sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
         Box::pin(async { Self::unsupported() })
     }
@@ -148,7 +148,7 @@ impl ExecutorFileSystem for SyntheticPluginFileSystem {
         &'a self,
         _path: &'a PathUri,
         _options: RemoveOptions,
-        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        _sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(async { Self::unsupported() })
     }
@@ -158,7 +158,7 @@ impl ExecutorFileSystem for SyntheticPluginFileSystem {
         _source_path: &'a PathUri,
         _destination_path: &'a PathUri,
         _options: CopyOptions,
-        _sandbox: Option<&'a ExecFileSystemSandboxContext>,
+        _sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(async { Self::unsupported() })
     }

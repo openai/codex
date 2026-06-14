@@ -49,7 +49,7 @@ async fn remote_file_system_sends_path_and_sandbox_cwd_uris_without_native_conve
         },
         access: FileSystemAccessMode::Write,
     }]);
-    let sandbox = codex_file_system::AppFileSystemSandboxContext::from_permission_profile_with_cwd(
+    let sandbox = codex_file_system::FileSystemSandboxContext::from_permission_profile_with_cwd(
         PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
         sandbox_cwd,
     )

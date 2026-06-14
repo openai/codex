@@ -20,8 +20,7 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::AppliedPatchDelta;
 use codex_apply_patch::ApplyPatchAction;
-use codex_exec_server::ExecFileSystemSandboxContext;
-use codex_file_system::AppFileSystemSandboxContext;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -34,6 +33,7 @@ use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -90,7 +90,7 @@ impl ApplyPatchRuntime {
     fn file_system_sandbox_context_for_attempt(
         req: &ApplyPatchRequest,
         attempt: &SandboxAttempt<'_>,
-    ) -> Option<ExecFileSystemSandboxContext> {
+    ) -> Option<FileSystemSandboxContext<PathUri>> {
         if attempt.sandbox == SandboxType::None {
             return None;
         }
@@ -98,7 +98,7 @@ impl ApplyPatchRuntime {
         let permissions =
             effective_permission_profile(attempt.permissions, req.additional_permissions.as_ref());
         Some(
-            AppFileSystemSandboxContext {
+            FileSystemSandboxContext::<AbsolutePathBuf> {
                 permissions,
                 cwd: Some(attempt.sandbox_cwd.clone()),
                 windows_sandbox_level: attempt.windows_sandbox_level,

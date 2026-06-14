@@ -15,7 +15,7 @@ async fn sandboxed_file_system_rejects_non_native_uri_as_invalid_input() {
     )
     .expect("runtime paths");
     let file_system = SandboxedFileSystem::new(runtime_paths);
-    let sandbox = codex_file_system::AppFileSystemSandboxContext::from_permission_profile(
+    let sandbox = codex_file_system::FileSystemSandboxContext::from_permission_profile(
         PermissionProfile::from_runtime_permissions(
             &FileSystemSandboxPolicy::restricted(Vec::new()),
             NetworkSandboxPolicy::Restricted,

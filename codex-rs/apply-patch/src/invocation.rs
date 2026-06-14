@@ -136,7 +136,7 @@ pub async fn maybe_parse_apply_patch_verified(
     argv: &[String],
     cwd: &AbsolutePathBuf,
     fs: &dyn ExecutorFileSystem,
-    sandbox: Option<&codex_exec_server::ExecFileSystemSandboxContext>,
+    sandbox: Option<&codex_exec_server::FileSystemSandboxContext<PathUri>>,
 ) -> MaybeApplyPatchVerified {
     // Detect a raw patch body passed directly as the command or as the body of a shell
     // script. In these cases, report an explicit error rather than applying the patch.
@@ -163,7 +163,7 @@ pub async fn verify_apply_patch_args(
     args: ApplyPatchArgs,
     cwd: &AbsolutePathBuf,
     fs: &dyn ExecutorFileSystem,
-    sandbox: Option<&codex_exec_server::ExecFileSystemSandboxContext>,
+    sandbox: Option<&codex_exec_server::FileSystemSandboxContext<PathUri>>,
 ) -> MaybeApplyPatchVerified {
     let ApplyPatchArgs {
         patch,

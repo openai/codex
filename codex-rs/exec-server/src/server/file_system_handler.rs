@@ -208,7 +208,7 @@ mod tests {
         let handler = FileSystemHandler::new(runtime_paths);
         let sandbox_cwd = PathUri::from_path(temp_dir.path()).expect("tempdir URI");
         let sandbox_context = |sandbox_policy| {
-            codex_file_system::AppFileSystemSandboxContext::from_legacy_sandbox_policy(
+            codex_file_system::FileSystemSandboxContext::from_legacy_sandbox_policy(
                 sandbox_policy,
                 sandbox_cwd.clone(),
             )
