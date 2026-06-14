@@ -17,10 +17,6 @@ use tempfile::TempDir;
 use tokio::process::Child;
 use tokio::process::ChildStdout;
 use tokio::process::Command as TokioCommand;
-use tokio::time::timeout;
-
-const ASYNC_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
-const BLOCKING_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Builds a command that runs a Windows executable in an isolated Wine prefix.
 pub struct WineTestCommand {
@@ -75,7 +71,6 @@ impl WineTestCommand {
         self.env.push((key.into(), value.into()));
         self
     }
-
 
     /// Starts the Windows executable with a fresh `WINEPREFIX`.
     pub fn spawn(self) -> Result<WineTestProcess> {
@@ -198,8 +193,10 @@ impl WineProcesses {
             Err(error) => (Err(error).context("check Windows process status"), false),
         };
         let wait_result = self
-            .wait_for_child()
+            .child
+            .wait()
             .await
+            .context("wait for Windows process running under Wine")
             .and_then(|status| {
                 anyhow::ensure!(
                     !check_exit_status || status.success(),
@@ -207,30 +204,20 @@ impl WineProcesses {
                 );
                 Ok(())
             });
-        let wineserver_result = timeout(ASYNC_SHUTDOWN_TIMEOUT, async {
+        let wineserver_result = async {
             let mut command = TokioCommand::from(self.stop_wineserver_command());
             let status = command.status().await.context("stop isolated wineserver")?;
             anyhow::ensure!(status.success(), "wineserver exited with {status}");
             Ok(())
-        })
-        .await
-        .context("stop isolated wineserver timed out")
-        .and_then(std::convert::identity);
-
-        let result = kill_result.and(wait_result).and(wineserver_result);
-        if result.is_ok() {
-            self.cleanup_complete = true;
-        } else {
-            self.shutdown_blocking();
         }
-        result
-    }
+        .await;
 
-    async fn wait_for_child(&mut self) -> Result<std::process::ExitStatus> {
-        timeout(ASYNC_SHUTDOWN_TIMEOUT, self.child.wait())
-            .await
-            .context("wait for Windows process running under Wine timed out")?
-            .context("wait for Windows process running under Wine")
+        // Every cleanup action has been attempted, so an individual error
+        // should not cause the blocking fallback to repeat them.
+        self.cleanup_complete = true;
+        kill_result?;
+        wait_result?;
+        wineserver_result
     }
 
     fn stop_wineserver_command(&self) -> StdCommand {
@@ -255,7 +242,6 @@ impl WineProcesses {
         }
 
         log_panic_cleanup(format_args!("Wine panic cleanup waiting for its child"));
-        let deadline = std::time::Instant::now() + BLOCKING_SHUTDOWN_TIMEOUT;
         loop {
             match self.child.try_wait() {
                 Ok(Some(status)) => {
@@ -264,15 +250,7 @@ impl WineProcesses {
                     ));
                     break;
                 }
-                Ok(None) if std::time::Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Ok(None) => {
-                    log_panic_cleanup(format_args!(
-                        "Wine panic cleanup timed out waiting for its child"
-                    ));
-                    break;
-                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
                 Err(error) => {
                     log_panic_cleanup(format_args!(
                         "Wine panic cleanup could not wait for its child: {error}"
@@ -283,7 +261,7 @@ impl WineProcesses {
         }
 
         log_panic_cleanup(format_args!("Wine panic cleanup stopping its wineserver"));
-        match self.kill_wineserver_command().status() {
+        match self.stop_wineserver_command().status() {
             Ok(status) => log_panic_cleanup(format_args!(
                 "Wine panic cleanup wineserver exited with {status}"
             )),
@@ -293,16 +271,6 @@ impl WineProcesses {
         }
         self.cleanup_complete = true;
         log_panic_cleanup(format_args!("Wine panic cleanup complete"));
-    }
-
-    fn kill_wineserver_command(&self) -> StdCommand {
-        let mut command = StdCommand::new(&self.runtime.wineserver);
-        configure_wine_environment(&mut command, &self.runtime, self.prefix.path());
-        command
-            .arg("-k")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        command
     }
 }
 
