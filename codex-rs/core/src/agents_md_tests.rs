@@ -267,9 +267,10 @@ fn resolved_local_environments<const N: usize>(
                         Environment::create_for_tests(/*exec_server_url*/ None)
                             .expect("local environment"),
                     ),
-                    cwd,
+                    PathUri::from_abs_path(&cwd),
                     /*shell*/ None,
                 )
+                .expect("turn environment")
             })
             .collect(),
     }

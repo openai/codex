@@ -64,18 +64,18 @@ impl TurnEnvironment {
     pub(crate) fn new(
         environment_id: String,
         environment: Arc<Environment>,
-        cwd: AbsolutePathBuf,
+        cwd_uri: PathUri,
         shell: Option<shell::Shell>,
-    ) -> Self {
-        let cwd_uri = PathUri::from_abs_path(&cwd);
-        Self {
+    ) -> std::io::Result<Self> {
+        let cwd = cwd_uri.to_abs_path()?;
+        Ok(Self {
             environment_id,
             environment,
             cwd,
             cwd_uri,
             shell,
             shell_snapshot: futures::future::ready(None).boxed().shared(),
-        }
+        })
     }
 
     pub(crate) fn shell_snapshot(&self, cwd: &AbsolutePathBuf) -> Option<AbsolutePathBuf> {

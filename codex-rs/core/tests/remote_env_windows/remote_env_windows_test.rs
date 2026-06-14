@@ -10,6 +10,7 @@ use app_test_support::write_mock_responses_config_toml;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::AskForApproval as AppAskForApproval;
+use codex_app_server_protocol::CommandAction;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
@@ -186,7 +187,7 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
 async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Result<()> {
     const AGENTS_INSTRUCTIONS: &str = "remote Windows workspace instructions";
     const CALL_ID: &str = "wine-cmd-smoke";
-    const COMMAND: &str = r#"if ((Get-Location).Path -ne 'C:\windows') { exit 1 }"#;
+    const COMMAND: &str = "Get-Content AGENTS.md -ErrorAction Stop";
 
     WineExecServer
         .scope(|exec_server_url| async move {
@@ -310,6 +311,8 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
             })
             .await??;
             let ThreadItem::CommandExecution {
+                command_actions,
+                cwd,
                 id,
                 status,
                 exit_code,
@@ -319,6 +322,12 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
                 unreachable!("loop returns only command execution items");
             };
             assert_eq!(id, CALL_ID);
+            // TODO(anp): Make command execution cwd a PathUri so this stays `C:\windows`.
+            assert_eq!(cwd, std::path::PathBuf::from("/C:/windows").abs());
+            // TODO(anp): Parse command actions using the selected environment's path convention so
+            // their paths remain Windows-native instead of degrading the action to Unknown.
+            assert_eq!(command_actions.len(), 1);
+            assert!(matches!(command_actions[0], CommandAction::Unknown { .. }));
             assert_eq!((status, exit_code), (CommandExecutionStatus::Completed, Some(0)));
             timeout(
                 APP_SERVER_READ_TIMEOUT,

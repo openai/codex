@@ -5697,9 +5697,10 @@ async fn request_permissions_tool_resolves_relative_paths_against_selected_envir
     turn_context_mut.environments.turn_environments[0] = TurnEnvironment::new(
         "remote".to_string(),
         current_environment.environment,
-        environment_cwd.clone(),
+        codex_utils_path_uri::PathUri::from_abs_path(&environment_cwd),
         current_environment.shell,
-    );
+    )
+    .expect("remote turn environment");
 
     let call_id = "call-1".to_string();
     let handler = RequestPermissionsHandler;
@@ -6316,15 +6317,15 @@ async fn primary_environment_uses_first_turn_environment() {
     let first_environment = turn_context.environments.turn_environments[0].clone();
     #[allow(deprecated)]
     let second_cwd = turn_context.cwd.join("second");
-    turn_context
-        .environments
-        .turn_environments
-        .push(TurnEnvironment::new(
+    turn_context.environments.turn_environments.push(
+        TurnEnvironment::new(
             "second".to_string(),
             Arc::clone(&first_environment.environment),
-            second_cwd.clone(),
+            codex_utils_path_uri::PathUri::from_abs_path(&second_cwd),
             /*shell*/ None,
-        ));
+        )
+        .expect("second turn environment"),
+    );
 
     assert_eq!(
         turn_context

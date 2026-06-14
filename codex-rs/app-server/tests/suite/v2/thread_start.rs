@@ -327,15 +327,13 @@ async fn thread_start_rejects_relative_environment_cwd_as_invalid_request() -> R
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
-        .send_raw_request(
-            "thread/start",
-            Some(json!({
-                "environments": [{
-                    "environmentId": "local",
-                    "cwd": "relative",
-                }],
-            })),
-        )
+        .send_thread_start_request(ThreadStartParams {
+            environments: Some(vec![TurnEnvironmentParams {
+                environment_id: "local".to_string(),
+                cwd: serde_json::from_value(json!("relative"))?,
+            }]),
+            ..Default::default()
+        })
         .await?;
     let error: JSONRPCError = timeout(
         DEFAULT_READ_TIMEOUT,
