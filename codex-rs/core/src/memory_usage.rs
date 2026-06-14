@@ -5,76 +5,54 @@ use crate::tools::handlers::unified_exec::ExecCommandArgs;
 use codex_memories_read::usage::MEMORIES_USAGE_METRIC;
 use codex_memories_read::usage::memories_usage_kinds_from_command;
 use codex_protocol::models::ShellCommandToolCallParams;
-use std::path::PathBuf;
+use codex_shell_command::bash::parse_plain_shell_script;
+use codex_shell_command::is_safe_command::is_known_safe_command;
 
-pub(crate) async fn emit_metric_for_tool_read(invocation: &ToolInvocation, success: bool) {
-    let Some((command, _)) = shell_command_for_invocation(invocation) else {
+pub(crate) fn emit_metric_for_tool_read(invocation: &ToolInvocation, success: bool) {
+    let Some(commands) = shell_commands_for_invocation(invocation) else {
         return;
     };
-    let kinds = memories_usage_kinds_from_command(&command);
-    if kinds.is_empty() {
+    if !commands
+        .iter()
+        .all(|command| is_known_safe_command(command))
+    {
         return;
     }
 
     let success = if success { "true" } else { "false" };
     let tool_name = flat_tool_name(&invocation.tool_name);
-    for kind in kinds {
-        invocation.turn.session_telemetry.counter(
-            MEMORIES_USAGE_METRIC,
-            /*inc*/ 1,
-            &[
-                ("kind", kind.as_tag()),
-                ("tool", tool_name.as_ref()),
-                ("success", success),
-            ],
-        );
+    for command in commands {
+        for kind in memories_usage_kinds_from_command(&command) {
+            invocation.turn.session_telemetry.counter(
+                MEMORIES_USAGE_METRIC,
+                /*inc*/ 1,
+                &[
+                    ("kind", kind.as_tag()),
+                    ("tool", tool_name.as_ref()),
+                    ("success", success),
+                ],
+            );
+        }
     }
 }
 
-fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<String>, PathBuf)> {
+fn shell_commands_for_invocation(invocation: &ToolInvocation) -> Option<Vec<Vec<String>>> {
     let ToolPayload::Function { arguments } = &invocation.payload else {
         return None;
     };
 
-    match (
+    let command = match (
         invocation.tool_name.namespace.as_deref(),
         invocation.tool_name.name.as_str(),
     ) {
         (None, "shell_command") => serde_json::from_str::<ShellCommandToolCallParams>(arguments)
             .ok()
-            .map(|params| {
-                if !invocation.turn.config.permissions.allow_login_shell
-                    && params.login == Some(true)
-                {
-                    #[allow(deprecated)]
-                    let cwd = invocation.turn.resolve_path(params.workdir).to_path_buf();
-                    return (Vec::new(), cwd);
-                }
-                let use_login_shell = params
-                    .login
-                    .unwrap_or(invocation.turn.config.permissions.allow_login_shell);
-                let command = invocation
-                    .session
-                    .user_shell()
-                    .derive_exec_args(&params.command, use_login_shell);
-                #[allow(deprecated)]
-                let cwd = invocation.turn.resolve_path(params.workdir).to_path_buf();
-                (command, cwd)
-            }),
+            .map(|params| params.command),
         (None, "exec_command") => serde_json::from_str::<ExecCommandArgs>(arguments)
             .ok()
-            .and_then(|params| {
-                let command = crate::tools::handlers::unified_exec::get_command(
-                    &params,
-                    invocation.session.user_shell(),
-                    &invocation.turn.unified_exec_shell_mode,
-                    invocation.turn.config.permissions.allow_login_shell,
-                )
-                .ok()?;
-                #[allow(deprecated)]
-                let cwd = invocation.turn.resolve_path(params.workdir).to_path_buf();
-                Some((command.command, cwd))
-            }),
+            .map(|params| params.cmd),
         (Some(_), _) | (None, _) => None,
-    }
+    }?;
+
+    parse_plain_shell_script(&command)
 }
