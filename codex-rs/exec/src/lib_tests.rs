@@ -775,7 +775,8 @@ fn sample_thread_start_response() -> ThreadStartResponse {
         model: "gpt-5.4".to_string(),
         model_provider: "openai".to_string(),
         service_tier: None,
-        cwd: test_path_buf("/tmp").abs(),
+        cwd: ApiPathString::from_abs_path(&test_path_buf("/tmp").abs(), PathConvention::native())
+            .expect("API cwd"),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: codex_app_server_protocol::AskForApproval::OnRequest,

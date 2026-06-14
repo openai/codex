@@ -26,6 +26,7 @@ use codex_protocol::protocol::ThreadGoalStatus as CoreThreadGoalStatus;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::ApiPathString;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -155,7 +156,7 @@ pub struct ThreadStartResponse {
     pub model: String,
     pub model_provider: String,
     pub service_tier: Option<String>,
-    pub cwd: AbsolutePathBuf,
+    pub cwd: ApiPathString,
     /// Thread-scoped runtime workspace roots used to materialize
     /// `:workspace_roots`.
     #[experimental("thread/start.runtimeWorkspaceRoots")]

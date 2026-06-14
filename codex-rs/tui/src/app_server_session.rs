@@ -120,6 +120,8 @@ use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
 use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -1538,9 +1540,21 @@ async fn thread_session_state_from_thread_start_response(
     config: &Config,
     thread_params_mode: ThreadParamsMode,
 ) -> Result<ThreadSessionState, String> {
+    let cwd_convention = response
+        .cwd
+        .infer_absolute_path_convention()
+        .ok_or_else(|| format!("thread cwd `{}` is not absolute", response.cwd.as_str()))?;
+    let cwd_uri = response
+        .cwd
+        .to_path_uri(cwd_convention)
+        .map_err(|err| format!("thread cwd is invalid: {err}"))?;
+    let cwd = ApiPathString::from_path_uri(&cwd_uri, PathConvention::native())
+        .map_err(|err| format!("thread cwd cannot be represented on this host: {err}"))?;
+    let cwd = AbsolutePathBuf::try_from(cwd.into_string())
+        .map_err(|err| format!("thread cwd is invalid on this host: {err}"))?;
     let permission_profile = display_permission_profile_from_thread_response(
         &response.sandbox,
-        response.cwd.as_path(),
+        cwd.as_path(),
         config,
         thread_params_mode,
     );
@@ -1556,7 +1570,7 @@ async fn thread_session_state_from_thread_start_response(
         response.approvals_reviewer.to_core(),
         permission_profile,
         response.active_permission_profile.clone().map(Into::into),
-        response.cwd.clone(),
+        cwd,
         response.runtime_workspace_roots.clone(),
         response.instruction_sources.clone(),
         response.reasoning_effort.clone(),

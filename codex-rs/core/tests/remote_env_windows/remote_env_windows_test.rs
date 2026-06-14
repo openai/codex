@@ -268,8 +268,7 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
             let response: ThreadStartResponse = to_response(response)?;
             assert!(!response.thread.id.is_empty());
             let host_cwd = codex_home.path().to_path_buf().abs();
-            // TODO(anp): Return the selected environment's native cwd from thread/start.
-            assert_eq!(response.cwd, host_cwd);
+            assert_eq!(response.cwd.as_str(), NATIVE_CWD);
             // TODO(anp): Derive runtime workspace roots from the selected remote environment.
             assert_eq!(response.runtime_workspace_roots, vec![host_cwd]);
             // TODO(anp): Discover and report instruction sources from the remote filesystem.

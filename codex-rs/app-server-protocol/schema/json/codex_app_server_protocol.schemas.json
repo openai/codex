@@ -19041,7 +19041,7 @@
             "description": "Reviewer currently used for approval requests on this thread."
           },
           "cwd": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
+            "$ref": "#/definitions/v2/ApiPathString"
           },
           "instructionSources": {
             "default": [],

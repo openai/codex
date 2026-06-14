@@ -16849,7 +16849,7 @@
           "description": "Reviewer currently used for approval requests on this thread."
         },
         "cwd": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "$ref": "#/definitions/ApiPathString"
         },
         "instructionSources": {
           "default": [],

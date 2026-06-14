@@ -232,7 +232,7 @@ async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
         ..
     } = to_response::<ThreadStartResponse>(resp)?;
 
-    assert_eq!(response_cwd, cwd.abs());
+    assert_eq!(response_cwd.as_str(), cwd.to_string_lossy());
     assert_eq!(runtime_workspace_roots, vec![extra_root.abs()]);
 
     Ok(())

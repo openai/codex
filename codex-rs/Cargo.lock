@@ -2844,6 +2844,7 @@ dependencies = [
  "codex-utils-cargo-bin",
  "codex-utils-cli",
  "codex-utils-oss",
+ "codex-utils-path-uri",
  "codex-utils-sandbox-summary",
  "core_test_support",
  "libc",

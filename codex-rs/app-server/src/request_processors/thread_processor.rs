@@ -4,6 +4,8 @@ use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
+use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathUri;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -1230,7 +1232,21 @@ impl ThreadRequestProcessor {
             &config_snapshot.permission_profile,
             config_snapshot.cwd().as_path(),
         );
-        let cwd = config_snapshot.cwd().clone();
+        let cwd_uri = config_snapshot
+            .environment_selections()
+            .first()
+            .map(|environment| environment.cwd.clone())
+            .unwrap_or_else(|| PathUri::from_abs_path(config_snapshot.cwd()));
+        let cwd_convention = cwd_uri.infer_path_convention().ok_or_else(|| {
+            internal_error(format!(
+                "could not infer the path convention for thread cwd `{cwd_uri}`"
+            ))
+        })?;
+        let cwd = ApiPathString::from_path_uri(&cwd_uri, cwd_convention).map_err(|err| {
+            internal_error(format!(
+                "could not render thread cwd `{cwd_uri}` using {cwd_convention}: {err}"
+            ))
+        })?;
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
 

@@ -100,6 +100,8 @@ use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
 use codex_utils_cli::SharedCliOptions;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
+use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 pub use event_processor_with_jsonl_output::CodexStatus;
 pub use event_processor_with_jsonl_output::CollectedThreadEvents;
@@ -1154,6 +1156,18 @@ fn session_configured_from_thread_start_response(
     response: &ThreadStartResponse,
     config: &Config,
 ) -> Result<SessionConfiguredEvent, String> {
+    let cwd_convention = response
+        .cwd
+        .infer_absolute_path_convention()
+        .ok_or_else(|| format!("thread cwd `{}` is not absolute", response.cwd.as_str()))?;
+    let cwd_uri = response
+        .cwd
+        .to_path_uri(cwd_convention)
+        .map_err(|err| format!("thread cwd is invalid: {err}"))?;
+    let cwd = ApiPathString::from_path_uri(&cwd_uri, PathConvention::native())
+        .map_err(|err| format!("thread cwd cannot be represented on this host: {err}"))?;
+    let cwd = AbsolutePathBuf::try_from(cwd.into_string())
+        .map_err(|err| format!("thread cwd is invalid on this host: {err}"))?;
     session_configured_from_thread_response(
         &response.thread.session_id,
         &response.thread.id,
@@ -1168,7 +1182,7 @@ fn session_configured_from_thread_start_response(
         response.approvals_reviewer.to_core(),
         config.permissions.effective_permission_profile(),
         response.active_permission_profile.clone().map(Into::into),
-        response.cwd.clone(),
+        cwd,
         response.reasoning_effort.clone(),
     )
 }
