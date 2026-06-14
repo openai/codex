@@ -36,7 +36,8 @@ pub use codex_file_system::ExecutorFileSystem;
 pub use codex_file_system::ExecutorFileSystemFuture;
 pub use codex_file_system::FileMetadata;
 pub use codex_file_system::FileSystemResult;
-pub use codex_file_system::FileSystemSandboxContext;
+pub type FileSystemSandboxContext<PathType = codex_utils_path_uri::PathUri> =
+    codex_file_system::FileSystemSandboxContext<PathType>;
 pub use codex_file_system::ReadDirectoryEntry;
 pub use codex_file_system::RemoveOptions;
 pub use environment::CODEX_EXEC_SERVER_URL_ENV_VAR;

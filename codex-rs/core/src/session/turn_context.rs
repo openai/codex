@@ -340,7 +340,7 @@ impl TurnContext {
             &file_system_sandbox_policy,
             network_sandbox_policy,
         );
-        FileSystemSandboxContext {
+        FileSystemSandboxContext::<AbsolutePathBuf> {
             permissions,
             cwd: Some(cwd.clone()),
             windows_sandbox_level: self.windows_sandbox_level,
@@ -350,6 +350,7 @@ impl TurnContext {
                 .windows_sandbox_private_desktop,
             use_legacy_landlock: self.features.use_legacy_landlock(),
         }
+        .into_path_uri()
     }
 
     fn non_legacy_file_system_sandbox_policy(&self) -> Option<FileSystemSandboxPolicy> {

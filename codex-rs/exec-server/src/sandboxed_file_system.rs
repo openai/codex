@@ -17,6 +17,7 @@ use crate::RemoveOptions;
 use crate::fs_helper::FsHelperPayload;
 use crate::fs_helper::FsHelperRequest;
 use crate::fs_sandbox::FileSystemSandboxRunner;
+use crate::local_file_system::should_run_in_platform_sandbox;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
@@ -342,7 +343,10 @@ fn require_platform_sandbox(
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> FileSystemResult<&FileSystemSandboxContext> {
     sandbox
-        .filter(|sandbox| sandbox.should_run_in_sandbox())
+        .map(|sandbox| should_run_in_platform_sandbox(sandbox).map(|required| (sandbox, required)))
+        .transpose()?
+        .filter(|(_, required)| *required)
+        .map(|(sandbox, _)| sandbox)
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,

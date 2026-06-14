@@ -3,13 +3,11 @@ use std::io;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_utils_path_uri::PathUri;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
-use crate::FileSystemSandboxContext;
 use crate::RemoveOptions;
 use crate::local_file_system::LocalFileSystem;
 use crate::protocol::FS_WRITE_FILE_METHOD;
@@ -50,10 +48,9 @@ impl FileSystemHandler {
         &self,
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
-        let sandbox = native_sandbox_context(params.sandbox)?;
         let bytes = self
             .file_system
-            .read_file(&params.path, sandbox.as_ref())
+            .read_file(&params.path, params.sandbox.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadFileResponse {
@@ -65,14 +62,13 @@ impl FileSystemHandler {
         &self,
         params: FsWriteFileParams,
     ) -> Result<FsWriteFileResponse, JSONRPCErrorError> {
-        let sandbox = native_sandbox_context(params.sandbox)?;
         let bytes = STANDARD.decode(params.data_base64).map_err(|err| {
             invalid_request(format!(
                 "{FS_WRITE_FILE_METHOD} requires valid base64 dataBase64: {err}"
             ))
         })?;
         self.file_system
-            .write_file(&params.path, bytes, sandbox.as_ref())
+            .write_file(&params.path, bytes, params.sandbox.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsWriteFileResponse {})
@@ -82,13 +78,12 @@ impl FileSystemHandler {
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
-        let sandbox = native_sandbox_context(params.sandbox)?;
         let recursive = params.recursive.unwrap_or(true);
         self.file_system
             .create_directory(
                 &params.path,
                 CreateDirectoryOptions { recursive },
-                sandbox.as_ref(),
+                params.sandbox.as_ref(),
             )
             .await
             .map_err(map_fs_error)?;
@@ -99,10 +94,9 @@ impl FileSystemHandler {
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
-        let sandbox = native_sandbox_context(params.sandbox)?;
         let metadata = self
             .file_system
-            .get_metadata(&params.path, sandbox.as_ref())
+            .get_metadata(&params.path, params.sandbox.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {
@@ -119,10 +113,9 @@ impl FileSystemHandler {
         &self,
         params: FsCanonicalizeParams,
     ) -> Result<FsCanonicalizeResponse, JSONRPCErrorError> {
-        let sandbox = native_sandbox_context(params.sandbox)?;
         let path = self
             .file_system
-            .canonicalize(&params.path, sandbox.as_ref())
+            .canonicalize(&params.path, params.sandbox.as_ref())
             .await
             .map_err(map_fs_error)?;
         Ok(FsCanonicalizeResponse { path })
@@ -132,10 +125,9 @@ impl FileSystemHandler {
         &self,
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
-        let sandbox = native_sandbox_context(params.sandbox)?;
         let entries = self
             .file_system
-            .read_directory(&params.path, sandbox.as_ref())
+            .read_directory(&params.path, params.sandbox.as_ref())
             .await
             .map_err(map_fs_error)?
             .into_iter()
@@ -152,14 +144,13 @@ impl FileSystemHandler {
         &self,
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
-        let sandbox = native_sandbox_context(params.sandbox)?;
         let recursive = params.recursive.unwrap_or(true);
         let force = params.force.unwrap_or(true);
         self.file_system
             .remove(
                 &params.path,
                 RemoveOptions { recursive, force },
-                sandbox.as_ref(),
+                params.sandbox.as_ref(),
             )
             .await
             .map_err(map_fs_error)?;
@@ -170,7 +161,6 @@ impl FileSystemHandler {
         &self,
         params: FsCopyParams,
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
-        let sandbox = native_sandbox_context(params.sandbox)?;
         self.file_system
             .copy(
                 &params.source_path,
@@ -178,21 +168,12 @@ impl FileSystemHandler {
                 CopyOptions {
                     recursive: params.recursive,
                 },
-                sandbox.as_ref(),
+                params.sandbox.as_ref(),
             )
             .await
             .map_err(map_fs_error)?;
         Ok(FsCopyResponse {})
     }
-}
-
-fn native_sandbox_context(
-    sandbox: Option<FileSystemSandboxContext<PathUri>>,
-) -> Result<Option<FileSystemSandboxContext>, JSONRPCErrorError> {
-    sandbox
-        .map(FileSystemSandboxContext::try_into_native)
-        .transpose()
-        .map_err(|err| invalid_request(format!("invalid sandbox permission path URI: {err}")))
 }
 
 fn map_fs_error(err: io::Error) -> JSONRPCErrorError {

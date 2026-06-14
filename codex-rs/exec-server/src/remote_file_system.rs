@@ -286,11 +286,10 @@ impl ExecutorFileSystem for RemoteFileSystem {
 
 fn remote_sandbox_context(
     sandbox: Option<&FileSystemSandboxContext>,
-) -> Option<FileSystemSandboxContext<PathUri>> {
+) -> Option<FileSystemSandboxContext> {
     sandbox
         .cloned()
         .map(FileSystemSandboxContext::drop_cwd_if_unused)
-        .map(FileSystemSandboxContext::into_path_uri)
 }
 
 fn map_remote_error(error: ExecServerError) -> io::Error {
@@ -341,7 +340,8 @@ mod tests {
         let sandbox_context = FileSystemSandboxContext::from_permission_profile_with_cwd(
             permissions,
             path_uri("host-checkout"),
-        );
+        )
+        .into_path_uri();
 
         let remote_context =
             remote_sandbox_context(Some(&sandbox_context)).expect("remote sandbox context");
@@ -361,7 +361,8 @@ mod tests {
             PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
         let cwd = path_uri("host-checkout");
         let sandbox_context =
-            FileSystemSandboxContext::from_permission_profile_with_cwd(permissions, cwd.clone());
+            FileSystemSandboxContext::from_permission_profile_with_cwd(permissions, cwd.clone())
+                .into_path_uri();
 
         let remote_context =
             remote_sandbox_context(Some(&sandbox_context)).expect("remote sandbox context");

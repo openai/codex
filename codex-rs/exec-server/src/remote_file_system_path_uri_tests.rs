@@ -52,7 +52,8 @@ async fn remote_file_system_sends_path_and_sandbox_cwd_uris_without_native_conve
     let sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
         PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
         sandbox_cwd,
-    );
+    )
+    .into_path_uri();
 
     for path in &paths {
         assert_eq!(
@@ -68,7 +69,7 @@ async fn remote_file_system_sends_path_and_sandbox_cwd_uris_without_native_conve
         .into_iter()
         .map(|path| FsReadFileParams {
             path,
-            sandbox: Some(sandbox.clone().into_path_uri()),
+            sandbox: Some(sandbox.clone()),
         })
         .collect::<Vec<_>>();
     assert_eq!(

@@ -2,15 +2,17 @@ use crate::FunctionCallError;
 use crate::ToolName;
 use crate::ToolPayload;
 use codex_file_system::ExecutorFileSystem;
-use codex_file_system::FileSystemSandboxContext;
 use codex_protocol::items::ImageGenerationItem;
 use codex_protocol::items::WebSearchItem;
 use codex_protocol::models::ResponseItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_path_uri::PathUri;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+
+type FileSystemSandboxContext = codex_file_system::FileSystemSandboxContext<PathUri>;
 
 /// Raw response history snapshot available when an extension tool is invoked.
 #[derive(Clone, Debug, Default)]
