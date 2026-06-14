@@ -17,6 +17,34 @@ use serde::de::Deserializer;
 use serde_json::Value;
 use std::collections::HashMap;
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct RateLimitResetCreditsSummary {
+    pub available_count: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct RateLimitStatusWithResetCredits {
+    #[serde(flatten)]
+    pub rate_limits: RateLimitStatusPayload,
+    pub rate_limit_reset_credits: Option<RateLimitResetCreditsSummary>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConsumeRateLimitResetCreditCode {
+    Reset,
+    NothingToReset,
+    NoCredit,
+    AlreadyRedeemed,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct ConsumeRateLimitResetCreditResponse {
+    pub code: ConsumeRateLimitResetCreditCode,
+    #[serde(default)]
+    pub windows_reset: i64,
+}
+
 #[derive(Clone, Debug)]
 pub struct AccountsCheckResponse {
     pub accounts: Vec<AccountEntry>,

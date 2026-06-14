@@ -1375,6 +1375,16 @@ impl MessageProcessor {
             ClientRequest::GetAccountRateLimits { .. } => {
                 self.account_processor.get_account_rate_limits().await
             }
+            ClientRequest::GetAccountRateLimitResetCredits { .. } => {
+                self.account_processor
+                    .get_account_rate_limit_reset_credits()
+                    .await
+            }
+            ClientRequest::ConsumeAccountRateLimitResetCredit { params, .. } => {
+                self.account_processor
+                    .consume_account_rate_limit_reset_credit(params)
+                    .await
+            }
             ClientRequest::GetAccountTokenUsage { .. } => {
                 self.account_processor.get_account_token_usage().await
             }

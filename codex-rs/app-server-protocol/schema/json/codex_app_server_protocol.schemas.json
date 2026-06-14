@@ -1864,6 +1864,53 @@
             },
             "method": {
               "enum": [
+                "account/rateLimitResetCredit/read"
+              ],
+              "title": "Account/rateLimitResetCredit/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Account/rateLimitResetCredit/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/rateLimitResetCredit/consume"
+              ],
+              "title": "Account/rateLimitResetCredit/consumeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ConsumeAccountRateLimitResetCreditParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Account/rateLimitResetCredit/consumeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "account/usage/read"
               ],
               "title": "Account/usage/readRequestMethod",
@@ -8453,6 +8500,46 @@
         ],
         "type": "object"
       },
+      "ConsumeAccountRateLimitResetCreditCode": {
+        "enum": [
+          "reset",
+          "nothing_to_reset",
+          "no_credit",
+          "already_redeemed"
+        ],
+        "type": "string"
+      },
+      "ConsumeAccountRateLimitResetCreditParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "redeemRequestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "redeemRequestId"
+        ],
+        "title": "ConsumeAccountRateLimitResetCreditParams",
+        "type": "object"
+      },
+      "ConsumeAccountRateLimitResetCreditResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "code": {
+            "$ref": "#/definitions/v2/ConsumeAccountRateLimitResetCreditCode"
+          },
+          "windowsReset": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "windowsReset"
+        ],
+        "title": "ConsumeAccountRateLimitResetCreditResponse",
+        "type": "object"
+      },
       "ContentItem": {
         "oneOf": [
           {
@@ -9806,6 +9893,20 @@
           }
         },
         "title": "GetAccountParams",
+        "type": "object"
+      },
+      "GetAccountRateLimitResetCreditsResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "availableCount": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "availableCount"
+        ],
+        "title": "GetAccountRateLimitResetCreditsResponse",
         "type": "object"
       },
       "GetAccountRateLimitsResponse": {

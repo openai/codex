@@ -1,0 +1,29 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ConsumeAccountRateLimitResetCreditCode": {
+      "enum": [
+        "reset",
+        "nothing_to_reset",
+        "no_credit",
+        "already_redeemed"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "code": {
+      "$ref": "#/definitions/ConsumeAccountRateLimitResetCreditCode"
+    },
+    "windowsReset": {
+      "format": "int64",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "code",
+    "windowsReset"
+  ],
+  "title": "ConsumeAccountRateLimitResetCreditResponse",
+  "type": "object"
+}

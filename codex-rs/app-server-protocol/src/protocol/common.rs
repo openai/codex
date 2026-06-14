@@ -1003,6 +1003,18 @@ client_request_definitions! {
         response: v2::GetAccountRateLimitsResponse,
     },
 
+    GetAccountRateLimitResetCredits => "account/rateLimitResetCredit/read" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: None,
+        response: v2::GetAccountRateLimitResetCreditsResponse,
+    },
+
+    ConsumeAccountRateLimitResetCredit => "account/rateLimitResetCredit/consume" {
+        params: v2::ConsumeAccountRateLimitResetCreditParams,
+        serialization: global("account-auth"),
+        response: v2::ConsumeAccountRateLimitResetCreditResponse,
+    },
+
     GetAccountTokenUsage => "account/usage/read" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         serialization: None,

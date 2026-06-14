@@ -261,6 +261,38 @@ pub struct GetAccountRateLimitsResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct GetAccountRateLimitResetCreditsResponse {
+    pub available_count: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConsumeAccountRateLimitResetCreditParams {
+    pub redeem_request_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConsumeAccountRateLimitResetCreditResponse {
+    pub code: ConsumeAccountRateLimitResetCreditCode,
+    pub windows_reset: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/", rename_all = "snake_case")]
+pub enum ConsumeAccountRateLimitResetCreditCode {
+    Reset,
+    NothingToReset,
+    NoCredit,
+    AlreadyRedeemed,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct GetAccountTokenUsageResponse {
     pub summary: AccountTokenUsageSummary,
     pub daily_usage_buckets: Option<Vec<AccountTokenUsageDailyBucket>>,

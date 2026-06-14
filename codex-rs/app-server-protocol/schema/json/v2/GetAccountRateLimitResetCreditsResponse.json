@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "availableCount": {
+      "format": "int64",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "availableCount"
+  ],
+  "title": "GetAccountRateLimitResetCreditsResponse",
+  "type": "object"
+}
