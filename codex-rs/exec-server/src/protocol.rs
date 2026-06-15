@@ -215,7 +215,7 @@ pub struct FsReadFileResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct FsOpenParams {
+pub struct FsOpenParams {
     pub handle_id: String,
     pub path: PathUri,
     pub sandbox: Option<FileSystemSandboxContext>,
@@ -223,13 +223,13 @@ pub(crate) struct FsOpenParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct FsOpenResponse {
+pub struct FsOpenResponse {
     pub handle_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct FsReadBlockParams {
+pub struct FsReadBlockParams {
     pub handle_id: String,
     pub offset: u64,
     pub len: usize,
@@ -237,20 +237,20 @@ pub(crate) struct FsReadBlockParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct FsReadBlockResponse {
+pub struct FsReadBlockResponse {
     pub chunk: ByteChunk,
     pub eof: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct FsCloseParams {
+pub struct FsCloseParams {
     pub handle_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct FsCloseResponse {}
+pub struct FsCloseResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

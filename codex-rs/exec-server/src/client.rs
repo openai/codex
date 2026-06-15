@@ -438,21 +438,18 @@ impl ExecServerClient {
         self.call(FS_READ_FILE_METHOD, &params).await
     }
 
-    pub(crate) async fn fs_open(
-        &self,
-        params: FsOpenParams,
-    ) -> Result<FsOpenResponse, ExecServerError> {
+    pub async fn fs_open(&self, params: FsOpenParams) -> Result<FsOpenResponse, ExecServerError> {
         self.call(FS_OPEN_METHOD, &params).await
     }
 
-    pub(crate) async fn fs_read_block(
+    pub async fn fs_read_block(
         &self,
         params: FsReadBlockParams,
     ) -> Result<FsReadBlockResponse, ExecServerError> {
         self.call(FS_READ_BLOCK_METHOD, &params).await
     }
 
-    pub(crate) async fn fs_close(
+    pub async fn fs_close(
         &self,
         params: FsCloseParams,
     ) -> Result<FsCloseResponse, ExecServerError> {

@@ -1,14 +1,19 @@
 mod common;
 
 use anyhow::Result;
-use base64::Engine as _;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_exec_server::Environment;
+use codex_exec_server::ExecServerClient;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FileSystemSandboxContext;
+use codex_exec_server::FsCloseParams;
+use codex_exec_server::FsOpenParams;
+use codex_exec_server::FsReadBlockParams;
+use codex_exec_server::FsReadBlockResponse;
 use codex_exec_server::InitializeParams;
+use codex_exec_server::RemoteExecServerConnectArgs;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -37,12 +42,6 @@ const OPEN_FILE_LIMIT: usize = 128;
 #[serde(rename_all = "camelCase")]
 struct OpenFileResponse {
     handle_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ReadBlockResponse {
-    chunk: String,
-    eof: bool,
 }
 
 #[tokio::test]
@@ -177,67 +176,61 @@ async fn stream_keeps_reading_the_open_file_after_path_replacement() -> Result<(
 #[tokio::test]
 async fn read_block_supports_non_sequential_offsets_and_lengths() -> Result<()> {
     let mut server = exec_server().await?;
-    initialize_exec_server(&mut server).await?;
+    let client = ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
+        server.websocket_url().to_string(),
+        "file-stream-protocol-test".to_string(),
+    ))
+    .await?;
     let tmp = TempDir::new()?;
     let path = tmp.path().join("non-sequential.bin");
     std::fs::write(&path, b"0123456789")?;
-    let open: OpenFileResponse = rpc_call(
-        &mut server,
-        "fs/open",
-        serde_json::json!({
-            "handleId": Uuid::new_v4().to_string(),
-            "path": PathUri::from_path(path)?,
-            "sandbox": null,
-        }),
-    )
-    .await?;
+    let open = client
+        .fs_open(FsOpenParams {
+            handle_id: Uuid::new_v4().to_string(),
+            path: PathUri::from_path(path)?,
+            sandbox: None,
+        })
+        .await?;
 
+    let mut blocks = Vec::new();
+    for (offset, len) in [(6, 3), (1, 2), (8, 4), (0, 2)] {
+        blocks.push(
+            client
+                .fs_read_block(FsReadBlockParams {
+                    handle_id: open.handle_id.clone(),
+                    offset,
+                    len,
+                })
+                .await?,
+        );
+    }
     assert_eq!(
-        read_block(
-            &mut server,
-            &open.handle_id,
-            /*offset*/ 6,
-            /*len*/ 3
-        )
-        .await?,
-        (b"678".to_vec(), false)
+        blocks,
+        vec![
+            FsReadBlockResponse {
+                chunk: b"678".to_vec().into(),
+                eof: false,
+            },
+            FsReadBlockResponse {
+                chunk: b"12".to_vec().into(),
+                eof: false,
+            },
+            FsReadBlockResponse {
+                chunk: b"89".to_vec().into(),
+                eof: true,
+            },
+            FsReadBlockResponse {
+                chunk: b"01".to_vec().into(),
+                eof: false,
+            },
+        ]
     );
-    assert_eq!(
-        read_block(
-            &mut server,
-            &open.handle_id,
-            /*offset*/ 1,
-            /*len*/ 2
-        )
-        .await?,
-        (b"12".to_vec(), false)
-    );
-    assert_eq!(
-        read_block(
-            &mut server,
-            &open.handle_id,
-            /*offset*/ 8,
-            /*len*/ 4
-        )
-        .await?,
-        (b"89".to_vec(), true)
-    );
-    assert_eq!(
-        read_block(
-            &mut server,
-            &open.handle_id,
-            /*offset*/ 0,
-            /*len*/ 2
-        )
-        .await?,
-        (b"01".to_vec(), false)
-    );
-    let _: serde_json::Value = rpc_call(
-        &mut server,
-        "fs/close",
-        serde_json::json!({ "handleId": open.handle_id }),
-    )
-    .await?;
+    client
+        .fs_close(FsCloseParams {
+            handle_id: open.handle_id,
+        })
+        .await?;
+    drop(client);
     server.shutdown().await?;
     Ok(())
 }
@@ -320,24 +313,6 @@ async fn initialize_exec_server(server: &mut ExecServerHarness) -> Result<()> {
         .send_notification("initialized", serde_json::json!({}))
         .await?;
     Ok(())
-}
-
-async fn read_block(
-    server: &mut ExecServerHarness,
-    handle_id: &str,
-    offset: u64,
-    len: usize,
-) -> Result<(Vec<u8>, bool)> {
-    let response: ReadBlockResponse = rpc_call(
-        server,
-        "fs/readBlock",
-        serde_json::json!({ "handleId": handle_id, "offset": offset, "len": len }),
-    )
-    .await?;
-    Ok((
-        base64::engine::general_purpose::STANDARD.decode(response.chunk)?,
-        response.eof,
-    ))
 }
 
 async fn rpc_call<T>(
