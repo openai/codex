@@ -344,7 +344,7 @@ fn require_platform_sandbox(
     sandbox
         .map(|sandbox| {
             sandbox
-                .should_run_in_platform_sandbox()
+                .should_run_in_sandbox()
                 .map(|required| (sandbox, required))
         })
         .transpose()?

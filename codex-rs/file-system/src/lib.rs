@@ -108,7 +108,7 @@ impl FileSystemSandboxContext {
         }
     }
 
-    pub fn should_run_in_platform_sandbox(&self) -> io::Result<bool> {
+    pub fn should_run_in_sandbox(&self) -> io::Result<bool> {
         let permissions: PermissionProfile<AbsolutePathBuf> =
             self.permissions.clone().try_into()?;
         let file_system_policy = permissions.file_system_sandbox_policy();
