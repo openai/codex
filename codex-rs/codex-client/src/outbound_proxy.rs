@@ -15,6 +15,8 @@ use std::time::Instant;
 
 use crate::custom_ca::BuildCustomCaTransportError;
 use crate::custom_ca::build_reqwest_client_with_custom_ca;
+use crate::route_diagnostics::RouteDecisionSource;
+use crate::route_diagnostics::RouteDiagnostic;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use sha2::Digest;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -209,6 +211,7 @@ fn configure_proxy_for_route(
     let origin = RequestOrigin::parse(request_url);
 
     if config.mode == OutboundProxyMode::Direct {
+        RouteDiagnostic::direct(route_class, RouteDecisionSource::ConfigDisabled).emit_opt_in();
         return Ok(builder.no_proxy());
     }
 
@@ -217,6 +220,7 @@ fn configure_proxy_for_route(
     // `NO_PROXY` is an env-derived direct decision; reqwest remains the
     // authority for applying the env proxy contract to its own env proxies.
     if origin.as_ref().is_some_and(no_proxy_env_matches_origin) {
+        RouteDiagnostic::direct(route_class, RouteDecisionSource::Env).emit_opt_in();
         if config.mode == OutboundProxyMode::Env {
             return Ok(builder.no_proxy());
         }
@@ -233,6 +237,12 @@ fn configure_proxy_for_route(
     }
 
     if !SystemProxyEnvOverride::from_env().system_discovery_enabled() {
+        RouteDiagnostic::unavailable(
+            route_class,
+            RouteDecisionSource::ConfigDisabled,
+            RouteFailureClass::ProxyResolutionUnavailable,
+        )
+        .emit_opt_in();
         if config.mode == OutboundProxyMode::System {
             return Err(BuildRouteAwareHttpClientError::SystemProxyUnavailable {
                 route_class,
@@ -248,6 +258,12 @@ fn configure_proxy_for_route(
     }
 
     if !system_proxy_supported() {
+        RouteDiagnostic::unavailable(
+            route_class,
+            RouteDecisionSource::UnsupportedPlatform,
+            RouteFailureClass::ProxyResolutionUnavailable,
+        )
+        .emit_opt_in();
         if config.mode == OutboundProxyMode::System {
             return Err(BuildRouteAwareHttpClientError::SystemProxyUnavailable {
                 route_class,
@@ -263,6 +279,12 @@ fn configure_proxy_for_route(
     }
 
     let Some(origin) = origin.as_ref() else {
+        RouteDiagnostic::unavailable(
+            route_class,
+            RouteDecisionSource::ResolutionError,
+            RouteFailureClass::InvalidProxyConfig,
+        )
+        .emit_opt_in();
         return if config.mode == OutboundProxyMode::System {
             Err(BuildRouteAwareHttpClientError::SystemProxyUnavailable {
                 route_class,
@@ -283,9 +305,15 @@ fn configure_proxy_for_route(
         OutboundProxyMode::Auto | OutboundProxyMode::System
     );
     match resolve_system_proxy(request_url, origin, include_auto_detect) {
-        SystemProxyDecision::Direct => Ok(builder.no_proxy()),
-        SystemProxyDecision::Proxy { url } => configure_concrete_proxy(builder, route_class, &url),
-        SystemProxyDecision::Unavailable { failure } => {
+        SystemProxyDecision::Direct { source } => {
+            RouteDiagnostic::direct(route_class, source).emit_opt_in();
+            Ok(builder.no_proxy())
+        }
+        SystemProxyDecision::Proxy { source, url } => {
+            configure_concrete_proxy(builder, route_class, source, &url)
+        }
+        SystemProxyDecision::Unavailable { source, failure } => {
+            RouteDiagnostic::unavailable(route_class, source, failure).emit_opt_in();
             if config.mode == OutboundProxyMode::System {
                 Err(BuildRouteAwareHttpClientError::SystemProxyUnavailable {
                     route_class,
@@ -310,15 +338,23 @@ const fn system_proxy_supported() -> bool {
 fn configure_concrete_proxy(
     builder: reqwest::ClientBuilder,
     route_class: ClientRouteClass,
+    source: RouteDecisionSource,
     proxy_url: &str,
 ) -> Result<reqwest::ClientBuilder, BuildRouteAwareHttpClientError> {
     let proxy = match reqwest::Proxy::all(proxy_url) {
         Ok(proxy) => proxy,
         Err(_source) => {
+            RouteDiagnostic::unavailable(
+                route_class,
+                source,
+                RouteFailureClass::InvalidProxyConfig,
+            )
+            .emit_opt_in();
             return Err(BuildRouteAwareHttpClientError::InvalidProxyConfig { route_class });
         }
     };
     let proxy = proxy.no_proxy(reqwest::NoProxy::from_env());
+    RouteDiagnostic::proxy(route_class, source, proxy_url).emit_opt_in();
     Ok(builder.proxy(proxy))
 }
 
@@ -338,18 +374,26 @@ fn configure_env_proxy_handling(
         && let Some(proxy_url) = env_proxy_for_origin(origin)
     {
         if handling == EnvProxyHandling::ResolveConcreteOrNoProxy {
-            return configure_concrete_proxy(builder, route_class, &proxy_url);
+            return configure_concrete_proxy(
+                builder,
+                route_class,
+                RouteDecisionSource::Env,
+                &proxy_url,
+            );
         }
+        RouteDiagnostic::proxy(route_class, RouteDecisionSource::Env, &proxy_url).emit_opt_in();
         return Ok(builder);
     }
 
     if conventional_proxy_env_present() {
+        RouteDiagnostic::direct(route_class, RouteDecisionSource::Env).emit_opt_in();
         return match handling {
             EnvProxyHandling::ResolveConcreteOrNoProxy => Ok(builder.no_proxy()),
             EnvProxyHandling::DelegateToReqwest => Ok(builder),
         };
     }
 
+    RouteDiagnostic::direct(route_class, RouteDecisionSource::Direct).emit_opt_in();
     match handling {
         EnvProxyHandling::ResolveConcreteOrNoProxy => Ok(builder.no_proxy()),
         EnvProxyHandling::DelegateToReqwest => Ok(builder),
@@ -386,17 +430,25 @@ fn default_port_for_scheme(scheme: &str) -> Option<u16> {
 #[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SystemProxyDecision {
-    Direct,
-    Proxy { url: String },
-    Unavailable { failure: RouteFailureClass },
+    Direct {
+        source: RouteDecisionSource,
+    },
+    Proxy {
+        source: RouteDecisionSource,
+        url: String,
+    },
+    Unavailable {
+        source: RouteDecisionSource,
+        failure: RouteFailureClass,
+    },
 }
 
 impl From<SystemProxyDecision> for SystemProxyRouteDecision {
     fn from(decision: SystemProxyDecision) -> Self {
         match decision {
-            SystemProxyDecision::Direct => Self::Direct,
-            SystemProxyDecision::Proxy { url } => Self::Proxy { url },
-            SystemProxyDecision::Unavailable { failure } => Self::Unavailable { failure },
+            SystemProxyDecision::Direct { .. } => Self::Direct,
+            SystemProxyDecision::Proxy { url, .. } => Self::Proxy { url },
+            SystemProxyDecision::Unavailable { failure, .. } => Self::Unavailable { failure },
         }
     }
 }
@@ -406,19 +458,37 @@ pub fn resolve_system_proxy_for_url(
     request_url: &str,
     include_auto_detect: bool,
 ) -> SystemProxyRouteDecision {
-    if !SystemProxyEnvOverride::from_env().system_discovery_enabled() || !system_proxy_supported() {
-        return SystemProxyRouteDecision::Unavailable {
+    let decision = if !SystemProxyEnvOverride::from_env().system_discovery_enabled() {
+        SystemProxyDecision::Unavailable {
+            source: RouteDecisionSource::ConfigDisabled,
             failure: RouteFailureClass::ProxyResolutionUnavailable,
-        };
-    }
-
-    let Some(origin) = RequestOrigin::parse(request_url) else {
-        return SystemProxyRouteDecision::Unavailable {
+        }
+    } else if !system_proxy_supported() {
+        SystemProxyDecision::Unavailable {
+            source: RouteDecisionSource::UnsupportedPlatform,
+            failure: RouteFailureClass::ProxyResolutionUnavailable,
+        }
+    } else if let Some(origin) = RequestOrigin::parse(request_url) {
+        resolve_system_proxy(request_url, &origin, include_auto_detect)
+    } else {
+        SystemProxyDecision::Unavailable {
+            source: RouteDecisionSource::ResolutionError,
             failure: RouteFailureClass::InvalidProxyConfig,
-        };
+        }
     };
 
-    resolve_system_proxy(request_url, &origin, include_auto_detect).into()
+    match &decision {
+        SystemProxyDecision::Direct { source } => {
+            RouteDiagnostic::direct(ClientRouteClass::Other, *source).emit_opt_in();
+        }
+        SystemProxyDecision::Proxy { source, url } => {
+            RouteDiagnostic::proxy(ClientRouteClass::Other, *source, url).emit_opt_in();
+        }
+        SystemProxyDecision::Unavailable { source, failure } => {
+            RouteDiagnostic::unavailable(ClientRouteClass::Other, *source, *failure).emit_opt_in();
+        }
+    }
+    decision.into()
 }
 
 fn resolve_system_proxy(
@@ -460,6 +530,7 @@ fn resolve_platform_system_proxy(
     _include_auto_detect: bool,
 ) -> SystemProxyDecision {
     SystemProxyDecision::Unavailable {
+        source: RouteDecisionSource::UnsupportedPlatform,
         failure: RouteFailureClass::ProxyResolutionUnavailable,
     }
 }
