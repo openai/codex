@@ -266,6 +266,9 @@ struct WebsocketSession {
     connection_reused: StdMutex<bool>,
 }
 
+// This is intentionally not a `PartialEq` implementation: request equality includes `input` and
+// `client_metadata`, while websocket reuse compares the input separately and ignores metadata.
+// Keep the destructuring exhaustive so new request fields require an explicit reuse decision.
 fn responses_request_properties_match(
     previous: &ResponsesApiRequest,
     current: &ResponsesApiRequest,
