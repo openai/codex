@@ -45,3 +45,4 @@ pub use marketplace_upgrade::ConfiguredMarketplaceUpgradeError as PluginMarketpl
 pub use marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome as PluginMarketplaceUpgradeOutcome;
 pub use provider::ExecutorPluginProvider;
 pub use provider::ExecutorPluginProviderError;
+pub use provider::ResolvedExecutorPlugin;
