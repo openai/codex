@@ -425,6 +425,9 @@
             "auth_elicitation": {
               "type": "boolean"
             },
+            "auto_compaction": {
+              "type": "boolean"
+            },
             "browser_use": {
               "type": "boolean"
             },
@@ -4578,6 +4581,9 @@
           ]
         },
         "auth_elicitation": {
+          "type": "boolean"
+        },
+        "auto_compaction": {
           "type": "boolean"
         },
         "browser_use": {
