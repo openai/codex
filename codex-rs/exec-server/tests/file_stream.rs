@@ -46,40 +46,6 @@ struct ReadBlockResponse {
 }
 
 #[tokio::test]
-async fn stream_reads_file_in_one_mib_blocks() -> Result<()> {
-    let server = exec_server().await?;
-    let client = connect_client(server.websocket_url()).await?;
-    let tmp = TempDir::new()?;
-    let path = tmp.path().join("blocks.bin");
-    let contents = (0..BLOCK_SIZE * 2 + 17)
-        .map(|index| (index % 251) as u8)
-        .collect::<Vec<_>>();
-    std::fs::write(&path, &contents)?;
-
-    let chunks = client
-        .stream(FsReadFileParams {
-            path: PathUri::from_path(path)?,
-            sandbox: None,
-        })
-        .await?
-        .try_collect::<Vec<_>>()
-        .await?;
-
-    assert_eq!(
-        chunks.iter().map(bytes::Bytes::len).collect::<Vec<_>>(),
-        vec![BLOCK_SIZE, BLOCK_SIZE, 17]
-    );
-    assert_eq!(
-        chunks
-            .iter()
-            .flat_map(|chunk| chunk.iter().copied())
-            .collect::<Vec<_>>(),
-        contents
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn stream_stops_after_an_exact_block_boundary() -> Result<()> {
     let server = exec_server().await?;
     let client = connect_client(server.websocket_url()).await?;

@@ -1,6 +1,7 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_utils_path_uri::PathUri;
+use futures::TryStreamExt;
 use tokio::io;
 use tracing::trace;
 
@@ -10,6 +11,7 @@ use crate::ExecServerError;
 use crate::ExecutorFileSystem;
 use crate::ExecutorFileSystemFuture;
 use crate::FileMetadata;
+use crate::FileSystemReadStream;
 use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
 use crate::ReadDirectoryEntry;
@@ -74,6 +76,28 @@ impl RemoteFileSystem {
                 format!("remote fs/readFile returned invalid base64 dataBase64: {err}"),
             )
         })
+    }
+
+    async fn read_file_stream(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<FileSystemReadStream> {
+        if sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox) {
+            return Ok(FileSystemReadStream::from_bytes(
+                self.read_file(path, sandbox).await?,
+            ));
+        }
+        trace!("remote fs read_file_stream");
+        let client = self.client.get().await.map_err(map_remote_error)?;
+        let stream = client
+            .stream(FsReadFileParams {
+                path: path.clone(),
+                sandbox: remote_sandbox_context(sandbox),
+            })
+            .await
+            .map_err(map_remote_error)?;
+        Ok(FileSystemReadStream::new(stream.map_err(map_remote_error)))
     }
 
     async fn write_file(
@@ -220,6 +244,14 @@ impl ExecutorFileSystem for RemoteFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
         Box::pin(RemoteFileSystem::read_file(self, path, sandbox))
+    }
+
+    fn read_file_stream<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
+        Box::pin(RemoteFileSystem::read_file_stream(self, path, sandbox))
     }
 
     fn write_file<'a>(

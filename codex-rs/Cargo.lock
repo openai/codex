@@ -3000,8 +3000,10 @@ dependencies = [
 name = "codex-file-system"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "codex-protocol",
  "codex-utils-path-uri",
+ "futures",
  "serde",
 ]
 

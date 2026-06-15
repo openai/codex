@@ -344,7 +344,7 @@ absolute path strings and normalize them to `file:` URIs:
 
 - `fs/readFile`
 - `fs/open`, `fs/readBlock`, and `fs/close` (internal transport for
-  `ExecServerClient::stream`)
+  `ExecServerClient::stream` and `ExecutorFileSystem::read_file_stream`)
 - `fs/writeFile`
 - `fs/createDirectory`
 - `fs/getMetadata`

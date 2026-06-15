@@ -8,8 +8,10 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+bytes = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-path-uri = { workspace = true }
+futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 
 [lib]

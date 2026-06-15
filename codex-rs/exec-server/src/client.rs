@@ -493,15 +493,15 @@ impl ExecServerClient {
                     .fs_read_block(FsReadBlockParams {
                         handle_id: registration.handle_id.clone(),
                         offset,
-                        len: crate::file_read::FILE_READ_BLOCK_SIZE,
+                        len: crate::FILE_READ_CHUNK_SIZE,
                     })
                     .await?;
                 let chunk = Bytes::from(response.chunk.into_inner());
-                if chunk.len() > crate::file_read::FILE_READ_BLOCK_SIZE {
+                if chunk.len() > crate::FILE_READ_CHUNK_SIZE {
                     return Err(ExecServerError::Protocol(format!(
                         "{FS_READ_BLOCK_METHOD} returned {} bytes, maximum is {}",
                         chunk.len(),
-                        crate::file_read::FILE_READ_BLOCK_SIZE
+                        crate::FILE_READ_CHUNK_SIZE
                     )));
                 }
                 if response.eof {

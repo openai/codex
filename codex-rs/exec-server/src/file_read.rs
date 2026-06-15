@@ -3,9 +3,9 @@ use std::fs::File;
 use std::io;
 use std::sync::Arc;
 
+use codex_file_system::FILE_READ_CHUNK_SIZE;
 use tokio::sync::Mutex;
 
-pub(crate) const FILE_READ_BLOCK_SIZE: usize = 1024 * 1024;
 const MAX_OPEN_FILE_READS: usize = 128;
 
 #[derive(Debug, Eq, PartialEq)]
@@ -111,10 +111,10 @@ fn read_file_at(file: &File, bytes: &mut [u8], offset: u64) -> io::Result<usize>
 }
 
 fn validate_read_block_len(len: usize) -> io::Result<()> {
-    if !(1..=FILE_READ_BLOCK_SIZE).contains(&len) {
+    if !(1..=FILE_READ_CHUNK_SIZE).contains(&len) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("file read block length must be between 1 and {FILE_READ_BLOCK_SIZE}"),
+            format!("file read block length must be between 1 and {FILE_READ_CHUNK_SIZE}"),
         ));
     }
     Ok(())

@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::path::Path;
@@ -7,13 +8,16 @@ use std::sync::LazyLock;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::io;
+use tokio::io::AsyncReadExt;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::ExecutorFileSystemFuture;
+use crate::FILE_READ_CHUNK_SIZE;
 use crate::FileMetadata;
+use crate::FileSystemReadStream;
 use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
 use crate::ReadDirectoryEntry;
@@ -111,6 +115,15 @@ impl LocalFileSystem {
         file_system.read_file(path, sandbox).await
     }
 
+    async fn read_file_stream(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<FileSystemReadStream> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system.read_file_stream(path, sandbox).await
+    }
+
     async fn write_file(
         &self,
         path: &PathUri,
@@ -188,6 +201,14 @@ impl ExecutorFileSystem for LocalFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
         Box::pin(LocalFileSystem::read_file(self, path, sandbox))
+    }
+
+    fn read_file_stream<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
+        Box::pin(LocalFileSystem::read_file_stream(self, path, sandbox))
     }
 
     fn write_file<'a>(
@@ -282,6 +303,17 @@ impl UnsandboxedFileSystem {
         self.file_system.read_file(path, /*sandbox*/ None).await
     }
 
+    async fn read_file_stream(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<FileSystemReadStream> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system
+            .read_file_stream(path, /*sandbox*/ None)
+            .await
+    }
+
     async fn write_file(
         &self,
         path: &PathUri,
@@ -372,6 +404,14 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
         Box::pin(UnsandboxedFileSystem::read_file(self, path, sandbox))
+    }
+
+    fn read_file_stream<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
+        Box::pin(UnsandboxedFileSystem::read_file_stream(self, path, sandbox))
     }
 
     fn write_file<'a>(
@@ -482,6 +522,33 @@ impl DirectFileSystem {
             ));
         }
         tokio::fs::read(path.as_path()).await
+    }
+
+    async fn read_file_stream(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<FileSystemReadStream> {
+        let file = self.open_file_for_read(path, sandbox).await?;
+        Ok(FileSystemReadStream::new(futures::stream::try_unfold(
+            file,
+            |mut file| async move {
+                let mut bytes = vec![0; FILE_READ_CHUNK_SIZE];
+                let mut bytes_read = 0;
+                while bytes_read < bytes.len() {
+                    let read = file.read(&mut bytes[bytes_read..]).await?;
+                    if read == 0 {
+                        break;
+                    }
+                    bytes_read += read;
+                }
+                if bytes_read == 0 {
+                    return Ok(None);
+                }
+                bytes.truncate(bytes_read);
+                Ok(Some((Bytes::from(bytes), file)))
+            },
+        )))
     }
 
     async fn write_file(
@@ -648,6 +715,14 @@ impl ExecutorFileSystem for DirectFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
         Box::pin(DirectFileSystem::read_file(self, path, sandbox))
+    }
+
+    fn read_file_stream<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
+        Box::pin(DirectFileSystem::read_file_stream(self, path, sandbox))
     }
 
     fn write_file<'a>(
