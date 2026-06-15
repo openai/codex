@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use crate::OPENAI_API_CURATED_MARKETPLACE_NAME;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::PluginsConfigInput;
 use codex_config::LoaderOverrides;
@@ -77,6 +78,41 @@ pub(crate) fn write_openai_curated_marketplace(root: &Path, plugin_names: &[&str
         &format!(
             r#"{{
   "name": "{OPENAI_CURATED_MARKETPLACE_NAME}",
+  "plugins": [
+{plugins}
+  ]
+}}"#
+        ),
+    );
+    for plugin_name in plugin_names {
+        write_curated_plugin(root, plugin_name);
+    }
+}
+
+pub(crate) fn write_openai_api_curated_marketplace(root: &Path, plugin_names: &[&str]) {
+    let plugins = plugin_names
+        .iter()
+        .map(|plugin_name| {
+            format!(
+                r#"{{
+      "name": "{plugin_name}",
+      "source": {{
+        "source": "local",
+        "path": "./plugins/{plugin_name}"
+      }}
+    }}"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
+    write_file(
+        &root.join(".agents/plugins/api_marketplace.json"),
+        &format!(
+            r#"{{
+  "name": "{OPENAI_API_CURATED_MARKETPLACE_NAME}",
+  "interface": {{
+    "displayName": "OpenAI Curated"
+  }},
   "plugins": [
 {plugins}
   ]

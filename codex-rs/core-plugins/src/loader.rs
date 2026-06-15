@@ -1,6 +1,7 @@
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::app_mcp_routing::apps_route_available;
+use crate::is_openai_curated_marketplace_name;
 use crate::manifest::PluginManifestHooks;
 use crate::manifest::PluginManifestPaths;
 use crate::manifest::load_plugin_manifest;
@@ -201,12 +202,13 @@ fn merge_configured_plugins_with_remote_installed(
     let local_curated_installed_plugin_keys = configured_plugins
         .keys()
         .filter_map(|plugin_key| {
-            installed_plugin_name_for_marketplace(
-                plugin_key,
-                OPENAI_CURATED_MARKETPLACE_NAME,
-                store,
-            )
-            .map(|plugin_name| (plugin_name, plugin_key.clone()))
+            let plugin_id = PluginId::parse(plugin_key).ok()?;
+            if !is_openai_curated_marketplace_name(&plugin_id.marketplace_name) {
+                return None;
+            }
+            store
+                .active_plugin_version(&plugin_id)
+                .map(|_| (plugin_id.plugin_name, plugin_key.clone()))
         })
         .collect::<HashMap<_, _>>();
 
@@ -289,41 +291,65 @@ pub fn refresh_curated_plugin_cache(
 ) -> Result<bool, String> {
     let cache_plugin_version = curated_plugin_cache_version(plugin_version);
     let store = PluginStore::try_new(codex_home.to_path_buf()).map_err(|err| err.to_string())?;
-    let curated_marketplace_path = AbsolutePathBuf::try_from(
-        codex_home
-            .join(".tmp/plugins")
-            .join(".agents/plugins/marketplace.json"),
-    )
-    .map_err(|_| "local curated marketplace is not available".to_string())?;
-    let marketplace_plugin_names = load_raw_marketplace_plugin_names(&curated_marketplace_path)
-        .map_err(|err| {
-            format!("failed to load curated marketplace plugin names for cache refresh: {err}")
-        })?;
-    let curated_marketplace = load_marketplace(&curated_marketplace_path)
-        .map_err(|err| format!("failed to load curated marketplace for cache refresh: {err}"))?;
-
+    let curated_marketplace_paths = curated_marketplace_paths_for_cache_refresh(codex_home)?;
+    let mut loaded_marketplace_names = HashSet::<String>::new();
+    let mut marketplace_plugin_keys = HashSet::<String>::new();
     let mut plugin_sources = HashMap::<String, AbsolutePathBuf>::new();
-    for plugin in curated_marketplace.plugins {
-        let plugin_name = plugin.name;
-        if plugin_sources.contains_key(&plugin_name) {
-            warn!(
-                plugin = plugin_name,
-                marketplace = OPENAI_CURATED_MARKETPLACE_NAME,
-                "ignoring duplicate curated plugin entry during cache refresh"
-            );
-            continue;
+
+    for curated_marketplace_path in curated_marketplace_paths {
+        let (marketplace_name, marketplace_plugin_names) =
+            load_raw_marketplace_plugin_names(&curated_marketplace_path).map_err(|err| {
+                format!("failed to load curated marketplace plugin names for cache refresh: {err}")
+            })?;
+        loaded_marketplace_names.insert(marketplace_name.clone());
+        let curated_marketplace = load_marketplace(&curated_marketplace_path).map_err(|err| {
+            format!("failed to load curated marketplace for cache refresh: {err}")
+        })?;
+
+        for plugin_name in marketplace_plugin_names {
+            let plugin_id =
+                PluginId::new(plugin_name, marketplace_name.clone()).map_err(|err| match err {
+                    PluginIdError::Invalid(message) => {
+                        format!("failed to prepare curated plugin cache refresh: {message}")
+                    }
+                })?;
+            marketplace_plugin_keys.insert(plugin_id.as_key());
         }
-        if let MarketplacePluginSource::Local { path } = plugin.source {
-            plugin_sources.insert(plugin_name, path);
+
+        for plugin in curated_marketplace.plugins {
+            let plugin_id =
+                PluginId::new(plugin.name.clone(), marketplace_name.clone()).map_err(|err| {
+                    match err {
+                        PluginIdError::Invalid(message) => {
+                            format!("failed to prepare curated plugin cache refresh: {message}")
+                        }
+                    }
+                })?;
+            let plugin_key = plugin_id.as_key();
+            if plugin_sources.contains_key(&plugin_key) {
+                warn!(
+                    plugin = %plugin.name,
+                    marketplace = %marketplace_name,
+                    "ignoring duplicate curated plugin entry during cache refresh"
+                );
+                continue;
+            }
+            if let MarketplacePluginSource::Local { path } = plugin.source {
+                plugin_sources.insert(plugin_key, path);
+            }
         }
     }
 
     let mut cache_refreshed = false;
     for plugin_id in configured_curated_plugin_ids {
-        if !marketplace_plugin_names.contains(&plugin_id.plugin_name) {
+        let plugin_key = plugin_id.as_key();
+        if !marketplace_plugin_keys.contains(&plugin_key) {
+            if !loaded_marketplace_names.contains(&plugin_id.marketplace_name) {
+                continue;
+            }
             warn!(
-                plugin = plugin_id.plugin_name,
-                marketplace = OPENAI_CURATED_MARKETPLACE_NAME,
+                plugin = %plugin_id.plugin_name,
+                marketplace = %plugin_id.marketplace_name,
                 "configured curated plugin no longer exists in curated marketplace during cache refresh"
             );
             if store.plugin_base_root(plugin_id).as_path().exists() {
@@ -338,7 +364,7 @@ pub fn refresh_curated_plugin_cache(
             continue;
         }
 
-        let Some(source_path) = plugin_sources.get(&plugin_id.plugin_name).cloned() else {
+        let Some(source_path) = plugin_sources.get(&plugin_key).cloned() else {
             continue;
         };
 
@@ -359,6 +385,30 @@ pub fn refresh_curated_plugin_cache(
     }
 
     Ok(cache_refreshed)
+}
+
+fn curated_marketplace_paths_for_cache_refresh(
+    codex_home: &Path,
+) -> Result<Vec<AbsolutePathBuf>, String> {
+    let curated_marketplace_path = AbsolutePathBuf::try_from(
+        codex_home
+            .join(".tmp/plugins")
+            .join(".agents/plugins/marketplace.json"),
+    )
+    .map_err(|_| "local curated marketplace is not available".to_string())?;
+    let mut paths = vec![curated_marketplace_path];
+
+    let api_marketplace_path = codex_home
+        .join(".tmp/plugins")
+        .join(".agents/plugins/api_marketplace.json");
+    if api_marketplace_path.is_file() {
+        paths.push(
+            AbsolutePathBuf::try_from(api_marketplace_path)
+                .map_err(|_| "local API curated marketplace is not available".to_string())?,
+        );
+    }
+
+    Ok(paths)
 }
 
 pub fn curated_plugin_cache_version(plugin_version: &str) -> String {
@@ -416,7 +466,7 @@ fn refresh_non_curated_plugin_cache_with_mode(
     let mut plugin_sources = HashMap::<String, MarketplacePluginSource>::new();
 
     for marketplace in marketplace_outcome.marketplaces {
-        if marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME {
+        if is_openai_curated_marketplace_name(&marketplace.name) {
             continue;
         }
 
@@ -570,7 +620,7 @@ fn curated_plugin_ids_from_config_keys(
         "ignoring invalid configured plugin key during curated sync setup",
     )
     .into_iter()
-    .filter(|plugin_id| plugin_id.marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME)
+    .filter(|plugin_id| is_openai_curated_marketplace_name(&plugin_id.marketplace_name))
     .collect::<Vec<_>>();
     configured_curated_plugin_ids.sort_unstable_by_key(PluginId::as_key);
     configured_curated_plugin_ids
@@ -584,7 +634,7 @@ fn non_curated_plugin_ids_from_config_keys(
         "ignoring invalid plugin key during non-curated cache refresh setup",
     )
     .into_iter()
-    .filter(|plugin_id| plugin_id.marketplace_name != OPENAI_CURATED_MARKETPLACE_NAME)
+    .filter(|plugin_id| !is_openai_curated_marketplace_name(&plugin_id.marketplace_name))
     .collect::<Vec<_>>();
     configured_non_curated_plugin_ids.sort_unstable_by_key(PluginId::as_key);
     configured_non_curated_plugin_ids
