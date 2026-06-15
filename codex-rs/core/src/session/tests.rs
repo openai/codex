@@ -4038,9 +4038,7 @@ async fn turn_environments_for_configuration(
     let turn_environments = Arc::new(ThreadEnvironments::new(Arc::new(
         codex_exec_server::EnvironmentManager::default_for_tests(),
     )));
-    turn_environments
-        .update_selections(session_configuration.environment_selections())
-        .await;
+    turn_environments.update_selections(session_configuration.environment_selections());
     turn_environments
 }
 
@@ -6241,8 +6239,7 @@ async fn default_turn_does_not_overlay_legacy_fallback_cwd_onto_stored_thread_en
     session
         .services
         .turn_environments
-        .update_selections(&[local(selected_cwd.clone())])
-        .await;
+        .update_selections(&[local(selected_cwd.clone())]);
     {
         let mut state = session.state.lock().await;
         state.session_configuration.environments.environments = vec![local(selected_cwd.clone())];
@@ -6271,11 +6268,7 @@ async fn default_turn_honors_empty_stored_thread_environments() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
     let session_cwd = session.get_config().await.cwd.clone();
 
-    session
-        .services
-        .turn_environments
-        .update_selections(&[])
-        .await;
+    session.services.turn_environments.update_selections(&[]);
     {
         let mut state = session.state.lock().await;
         state.session_configuration.environments.environments = Vec::new();

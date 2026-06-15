@@ -520,9 +520,7 @@ impl Codex {
             inherited_multi_agent_version,
         } = args;
         let turn_environments = Arc::new(ThreadEnvironments::new(environment_manager));
-        turn_environments
-            .update_selections(&environment_selections)
-            .await;
+        turn_environments.update_selections(&environment_selections);
         let resolved_environments = turn_environments.snapshot().await;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -1466,6 +1464,11 @@ impl Session {
             let next_cwd = updated.cwd().clone();
             let codex_home = updated.codex_home.clone();
             let session_source = updated.session_source.clone();
+            if updates.environments.is_some() {
+                self.services
+                    .turn_environments
+                    .update_selections(updated.environment_selections());
+            }
             state.session_configuration = updated;
             (
                 previous_config,
@@ -1477,12 +1480,6 @@ impl Session {
                 session_source,
             )
         };
-        if let Some(environments) = &updates.environments {
-            self.services
-                .turn_environments
-                .update_selections(&environments.environments)
-                .await;
-        }
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         self.maybe_refresh_shell_snapshot_for_cwd(
             &previous_cwd,

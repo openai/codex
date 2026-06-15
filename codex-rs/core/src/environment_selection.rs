@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::error::CodexErr;
@@ -8,7 +9,10 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
-use tokio::sync::Mutex;
+use futures::FutureExt;
+use futures::future::BoxFuture;
+use futures::future::Shared;
+use tokio_util::task::AbortOnDropHandle;
 
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
@@ -27,25 +31,55 @@ pub(crate) fn default_thread_environment_selections(
         .collect()
 }
 
-#[derive(Debug)]
+type SnapshotTask = Shared<BoxFuture<'static, TurnEnvironmentSnapshot>>;
+
 pub(crate) struct ThreadEnvironments {
     environment_manager: Arc<EnvironmentManager>,
-    snapshot: Mutex<TurnEnvironmentSnapshot>,
+    snapshot_task: ArcSwap<SnapshotTask>,
 }
 
 impl ThreadEnvironments {
     pub(crate) fn new(environment_manager: Arc<EnvironmentManager>) -> Self {
         Self {
             environment_manager,
-            snapshot: Mutex::new(TurnEnvironmentSnapshot::default()),
+            snapshot_task: ArcSwap::from_pointee(
+                futures::future::ready(TurnEnvironmentSnapshot::default())
+                    .boxed()
+                    .shared(),
+            ),
         }
     }
 
-    pub(crate) async fn update_selections(&self, environments: &[TurnEnvironmentSelection]) {
-        let current = self.snapshot().await;
+    pub(crate) fn update_selections(&self, environments: &[TurnEnvironmentSelection]) {
+        let previous = self
+            .snapshot_task
+            .load()
+            .peek()
+            .cloned()
+            .unwrap_or_default();
+        let environment_manager = Arc::clone(&self.environment_manager);
+        let environments = environments.to_vec();
+        let snapshot_task = AbortOnDropHandle::new(tokio::spawn(async move {
+            Self::resolve_snapshot(environment_manager, previous, environments).await
+        }));
+        let snapshot_task = async move {
+            snapshot_task
+                .await
+                .expect("environment resolution task should not panic")
+        }
+        .boxed()
+        .shared();
+        self.snapshot_task.store(Arc::new(snapshot_task));
+    }
+
+    async fn resolve_snapshot(
+        environment_manager: Arc<EnvironmentManager>,
+        current: TurnEnvironmentSnapshot,
+        environments: Vec<TurnEnvironmentSelection>,
+    ) -> TurnEnvironmentSnapshot {
         let mut seen_environment_ids = HashSet::with_capacity(environments.len());
         let mut turn_environments = Vec::with_capacity(environments.len());
-        for selected_environment in environments {
+        for selected_environment in &environments {
             if !seen_environment_ids.insert(selected_environment.environment_id.as_str()) {
                 continue;
             }
@@ -54,7 +88,9 @@ impl ThreadEnvironments {
                     && environment.cwd_uri() == &selected_environment.cwd
             }) {
                 Some(environment) => environment.clone(),
-                None => match self.resolve_selection(selected_environment).await {
+                None => match Self::resolve_selection(&environment_manager, selected_environment)
+                    .await
+                {
                     Ok(environment) => environment,
                     Err(err) => {
                         tracing::warn!(
@@ -67,16 +103,15 @@ impl ThreadEnvironments {
             };
             turn_environments.push(turn_environment);
         }
-        *self.snapshot.lock().await = TurnEnvironmentSnapshot { turn_environments };
+        TurnEnvironmentSnapshot { turn_environments }
     }
 
     async fn resolve_selection(
-        &self,
+        environment_manager: &EnvironmentManager,
         selected_environment: &TurnEnvironmentSelection,
     ) -> CodexResult<TurnEnvironment> {
         let environment_id = selected_environment.environment_id.clone();
-        let environment = self
-            .environment_manager
+        let environment = environment_manager
             .get_environment(&environment_id)
             .ok_or_else(|| {
                 CodexErr::InvalidRequest(format!("unknown turn environment id `{environment_id}`"))
@@ -110,7 +145,7 @@ impl ThreadEnvironments {
     }
 
     pub(crate) async fn snapshot(&self) -> TurnEnvironmentSnapshot {
-        self.snapshot.lock().await.clone()
+        self.snapshot_task.load_full().as_ref().clone().await
     }
 
     pub(crate) fn environment_manager(&self) -> Arc<EnvironmentManager> {
@@ -173,7 +208,8 @@ mod tests {
         selections: &[TurnEnvironmentSelection],
     ) -> Arc<ThreadEnvironments> {
         let turn_environments = Arc::new(ThreadEnvironments::new(environment_manager));
-        turn_environments.update_selections(selections).await;
+        turn_environments.update_selections(selections);
+        turn_environments.snapshot().await;
         turn_environments
     }
 
@@ -341,6 +377,48 @@ url = "ws://127.0.0.1:8765"
     }
 
     #[tokio::test]
+    async fn latest_environment_update_wins_while_previous_resolution_is_pending() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind websocket listener");
+        let manager = Arc::new(
+            EnvironmentManager::create_for_tests_with_local(
+                Some(format!(
+                    "ws://{}",
+                    listener.local_addr().expect("listener address")
+                )),
+                test_runtime_paths(),
+            )
+            .await,
+        );
+        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let turn_environments = Arc::new(ThreadEnvironments::new(manager));
+        turn_environments.update_selections(&[TurnEnvironmentSelection {
+            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+            cwd: PathUri::from_abs_path(&cwd),
+        }]);
+        let (_connection, _) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), listener.accept())
+                .await
+                .expect("remote resolution should connect")
+                .expect("accept remote resolution connection");
+        let local = TurnEnvironmentSelection {
+            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+            cwd: PathUri::from_abs_path(&cwd),
+        };
+
+        turn_environments.update_selections(std::slice::from_ref(&local));
+        let snapshot = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            turn_environments.snapshot(),
+        )
+        .await
+        .expect("latest environment resolution should complete");
+
+        assert_eq!(snapshot.to_selections(), vec![local]);
+    }
+
+    #[tokio::test]
     async fn matching_environment_id_and_cwd_reuse_resolved_environment() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let manager = Arc::new(
@@ -364,16 +442,12 @@ url = "ws://127.0.0.1:8765"
             .expect("replace environment");
 
         let initial_snapshot = initial.snapshot().await;
-        initial
-            .update_selections(std::slice::from_ref(&selection))
-            .await;
+        initial.update_selections(std::slice::from_ref(&selection));
         let reused_snapshot = initial.snapshot().await;
-        initial
-            .update_selections(&[TurnEnvironmentSelection {
-                cwd: PathUri::from_abs_path(&cwd.join("changed")),
-                ..selection
-            }])
-            .await;
+        initial.update_selections(&[TurnEnvironmentSelection {
+            cwd: PathUri::from_abs_path(&cwd.join("changed")),
+            ..selection
+        }]);
         let changed_snapshot = initial.snapshot().await;
 
         assert!(Arc::ptr_eq(

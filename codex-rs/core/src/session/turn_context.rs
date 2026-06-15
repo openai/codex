@@ -635,6 +635,11 @@ impl Session {
                     });
                     let new_config = notify_config_contributors
                         .then(|| Self::build_effective_session_config(&next));
+                    if updates.environments.is_some() {
+                        self.services
+                            .turn_environments
+                            .update_selections(next.environment_selections());
+                    }
                     state.session_configuration = next.clone();
                     Ok((
                         next,
@@ -673,12 +678,6 @@ impl Session {
                 return Err(CodexErr::InvalidRequest(message));
             }
         };
-        if let Some(environments) = &updates.environments {
-            self.services
-                .turn_environments
-                .update_selections(&environments.environments)
-                .await;
-        }
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         self.maybe_refresh_shell_snapshot_for_cwd(
             &previous_cwd,
