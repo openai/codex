@@ -5073,6 +5073,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         session_configuration.cwd().clone(),
         "turn_id".to_string(),
         skills_outcome,
+        /*recommended_plugin_candidates*/ None,
     );
 
     let session = Session {
@@ -7118,6 +7119,7 @@ where
         session_configuration.cwd().clone(),
         "turn_id".to_string(),
         skills_outcome,
+        /*recommended_plugin_candidates*/ None,
     ));
 
     let session = Arc::new(Session {

@@ -4,6 +4,8 @@ use crate::agents_md::LoadedAgentsMd;
 use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::shell_snapshot::ShellSnapshotFile;
+use codex_config::types::ToolSuggestDiscoverableType;
+use codex_core_plugins::RecommendedPluginsMode;
 use codex_core_skills::HostLoadedSkills;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
@@ -19,6 +21,9 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
+use codex_tools::DiscoverablePluginInfo;
+use codex_tools::DiscoverableTool;
+use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
 use codex_utils_path_uri::PathUri;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -129,6 +134,7 @@ pub struct TurnContext {
     pub(crate) current_date: Option<String>,
     pub(crate) timezone: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
+    pub(crate) recommended_plugin_candidates: Option<Vec<DiscoverableTool>>,
     pub(crate) developer_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
@@ -299,6 +305,7 @@ impl TurnContext {
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             app_server_client_name: self.app_server_client_name.clone(),
+            recommended_plugin_candidates: self.recommended_plugin_candidates.clone(),
             developer_instructions: self.developer_instructions.clone(),
             compact_prompt: self.compact_prompt.clone(),
             user_instructions: self.user_instructions.clone(),
@@ -526,6 +533,7 @@ impl Session {
         cwd: AbsolutePathBuf,
         sub_id: String,
         skills_outcome: Arc<SkillLoadOutcome>,
+        recommended_plugin_candidates: Option<Vec<DiscoverableTool>>,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration
@@ -600,6 +608,7 @@ impl Session {
             current_date: Some(current_date),
             timezone: Some(timezone),
             app_server_client_name: session_configuration.app_server_client_name.clone(),
+            recommended_plugin_candidates,
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration
@@ -778,6 +787,62 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&per_turn_config.plugins_config_input())
             .await;
+        let recommended_plugin_candidates =
+            if per_turn_config.features.enabled(Feature::ToolSuggest)
+                && per_turn_config.features.enabled(Feature::Apps)
+                && per_turn_config.features.enabled(Feature::Plugins)
+            {
+                let auth = self.services.auth_manager.auth().await;
+                match self
+                    .services
+                    .plugins_manager
+                    .recommended_plugins_mode_for_config(
+                        &per_turn_config.plugins_config_input(),
+                        auth.as_ref(),
+                    )
+                    .await
+                {
+                    RecommendedPluginsMode::Legacy => None,
+                    RecommendedPluginsMode::Endpoint { plugins } => {
+                        let installed_plugin_ids = plugin_outcome
+                            .plugins()
+                            .iter()
+                            .map(|plugin| plugin.config_name.as_str())
+                            .collect::<HashSet<_>>();
+                        let disabled_plugin_ids = per_turn_config
+                            .tool_suggest
+                            .disabled_tools
+                            .iter()
+                            .filter(|tool| tool.kind == ToolSuggestDiscoverableType::Plugin)
+                            .map(|tool| tool.id.as_str())
+                            .collect::<HashSet<_>>();
+                        let candidates = plugins
+                            .into_iter()
+                            .filter(|plugin| {
+                                !installed_plugin_ids.contains(plugin.config_id.as_str())
+                                    && !disabled_plugin_ids.contains(plugin.config_id.as_str())
+                            })
+                            .map(|plugin| {
+                                DiscoverableTool::from(DiscoverablePluginInfo {
+                                    id: plugin.config_id,
+                                    remote_plugin_id: Some(plugin.remote_plugin_id),
+                                    name: plugin.display_name,
+                                    description: None,
+                                    has_skills: false,
+                                    mcp_server_names: Vec::new(),
+                                    app_connector_ids: plugin.app_connector_ids,
+                                })
+                            })
+                            .collect();
+                        Some(filter_request_plugin_install_discoverable_tools_for_client(
+                            candidates,
+                            session_configuration.app_server_client_name.as_deref(),
+                        ))
+                    }
+                }
+            } else {
+                None
+            };
         let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
         let fs = primary_turn_environment
@@ -816,6 +881,7 @@ impl Session {
             cwd,
             sub_id,
             skills_outcome,
+            recommended_plugin_candidates,
         );
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 

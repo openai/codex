@@ -30,6 +30,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
+use crate::context::RecommendedPluginsInstructions;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::ExecPolicyManager;
@@ -2975,6 +2976,14 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&turn_context.config.plugins_config_input())
             .await;
+        if crate::tools::spec_plan::tool_suggest_enabled(turn_context)
+            && let Some(recommended_plugins) = turn_context
+                .recommended_plugin_candidates
+                .as_deref()
+                .and_then(RecommendedPluginsInstructions::from_plugins)
+        {
+            developer_sections.push(recommended_plugins.render());
+        }
         if let Some(plugin_instructions) =
             AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
         {

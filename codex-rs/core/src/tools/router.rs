@@ -48,7 +48,6 @@ pub(crate) struct ToolRouterParams<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ToolSuggestPresentation {
     ListTool,
-    #[allow(dead_code)]
     DeveloperContext,
 }
 
