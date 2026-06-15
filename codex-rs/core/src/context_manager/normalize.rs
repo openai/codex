@@ -12,6 +12,27 @@ const IMAGE_CONTENT_OMITTED_PLACEHOLDER: &str =
     "image content omitted because you do not support image input";
 
 pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
+    let mut function_output_ids = HashSet::new();
+    let mut tool_search_output_ids = HashSet::new();
+    let mut custom_tool_output_ids = HashSet::new();
+    for item in items.iter() {
+        match item {
+            ResponseItem::FunctionCallOutput { call_id, .. } => {
+                function_output_ids.insert(call_id.as_str());
+            }
+            ResponseItem::ToolSearchOutput {
+                call_id: Some(call_id),
+                ..
+            } => {
+                tool_search_output_ids.insert(call_id.as_str());
+            }
+            ResponseItem::CustomToolCallOutput { call_id, .. } => {
+                custom_tool_output_ids.insert(call_id.as_str());
+            }
+            _ => {}
+        }
+    }
+
     // Collect synthetic outputs to insert immediately after their calls.
     // Store the insertion position (index of call) alongside the item so
     // we can insert in reverse order and avoid index shifting.
@@ -20,14 +41,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
     for (idx, item) in items.iter().enumerate() {
         match item {
             ResponseItem::FunctionCall { call_id, .. } => {
-                let has_output = items.iter().any(|i| match i {
-                    ResponseItem::FunctionCallOutput {
-                        call_id: existing, ..
-                    } => existing == call_id,
-                    _ => false,
-                });
-
-                if !has_output {
+                if !function_output_ids.contains(call_id.as_str()) {
                     info!("Function call output is missing for call id: {call_id}");
                     missing_outputs_to_insert.push((
                         idx,
@@ -42,15 +56,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                 call_id: Some(call_id),
                 ..
             } => {
-                let has_output = items.iter().any(|i| match i {
-                    ResponseItem::ToolSearchOutput {
-                        call_id: Some(existing),
-                        ..
-                    } => existing == call_id,
-                    _ => false,
-                });
-
-                if !has_output {
+                if !tool_search_output_ids.contains(call_id.as_str()) {
                     info!("Tool search output is missing for call id: {call_id}");
                     missing_outputs_to_insert.push((
                         idx,
@@ -64,14 +70,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                 }
             }
             ResponseItem::CustomToolCall { call_id, .. } => {
-                let has_output = items.iter().any(|i| match i {
-                    ResponseItem::CustomToolCallOutput {
-                        call_id: existing, ..
-                    } => existing == call_id,
-                    _ => false,
-                });
-
-                if !has_output {
+                if !custom_tool_output_ids.contains(call_id.as_str()) {
                     error_or_panic(format!(
                         "Custom tool call output is missing for call id: {call_id}"
                     ));
@@ -88,14 +87,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
             // LocalShellCall is represented in upstream streams by a FunctionCallOutput
             ResponseItem::LocalShellCall { call_id, .. } => {
                 if let Some(call_id) = call_id.as_ref() {
-                    let has_output = items.iter().any(|i| match i {
-                        ResponseItem::FunctionCallOutput {
-                            call_id: existing, ..
-                        } => existing == call_id,
-                        _ => false,
-                    });
-
-                    if !has_output {
+                    if !function_output_ids.contains(call_id.as_str()) {
                         error_or_panic(format!(
                             "Local shell call output is missing for call id: {call_id}"
                         ));
@@ -112,6 +104,11 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
             _ => {}
         }
     }
+    drop((
+        function_output_ids,
+        tool_search_output_ids,
+        custom_tool_output_ids,
+    ));
 
     // Insert synthetic outputs in reverse index order to avoid re-indexing.
     for (idx, output_item) in missing_outputs_to_insert.into_iter().rev() {
