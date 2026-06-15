@@ -1,7 +1,10 @@
 use serde::Deserialize;
 use serde::Serialize;
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt;
+
+const NAMESPACED_TOOL_NAME_DELIMITER: &str = "__";
 
 /// Identifies a callable tool, preserving the namespace split when the model
 /// provides one.
@@ -32,6 +35,22 @@ impl ToolName {
             namespace: Some(namespace.into()),
         }
     }
+
+    /// Canonical flat name with the `__` delimiter used when a boundary cannot
+    /// preserve the namespace split. Stray underscores around the delimiter
+    /// are trimmed to match Responses-facing flattened tool names.
+    pub fn canonical_flat_name(&self) -> Cow<'_, str> {
+        match self.namespace.as_deref() {
+            Some(namespace) => Cow::Owned(join_namespaced_tool_name(namespace, &self.name)),
+            None => Cow::Borrowed(self.name.as_str()),
+        }
+    }
+}
+
+fn join_namespaced_tool_name(namespace: &str, name: &str) -> String {
+    let namespace = namespace.trim_end_matches('_');
+    let name = name.trim_start_matches('_');
+    format!("{namespace}{NAMESPACED_TOOL_NAME_DELIMITER}{name}")
 }
 
 impl fmt::Display for ToolName {

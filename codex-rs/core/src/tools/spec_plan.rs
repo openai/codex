@@ -49,7 +49,6 @@ use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_image_generation_tool;
 use crate::tools::hosted_spec::create_web_search_tool;
-use crate::tools::join_namespaced_tool_name;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
@@ -248,7 +247,8 @@ fn flatten_namespace_spec(namespace: ResponsesApiNamespace) -> Vec<ToolSpec> {
         .into_iter()
         .map(|tool| match tool {
             ResponsesApiNamespaceTool::Function(mut function) => {
-                function.name = join_namespaced_tool_name(&namespace.name, &function.name);
+                let tool_name = ToolName::namespaced(namespace.name.as_str(), function.name);
+                function.name = tool_name.canonical_flat_name().into_owned();
                 ToolSpec::Function(function)
             }
         })

@@ -4,7 +4,6 @@ use std::time::Instant;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::original_image_detail::can_request_original_image_detail;
-use crate::tools::canonical_flat_tool_name;
 use crate::tools::context::McpToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -42,7 +41,7 @@ impl McpHandler {
 
     fn hook_tool_name(&self) -> HookToolName {
         let tool_name = self.tool_name();
-        let canonical = canonical_flat_tool_name(&tool_name);
+        let canonical = tool_name.canonical_flat_name();
         HookToolName::new(ensure_mcp_prefix(&canonical))
     }
 }

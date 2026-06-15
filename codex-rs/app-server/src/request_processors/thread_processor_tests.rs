@@ -223,6 +223,36 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
+    fn validate_dynamic_tools_rejects_duplicate_canonical_flat_name() {
+        let tools = vec![
+            ApiDynamicToolSpec {
+                namespace: Some("a".to_string()),
+                name: "b__c".to_string(),
+                description: "test".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                defer_loading: true,
+            },
+            ApiDynamicToolSpec {
+                namespace: Some("a__b".to_string()),
+                name: "c".to_string(),
+                description: "test".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                defer_loading: true,
+            },
+        ];
+        let err = validate_dynamic_tools(&tools).expect_err("duplicate canonical flat name");
+        assert!(err.contains("a__b__c"), "unexpected error: {err}");
+    }
+
+    #[test]
     fn validate_dynamic_tools_accepts_responses_compatible_identifiers() {
         let tools = vec![ApiDynamicToolSpec {
             namespace: Some("Codex-App_2".to_string()),

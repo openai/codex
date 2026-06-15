@@ -244,6 +244,7 @@ fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
     }
 
     let mut seen = HashSet::new();
+    let mut seen_canonical_flat_names = HashSet::new();
     for tool in tools {
         let name = tool.name.trim();
         if name.is_empty() {
@@ -296,6 +297,14 @@ fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
                 ));
             }
             return Err(format!("duplicate dynamic tool name: {name}"));
+        }
+        let tool_name = codex_tools::ToolName::new(namespace.map(str::to_string), name);
+        let canonical_flat_name = tool_name.canonical_flat_name().into_owned();
+        if !seen_canonical_flat_names.insert(canonical_flat_name.clone()) {
+            return Err(format!(
+                "duplicate dynamic tool canonical flat name: {}",
+                escape_identifier_for_error(&canonical_flat_name),
+            ));
         }
         if tool.defer_loading && namespace.is_none() {
             return Err(format!(

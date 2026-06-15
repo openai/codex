@@ -13,7 +13,6 @@ use crate::memory_usage::emit_metric_for_tool_read;
 use crate::sandbox_tags::permission_profile_policy_tag;
 use crate::sandbox_tags::permission_profile_sandbox_tag;
 use crate::session::turn_context::TurnContext;
-use crate::tools::canonical_flat_tool_name;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -362,10 +361,10 @@ impl ToolRegistry {
         // Fall back to matching by canonical flattened name so a flat
         // `<namespace>__<tool>` call (emitted for providers without namespace
         // support, or flattened by a proxy) resolves to its namespaced runtime.
-        let canonical = canonical_flat_tool_name(name);
+        let canonical = name.canonical_flat_name();
         self.tools
             .iter()
-            .find(|(key, _)| canonical_flat_tool_name(key) == canonical)
+            .find(|(key, _)| key.canonical_flat_name() == canonical)
             .map(|(_, tool)| Arc::clone(tool))
     }
 
