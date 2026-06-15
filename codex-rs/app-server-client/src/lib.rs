@@ -2171,26 +2171,6 @@ mod tests {
                 )
             )
         ));
-        assert!(!event_requires_delivery(
-            &InProcessServerEvent::ServerNotification(
-                codex_app_server_protocol::ServerNotification::ExternalAgentConfigImportProgress(
-                    codex_app_server_protocol::ExternalAgentConfigImportProgressNotification {
-                        import_id: "import".to_string(),
-                        item_result:
-                            codex_app_server_protocol::ExternalAgentConfigImportItemResult {
-                                item_type:
-                                    codex_app_server_protocol::ExternalAgentConfigMigrationItemType::Config,
-                                description: "Import config".to_string(),
-                                cwd: None,
-                                success_count: 1,
-                                error_count: 0,
-                                successes: Vec::new(),
-                                raw_errors: Vec::new(),
-                            },
-                    },
-                )
-            )
-        ));
         assert!(!event_requires_delivery(&InProcessServerEvent::Lagged {
             skipped: 1
         }));

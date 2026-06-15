@@ -2222,7 +2222,7 @@ async fn import_plugins_requires_source_marketplace_details() {
     );
     assert_single_plugin_raw_error(
         &outcome.raw_errors,
-        "plugin_marketplace_source",
+        "plugin_import",
         "formatter@other-tools",
     );
 }
@@ -2259,11 +2259,7 @@ async fn import_plugins_defers_marketplace_source_validation_to_add_marketplace(
         outcome.failed_plugin_ids,
         vec!["formatter@acme-tools".to_string()]
     );
-    assert_single_plugin_raw_error(
-        &outcome.raw_errors,
-        "plugin_marketplace_add",
-        "formatter@acme-tools",
-    );
+    assert_single_plugin_raw_error(&outcome.raw_errors, "plugin_import", "formatter@acme-tools");
 }
 
 #[tokio::test]
@@ -2581,7 +2577,7 @@ async fn import_plugins_infers_external_official_marketplace_when_missing_from_s
     );
     assert_single_plugin_raw_error(
         &outcome.raw_errors,
-        "plugin_install",
+        "plugin_import",
         &format!("sample@{EXTERNAL_OFFICIAL_MARKETPLACE_NAME}"),
     );
 }

@@ -732,9 +732,6 @@ mod tests {
     use codex_app_server_protocol::ClientInfo;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
-    use codex_app_server_protocol::ExternalAgentConfigImportItemResult;
-    use codex_app_server_protocol::ExternalAgentConfigImportProgressNotification;
-    use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
@@ -904,22 +901,6 @@ mod tests {
                 ExternalAgentConfigImportCompletedNotification {
                     import_id: "import".to_string(),
                     item_results: Vec::new(),
-                },
-            )
-        ));
-        assert!(!server_notification_requires_delivery(
-            &ServerNotification::ExternalAgentConfigImportProgress(
-                ExternalAgentConfigImportProgressNotification {
-                    import_id: "import".to_string(),
-                    item_result: ExternalAgentConfigImportItemResult {
-                        item_type: ExternalAgentConfigMigrationItemType::Config,
-                        description: "Import config".to_string(),
-                        cwd: None,
-                        success_count: 1,
-                        error_count: 0,
-                        successes: Vec::new(),
-                        raw_errors: Vec::new(),
-                    },
                 },
             )
         ));

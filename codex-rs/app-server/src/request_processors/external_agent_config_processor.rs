@@ -19,9 +19,7 @@ use codex_app_server_protocol::CommandMigration;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
-use codex_app_server_protocol::ExternalAgentConfigImportItemResult as ProtocolImportItemResult;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
-use codex_app_server_protocol::ExternalAgentConfigImportProgressNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportRawError as ProtocolImportRawError;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportSuccess as ProtocolImportSuccess;
@@ -37,7 +35,6 @@ use codex_app_server_protocol::ServerNotification;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::ThreadManager;
 use codex_external_agent_sessions::ExternalAgentSessionMigration as CoreSessionMigration;
-use codex_state::log_db::LogDbLayer;
 use codex_thread_store::ThreadStore;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -49,36 +46,22 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub(crate) struct ExternalAgentConfigRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
-    log_db: Option<LogDbLayer>,
     migration_service: ExternalAgentConfigService,
     session_importer: ExternalAgentSessionImporter,
     thread_manager: Arc<ThreadManager>,
     config_processor: ConfigRequestProcessor,
 }
 
-pub(crate) struct ExternalAgentConfigRequestProcessorArgs {
-    pub(crate) outgoing: Arc<OutgoingMessageSender>,
-    pub(crate) log_db: Option<LogDbLayer>,
-    pub(crate) thread_manager: Arc<ThreadManager>,
-    pub(crate) thread_store: Arc<dyn ThreadStore>,
-    pub(crate) config_manager: ConfigManager,
-    pub(crate) config_processor: ConfigRequestProcessor,
-    pub(crate) arg0_paths: Arg0DispatchPaths,
-    pub(crate) codex_home: PathBuf,
-}
-
 impl ExternalAgentConfigRequestProcessor {
-    pub(crate) fn new(args: ExternalAgentConfigRequestProcessorArgs) -> Self {
-        let ExternalAgentConfigRequestProcessorArgs {
-            outgoing,
-            log_db,
-            thread_manager,
-            thread_store,
-            config_manager,
-            config_processor,
-            arg0_paths,
-            codex_home,
-        } = args;
+    pub(crate) fn new(
+        outgoing: Arc<OutgoingMessageSender>,
+        thread_manager: Arc<ThreadManager>,
+        thread_store: Arc<dyn ThreadStore>,
+        config_manager: ConfigManager,
+        config_processor: ConfigRequestProcessor,
+        arg0_paths: Arg0DispatchPaths,
+        codex_home: PathBuf,
+    ) -> Self {
         let session_importer = ExternalAgentSessionImporter::new(
             codex_home.clone(),
             Arc::clone(&thread_manager),
@@ -88,7 +71,6 @@ impl ExternalAgentConfigRequestProcessor {
         );
         Self {
             outgoing,
-            log_db,
             migration_service: ExternalAgentConfigService::new(codex_home),
             session_importer,
             thread_manager,
@@ -198,7 +180,6 @@ impl ExternalAgentConfigRequestProcessor {
         let import_id = Uuid::new_v4().to_string();
         let needs_runtime_refresh = migration_items_need_runtime_refresh(&params.migration_items);
         let has_migration_items = !params.migration_items.is_empty();
-        let migration_items = import_request_migration_items_json(&params.migration_items);
         let has_plugin_imports = params.migration_items.iter().any(|item| {
             matches!(
                 item.item_type,
@@ -231,27 +212,18 @@ impl ExternalAgentConfigRequestProcessor {
         for item_result in import_outcome.item_results {
             completed_item_results.push(item_result);
         }
-        send_import_progress_notifications(&self.outgoing, &import_id, &completed_item_results)
-            .await;
 
         let has_background_imports = !import_outcome.pending_plugin_imports.is_empty()
             || !pending_session_imports.is_empty();
         if !has_background_imports {
-            send_completed_import_notification(
-                &self.outgoing,
-                self.log_db.as_ref(),
-                import_id,
-                &migration_items,
-                &completed_item_results,
-            )
-            .await;
+            send_completed_import_notification(&self.outgoing, import_id, &completed_item_results)
+                .await;
             return Ok(());
         }
 
         let session_importer = self.session_importer.clone();
         let plugin_processor = self.clone();
         let outgoing = Arc::clone(&self.outgoing);
-        let log_db = self.log_db.clone();
         let thread_manager = Arc::clone(&self.thread_manager);
         let session_import_result = (!pending_session_imports.is_empty()).then(|| {
             CoreImportItemResult::new(
@@ -303,21 +275,12 @@ impl ExternalAgentConfigRequestProcessor {
                 background_item_results.push(session_result);
             }
             background_item_results.extend(plugin_results);
-            send_import_progress_notifications(&outgoing, &import_id, &background_item_results)
-                .await;
             completed_item_results.extend(background_item_results);
             if has_plugin_imports {
                 thread_manager.plugins_manager().clear_cache();
                 thread_manager.skills_manager().clear_cache();
             }
-            send_completed_import_notification(
-                &outgoing,
-                log_db.as_ref(),
-                import_id,
-                &migration_items,
-                &completed_item_results,
-            )
-            .await;
+            send_completed_import_notification(&outgoing, import_id, &completed_item_results).await;
         });
 
         Ok(())
@@ -504,60 +467,17 @@ impl ExternalAgentConfigRequestProcessor {
     }
 }
 
-async fn send_import_progress_notifications(
-    outgoing: &OutgoingMessageSender,
-    import_id: &str,
-    item_results: &[CoreImportItemResult],
-) {
-    for item_result in item_results {
-        outgoing
-            .send_server_notification(ServerNotification::ExternalAgentConfigImportProgress(
-                ExternalAgentConfigImportProgressNotification {
-                    import_id: import_id.to_string(),
-                    item_result: protocol_import_item_result(item_result),
-                },
-            ))
-            .await;
-    }
-}
-
 async fn send_completed_import_notification(
     outgoing: &OutgoingMessageSender,
-    log_db: Option<&LogDbLayer>,
     import_id: String,
-    migration_items: &str,
     item_results: &[CoreImportItemResult],
 ) {
     let notification = completed_notification(import_id, item_results);
-    log_completed_import(&notification, migration_items);
-    if let Some(log_db) = log_db {
-        log_db.flush().await;
-    }
     outgoing
         .send_server_notification(ServerNotification::ExternalAgentConfigImportCompleted(
             notification,
         ))
         .await;
-}
-
-fn log_completed_import(
-    notification: &ExternalAgentConfigImportCompletedNotification,
-    migration_items: &str,
-) {
-    let item_results = serde_json::to_string(&notification.item_results)
-        .unwrap_or_else(|err| format!(r#"[{{"serializationError":"{err}"}}]"#));
-    tracing::info!(
-        target: "codex.external_agent_config.import",
-        import_id = %notification.import_id,
-        migration_items = %migration_items,
-        item_results = %item_results,
-        "external agent config import completed"
-    );
-}
-
-fn import_request_migration_items_json(items: &[ExternalAgentConfigMigrationItem]) -> String {
-    serde_json::to_string(items)
-        .unwrap_or_else(|err| format!(r#"[{{"serializationError":"{err}"}}]"#))
 }
 
 fn completed_notification(
@@ -614,26 +534,6 @@ fn completed_notification(
     ExternalAgentConfigImportCompletedNotification {
         import_id,
         item_results: protocol_type_results,
-    }
-}
-
-fn protocol_import_item_result(item_result: &CoreImportItemResult) -> ProtocolImportItemResult {
-    ProtocolImportItemResult {
-        item_type: protocol_migration_item_type(item_result.item_type),
-        description: item_result.description.clone(),
-        cwd: item_result.cwd.clone(),
-        success_count: item_result.success_count,
-        error_count: item_result.error_count,
-        successes: item_result
-            .successes
-            .iter()
-            .map(protocol_import_success)
-            .collect(),
-        raw_errors: item_result
-            .raw_errors
-            .iter()
-            .map(protocol_import_raw_error)
-            .collect(),
     }
 }
 

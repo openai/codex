@@ -294,7 +294,7 @@ impl ExternalAgentConfigService {
                                 );
                                 record_import_error(
                                     &mut item_result,
-                                    "missing_details",
+                                    "plugin_import",
                                     err.to_string(),
                                     /*source*/ None,
                                 );
@@ -308,7 +308,7 @@ impl ExternalAgentConfigService {
                             Err(err) => {
                                 record_import_error(
                                     &mut item_result,
-                                    "plugin_partition",
+                                    "plugin_import",
                                     err.to_string(),
                                     /*source*/ None,
                                 );
@@ -884,7 +884,7 @@ impl ExternalAgentConfigService {
                     &mut outcome,
                     cwd,
                     &plugin_ids,
-                    "plugin_marketplace_source",
+                    "plugin_import",
                     message,
                 );
                 outcome.failed_marketplaces.push(marketplace_name);
@@ -909,7 +909,7 @@ impl ExternalAgentConfigService {
                             &mut outcome,
                             cwd,
                             &plugin_ids,
-                            "plugin_marketplace_manifest",
+                            "plugin_import",
                             message,
                         );
                         outcome.failed_marketplaces.push(marketplace_name);
@@ -926,7 +926,7 @@ impl ExternalAgentConfigService {
                         &mut outcome,
                         cwd,
                         &plugin_ids,
-                        "plugin_marketplace_add",
+                        "plugin_import",
                         err.to_string(),
                     );
                     outcome.failed_marketplaces.push(marketplace_name);
@@ -950,7 +950,7 @@ impl ExternalAgentConfigService {
                         outcome.failed_plugin_ids.push(plugin_id.clone());
                         outcome.raw_errors.push(plugin_import_raw_error(
                             cwd,
-                            "plugin_install",
+                            "plugin_import",
                             err.to_string(),
                             Some(plugin_id),
                         ));
