@@ -40,66 +40,63 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
 
     for (idx, item) in items.iter().enumerate() {
         match item {
-            ResponseItem::FunctionCall { call_id, .. } => {
-                if !function_output_ids.contains(call_id.as_str()) {
-                    info!("Function call output is missing for call id: {call_id}");
-                    missing_outputs_to_insert.push((
-                        idx,
-                        ResponseItem::FunctionCallOutput {
-                            call_id: call_id.clone(),
-                            output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                        },
-                    ));
-                }
+            ResponseItem::FunctionCall { call_id, .. }
+                if !function_output_ids.contains(call_id.as_str()) =>
+            {
+                info!("Function call output is missing for call id: {call_id}");
+                missing_outputs_to_insert.push((
+                    idx,
+                    ResponseItem::FunctionCallOutput {
+                        call_id: call_id.clone(),
+                        output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                    },
+                ));
             }
             ResponseItem::ToolSearchCall {
                 call_id: Some(call_id),
                 ..
-            } => {
-                if !tool_search_output_ids.contains(call_id.as_str()) {
-                    info!("Tool search output is missing for call id: {call_id}");
-                    missing_outputs_to_insert.push((
-                        idx,
-                        ResponseItem::ToolSearchOutput {
-                            call_id: Some(call_id.clone()),
-                            status: "completed".to_string(),
-                            execution: "client".to_string(),
-                            tools: Vec::new(),
-                        },
-                    ));
-                }
+            } if !tool_search_output_ids.contains(call_id.as_str()) => {
+                info!("Tool search output is missing for call id: {call_id}");
+                missing_outputs_to_insert.push((
+                    idx,
+                    ResponseItem::ToolSearchOutput {
+                        call_id: Some(call_id.clone()),
+                        status: "completed".to_string(),
+                        execution: "client".to_string(),
+                        tools: Vec::new(),
+                    },
+                ));
             }
-            ResponseItem::CustomToolCall { call_id, .. } => {
-                if !custom_tool_output_ids.contains(call_id.as_str()) {
-                    error_or_panic(format!(
-                        "Custom tool call output is missing for call id: {call_id}"
-                    ));
-                    missing_outputs_to_insert.push((
-                        idx,
-                        ResponseItem::CustomToolCallOutput {
-                            call_id: call_id.clone(),
-                            name: None,
-                            output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                        },
-                    ));
-                }
+            ResponseItem::CustomToolCall { call_id, .. }
+                if !custom_tool_output_ids.contains(call_id.as_str()) =>
+            {
+                error_or_panic(format!(
+                    "Custom tool call output is missing for call id: {call_id}"
+                ));
+                missing_outputs_to_insert.push((
+                    idx,
+                    ResponseItem::CustomToolCallOutput {
+                        call_id: call_id.clone(),
+                        name: None,
+                        output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                    },
+                ));
             }
             // LocalShellCall is represented in upstream streams by a FunctionCallOutput
-            ResponseItem::LocalShellCall { call_id, .. } => {
-                if let Some(call_id) = call_id.as_ref() {
-                    if !function_output_ids.contains(call_id.as_str()) {
-                        error_or_panic(format!(
-                            "Local shell call output is missing for call id: {call_id}"
-                        ));
-                        missing_outputs_to_insert.push((
-                            idx,
-                            ResponseItem::FunctionCallOutput {
-                                call_id: call_id.clone(),
-                                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                            },
-                        ));
-                    }
-                }
+            ResponseItem::LocalShellCall {
+                call_id: Some(call_id),
+                ..
+            } if !function_output_ids.contains(call_id.as_str()) => {
+                error_or_panic(format!(
+                    "Local shell call output is missing for call id: {call_id}"
+                ));
+                missing_outputs_to_insert.push((
+                    idx,
+                    ResponseItem::FunctionCallOutput {
+                        call_id: call_id.clone(),
+                        output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                    },
+                ));
             }
             _ => {}
         }
