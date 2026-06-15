@@ -254,8 +254,11 @@ pub(crate) async fn run_turn(
                         sess.input_queue.has_pending_input(&sess.active_turn).await;
                     let token_status =
                         auto_compact_token_status(sess.as_ref(), turn_context.as_ref()).await;
-                    let estimated_token_count =
-                        sess.get_estimated_token_count(turn_context.as_ref()).await;
+                    let estimated_token_count = if tracing::enabled!(tracing::Level::TRACE) {
+                        sess.get_estimated_token_count(turn_context.as_ref()).await
+                    } else {
+                        None
+                    };
                     (has_pending_input, token_status, estimated_token_count)
                 }
                 .instrument(trace_span!("run_turn.collect_post_sampling_state"))
