@@ -244,7 +244,7 @@ remote_plugin = true
             .all(|plugin| plugin.id != "github@openai-curated-remote")
     );
 
-    for scope in ["GLOBAL", "WORKSPACE"] {
+    for scope in ["GLOBAL", "USER", "WORKSPACE"] {
         Mock::given(method("GET"))
             .and(path("/backend-api/ps/plugins/installed"))
             .and(query_param("scope", scope))
