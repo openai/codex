@@ -65,7 +65,7 @@ fn missing_transfer_modes_defaults_to_inline() {
             "type": "object",
             "properties": {"file": {"x-mcp-file": {}}}
         }),
-        None,
+        /*meta*/ None,
     );
     assert_eq!(
         file_input_specs(&tool)[0].transfer_modes,
@@ -90,7 +90,7 @@ fn malformed_extension_values_are_ignored_and_arrays_are_preserved() {
                 }
             }
         }),
-        None,
+        /*meta*/ None,
     );
 
     assert_eq!(
@@ -126,12 +126,16 @@ fn mcp_schema_masking_is_gated_while_legacy_masking_is_not() {
         Some(serde_json::json!({"openai/fileParams": ["legacy"]})),
     );
 
-    let disabled = tool_with_file_input_schema(&tool, true, false);
+    let disabled = tool_with_file_input_schema(
+        &tool, /*honor_openai_file_params*/ true, /*mcp_file_transfer_enabled*/ false,
+    );
     let disabled_properties = disabled.input_schema["properties"].as_object().unwrap();
     assert_eq!(disabled_properties["mcp"]["type"], "object");
     assert_eq!(disabled_properties["legacy"]["type"], "string");
 
-    let enabled = tool_with_file_input_schema(&tool, true, true);
+    let enabled = tool_with_file_input_schema(
+        &tool, /*honor_openai_file_params*/ true, /*mcp_file_transfer_enabled*/ true,
+    );
     let enabled_properties = enabled.input_schema["properties"].as_object().unwrap();
     assert_eq!(enabled_properties["mcp"]["type"], "string");
     assert_eq!(enabled_properties["legacy"]["type"], "string");
@@ -171,7 +175,7 @@ fn file_capabilities_infer_openai_compatibility_from_upload_schema() {
                 "file": {"x-mcp-file": {"transferModes": ["upload"]}}
             }
         }),
-        None,
+        /*meta*/ None,
     );
     let tool = crate::ToolInfo {
         server_name: "server".to_string(),
