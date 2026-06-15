@@ -1834,6 +1834,8 @@ async fn on_request_permissions_response(
     ) {
         Ok(Some(response)) => response,
         Ok(None) => return,
+        // TODO(anp): Remove this native-path localization error path once core permission paths
+        // remain PathUri after crossing the app-server boundary.
         Err(err) => {
             let message = format!("failed to localize granted filesystem paths: {err}");
             handle_error_notification(
