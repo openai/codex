@@ -21,7 +21,6 @@ use codex_exec_server::WriteResponse;
 use codex_exec_server::WriteStatus;
 use codex_sandboxing::SandboxType;
 use codex_utils_output_truncation::TruncationPolicy;
-use codex_utils_output_truncation::approx_token_count;
 use core_test_support::get_remote_test_env;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::test_env as remote_test_env;
@@ -163,7 +162,6 @@ async fn exec_command_with_tty(
     )
     .await;
     let wall_time = Instant::now().saturating_duration_since(started_at);
-    let text = String::from_utf8_lossy(&collected).to_string();
     let has_exited = process.has_exited();
     let exit_code = process.exit_code();
     let response_process_id = if process_started_alive && !has_exited {
@@ -189,12 +187,12 @@ async fn exec_command_with_tty(
         event_call_id: context.call_id,
         chunk_id: generate_chunk_id(),
         wall_time,
-        raw_output: collected,
+        raw_output: collected.raw_output,
         truncation_policy: turn.truncation_policy,
         max_output_tokens: None,
         process_id: response_process_id,
         exit_code,
-        original_token_count: Some(approx_token_count(&text)),
+        original_token_count: Some(collected.original_token_count),
         hook_command: Some(cmd.to_string()),
     })
 }
@@ -349,6 +347,61 @@ fn head_tail_buffer_default_preserves_prefix_and_suffix() {
     let rendered = buffer.to_bytes();
     assert_eq!(rendered.first(), Some(&b'a'));
     assert!(rendered.ends_with(b"bc"));
+}
+
+#[tokio::test]
+async fn collect_output_bounds_multiple_drains_and_reports_original_size() {
+    let output_buffer = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
+    let output_notify = Arc::new(Notify::new());
+    let output_closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let output_closed_notify = Arc::new(Notify::new());
+    let cancellation_token = tokio_util::sync::CancellationToken::new();
+    let chunk_len = UNIFIED_EXEC_OUTPUT_MAX_BYTES * 3 / 4;
+
+    output_buffer.lock().await.push_chunk(vec![b'a'; chunk_len]);
+
+    let collector = tokio::spawn({
+        let output_buffer = Arc::clone(&output_buffer);
+        let output_notify = Arc::clone(&output_notify);
+        let output_closed = Arc::clone(&output_closed);
+        let output_closed_notify = Arc::clone(&output_closed_notify);
+        let cancellation_token = cancellation_token.clone();
+        async move {
+            UnifiedExecProcessManager::collect_output_until_deadline(
+                &output_buffer,
+                &output_notify,
+                &output_closed,
+                &output_closed_notify,
+                &cancellation_token,
+                /*pause_state*/ None,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .await
+        }
+    });
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if output_buffer.lock().await.retained_bytes() == 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("collector should drain the first chunk");
+
+    output_buffer.lock().await.push_chunk(vec![b'b'; chunk_len]);
+    output_closed.store(true, std::sync::atomic::Ordering::Release);
+    output_closed_notify.notify_waiters();
+    output_notify.notify_waiters();
+    cancellation_token.cancel();
+
+    let collected = collector.await.expect("collector task should succeed");
+    let half = UNIFIED_EXEC_OUTPUT_MAX_BYTES / 2;
+    let expected_output = [vec![b'a'; half], vec![b'b'; half]].concat();
+    assert_eq!(collected.raw_output, expected_output);
+    assert_eq!(collected.original_token_count, chunk_len * 2 / 4);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -881,7 +934,7 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
     )
     .await;
 
-    assert!(String::from_utf8_lossy(&collected).contains("remote-unified-exec"));
+    assert!(String::from_utf8_lossy(&collected.raw_output).contains("remote-unified-exec"));
     Ok(())
 }
 

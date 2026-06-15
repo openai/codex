@@ -56,7 +56,7 @@ use codex_protocol::error::SandboxErr;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_output_truncation::approx_token_count;
+use codex_utils_output_truncation::approx_tokens_from_byte_count;
 use codex_utils_path_uri::PathUri;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
@@ -75,6 +75,11 @@ const NETWORK_ACCESS_DENIED_MESSAGE: &str =
     "Network access was denied by the Codex sandbox network proxy.";
 const LATE_NETWORK_DENIAL_GRACE_PERIOD: Duration = Duration::from_millis(100);
 const INTERRUPT: &str = "\u{3}";
+
+pub(super) struct CollectedOutput {
+    pub(super) raw_output: Vec<u8>,
+    pub(super) original_token_count: usize,
+}
 
 /// Test-only override for deterministic unified exec process IDs.
 ///
@@ -462,7 +467,10 @@ impl UnifiedExecProcessManager {
             cancellation_token,
         } = process.output_handles();
         let deadline = start + Duration::from_millis(yield_time_ms);
-        let collected = Self::collect_output_until_deadline(
+        let CollectedOutput {
+            raw_output: collected,
+            original_token_count,
+        } = Self::collect_output_until_deadline(
             &output_buffer,
             &output_notify,
             &output_closed,
@@ -596,7 +604,6 @@ impl UnifiedExecProcessManager {
             (None, exit_code)
         };
 
-        let original_token_count = approx_token_count(&text);
         let response = ExecCommandToolOutput {
             event_call_id: context.call_id.clone(),
             chunk_id,
@@ -679,7 +686,10 @@ impl UnifiedExecProcessManager {
         };
         let start = Instant::now();
         let deadline = start + Duration::from_millis(yield_time_ms);
-        let collected = Self::collect_output_until_deadline(
+        let CollectedOutput {
+            raw_output: collected,
+            original_token_count,
+        } = Self::collect_output_until_deadline(
             &output_buffer,
             &output_notify,
             &output_closed,
@@ -691,8 +701,6 @@ impl UnifiedExecProcessManager {
         .await;
         let wall_time = Instant::now().saturating_duration_since(start);
 
-        let text = String::from_utf8_lossy(&collected).to_string();
-        let original_token_count = approx_token_count(&text);
         let chunk_id = generate_chunk_id();
         if network_approval
             .as_ref()
@@ -1120,10 +1128,11 @@ impl UnifiedExecProcessManager {
         cancellation_token: &CancellationToken,
         mut pause_state: Option<watch::Receiver<bool>>,
         mut deadline: Instant,
-    ) -> Vec<u8> {
+    ) -> CollectedOutput {
         const POST_EXIT_CLOSE_WAIT_CAP: Duration = Duration::from_millis(50);
 
-        let mut collected: Vec<u8> = Vec::with_capacity(4096);
+        let mut collected = HeadTailBuffer::default();
+        let mut original_output_bytes = 0usize;
         let mut exit_signal_received = cancellation_token.is_cancelled();
         let mut post_exit_deadline: Option<Instant> = None;
         loop {
@@ -1134,14 +1143,20 @@ impl UnifiedExecProcessManager {
             )
             .await;
             let drained_chunks: Vec<Vec<u8>>;
+            let omitted_bytes: usize;
             let mut wait_for_output = None;
             {
                 let mut guard = output_buffer.lock().await;
+                omitted_bytes = guard.omitted_bytes();
                 drained_chunks = guard.drain_chunks();
                 if drained_chunks.is_empty() {
                     wait_for_output = Some(output_notify.notified());
                 }
             }
+            original_output_bytes = drained_chunks.iter().fold(
+                original_output_bytes.saturating_add(omitted_bytes),
+                |total, chunk| total.saturating_add(chunk.len()),
+            );
 
             if drained_chunks.is_empty() {
                 exit_signal_received |= cancellation_token.is_cancelled();
@@ -1189,7 +1204,7 @@ impl UnifiedExecProcessManager {
             }
 
             for chunk in drained_chunks {
-                collected.extend_from_slice(&chunk);
+                collected.push_chunk(chunk);
             }
 
             exit_signal_received |= cancellation_token.is_cancelled();
@@ -1198,7 +1213,13 @@ impl UnifiedExecProcessManager {
             }
         }
 
-        collected
+        CollectedOutput {
+            raw_output: collected.to_bytes(),
+            original_token_count: usize::try_from(approx_tokens_from_byte_count(
+                original_output_bytes,
+            ))
+            .unwrap_or(usize::MAX),
+        }
     }
 
     async fn extend_deadlines_while_paused(
