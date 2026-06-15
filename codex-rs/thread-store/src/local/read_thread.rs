@@ -38,35 +38,33 @@ pub(super) async fn read_thread(
                     store.config.codex_home.as_path(),
                     metadata.rollout_path.as_path(),
                 )))
-        && (!params.include_history
-            || sqlite_rollout_path_can_load_history_for_thread(
-                store,
-                &metadata.rollout_path,
-                thread_id,
-            )
-            .await)
     {
         let metadata_sandbox_policy = metadata.sandbox_policy.clone();
+        let rollout_thread = matching_rollout_thread_from_sqlite_path(
+            store,
+            metadata.rollout_path.as_path(),
+            thread_id,
+            params.include_archived,
+        )
+        .await;
         let mut thread = stored_thread_from_sqlite_metadata(store, metadata).await;
-        if !params.include_history
-            && let Some(rollout_path) = thread.rollout_path.clone()
-            && let Ok(mut rollout_thread) = read_thread_from_rollout_path(store, rollout_path).await
-            && rollout_thread.thread_id == thread_id
-            && (params.include_archived || rollout_thread.archived_at.is_none())
-            && !rollout_thread.preview.is_empty()
-        {
-            if thread.name.is_some() {
-                rollout_thread.name = thread.name;
+        if !params.include_history || rollout_thread.is_some() {
+            if let Some(mut rollout_thread) = rollout_thread
+                && !rollout_thread.preview.is_empty()
+            {
+                if thread.name.is_some() {
+                    rollout_thread.name = thread.name;
+                }
+                rollout_thread.git_info = thread.git_info;
+                rollout_thread.permission_profile = permission_profile_from_metadata_value(
+                    &metadata_sandbox_policy,
+                    rollout_thread.cwd.as_path(),
+                );
+                thread = rollout_thread;
             }
-            rollout_thread.git_info = thread.git_info;
-            rollout_thread.permission_profile = permission_profile_from_metadata_value(
-                &metadata_sandbox_policy,
-                rollout_thread.cwd.as_path(),
-            );
-            thread = rollout_thread;
+            attach_history_if_requested(&mut thread, params.include_history).await?;
+            return Ok(thread);
         }
-        attach_history_if_requested(&mut thread, params.include_history).await?;
-        return Ok(thread);
     }
 
     let path = resolve_rollout_path(store, thread_id, params.include_archived)
@@ -85,20 +83,21 @@ pub(super) async fn read_thread(
     Ok(thread)
 }
 
-async fn sqlite_rollout_path_can_load_history_for_thread(
+async fn matching_rollout_thread_from_sqlite_path(
     store: &LocalThreadStore,
     path: &std::path::Path,
     thread_id: codex_protocol::ThreadId,
-) -> bool {
-    if codex_rollout::existing_rollout_path(path).await.is_none() {
-        return false;
-    }
-    // SQLite metadata can outlive a moved/recreated rollout path. When history is
-    // requested, verify the path still resolves to the requested thread before
-    // trusting it as the source replay.
+    include_archived: bool,
+) -> Option<StoredThread> {
+    codex_rollout::existing_rollout_path(path).await.as_ref()?;
+    // SQLite metadata can outlive a moved or recreated rollout path. Verify the
+    // path still resolves to the requested thread before trusting its summary or history.
     read_thread_from_rollout_path(store, path.to_path_buf())
         .await
-        .is_ok_and(|thread| thread.thread_id == thread_id)
+        .ok()
+        .filter(|thread| {
+            thread.thread_id == thread_id && (include_archived || thread.archived_at.is_none())
+        })
 }
 
 pub(super) async fn read_thread_by_rollout_path(

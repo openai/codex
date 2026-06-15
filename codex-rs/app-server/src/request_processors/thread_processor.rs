@@ -3177,18 +3177,6 @@ impl ThreadRequestProcessor {
             InitialHistory::Resumed(resumed) => {
                 let fallback_provider = config_snapshot.model_provider_id.as_str();
                 if let Some(mut stored_thread) = resume_source_thread {
-                    if let Some(created_at) = resumed.history.iter().find_map(|item| match item {
-                        RolloutItem::SessionMeta(session_meta) => {
-                            chrono::DateTime::parse_from_rfc3339(&session_meta.meta.timestamp)
-                                .ok()
-                                .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
-                        }
-                        _ => None,
-                    }) {
-                        // Resume does not advance updated_at until the next turn starts.
-                        stored_thread.created_at = created_at;
-                        stored_thread.updated_at = created_at;
-                    }
                     if stored_thread.preview.is_empty() {
                         stored_thread.preview = preview_from_rollout_items(&resumed.history);
                     }

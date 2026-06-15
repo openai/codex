@@ -98,16 +98,18 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
     action: CwdPromptAction,
     allow_prompt: bool,
 ) -> color_eyre::Result<ResolveCwdOutcome> {
-    let history_cwd = match target_session.cwd.as_deref() {
-        Some(cwd) => Some(cwd.to_path_buf()),
-        None => {
-            read_session_cwd(
-                state_db_ctx,
-                target_session.thread_id,
-                target_session.path.as_deref(),
-            )
-            .await
-        }
+    let history_cwd = if target_session.path.is_some() {
+        read_session_cwd(
+            state_db_ctx,
+            target_session.thread_id,
+            target_session.path.as_deref(),
+        )
+        .await
+        .or_else(|| target_session.cwd.clone())
+    } else if let Some(cwd) = target_session.cwd.as_ref() {
+        Some(cwd.clone())
+    } else {
+        read_session_cwd(state_db_ctx, target_session.thread_id, /*path*/ None).await
     };
     let Some(history_cwd) = history_cwd else {
         return Ok(ResolveCwdOutcome::Continue(None));
@@ -133,25 +135,30 @@ async fn read_session_cwd(
     thread_id: ThreadId,
     path: Option<&Path>,
 ) -> Option<PathBuf> {
+    if let Some(path) = path {
+        match read_rollout_resume_state(path).await {
+            Ok(state) => {
+                if state.cwd.is_some() {
+                    return state.cwd;
+                }
+            }
+            Err(err) => {
+                let rollout_path = path.display().to_string();
+                tracing::warn!(
+                    %rollout_path,
+                    %err,
+                    "Failed to read session metadata from rollout"
+                );
+            }
+        }
+    }
+
     if let Some(state_db_ctx) = state_db_ctx
         && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
     {
         return Some(metadata.cwd);
     }
-
-    let path = path?;
-    match read_rollout_resume_state(path).await {
-        Ok(state) => state.cwd,
-        Err(err) => {
-            let rollout_path = path.display().to_string();
-            tracing::warn!(
-                %rollout_path,
-                %err,
-                "Failed to read session metadata from rollout"
-            );
-            None
-        }
-    }
+    None
 }
 
 pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {

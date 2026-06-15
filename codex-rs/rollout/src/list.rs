@@ -1778,7 +1778,6 @@ async fn find_thread_path_by_id_str_in_subdir(
         _ => None,
     };
     let thread_id = ThreadId::from_string(id_str).ok();
-    let mut unverified_db_path = None;
     let mut state_metadata_path = None;
     let mut fallback_reason = state_db_ctx.is_none().then_some("db_unavailable");
     if let Some(state_db_ctx) = state_db_ctx
@@ -1830,7 +1829,7 @@ async fn find_thread_path_by_id_str_in_subdir(
                                 "state db returned rollout path for thread {id_str} that could not be verified: {}: {err}",
                                 existing_db_path.display()
                             );
-                            unverified_db_path = Some(existing_db_path);
+                            fallback_reason = Some("unverified_path");
                         }
                     }
                 } else {
@@ -1900,7 +1899,7 @@ async fn find_thread_path_by_id_str_in_subdir(
         }
     }
 
-    Ok(found.or(unverified_db_path))
+    Ok(found)
 }
 
 async fn find_thread_path_by_id_str_in_any_subdir(
@@ -1954,7 +1953,7 @@ async fn find_thread_path_by_id_str_in_any_subdir(
                                 "state db returned rollout path for thread {id_str} that could not be verified: {}: {err}",
                                 existing_db_path.display()
                             );
-                            return Ok(Some(existing_db_path));
+                            fallback_reason = Some("unverified_path");
                         }
                     }
                 } else {

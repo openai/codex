@@ -75,11 +75,6 @@ pub(super) async fn list_threads(
         })
         .collect::<Vec<_>>();
 
-    // Startup --last lookups use this internal mode only to resolve id/path.
-    if params.use_state_db_only && params.page_size == 1 && params.search_term.is_none() {
-        return Ok(ThreadPage { items, next_cursor });
-    }
-
     let thread_ids = items
         .iter()
         .map(|thread| thread.thread_id)
@@ -95,6 +90,17 @@ pub(super) async fn list_threads(
             }
         }
     }
+    for thread in &mut items {
+        if let Some(title) = names.get(&thread.thread_id).cloned() {
+            set_thread_name_from_title(thread, title);
+        }
+    }
+
+    // Startup --last lookups use this internal mode only to resolve id/path.
+    if params.use_state_db_only && params.page_size == 1 && params.search_term.is_none() {
+        return Ok(ThreadPage { items, next_cursor });
+    }
+
     if names.len() < thread_ids.len()
         && let Ok(legacy_names) =
             find_thread_names_by_ids(store.config.codex_home.as_path(), &thread_ids).await
