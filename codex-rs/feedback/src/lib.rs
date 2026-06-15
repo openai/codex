@@ -2,6 +2,10 @@ use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::collections::btree_map::Entry;
 use std::fs;
+use std::fs::File;
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
 use std::io::Write;
 use std::io::{self};
 use std::path::PathBuf;
@@ -37,6 +41,10 @@ const SENTRY_DSN: &str =
 const UPLOAD_TIMEOUT_SECS: u64 = 10;
 const FEEDBACK_TAGS_TARGET: &str = "feedback_tags";
 const MAX_FEEDBACK_TAGS: usize = 64;
+// Sentry attachments own their bytes, then the transport serializes the complete envelope into a
+// second contiguous buffer. Bound file-backed inputs before either allocation can scale with disk.
+const MAX_FILE_ATTACHMENT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_FILE_ATTACHMENTS_BYTES: usize = 8 * 1024 * 1024;
 
 /// Structured request/auth fields that should be attached to feedback uploads.
 pub struct FeedbackRequestTags<'a> {
@@ -571,9 +579,20 @@ impl FeedbackSnapshot {
             });
         }
 
-        for attachment_path in extra_attachment_paths {
-            let data = match fs::read(&attachment_path.path) {
-                Ok(data) => data,
+        let mut file_attachment_bytes = 0usize;
+        for (index, attachment_path) in extra_attachment_paths.iter().enumerate() {
+            let remaining_bytes = MAX_FILE_ATTACHMENTS_BYTES.saturating_sub(file_attachment_bytes);
+            if remaining_bytes == 0 {
+                tracing::warn!(
+                    skipped_attachment_count = extra_attachment_paths.len() - index,
+                    max_bytes = MAX_FILE_ATTACHMENTS_BYTES,
+                    "feedback file attachment budget exhausted; skipping remaining files"
+                );
+                break;
+            }
+
+            let mut file = match File::open(&attachment_path.path) {
+                Ok(file) => file,
                 Err(err) => {
                     tracing::warn!(
                         path = %attachment_path.path.display(),
@@ -583,6 +602,39 @@ impl FeedbackSnapshot {
                     continue;
                 }
             };
+            let file_len = match file.metadata() {
+                Ok(metadata) => metadata.len(),
+                Err(err) => {
+                    tracing::warn!(
+                        path = %attachment_path.path.display(),
+                        error = %err,
+                        "failed to inspect log attachment; skipping"
+                    );
+                    continue;
+                }
+            };
+            let max_bytes = remaining_bytes.min(MAX_FILE_ATTACHMENT_BYTES);
+            let max_bytes_u64 = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+            let truncated = file_len > max_bytes_u64;
+            if truncated && let Err(err) = file.seek(SeekFrom::Start(file_len - max_bytes_u64)) {
+                tracing::warn!(
+                    path = %attachment_path.path.display(),
+                    error = %err,
+                    "failed to seek log attachment; skipping"
+                );
+                continue;
+            }
+            let mut data =
+                Vec::with_capacity(max_bytes.min(usize::try_from(file_len).unwrap_or(max_bytes)));
+            if let Err(err) = file.take(max_bytes_u64).read_to_end(&mut data) {
+                tracing::warn!(
+                    path = %attachment_path.path.display(),
+                    error = %err,
+                    "failed to read log attachment; skipping"
+                );
+                continue;
+            }
+            file_attachment_bytes += data.len();
             let filename = attachment_path
                 .attachment_filename_override
                 .clone()
@@ -593,6 +645,17 @@ impl FeedbackSnapshot {
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_else(|| "extra-log.log".to_string())
                 });
+            let filename = if truncated {
+                tracing::warn!(
+                    path = %attachment_path.path.display(),
+                    file_bytes = file_len,
+                    included_bytes = data.len(),
+                    "truncated feedback file attachment to its newest bytes"
+                );
+                format!("{filename}.tail")
+            } else {
+                filename
+            };
             attachments.push(Attachment {
                 buffer: data,
                 filename,
@@ -792,6 +855,46 @@ mod tests {
         );
         assert_eq!(attachments_without_diagnostics[0].buffer, vec![1]);
         fs::remove_file(extra_path).expect("extra attachment should be removed");
+    }
+
+    #[test]
+    fn file_attachments_are_tail_sampled_with_a_total_budget() {
+        let filename = format!("codex-feedback-large-{}.jsonl", ThreadId::new());
+        let path = std::env::temp_dir().join(&filename);
+        let file = File::create(&path).expect("large attachment should be created");
+        file.set_len(
+            u64::try_from(MAX_FILE_ATTACHMENT_BYTES + 1)
+                .expect("attachment limit should fit in u64"),
+        )
+        .expect("large attachment should be sized");
+        let paths = (0..5)
+            .map(|_| FeedbackAttachmentPath {
+                path: path.clone(),
+                attachment_filename_override: None,
+            })
+            .collect::<Vec<_>>();
+
+        let attachments = CodexFeedback::new()
+            .snapshot(/*session_id*/ None)
+            .feedback_attachments(
+                /*include_logs*/ false,
+                &[],
+                &paths,
+                /*logs_override*/ None,
+            );
+
+        assert_eq!(attachments.len(), 4);
+        assert!(
+            attachments
+                .iter()
+                .all(|attachment| attachment.buffer.len() == MAX_FILE_ATTACHMENT_BYTES)
+        );
+        assert!(
+            attachments
+                .iter()
+                .all(|attachment| attachment.filename == format!("{filename}.tail"))
+        );
+        fs::remove_file(path).expect("large attachment should be removed");
     }
 
     #[test]

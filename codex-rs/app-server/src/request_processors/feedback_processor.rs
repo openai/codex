@@ -2,6 +2,10 @@ use super::*;
 #[cfg(target_os = "windows")]
 use codex_feedback::WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME;
 
+// The subtree API returns the requested root first, followed by descendants. Keep the root plus a
+// small descendant sample so log queries and rollout-path resolution cannot scale without bound.
+const MAX_FEEDBACK_SUBTREE_THREADS: usize = 4;
+
 #[derive(Clone)]
 pub(crate) struct FeedbackRequestProcessor {
     auth_manager: Arc<AuthManager>,
@@ -89,7 +93,7 @@ impl FeedbackRequestProcessor {
                 log_db.flush().await;
             }
             let state_db_ctx = self.state_db.clone();
-            let feedback_thread_ids = match conversation_id {
+            let mut feedback_thread_ids = match conversation_id {
                 Some(conversation_id) => match self
                     .thread_manager
                     .list_agent_subtree_thread_ids(conversation_id)
@@ -125,6 +129,23 @@ impl FeedbackRequestProcessor {
                 },
                 None => Vec::new(),
             };
+            if feedback_thread_ids.len() > MAX_FEEDBACK_SUBTREE_THREADS {
+                let subtree_thread_count = feedback_thread_ids.len();
+                feedback_thread_ids.truncate(MAX_FEEDBACK_SUBTREE_THREADS);
+                upload_tags.insert(
+                    "feedback_subtree_thread_count".to_string(),
+                    subtree_thread_count.to_string(),
+                );
+                upload_tags.insert(
+                    "feedback_subtree_threads_included".to_string(),
+                    feedback_thread_ids.len().to_string(),
+                );
+                warn!(
+                    subtree_thread_count,
+                    included_thread_count = feedback_thread_ids.len(),
+                    "feedback subtree exceeds attachment limit; including a bounded sample"
+                );
+            }
             let sqlite_feedback_logs = if let Some(state_db_ctx) = state_db_ctx.as_ref()
                 && !feedback_thread_ids.is_empty()
             {
