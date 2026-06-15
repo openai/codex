@@ -9,6 +9,15 @@ pub fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
 }
 
 fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &mut Vec<String>) {
+    // Ordinary config temporarily accepts legacy arrays and keyed boolean maps
+    // for these fields. Promote a lower array only when a map overlays it so
+    // tombstones can remove individual entries. Keeping this migration rule
+    // narrow preserves legacy array replacement and makes arrays easy to
+    // deprecate later without changing the general TOML merge semantics.
+    if is_shell_environment_pattern_list_path(path) && overlay.is_table() {
+        promote_string_array_to_bool_map(base);
+    }
+
     if let TomlValue::Table(overlay_table) = overlay
         && let TomlValue::Table(base_table) = base
     {
@@ -32,6 +41,34 @@ fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &m
     } else {
         *base = normalized_with_key_aliases(overlay, path);
     }
+}
+
+fn is_shell_environment_pattern_list_path(path: &[String]) -> bool {
+    matches!(
+        path,
+        [policy, field]
+            if policy == "shell_environment_policy"
+                && (field == "exclude" || field == "include_only")
+    )
+}
+
+fn promote_string_array_to_bool_map(value: &mut TomlValue) {
+    let TomlValue::Array(items) = value else {
+        return;
+    };
+    let Some(patterns) = items
+        .iter()
+        .map(TomlValue::as_str)
+        .collect::<Option<Vec<_>>>()
+    else {
+        return;
+    };
+    *value = TomlValue::Table(
+        patterns
+            .into_iter()
+            .map(|pattern| (pattern.to_string(), TomlValue::Boolean(true)))
+            .collect(),
+    );
 }
 
 fn is_permission_network_domains_path(path: &[String]) -> bool {

@@ -4661,6 +4661,14 @@
           "description": "Lossless config-native OTEL requirements, including exporter headers."
         },
         "shellEnvironmentPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ShellEnvironmentPolicyRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "description": "Lossless config-native shell environment policy requirements."
         },
         "sqliteHome": {
@@ -13343,6 +13351,85 @@
       "required": [
         "model"
       ],
+      "type": "object"
+    },
+    "ShellEnvironmentPolicyInherit": {
+      "oneOf": [
+        {
+          "description": "\"Core\" environment variables for the platform. On UNIX, this would include HOME, LOGNAME, PATH, SHELL, and USER, among others.",
+          "enum": [
+            "core"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Inherits the full environment from the parent process.",
+          "enum": [
+            "all"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Do not inherit any environment variables from the parent process.",
+          "enum": [
+            "none"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ShellEnvironmentPolicyRequirements": {
+      "properties": {
+        "exclude": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "experimental_use_profile": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "ignore_default_excludes": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "include_only": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "inherit": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ShellEnvironmentPolicyInherit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "set": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "SkillDependencies": {

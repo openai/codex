@@ -2592,6 +2592,22 @@
       ],
       "type": "string"
     },
+    "ShellEnvironmentPatternListInput": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "type": "object"
+        }
+      ]
+    },
     "ShellEnvironmentPolicyInherit": {
       "oneOf": [
         {
@@ -2622,11 +2638,13 @@
       "description": "Policy for building the `env` when spawning a process via shell-like tools.",
       "properties": {
         "exclude": {
-          "description": "List of regular expressions.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
+          "allOf": [
+            {
+              "$ref": "#/definitions/ShellEnvironmentPatternListInput"
+            }
+          ],
+          "default": null,
+          "description": "List or boolean map of regular expressions."
         },
         "experimental_use_profile": {
           "type": "boolean"
@@ -2635,11 +2653,13 @@
           "type": "boolean"
         },
         "include_only": {
-          "description": "List of regular expressions.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
+          "allOf": [
+            {
+              "$ref": "#/definitions/ShellEnvironmentPatternListInput"
+            }
+          ],
+          "default": null,
+          "description": "List or boolean map of regular expressions."
         },
         "inherit": {
           "$ref": "#/definitions/ShellEnvironmentPolicyInherit"

@@ -6,6 +6,7 @@ use super::compose_requirements_for_hostname_and_hook_directory;
 use crate::ConfigRequirementsToml;
 use crate::ConfigRequirementsWithSources;
 use crate::RequirementSource;
+use crate::ShellEnvironmentPolicyRequirementsToml;
 use crate::Sourced;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -341,6 +342,69 @@ api = false
         composed.allowed_login_methods,
         Some(Sourced::new(
             BTreeMap::from([("api".to_string(), false), ("chatgpt".to_string(), true),]),
+            RequirementSource::composite([high_source, low_source]),
+        ))
+    );
+}
+
+#[test]
+fn shell_environment_pattern_maps_compose_by_key_with_tombstones() {
+    let high_source = RequirementSource::EnterpriseManaged {
+        id: "req_high".to_string(),
+        name: "High".to_string(),
+    };
+    let low_source = RequirementSource::EnterpriseManaged {
+        id: "req_low".to_string(),
+        name: "Low".to_string(),
+    };
+    let composed = compose_requirements_for_hostname(
+        vec![
+            RequirementsLayerEntry::from_toml(
+                low_source.clone(),
+                r#"
+[shell_environment_policy.exclude]
+"KEEP_*" = true
+"REMOVE_*" = true
+
+[shell_environment_policy.include_only]
+"HOME" = true
+"PATH" = true
+"#,
+            ),
+            RequirementsLayerEntry::from_toml(
+                high_source.clone(),
+                r#"
+[shell_environment_policy.exclude]
+"ADD_*" = true
+"REMOVE_*" = false
+
+[shell_environment_policy.include_only]
+"PATH" = false
+"USER" = true
+"#,
+            ),
+        ],
+        /*hostname*/ None,
+    )
+    .expect("compose requirements")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed.shell_environment_policy,
+        Some(Sourced::new(
+            ShellEnvironmentPolicyRequirementsToml {
+                exclude: Some(BTreeMap::from([
+                    ("ADD_*".to_string(), true),
+                    ("KEEP_*".to_string(), true),
+                    ("REMOVE_*".to_string(), false),
+                ])),
+                include_only: Some(BTreeMap::from([
+                    ("HOME".to_string(), true),
+                    ("PATH".to_string(), false),
+                    ("USER".to_string(), true),
+                ])),
+                ..Default::default()
+            },
             RequirementSource::composite([high_source, low_source]),
         ))
     );

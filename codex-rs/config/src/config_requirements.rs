@@ -1,5 +1,6 @@
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -10,6 +11,7 @@ use serde::de::Error as _;
 use serde::de::value::Error as ValueDeserializerError;
 use serde::de::value::StrDeserializer;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
 use wildmatch::WildMatchPattern;
 
@@ -23,7 +25,6 @@ use crate::permissions_toml::PermissionProfileToml;
 use crate::types::AuthCredentialsStoreMode;
 use crate::types::FeedbackConfigToml;
 use crate::types::OtelConfigToml;
-use crate::types::ShellEnvironmentPolicyToml;
 use crate::types::WindowsSandboxModeToml;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,7 +157,7 @@ pub struct ConfigRequirements {
     pub check_for_update_on_startup: Option<Sourced<bool>>,
     pub otel: Option<Sourced<OtelConfigToml>>,
     pub allow_login_shell: Option<Sourced<bool>>,
-    pub shell_environment_policy: Option<Sourced<ShellEnvironmentPolicyToml>>,
+    pub shell_environment_policy: Option<Sourced<ShellEnvironmentPolicyRequirementsToml>>,
     pub feedback: Option<Sourced<FeedbackConfigToml>>,
     pub approval_policy: ConstrainedWithSource<AskForApproval>,
     pub approvals_reviewer: ConstrainedWithSource<ApprovalsReviewer>,
@@ -862,7 +863,7 @@ pub struct ConfigRequirementsToml {
     pub check_for_update_on_startup: Option<bool>,
     pub otel: Option<OtelConfigToml>,
     pub allow_login_shell: Option<bool>,
-    pub shell_environment_policy: Option<ShellEnvironmentPolicyToml>,
+    pub shell_environment_policy: Option<ShellEnvironmentPolicyRequirementsToml>,
     pub feedback: Option<FeedbackConfigToml>,
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
@@ -888,6 +889,22 @@ pub struct ConfigRequirementsToml {
     pub network: Option<NetworkRequirementsToml>,
     pub permissions: Option<PermissionsRequirementsToml>,
     pub guardian_policy_config: Option<String>,
+}
+
+/// Managed shell environment policy fields accepted by `requirements.toml`.
+///
+/// Unlike ordinary `config.toml`, requirements intentionally accept only
+/// boolean maps for list-like fields. This keeps tombstones composable by key
+/// while config arrays remain a migration-only compatibility path that can be
+/// deprecated independently later.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShellEnvironmentPolicyRequirementsToml {
+    pub inherit: Option<ShellEnvironmentPolicyInherit>,
+    pub ignore_default_excludes: Option<bool>,
+    pub exclude: Option<BTreeMap<String, bool>>,
+    pub r#set: Option<HashMap<String, String>>,
+    pub include_only: Option<BTreeMap<String, bool>>,
+    pub experimental_use_profile: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -930,7 +947,7 @@ pub struct ConfigRequirementsWithSources {
     pub check_for_update_on_startup: Option<Sourced<bool>>,
     pub otel: Option<Sourced<OtelConfigToml>>,
     pub allow_login_shell: Option<Sourced<bool>>,
-    pub shell_environment_policy: Option<Sourced<ShellEnvironmentPolicyToml>>,
+    pub shell_environment_policy: Option<Sourced<ShellEnvironmentPolicyRequirementsToml>>,
     pub feedback: Option<Sourced<FeedbackConfigToml>>,
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
     pub allowed_approvals_reviewers: Option<Sourced<Vec<ApprovalsReviewer>>>,
@@ -1222,7 +1239,7 @@ impl ConfigRequirementsToml {
             && self
                 .shell_environment_policy
                 .as_ref()
-                .is_none_or(|policy| policy == &ShellEnvironmentPolicyToml::default())
+                .is_none_or(|policy| policy == &ShellEnvironmentPolicyRequirementsToml::default())
             && self
                 .feedback
                 .as_ref()
@@ -1743,6 +1760,45 @@ mod tests {
     }
 
     #[test]
+    fn shell_environment_policy_requires_boolean_maps_for_list_fields() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+[shell_environment_policy.exclude]
+"ADD_*" = true
+"REMOVE_*" = false
+
+[shell_environment_policy.include_only]
+"HOME" = true
+"PATH" = false
+"#,
+        )?;
+
+        assert_eq!(
+            requirements.shell_environment_policy,
+            Some(ShellEnvironmentPolicyRequirementsToml {
+                exclude: Some(BTreeMap::from([
+                    ("ADD_*".to_string(), true),
+                    ("REMOVE_*".to_string(), false),
+                ])),
+                include_only: Some(BTreeMap::from([
+                    ("HOME".to_string(), true),
+                    ("PATH".to_string(), false),
+                ])),
+                ..Default::default()
+            })
+        );
+
+        for field in ["exclude", "include_only"] {
+            let error = from_str::<ConfigRequirementsToml>(&format!(
+                "[shell_environment_policy]\n{field} = [\"LEGACY_*\"]\n"
+            ))
+            .expect_err("requirements.toml arrays should be rejected");
+            assert!(error.to_string().contains(field));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn allow_managed_hooks_only_false_is_still_configured() -> Result<()> {
         let requirements: ConfigRequirementsToml = from_str(
             r#"
@@ -1955,7 +2011,7 @@ mod tests {
             log_user_prompt: Some(false),
             ..Default::default()
         };
-        let shell_environment_policy = ShellEnvironmentPolicyToml {
+        let shell_environment_policy = ShellEnvironmentPolicyRequirementsToml {
             ignore_default_excludes: Some(false),
             ..Default::default()
         };

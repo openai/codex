@@ -29,6 +29,7 @@ use codex_app_server_protocol::NetworkDomainPermission;
 use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::NetworkUnixSocketPermission;
 use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::ShellEnvironmentPolicyRequirements;
 use codex_app_server_protocol::WindowsSandboxSetupMode;
 use codex_config::ConfigRequirementsToml;
 use codex_config::HookEventsToml;
@@ -37,6 +38,7 @@ use codex_config::ManagedHooksRequirementsToml;
 use codex_config::MatcherGroup as CoreMatcherGroup;
 use codex_config::ResidencyRequirement as CoreResidencyRequirement;
 use codex_config::SandboxModeRequirement as CoreSandboxModeRequirement;
+use codex_config::ShellEnvironmentPolicyRequirementsToml;
 use codex_core::ThreadManager;
 use codex_features::canonical_feature_for_key;
 use codex_features::feature_for_key;
@@ -394,11 +396,32 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         allow_login_shell: requirements.allow_login_shell,
         shell_environment_policy: requirements
             .shell_environment_policy
-            .map(|policy| json!(policy)),
+            .map(map_shell_environment_policy_requirements_to_api),
         feedback: requirements.feedback.map(|feedback| FeedbackRequirements {
             enabled: feedback.enabled,
         }),
         windows_sandbox_private_desktop,
+    }
+}
+
+fn map_shell_environment_policy_requirements_to_api(
+    policy: ShellEnvironmentPolicyRequirementsToml,
+) -> ShellEnvironmentPolicyRequirements {
+    let ShellEnvironmentPolicyRequirementsToml {
+        inherit,
+        ignore_default_excludes,
+        exclude,
+        r#set,
+        include_only,
+        experimental_use_profile,
+    } = policy;
+    ShellEnvironmentPolicyRequirements {
+        inherit,
+        ignore_default_excludes,
+        exclude,
+        r#set,
+        include_only,
+        experimental_use_profile,
     }
 }
 
@@ -589,13 +612,16 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::map_requirements_toml_to_api;
+    use codex_app_server_protocol::ShellEnvironmentPolicyRequirements;
     use codex_app_server_protocol::WindowsSandboxSetupMode;
     use codex_config::ComputerUseRequirementsToml;
     use codex_config::ConfigRequirementsToml;
     use codex_config::WindowsRequirementsToml;
+    use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::collections::BTreeMap;
+    use std::collections::HashMap;
 
     #[test]
     fn requirements_api_includes_allow_managed_hooks_only() {
@@ -708,8 +734,15 @@ team = "codex"
 [shell_environment_policy]
 inherit = "core"
 ignore_default_excludes = false
-exclude = ["*SECRET*"]
 experimental_use_profile = false
+
+[shell_environment_policy.exclude]
+"*OLD*" = false
+"*SECRET*" = true
+
+[shell_environment_policy.include_only]
+"HOME" = true
+"PATH" = false
 
 [shell_environment_policy.set]
 MANAGED = "true"
@@ -727,14 +760,22 @@ MANAGED = "true"
         );
         assert_eq!(
             mapped.shell_environment_policy,
-            Some(json!({
-                "inherit": "core",
-                "ignore_default_excludes": false,
-                "exclude": ["*SECRET*"],
-                "set": {"MANAGED": "true"},
-                "include_only": null,
-                "experimental_use_profile": false
-            }))
+            Some(ShellEnvironmentPolicyRequirements {
+                inherit: Some(ShellEnvironmentPolicyInherit::Core),
+                ignore_default_excludes: Some(false),
+                exclude: Some(BTreeMap::from([
+                    ("*OLD*".to_string(), false),
+                    ("*SECRET*".to_string(), true),
+                ])),
+                r#set: Some(HashMap::from([
+                    ("MANAGED".to_string(), "true".to_string(),)
+                ])),
+                include_only: Some(BTreeMap::from([
+                    ("HOME".to_string(), true),
+                    ("PATH".to_string(), false),
+                ])),
+                experimental_use_profile: Some(false),
+            })
         );
     }
 }

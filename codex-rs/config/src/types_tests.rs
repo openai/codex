@@ -2,6 +2,41 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn shell_environment_policy_accepts_legacy_lists_and_bool_maps() {
+    let legacy: ShellEnvironmentPolicyToml = toml::from_str(
+        r#"
+exclude = ["LEGACY_*", "SHARED_*"]
+include_only = ["PATH", "HOME"]
+"#,
+    )
+    .expect("legacy arrays should remain valid in config.toml");
+    assert_eq!(
+        legacy,
+        ShellEnvironmentPolicyToml {
+            exclude: Some(vec!["LEGACY_*".to_string(), "SHARED_*".to_string()]),
+            include_only: Some(vec!["PATH".to_string(), "HOME".to_string()]),
+            ..Default::default()
+        }
+    );
+
+    let mapped: ShellEnvironmentPolicyToml = toml::from_str(
+        r#"
+exclude = { "DISABLED_*" = false, "ENABLED_*" = true }
+include_only = { "HOME" = true, "PATH" = false }
+"#,
+    )
+    .expect("boolean maps should be valid in config.toml");
+    assert_eq!(
+        mapped,
+        ShellEnvironmentPolicyToml {
+            exclude: Some(vec!["ENABLED_*".to_string()]),
+            include_only: Some(vec!["HOME".to_string()]),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
 fn deserialize_skill_config_with_name_selector() {
     let cfg: SkillConfig = toml::from_str(
         r#"

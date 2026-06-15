@@ -913,6 +913,41 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings 
     }
 }
 
+// Compatibility input for list-like shell environment policy fields.
+//
+// Ordinary `config.toml` accepts both the legacy array form and the keyed
+// boolean-map form while the latter rolls out. Keeping that compatibility in
+// this input-only type lets requirements stay map-only and gives us a single
+// seam where arrays can be deprecated and removed later.
+#[derive(Deserialize, JsonSchema)]
+#[serde(untagged)]
+enum ShellEnvironmentPatternListInput {
+    List(Vec<String>),
+    Map(BTreeMap<String, bool>),
+}
+
+impl ShellEnvironmentPatternListInput {
+    fn into_enabled_patterns(self) -> Vec<String> {
+        match self {
+            Self::List(patterns) => patterns,
+            Self::Map(patterns) => patterns
+                .into_iter()
+                .filter_map(|(pattern, enabled)| enabled.then_some(pattern))
+                .collect(),
+        }
+    }
+}
+
+fn deserialize_optional_shell_environment_pattern_list<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<ShellEnvironmentPatternListInput>::deserialize(deserializer)
+        .map(|value| value.map(ShellEnvironmentPatternListInput::into_enabled_patterns))
+}
+
 /// Policy for building the `env` when spawning a process via shell-like tools.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -921,12 +956,22 @@ pub struct ShellEnvironmentPolicyToml {
 
     pub ignore_default_excludes: Option<bool>,
 
-    /// List of regular expressions.
+    /// List or boolean map of regular expressions.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_shell_environment_pattern_list"
+    )]
+    #[schemars(with = "Option<ShellEnvironmentPatternListInput>")]
     pub exclude: Option<Vec<String>>,
 
     pub r#set: Option<HashMap<String, String>>,
 
-    /// List of regular expressions.
+    /// List or boolean map of regular expressions.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_shell_environment_pattern_list"
+    )]
+    #[schemars(with = "Option<ShellEnvironmentPatternListInput>")]
     pub include_only: Option<Vec<String>>,
 
     pub experimental_use_profile: Option<bool>,

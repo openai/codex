@@ -9338,7 +9338,8 @@ allow_login_shell = true
 
 [shell_environment_policy]
 ignore_default_excludes = true
-exclude = ["USER_*"]
+exclude = ["USER_*", "REMOVE_*"]
+include_only = ["HOME", "PATH"]
 
 [shell_environment_policy.set]
 CONFIGURED = "kept"
@@ -9381,6 +9382,14 @@ api = false
 ignore_default_excludes = false
 experimental_use_profile = true
 
+[shell_environment_policy.exclude]
+"MANAGED_*" = true
+"REMOVE_*" = false
+
+[shell_environment_policy.include_only]
+"PATH" = false
+"USER" = true
+
 [shell_environment_policy.set]
 MANAGED = "required"
 
@@ -9406,7 +9415,8 @@ sandbox_private_desktop = false
     let expected_shell_environment_policy: ShellEnvironmentPolicy =
         codex_config::types::ShellEnvironmentPolicyToml {
             ignore_default_excludes: Some(false),
-            exclude: Some(vec!["USER_*".to_string()]),
+            exclude: Some(vec!["USER_*".to_string(), "MANAGED_*".to_string()]),
+            include_only: Some(vec!["HOME".to_string(), "USER".to_string()]),
             experimental_use_profile: Some(true),
             r#set: Some(HashMap::from([
                 ("CONFIGURED".to_string(), "kept".to_string()),

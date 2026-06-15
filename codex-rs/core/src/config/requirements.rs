@@ -1,11 +1,13 @@
 use codex_config::ConfigRequirements;
 use codex_config::RequirementSource;
+use codex_config::ShellEnvironmentPolicyRequirementsToml;
 use codex_config::Sourced;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::FeedbackConfigToml;
 use codex_config::types::ShellEnvironmentPolicyToml;
 use codex_protocol::config_types::ForcedLoginMethod;
+use std::collections::BTreeMap;
 
 use super::otel;
 
@@ -136,13 +138,13 @@ pub(super) fn replace_required_leaf<T: Clone + PartialEq>(
 
 fn apply_shell_environment_policy_requirement(
     configured: &mut ShellEnvironmentPolicyToml,
-    requirement: Option<&Sourced<ShellEnvironmentPolicyToml>>,
+    requirement: Option<&Sourced<ShellEnvironmentPolicyRequirementsToml>>,
     startup_warnings: &mut Vec<String>,
 ) {
     let Some(Sourced { value, source }) = requirement else {
         return;
     };
-    let ShellEnvironmentPolicyToml {
+    let ShellEnvironmentPolicyRequirementsToml {
         inherit,
         ignore_default_excludes,
         exclude,
@@ -157,8 +159,8 @@ fn apply_shell_environment_policy_requirement(
         &mut configured.ignore_default_excludes,
         ignore_default_excludes,
     );
-    conflict |= replace_required_leaf(&mut configured.exclude, exclude);
-    conflict |= replace_required_leaf(&mut configured.include_only, include_only);
+    conflict |= apply_required_pattern_map(&mut configured.exclude, exclude);
+    conflict |= apply_required_pattern_map(&mut configured.include_only, include_only);
     conflict |= replace_required_leaf(
         &mut configured.experimental_use_profile,
         experimental_use_profile,
@@ -180,6 +182,30 @@ fn apply_shell_environment_policy_requirement(
         source,
         startup_warnings,
     );
+}
+
+fn apply_required_pattern_map(
+    configured: &mut Option<Vec<String>>,
+    required: &Option<BTreeMap<String, bool>>,
+) -> bool {
+    let Some(required) = required else {
+        return false;
+    };
+    let configured = configured.get_or_insert_default();
+    // Adding an enabled pattern is additive; removing a configured pattern is
+    // the only case that overrides the user's effective list.
+    let conflict = required
+        .iter()
+        .any(|(pattern, enabled)| !enabled && configured.contains(pattern));
+
+    configured.retain(|pattern| required.get(pattern).copied().unwrap_or(true));
+    for (pattern, enabled) in required {
+        if *enabled && !configured.contains(pattern) {
+            configured.push(pattern.clone());
+        }
+    }
+
+    conflict
 }
 
 fn apply_feedback_requirement(

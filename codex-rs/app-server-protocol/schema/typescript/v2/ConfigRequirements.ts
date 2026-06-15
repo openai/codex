@@ -10,6 +10,7 @@ import type { ComputerUseRequirements } from "./ComputerUseRequirements";
 import type { FeedbackRequirements } from "./FeedbackRequirements";
 import type { ResidencyRequirement } from "./ResidencyRequirement";
 import type { SandboxMode } from "./SandboxMode";
+import type { ShellEnvironmentPolicyRequirements } from "./ShellEnvironmentPolicyRequirements";
 import type { WindowsSandboxSetupMode } from "./WindowsSandboxSetupMode";
 
 export type ConfigRequirements = {allowedApprovalPolicies: Array<AskForApproval> | null, allowedSandboxModes: Array<SandboxMode> | null, allowedWindowsSandboxImplementations: Array<WindowsSandboxSetupMode> | null, allowedPermissionProfiles: { [key in string]?: boolean } | null, defaultPermissions: string | null, allowedWebSearchModes: Array<WebSearchMode> | null, allowManagedHooksOnly: boolean | null, allowAppshots: boolean | null, allowRemoteControl: boolean | null, computerUse: ComputerUseRequirements | null, featureRequirements: { [key in string]?: boolean } | null, enforceResidency: ResidencyRequirement | null, allowedLoginMethods: { [key in string]?: boolean } | null, allowedChatgptWorkspaces: { [key in string]?: boolean } | null, cliAuthCredentialsStore: AuthCredentialsStoreMode | null, chatgptBaseUrl: string | null, sqliteHome: AbsolutePathBuf | null, logDir: AbsolutePathBuf | null, modelCatalogJson: AbsolutePathBuf | null, checkForUpdateOnStartup: boolean | null, /**
@@ -18,4 +19,4 @@ export type ConfigRequirements = {allowedApprovalPolicies: Array<AskForApproval>
 otel: JsonValue | null, allowLoginShell: boolean | null, /**
  * Lossless config-native shell environment policy requirements.
  */
-shellEnvironmentPolicy: JsonValue | null, feedback: FeedbackRequirements | null, windowsSandboxPrivateDesktop: boolean | null};
+shellEnvironmentPolicy: ShellEnvironmentPolicyRequirements | null, feedback: FeedbackRequirements | null, windowsSandboxPrivateDesktop: boolean | null};

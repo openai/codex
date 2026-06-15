@@ -8,6 +8,7 @@ pub use codex_protocol::config_types::AuthCredentialsStoreMode;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
@@ -405,7 +406,7 @@ pub struct ConfigRequirements {
     pub otel: Option<JsonValue>,
     pub allow_login_shell: Option<bool>,
     /// Lossless config-native shell environment policy requirements.
-    pub shell_environment_policy: Option<JsonValue>,
+    pub shell_environment_policy: Option<ShellEnvironmentPolicyRequirements>,
     pub feedback: Option<FeedbackRequirements>,
     pub windows_sandbox_private_desktop: Option<bool>,
 }
@@ -415,6 +416,18 @@ pub struct ConfigRequirements {
 #[ts(export_to = "v2/")]
 pub struct FeedbackRequirements {
     pub enabled: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct ShellEnvironmentPolicyRequirements {
+    pub inherit: Option<ShellEnvironmentPolicyInherit>,
+    pub ignore_default_excludes: Option<bool>,
+    pub exclude: Option<BTreeMap<String, bool>>,
+    pub r#set: Option<HashMap<String, String>>,
+    pub include_only: Option<BTreeMap<String, bool>>,
+    pub experimental_use_profile: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

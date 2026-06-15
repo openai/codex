@@ -1,6 +1,7 @@
 use super::*;
 use crate::config_toml::ConfigToml;
 use crate::types::MemoriesToml;
+use crate::types::ShellEnvironmentPolicyToml;
 use pretty_assertions::assert_eq;
 
 fn parse_toml(value: &str) -> TomlValue {
@@ -123,4 +124,116 @@ fn merge_toml_values_normalizes_permission_network_domains_before_overlaying() {
 "#,
     );
     assert_eq!(base, expected);
+}
+
+#[test]
+fn shell_environment_policy_legacy_array_overlay_replaces_legacy_array() {
+    let mut base = parse_toml(
+        r#"
+[shell_environment_policy]
+exclude = ["LOW_*", "SHARED_*"]
+"#,
+    );
+    let overlay = parse_toml(
+        r#"
+[shell_environment_policy]
+exclude = ["HIGH_*"]
+"#,
+    );
+
+    merge_toml_values(&mut base, &overlay);
+
+    assert_eq!(base, overlay);
+}
+
+#[test]
+fn shell_environment_policy_bool_map_overlay_merges_by_key() {
+    let mut base = parse_toml(
+        r#"
+[shell_environment_policy.exclude]
+"KEEP_*" = true
+"REMOVE_*" = true
+"#,
+    );
+    let overlay = parse_toml(
+        r#"
+[shell_environment_policy.exclude]
+"ADD_*" = true
+"REMOVE_*" = false
+"#,
+    );
+
+    merge_toml_values(&mut base, &overlay);
+
+    assert_eq!(
+        base,
+        parse_toml(
+            r#"
+[shell_environment_policy.exclude]
+"ADD_*" = true
+"KEEP_*" = true
+"REMOVE_*" = false
+"#,
+        )
+    );
+}
+
+#[test]
+fn shell_environment_policy_bool_map_overlay_promotes_lower_legacy_array() {
+    let mut base = parse_toml(
+        r#"
+[shell_environment_policy]
+include_only = ["HOME", "PATH"]
+"#,
+    );
+    let overlay = parse_toml(
+        r#"
+[shell_environment_policy.include_only]
+"PATH" = false
+"USER" = true
+"#,
+    );
+
+    merge_toml_values(&mut base, &overlay);
+
+    assert_eq!(
+        base,
+        parse_toml(
+            r#"
+[shell_environment_policy.include_only]
+"HOME" = true
+"PATH" = false
+"USER" = true
+"#,
+        )
+    );
+
+    let config: ConfigToml = base.try_into().expect("merged config should deserialize");
+    assert_eq!(
+        config.shell_environment_policy,
+        ShellEnvironmentPolicyToml {
+            include_only: Some(vec!["HOME".to_string(), "USER".to_string()]),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn shell_environment_policy_legacy_array_overlay_replaces_lower_bool_map() {
+    let mut base = parse_toml(
+        r#"
+[shell_environment_policy.exclude]
+"LOW_*" = true
+"#,
+    );
+    let overlay = parse_toml(
+        r#"
+[shell_environment_policy]
+exclude = ["HIGH_*"]
+"#,
+    );
+
+    merge_toml_values(&mut base, &overlay);
+
+    assert_eq!(base, overlay);
 }
