@@ -11,47 +11,6 @@ use codex_features::Stage;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
-async fn realtime_error_closes_without_followup_closed_info() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
-
-    chat.on_realtime_error(ThreadRealtimeErrorNotification {
-        thread_id: ThreadId::new().to_string(),
-        message: "boom".to_string(),
-    });
-    next_realtime_close_op(&mut op_rx);
-
-    chat.on_realtime_conversation_closed(ThreadRealtimeClosedNotification {
-        thread_id: ThreadId::new().to_string(),
-        reason: Some("error".to_string()),
-    });
-
-    let rendered = drain_insert_history(&mut rx)
-        .into_iter()
-        .map(|lines| lines_to_single_string(&lines))
-        .collect::<Vec<_>>();
-    insta::assert_snapshot!(rendered.join("\n\n"), @"■ Realtime voice error: boom");
-}
-
-#[cfg(not(target_os = "linux"))]
-#[tokio::test]
-async fn deleted_realtime_meter_uses_shared_stop_path() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
-    let placeholder_id = chat.bottom_pane.insert_recording_meter_placeholder("⠤⠤⠤⠤");
-    chat.realtime_conversation.meter_placeholder_id = Some(placeholder_id.clone());
-
-    assert!(chat.stop_realtime_conversation_for_deleted_meter(&placeholder_id));
-
-    next_realtime_close_op(&mut op_rx);
-    assert_eq!(chat.realtime_conversation.meter_placeholder_id, None);
-    assert_eq!(
-        chat.realtime_conversation.phase,
-        RealtimeConversationPhase::Stopping
-    );
-}
-
-#[tokio::test]
 async fn experimental_mode_plan_is_ignored_on_startup() {
     let codex_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
@@ -79,6 +38,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         initial_user_message: None,
         enhanced_keys_supported: false,
         has_chatgpt_account: false,
+        has_codex_backend_auth: false,
         model_catalog: test_model_catalog(&cfg),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
@@ -2616,60 +2576,13 @@ async fn personality_selection_popup_snapshot() {
     assert_chatwidget_snapshot!("personality_selection_popup", popup);
 }
 
-#[cfg(not(target_os = "linux"))]
 #[tokio::test]
-async fn realtime_audio_selection_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.open_realtime_audio_popup();
+async fn skills_menu_default_mentions_shortcut_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.open_skills_menu();
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
-    assert_chatwidget_snapshot!("realtime_audio_selection_popup", popup);
-}
-
-#[cfg(not(target_os = "linux"))]
-#[tokio::test]
-async fn realtime_audio_selection_popup_narrow_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.open_realtime_audio_popup();
-
-    let popup = render_bottom_popup(&chat, /*width*/ 56);
-    assert_chatwidget_snapshot!("realtime_audio_selection_popup_narrow", popup);
-}
-
-#[cfg(not(target_os = "linux"))]
-#[tokio::test]
-async fn realtime_microphone_picker_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.config.realtime_audio.microphone = Some("Studio Mic".to_string());
-    chat.open_realtime_audio_device_selection_with_names(
-        RealtimeAudioDeviceKind::Microphone,
-        vec!["Built-in Mic".to_string(), "USB Mic".to_string()],
-    );
-
-    let popup = render_bottom_popup(&chat, /*width*/ 80);
-    assert_chatwidget_snapshot!("realtime_microphone_picker_popup", popup);
-}
-
-#[cfg(not(target_os = "linux"))]
-#[tokio::test]
-async fn realtime_audio_picker_emits_persist_event() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.open_realtime_audio_device_selection_with_names(
-        RealtimeAudioDeviceKind::Speaker,
-        vec!["Desk Speakers".to_string(), "Headphones".to_string()],
-    );
-
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::PersistRealtimeAudioDeviceSelection {
-            kind: RealtimeAudioDeviceKind::Speaker,
-            name: Some(name),
-        }) if name == "Headphones"
-    );
+    assert_chatwidget_snapshot!("skills_menu_default_mentions_shortcut", popup);
 }
 
 #[tokio::test]

@@ -498,6 +498,7 @@ mod tests {
     use crate::ProcessId;
     use crate::environment_provider::EnvironmentDefault;
     use crate::environment_provider::EnvironmentProviderSnapshot;
+    use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
 
     fn test_runtime_paths() -> ExecServerRuntimePaths {
@@ -862,7 +863,8 @@ mod tests {
             .start(crate::ExecParams {
                 process_id: ProcessId::from("default-env-proc"),
                 argv: vec!["true".to_string()],
-                cwd: std::env::current_dir().expect("read current dir"),
+                cwd: PathUri::from_path(std::env::current_dir().expect("read current dir"))
+                    .expect("cwd URI"),
                 env_policy: None,
                 env: Default::default(),
                 tty: false,
@@ -882,7 +884,7 @@ mod tests {
             std::env::current_exe().expect("current exe").as_path(),
         )
         .expect("absolute current exe");
-        let path = codex_utils_path_uri::PathUri::from_abs_path(&path).expect("path URI");
+        let path = codex_utils_path_uri::PathUri::from_abs_path(&path);
         let sandbox = crate::FileSystemSandboxContext::from_permission_profile(
             codex_protocol::models::PermissionProfile::from_runtime_permissions(
                 &codex_protocol::permissions::FileSystemSandboxPolicy::restricted(Vec::new()),

@@ -19,6 +19,7 @@ impl ChatWidget {
             initial_user_message,
             enhanced_keys_supported,
             has_chatgpt_account,
+            has_codex_backend_auth,
             model_catalog,
             feedback,
             is_first_run,
@@ -113,6 +114,7 @@ impl ChatWidget {
             current_collaboration_mode,
             active_collaboration_mask,
             has_chatgpt_account,
+            has_codex_backend_auth,
             model_catalog,
             session_telemetry,
             session_header: SessionHeader::new(header_model),
@@ -124,6 +126,9 @@ impl ChatWidget {
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             refreshing_status_outputs: Vec::new(),
             next_status_refresh_request_id: 0,
+            refreshing_token_activity_output: None,
+            completed_token_activity_output: None,
+            next_token_activity_request_id: 0,
             plan_type: initial_plan_type,
             codex_rate_limit_reached_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
@@ -133,6 +138,7 @@ impl ChatWidget {
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
+            pending_stream_consolidations: 0,
             clipboard_lease: None,
             copy_last_response_binding,
             running_commands: HashMap::new(),
@@ -221,7 +227,6 @@ impl ChatWidget {
             current_goal_status_indicator: None,
             current_goal_status: None,
             external_editor_state: ExternalEditorState::Closed,
-            realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_display: None,
             last_non_retry_error: None,
         };
@@ -233,12 +238,6 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_vim_enabled(widget.config.tui_vim_mode_default);
-        widget
-            .bottom_pane
-            .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
-        widget
-            .bottom_pane
-            .set_audio_device_selection_enabled(widget.realtime_audio_device_selection_enabled());
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -265,6 +264,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_connectors_enabled(widget.connectors_enabled());
+        widget
+            .bottom_pane
+            .set_token_activity_command_enabled(widget.has_codex_backend_auth);
         widget.refresh_status_surfaces();
 
         widget

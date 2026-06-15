@@ -123,9 +123,9 @@ async fn goal_edit_prompt_submits_preserved_status_and_budget() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     match rx.try_recv() {
-        Ok(AppEvent::SetThreadGoalObjective {
+        Ok(AppEvent::SetThreadGoalDraft {
             thread_id: event_thread_id,
-            objective,
+            draft,
             mode:
                 crate::app_event::ThreadGoalSetMode::UpdateExisting {
                     status,
@@ -134,13 +134,13 @@ async fn goal_edit_prompt_submits_preserved_status_and_budget() {
         }) => {
             assert_eq!(event_thread_id, thread_id);
             assert_eq!(
-                objective,
+                draft.objective,
                 "Keep improving the bare goal command until it feels calm and useful. with clearer wording"
             );
             assert_eq!(status, AppThreadGoalStatus::Paused);
             assert_eq!(token_budget, Some(80_000));
         }
-        other => panic!("expected SetThreadGoalObjective event, got {other:?}"),
+        other => panic!("expected SetThreadGoalDraft event, got {other:?}"),
     }
     assert!(chat.no_modal_or_popup_active());
 }
@@ -165,7 +165,7 @@ async fn goal_edit_prompt_preserves_resumable_stopped_statuses() {
         chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
         match rx.try_recv() {
-            Ok(AppEvent::SetThreadGoalObjective {
+            Ok(AppEvent::SetThreadGoalDraft {
                 mode:
                     crate::app_event::ThreadGoalSetMode::UpdateExisting {
                         status,
@@ -176,7 +176,7 @@ async fn goal_edit_prompt_preserves_resumable_stopped_statuses() {
                 assert_eq!(status, stopped_status);
                 assert_eq!(token_budget, Some(80_000));
             }
-            other => panic!("expected SetThreadGoalObjective event, got {other:?}"),
+            other => panic!("expected SetThreadGoalDraft event, got {other:?}"),
         }
     }
 }
@@ -203,7 +203,7 @@ async fn goal_edit_prompt_resets_terminal_status_to_active() {
         chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
         match rx.try_recv() {
-            Ok(AppEvent::SetThreadGoalObjective {
+            Ok(AppEvent::SetThreadGoalDraft {
                 mode:
                     crate::app_event::ThreadGoalSetMode::UpdateExisting {
                         status,
@@ -214,7 +214,7 @@ async fn goal_edit_prompt_resets_terminal_status_to_active() {
                 assert_eq!(status, AppThreadGoalStatus::Active);
                 assert_eq!(token_budget, Some(80_000));
             }
-            other => panic!("expected SetThreadGoalObjective event, got {other:?}"),
+            other => panic!("expected SetThreadGoalDraft event, got {other:?}"),
         }
     }
 }

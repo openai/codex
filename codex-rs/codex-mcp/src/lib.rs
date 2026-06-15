@@ -12,6 +12,7 @@ pub use runtime::SandboxState;
 pub use tools::ToolInfo;
 
 pub use catalog::McpCatalogBuilder;
+pub use catalog::McpPluginAttribution;
 pub use catalog::McpServerConflict;
 pub use catalog::McpServerConflictAction;
 pub use catalog::McpServerRegistration;

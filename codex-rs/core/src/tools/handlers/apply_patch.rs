@@ -526,12 +526,7 @@ pub(crate) async fn intercept_apply_patch(
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
-    let sandbox_cwd = PathUri::from_abs_path(cwd).map_err(|_| {
-        FunctionCallError::RespondToModel(
-            "unable to prepare filesystem sandbox: working directory cannot be represented as a file URI"
-                .to_string(),
-        )
-    })?;
+    let sandbox_cwd = PathUri::from_abs_path(cwd);
     let sandbox =
         turn.file_system_sandbox_context(/*additional_permissions*/ None, &sandbox_cwd);
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, Some(&sandbox))

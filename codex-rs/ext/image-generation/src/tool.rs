@@ -341,12 +341,7 @@ async fn image_url(
     path: &AbsolutePathBuf,
     environment: &ToolEnvironment,
 ) -> Result<ImageUrl, FunctionCallError> {
-    let path_uri = PathUri::from_abs_path(path).map_err(|error| {
-        FunctionCallError::RespondToModel(format!(
-            "unable to read referenced image at `{}`: {error}",
-            path.display()
-        ))
-    })?;
+    let path_uri = PathUri::from_abs_path(path);
     let bytes = environment
         .file_system
         .read_file(&path_uri, Some(&environment.file_system_sandbox_context))

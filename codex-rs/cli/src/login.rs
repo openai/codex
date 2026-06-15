@@ -10,6 +10,7 @@
 use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
+use codex_login::AuthKeyringBackendKind;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
 use codex_login::ServerOptions;
@@ -117,8 +118,15 @@ fn print_login_server_start(actual_port: u16, auth_url: &str) {
 async fn clear_existing_auth_before_login(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
+    auth_keyring_backend_kind: AuthKeyringBackendKind,
 ) {
-    if let Err(err) = logout_with_revoke(codex_home, auth_credentials_store_mode).await {
+    if let Err(err) = logout_with_revoke(
+        codex_home,
+        auth_credentials_store_mode,
+        auth_keyring_backend_kind,
+    )
+    .await
+    {
         tracing::warn!("failed to clear existing auth before login: {err}");
     }
 }
@@ -127,14 +135,21 @@ pub async fn login_with_chatgpt(
     codex_home: PathBuf,
     forced_chatgpt_workspace_id: Option<Vec<String>>,
     cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+    auth_keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<()> {
-    clear_existing_auth_before_login(&codex_home, cli_auth_credentials_store_mode).await;
+    clear_existing_auth_before_login(
+        &codex_home,
+        cli_auth_credentials_store_mode,
+        auth_keyring_backend_kind,
+    )
+    .await;
 
     let opts = ServerOptions::new(
         codex_home,
         CLIENT_ID.to_string(),
         forced_chatgpt_workspace_id,
         cli_auth_credentials_store_mode,
+        auth_keyring_backend_kind,
     );
     let server = run_login_server(opts)?;
 
@@ -159,6 +174,7 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
         config.codex_home.to_path_buf(),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
     )
     .await
     {
@@ -190,6 +206,7 @@ pub async fn run_login_with_api_key(
         &config.codex_home,
         &api_key,
         config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
     ) {
         Ok(_) => {
             eprintln!("{LOGIN_SUCCESS_MESSAGE}");
@@ -221,6 +238,7 @@ pub async fn run_login_with_access_token(
         config.cli_auth_credentials_store_mode,
         config.forced_chatgpt_workspace_id.as_deref(),
         Some(&config.chatgpt_base_url),
+        config.auth_keyring_backend_kind(),
     )
     .await
     {
@@ -289,14 +307,19 @@ pub async fn run_login_with_device_code(
         eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
-    clear_existing_auth_before_login(&config.codex_home, config.cli_auth_credentials_store_mode)
-        .await;
+    clear_existing_auth_before_login(
+        &config.codex_home,
+        config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
+    )
+    .await;
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
     let mut opts = ServerOptions::new(
         config.codex_home.to_path_buf(),
         client_id.unwrap_or(CLIENT_ID.to_string()),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
     );
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
@@ -329,8 +352,12 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
-    clear_existing_auth_before_login(&config.codex_home, config.cli_auth_credentials_store_mode)
-        .await;
+    clear_existing_auth_before_login(
+        &config.codex_home,
+        config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
+    )
+    .await;
 
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
     let mut opts = ServerOptions::new(
@@ -338,6 +365,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         client_id.unwrap_or(CLIENT_ID.to_string()),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
     );
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
@@ -386,6 +414,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
         Some(&config.chatgpt_base_url),
+        config.auth_keyring_backend_kind(),
     )
     .await
     {
@@ -431,7 +460,13 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
 pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
-    match logout_with_revoke(&config.codex_home, config.cli_auth_credentials_store_mode).await {
+    match logout_with_revoke(
+        &config.codex_home,
+        config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
+    )
+    .await
+    {
         Ok(true) => {
             eprintln!("Successfully logged out");
             std::process::exit(0);
@@ -477,6 +512,7 @@ fn safe_format_key(key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use codex_config::types::AuthCredentialsStoreMode;
+    use codex_login::AuthKeyringBackendKind;
     use codex_login::load_auth_dot_json;
     use codex_login::login_with_api_key;
     use pretty_assertions::assert_eq;
@@ -492,13 +528,23 @@ mod tests {
             codex_home.path(),
             "sk-existing",
             AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
         )
         .expect("save existing auth");
 
-        clear_existing_auth_before_login(codex_home.path(), AuthCredentialsStoreMode::File).await;
+        clear_existing_auth_before_login(
+            codex_home.path(),
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )
+        .await;
 
-        let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
-            .expect("load auth after cleanup");
+        let auth = load_auth_dot_json(
+            codex_home.path(),
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )
+        .expect("load auth after cleanup");
         assert_eq!(auth, None);
     }
 

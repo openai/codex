@@ -12,6 +12,8 @@ mod connection_handling_websocket;
 #[cfg(unix)]
 mod connection_handling_websocket_unix;
 mod dynamic_tools;
+#[cfg(not(target_os = "windows"))]
+mod executor_mcp;
 mod executor_skills;
 mod experimental_api;
 mod experimental_feature_list;

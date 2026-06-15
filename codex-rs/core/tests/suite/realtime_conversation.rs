@@ -13,6 +13,7 @@ use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
+use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
@@ -331,6 +332,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     test.codex
         .submit(Op::RealtimeConversationText(ConversationTextParams {
             text: "hello".to_string(),
+            role: ConversationTextRole::User,
         }))
         .await?;
 
@@ -546,6 +548,7 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
     test.codex
         .submit(Op::RealtimeConversationText(ConversationTextParams {
             text: "queued before sideband".to_string(),
+            role: ConversationTextRole::User,
         }))
         .await?;
 
@@ -1015,6 +1018,7 @@ async fn conversation_webrtc_sideband_connect_failure_closes_with_error() -> Res
     test.codex
         .submit(Op::RealtimeConversationText(ConversationTextParams {
             text: "after sideband failure".to_string(),
+            role: ConversationTextRole::User,
         }))
         .await?;
     let err = wait_for_event_match(&test.codex, |msg| match msg {
@@ -1311,6 +1315,7 @@ async fn conversation_text_before_start_emits_error() -> Result<()> {
     test.codex
         .submit(Op::RealtimeConversationText(ConversationTextParams {
             text: "hello".to_string(),
+            role: ConversationTextRole::User,
         }))
         .await?;
 
@@ -2345,6 +2350,7 @@ async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> 
     test.codex
         .submit(Op::RealtimeConversationText(ConversationTextParams {
             text: "hello".to_string(),
+            role: ConversationTextRole::User,
         }))
         .await?;
 

@@ -152,6 +152,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
             &name,
             &oauth_config.url,
             config.mcp_oauth_credentials_store_mode,
+            config.auth_keyring_backend_kind(),
             oauth_config.http_headers.clone(),
             oauth_config.env_http_headers.clone(),
             &resolved_scopes.scopes,
@@ -168,6 +169,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
                     &name,
                     &oauth_config.url,
                     config.mcp_oauth_credentials_store_mode,
+                    config.auth_keyring_backend_kind(),
                     oauth_config.http_headers,
                     oauth_config.env_http_headers,
                     &[],
@@ -202,6 +204,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         turn_context,
         refresh_servers,
         config.mcp_oauth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
         elicitation_reviewer,
     )
     .await;
