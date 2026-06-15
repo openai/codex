@@ -15,10 +15,6 @@ use crate::endpoint::realtime_websocket::protocol::SessionType;
 use crate::endpoint::realtime_websocket::protocol::SessionUpdateSession;
 use codex_protocol::protocol::ConversationTextRole;
 
-pub(super) fn conversation_context_item_create_message(text: String) -> RealtimeOutboundMessage {
-    conversation_item_create_message(text, ConversationTextRole::Developer)
-}
-
 pub(super) fn conversation_item_create_message(
     text: String,
     role: ConversationTextRole,
