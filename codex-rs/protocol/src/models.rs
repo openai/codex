@@ -1878,7 +1878,7 @@ mod tests {
         empty_turn_id.stamp_turn_id_if_missing("turn-1");
         assert_eq!(empty_turn_id.turn_id(), Some("turn-1"));
 
-        let mut missing_turn_id = response_item_with_metadata(None);
+        let mut missing_turn_id = response_item_with_metadata(/*metadata*/ None);
         missing_turn_id.stamp_turn_id_if_missing("");
         missing_turn_id.stamp_turn_id_if_missing("turn-1");
         assert_eq!(missing_turn_id.turn_id(), Some("turn-1"));

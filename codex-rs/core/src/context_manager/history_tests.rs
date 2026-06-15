@@ -1237,6 +1237,7 @@ fn normalize_adds_missing_output_for_function_call() {
         namespace: None,
         arguments: "{}".to_string(),
         call_id: "call-x".to_string(),
+        metadata: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1251,10 +1252,12 @@ fn normalize_adds_missing_output_for_function_call() {
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-x".to_string(),
+                metadata: None,
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "call-x".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                metadata: None,
             },
         ]
     );
@@ -1269,6 +1272,7 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
         call_id: "tool-x".to_string(),
         name: "custom".to_string(),
         input: "{}".to_string(),
+        metadata: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1283,11 +1287,13 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
                 call_id: "tool-x".to_string(),
                 name: "custom".to_string(),
                 input: "{}".to_string(),
+                metadata: None,
             },
             ResponseItem::CustomToolCallOutput {
                 call_id: "tool-x".to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                metadata: None,
             },
         ]
     );
@@ -1307,6 +1313,7 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id() {
             env: None,
             user: None,
         }),
+        metadata: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1326,10 +1333,12 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id() {
                     env: None,
                     user: None,
                 }),
+                metadata: None,
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "shell-1".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                metadata: None,
             },
         ]
     );
@@ -1341,6 +1350,7 @@ fn normalize_removes_orphan_function_call_output() {
     let items = vec![ResponseItem::FunctionCallOutput {
         call_id: "orphan-1".to_string(),
         output: FunctionCallOutputPayload::from_text("ok".to_string()),
+        metadata: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1356,6 +1366,7 @@ fn normalize_removes_orphan_custom_tool_call_output() {
         call_id: "orphan-2".to_string(),
         name: None,
         output: FunctionCallOutputPayload::from_text("ok".to_string()),
+        metadata: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1375,11 +1386,13 @@ fn normalize_mixed_inserts_and_removals() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "c1".to_string(),
+            metadata: None,
         },
         // Orphan output that should be removed
         ResponseItem::FunctionCallOutput {
             call_id: "c2".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
+            metadata: None,
         },
         // Will get an inserted custom tool output
         ResponseItem::CustomToolCall {
@@ -1388,6 +1401,7 @@ fn normalize_mixed_inserts_and_removals() {
             call_id: "t1".to_string(),
             name: "tool".to_string(),
             input: "{}".to_string(),
+            metadata: None,
         },
         // Local shell call also gets an inserted function call output
         ResponseItem::LocalShellCall {
@@ -1401,6 +1415,7 @@ fn normalize_mixed_inserts_and_removals() {
                 env: None,
                 user: None,
             }),
+            metadata: None,
         },
     ];
     let mut h = create_history_with_items(items);
@@ -1416,10 +1431,12 @@ fn normalize_mixed_inserts_and_removals() {
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "c1".to_string(),
+                metadata: None,
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "c1".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                metadata: None,
             },
             ResponseItem::CustomToolCall {
                 id: None,
@@ -1427,11 +1444,13 @@ fn normalize_mixed_inserts_and_removals() {
                 call_id: "t1".to_string(),
                 name: "tool".to_string(),
                 input: "{}".to_string(),
+                metadata: None,
             },
             ResponseItem::CustomToolCallOutput {
                 call_id: "t1".to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                metadata: None,
             },
             ResponseItem::LocalShellCall {
                 id: None,
@@ -1444,10 +1463,12 @@ fn normalize_mixed_inserts_and_removals() {
                     env: None,
                     user: None,
                 }),
+                metadata: None,
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "s1".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                metadata: None,
             },
         ]
     );
@@ -1593,6 +1614,7 @@ fn normalize_removes_orphan_client_tool_search_output() {
         status: "completed".to_string(),
         execution: "client".to_string(),
         tools: Vec::new(),
+        metadata: None,
     }];
     let mut h = create_history_with_items(items);
 
