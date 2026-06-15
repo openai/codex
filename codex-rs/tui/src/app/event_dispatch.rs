@@ -140,6 +140,7 @@ impl App {
                 match crate::lookup_session_target_with_app_server(
                     app_server,
                     &id_or_name,
+                    self.config.codex_home.as_path(),
                     self.state_db.as_deref(),
                 )
                 .await?

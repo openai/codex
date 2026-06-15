@@ -916,11 +916,7 @@ impl App {
             }
             SessionSelection::Resume(target_session) => {
                 let resumed = app_server
-                    .resume_thread_with_path(
-                        config.clone(),
-                        target_session.thread_id,
-                        target_session.path.clone(),
-                    )
+                    .resume_thread(config.clone(), target_session.thread_id)
                     .await
                     .map_err(|err| session_start_error("resume", &target_session, err))?;
                 let init = crate::chatwidget::ChatWidgetInit {
@@ -959,11 +955,7 @@ impl App {
                     &[("source", "cli_subcommand")],
                 );
                 let forked = app_server
-                    .fork_thread_with_path(
-                        config.clone(),
-                        target_session.thread_id,
-                        target_session.path.clone(),
-                    )
+                    .fork_thread(config.clone(), target_session.thread_id)
                     .await
                     .map_err(|err| session_start_error("fork", &target_session, err))?;
                 let init = crate::chatwidget::ChatWidgetInit {

@@ -600,6 +600,7 @@ fn session_target_from_app_server_thread(
 
 async fn lookup_local_session_target_by_id(
     thread_id: ThreadId,
+    codex_home: &Path,
     state_db_ctx: Option<&codex_state::StateRuntime>,
 ) -> Option<resume_picker::SessionTarget> {
     let state_db_ctx = state_db_ctx?;
@@ -616,14 +617,11 @@ async fn lookup_local_session_target_by_id(
             cwd: Some(metadata.cwd.clone()),
         });
     }
-    let path = codex_rollout::find_any_thread_path_by_id_str(
-        state_db_ctx.codex_home(),
-        id.as_str(),
-        Some(state_db_ctx),
-    )
-    .await
-    .ok()
-    .flatten()?;
+    let path =
+        codex_rollout::find_any_thread_path_by_id_str(codex_home, id.as_str(), Some(state_db_ctx))
+            .await
+            .ok()
+            .flatten()?;
     let existing_path = codex_rollout::existing_rollout_path(path.as_path()).await?;
     if !rollout_file_name_matches_thread_id(existing_path.as_path(), thread_id) {
         return None;
@@ -695,6 +693,7 @@ async fn lookup_session_target_by_name_with_app_server(
 async fn lookup_session_target_with_app_server(
     app_server: &mut AppServerSession,
     id_or_name: &str,
+    codex_home: &Path,
     state_db_ctx: Option<&codex_state::StateRuntime>,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
     if Uuid::parse_str(id_or_name).is_ok() {
@@ -710,7 +709,8 @@ async fn lookup_session_target_with_app_server(
             }
         };
         if !app_server.uses_remote_workspace()
-            && let Some(target) = lookup_local_session_target_by_id(thread_id, state_db_ctx).await
+            && let Some(target) =
+                lookup_local_session_target_by_id(thread_id, codex_home, state_db_ctx).await
         {
             return Ok(Some(target));
         }
@@ -1532,6 +1532,7 @@ async fn run_ratatui_app(
             match lookup_session_target_with_app_server(
                 startup_app_server,
                 id_str,
+                config.codex_home.as_path(),
                 state_db.as_deref(),
             )
             .await?
@@ -1592,8 +1593,13 @@ async fn run_ratatui_app(
         let Some(startup_app_server) = app_server.as_mut() else {
             unreachable!("app server should be initialized for --resume <id>");
         };
-        match lookup_session_target_with_app_server(startup_app_server, id_str, state_db.as_deref())
-            .await?
+        match lookup_session_target_with_app_server(
+            startup_app_server,
+            id_str,
+            config.codex_home.as_path(),
+            state_db.as_deref(),
+        )
+        .await?
         {
             Some(target_session) => resume_picker::SessionSelection::Resume(target_session),
             None => {
@@ -2945,9 +2951,13 @@ mod tests {
             .await
             .map_err(std::io::Error::other)?;
 
-        let target = lookup_local_session_target_by_id(thread_id, Some(state_runtime.as_ref()))
-            .await
-            .expect("state db path should resolve");
+        let target = lookup_local_session_target_by_id(
+            thread_id,
+            config.codex_home.as_path(),
+            Some(state_runtime.as_ref()),
+        )
+        .await
+        .expect("state db path should resolve");
 
         assert_eq!(target.thread_id, thread_id);
         assert_eq!(target.path, Some(rollout_path));
