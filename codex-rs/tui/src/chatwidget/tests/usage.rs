@@ -435,10 +435,7 @@ async fn usage_limit_without_known_limit_type_does_not_check_reset_credits() {
 fn consume_response(
     outcome: ConsumeAccountRateLimitResetCreditOutcome,
 ) -> ConsumeAccountRateLimitResetCreditResponse {
-    ConsumeAccountRateLimitResetCreditResponse {
-        outcome,
-        windows_reset: 0,
-    }
+    ConsumeAccountRateLimitResetCreditResponse { outcome }
 }
 
 fn finish_reset_consume_outcome(
