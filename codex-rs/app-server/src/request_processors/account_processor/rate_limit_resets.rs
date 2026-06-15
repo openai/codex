@@ -3,27 +3,6 @@ use super::*;
 const RATE_LIMIT_RESET_REQUEST_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 10);
 
 impl AccountRequestProcessor {
-    pub(crate) async fn get_account_rate_limit_reset_credits(
-        &self,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        let client = self.rate_limit_reset_backend_client().await?;
-        let summary = tokio::time::timeout(
-            RATE_LIMIT_RESET_REQUEST_TIMEOUT,
-            client.get_rate_limit_reset_credits(),
-        )
-        .await
-        .map_err(|_| internal_error("rate limit reset credits fetch timed out"))?
-        .map_err(|err| {
-            internal_error(format!("failed to fetch rate limit reset credits: {err}"))
-        })?;
-        Ok(Some(
-            GetAccountRateLimitResetCreditsResponse {
-                available_count: summary.available_count,
-            }
-            .into(),
-        ))
-    }
-
     pub(crate) async fn consume_account_rate_limit_reset_credit(
         &self,
         params: ConsumeAccountRateLimitResetCreditParams,

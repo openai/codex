@@ -6126,29 +6126,6 @@
         },
         "method": {
           "enum": [
-            "account/rateLimitResetCredit/read"
-          ],
-          "title": "Account/rateLimitResetCredit/readRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "type": "null"
-        }
-      },
-      "required": [
-        "id",
-        "method"
-      ],
-      "title": "Account/rateLimitResetCredit/readRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
             "account/rateLimitResetCredit/consume"
           ],
           "title": "Account/rateLimitResetCredit/consumeRequestMethod",

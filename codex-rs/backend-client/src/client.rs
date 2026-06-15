@@ -296,8 +296,7 @@ impl Client {
     }
 
     pub async fn get_rate_limits_many(&self) -> Result<Vec<RateLimitSnapshot>> {
-        let payload = self.get_rate_limit_status().await?;
-        Ok(Self::rate_limit_snapshots_from_payload(payload.rate_limits))
+        Ok(self.get_rate_limits_with_reset_credits().await?.rate_limits)
     }
 
     pub async fn get_accounts_check(&self) -> Result<AccountsCheckResponse> {

@@ -145,7 +145,6 @@ export type { FsWatchResponse } from "./FsWatchResponse";
 export type { FsWriteFileParams } from "./FsWriteFileParams";
 export type { FsWriteFileResponse } from "./FsWriteFileResponse";
 export type { GetAccountParams } from "./GetAccountParams";
-export type { GetAccountRateLimitResetCreditsResponse } from "./GetAccountRateLimitResetCreditsResponse";
 export type { GetAccountRateLimitsResponse } from "./GetAccountRateLimitsResponse";
 export type { GetAccountResponse } from "./GetAccountResponse";
 export type { GetAccountTokenUsageResponse } from "./GetAccountTokenUsageResponse";
@@ -321,6 +320,7 @@ export type { ProcessOutputDeltaNotification } from "./ProcessOutputDeltaNotific
 export type { ProcessOutputStream } from "./ProcessOutputStream";
 export type { ProcessTerminalSize } from "./ProcessTerminalSize";
 export type { RateLimitReachedType } from "./RateLimitReachedType";
+export type { RateLimitResetCreditsSummary } from "./RateLimitResetCreditsSummary";
 export type { RateLimitSnapshot } from "./RateLimitSnapshot";
 export type { RateLimitWindow } from "./RateLimitWindow";
 export type { RawResponseItemCompletedNotification } from "./RawResponseItemCompletedNotification";

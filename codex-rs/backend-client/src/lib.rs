@@ -16,6 +16,7 @@ pub use types::DeliveredRequirementsToml;
 pub use types::DeliveredTomlFragment;
 pub use types::PaginatedListTaskListItem;
 pub use types::RateLimitResetCreditsSummary;
+pub use types::RateLimitsWithResetCredits;
 pub use types::TaskListItem;
 pub use types::TokenUsageProfile;
 pub use types::TokenUsageProfileDailyBucket;

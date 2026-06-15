@@ -2848,29 +2848,6 @@
             },
             "method": {
               "enum": [
-                "account/rateLimitResetCredit/read"
-              ],
-              "title": "Account/rateLimitResetCredit/readRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "type": "null"
-            }
-          },
-          "required": [
-            "id",
-            "method"
-          ],
-          "title": "Account/rateLimitResetCredit/readRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
                 "account/rateLimitResetCredit/consume"
               ],
               "title": "Account/rateLimitResetCredit/consumeRequestMethod",
@@ -6319,23 +6296,19 @@
       "title": "GetAccountParams",
       "type": "object"
     },
-    "GetAccountRateLimitResetCreditsResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "availableCount": {
-          "format": "int64",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "availableCount"
-      ],
-      "title": "GetAccountRateLimitResetCreditsResponse",
-      "type": "object"
-    },
     "GetAccountRateLimitsResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "rateLimitResetCredits": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RateLimitResetCreditsSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "rateLimits": {
           "allOf": [
             {
@@ -10287,6 +10260,18 @@
         "workspace_member_usage_limit_reached"
       ],
       "type": "string"
+    },
+    "RateLimitResetCreditsSummary": {
+      "properties": {
+        "availableCount": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "availableCount"
+      ],
+      "type": "object"
     },
     "RateLimitSnapshot": {
       "properties": {

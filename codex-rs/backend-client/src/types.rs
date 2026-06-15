@@ -12,6 +12,7 @@ pub use codex_backend_openapi_models::models::RateLimitWindowSnapshot;
 pub use codex_backend_openapi_models::models::SpendControlLimitDetails;
 pub use codex_backend_openapi_models::models::TaskListItem;
 
+use codex_protocol::protocol::RateLimitSnapshot;
 use serde::Deserialize;
 use serde::de::Deserializer;
 use serde_json::Value;
@@ -20,6 +21,12 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct RateLimitResetCreditsSummary {
     pub available_count: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RateLimitsWithResetCredits {
+    pub rate_limits: Vec<RateLimitSnapshot>,
+    pub rate_limit_reset_credits: Option<RateLimitResetCreditsSummary>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]

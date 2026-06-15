@@ -9,7 +9,6 @@ use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditCode;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditParams;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
 use codex_app_server_protocol::GetAccountParams;
-use codex_app_server_protocol::GetAccountRateLimitResetCreditsResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
@@ -35,21 +34,10 @@ const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 const INTERNAL_ERROR_CODE: i64 = -32603;
 
 #[tokio::test]
-async fn rate_limit_reset_credits_require_chatgpt_auth() -> Result<()> {
+async fn consume_rate_limit_reset_credit_requires_chatgpt_auth() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut mcp = initialized_app_server(codex_home.path()).await?;
 
-    let read_id = mcp
-        .send_get_account_rate_limit_reset_credits_request()
-        .await?;
-    let read_error = read_error_response(&mut mcp, read_id).await?;
-    assert_eq!(read_error.error.code, INVALID_REQUEST_ERROR_CODE);
-    assert_eq!(
-        read_error.error.message,
-        "codex account authentication required for rate limit reset credits"
-    );
-
-    login_with_api_key(&mut mcp, "sk-test-key").await?;
     let consume_id = mcp
         .send_consume_account_rate_limit_reset_credit_request(
             ConsumeAccountRateLimitResetCreditParams {
@@ -61,56 +49,16 @@ async fn rate_limit_reset_credits_require_chatgpt_auth() -> Result<()> {
     assert_eq!(consume_error.error.code, INVALID_REQUEST_ERROR_CODE);
     assert_eq!(
         consume_error.error.message,
+        "codex account authentication required for rate limit reset credits"
+    );
+
+    login_with_api_key(&mut mcp, "sk-test-key").await?;
+    let consume_id = send_consume_reset_credit(&mut mcp, "request-2").await?;
+    let consume_error = read_error_response(&mut mcp, consume_id).await?;
+    assert_eq!(consume_error.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert_eq!(
+        consume_error.error.message,
         "chatgpt authentication required for rate limit reset credits"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn get_account_rate_limit_reset_credits_returns_available_count() -> Result<()> {
-    let (codex_home, server) = chatgpt_test_context().await?;
-    Mock::given(method("GET"))
-        .and(path("/api/codex/usage"))
-        .and(header("authorization", "Bearer chatgpt-token"))
-        .and(header("chatgpt-account-id", "account-123"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "plan_type": "pro",
-            "rate_limit_reset_credits": { "available_count": 3 }
-        })))
-        .mount(&server)
-        .await;
-
-    let mut mcp = initialized_app_server(codex_home.path()).await?;
-
-    assert_eq!(
-        read_reset_credits(&mut mcp).await?,
-        GetAccountRateLimitResetCreditsResponse { available_count: 3 }
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn get_account_rate_limit_reset_credits_rejects_missing_balance() -> Result<()> {
-    let (codex_home, server) = chatgpt_test_context().await?;
-    Mock::given(method("GET"))
-        .and(path("/api/codex/usage"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "plan_type": "pro"
-        })))
-        .mount(&server)
-        .await;
-
-    let mut mcp = initialized_app_server(codex_home.path()).await?;
-    let request_id = mcp
-        .send_get_account_rate_limit_reset_credits_request()
-        .await?;
-    let error = read_error_response(&mut mcp, request_id).await?;
-
-    assert_eq!(error.error.code, INTERNAL_ERROR_CODE);
-    assert_eq!(
-        error.error.message,
-        "failed to fetch rate limit reset credits: usage response did not include rate_limit_reset_credits"
     );
     Ok(())
 }
@@ -274,15 +222,6 @@ async fn initialized_app_server(codex_home: &Path) -> Result<TestAppServer> {
     let mut mcp = TestAppServer::new_with_env(codex_home, &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     Ok(mcp)
-}
-
-async fn read_reset_credits(
-    mcp: &mut TestAppServer,
-) -> Result<GetAccountRateLimitResetCreditsResponse> {
-    let request_id = mcp
-        .send_get_account_rate_limit_reset_credits_request()
-        .await?;
-    read_response(mcp, request_id).await
 }
 
 async fn consume_reset_credit(

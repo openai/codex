@@ -256,12 +256,13 @@ pub struct GetAccountRateLimitsResponse {
     pub rate_limits: RateLimitSnapshot,
     /// Multi-bucket view keyed by metered `limit_id` (for example, `codex`).
     pub rate_limits_by_limit_id: Option<HashMap<String, RateLimitSnapshot>>,
+    pub rate_limit_reset_credits: Option<RateLimitResetCreditsSummary>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct GetAccountRateLimitResetCreditsResponse {
+pub struct RateLimitResetCreditsSummary {
     pub available_count: i64,
 }
 

@@ -1838,8 +1838,7 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 - `account/login/cancel` — cancel a pending managed ChatGPT login by `loginId`.
 - `account/logout` — sign out; triggers `account/updated`.
 - `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, `personalAccessToken`, or `null`) and includes the current ChatGPT `planType` when available.
-- `account/rateLimits/read` — fetch ChatGPT rate limits and an optional effective monthly credit limit; updates arrive via `account/rateLimits/updated` (notify).
-- `account/rateLimitResetCredit/read` — fetch the number of earned rate-limit resets currently available.
+- `account/rateLimits/read` — fetch ChatGPT rate limits, an optional effective monthly credit limit, and the number of earned rate-limit resets currently available. Rate-limit updates arrive via `account/rateLimits/updated` (notify); the reset count is snapshot-only.
 - `account/rateLimitResetCredit/consume` — consume one earned reset using a caller-provided idempotency key.
 - `account/usage/read` — fetch ChatGPT account token-activity summary and daily buckets.
 - `account/rateLimits/updated` (notify) — emitted whenever a user's ChatGPT rate limits change. This is a sparse rolling update; merge available values into the most recent `account/rateLimits/read` response or refetch that snapshot.
@@ -1936,7 +1935,7 @@ Field notes:
 
 ```json
 { "method": "account/rateLimits/read", "id": 7 }
-{ "id": 7, "result": { "rateLimits": { "primary": { "usedPercent": 25, "windowDurationMins": 15, "resetsAt": 1730947200 }, "secondary": null, "rateLimitReachedType": null } } }
+{ "id": 7, "result": { "rateLimits": { "primary": { "usedPercent": 25, "windowDurationMins": 15, "resetsAt": 1730947200 }, "secondary": null, "rateLimitReachedType": null }, "rateLimitResetCredits": { "availableCount": 2 } } }
 { "method": "account/rateLimits/updated", "params": { "rateLimits": { … } } }
 ```
 
@@ -1947,14 +1946,13 @@ Field notes:
 - `resetsAt` is a Unix timestamp (seconds) for the next reset.
 - `rateLimitReachedType` identifies the backend-classified limit state when one has been reached.
 - `individualLimit` describes the effective monthly credit limit when available. In an `account/rateLimits/read` response, `null` means no monthly limit is available. In a sparse `account/rateLimits/updated` notification, nullable account metadata may be unavailable and does not clear a previously observed value.
+- `rateLimitResetCredits` contains the available earned-reset count when the backend provides it; otherwise it is `null`. Refetch `account/rateLimits/read` after consuming a reset.
 
 ### 8) Earned rate-limit resets (ChatGPT)
 
 ```json
-{ "method": "account/rateLimitResetCredit/read", "id": 8 }
-{ "id": 8, "result": { "availableCount": 2 } }
-{ "method": "account/rateLimitResetCredit/consume", "id": 9, "params": { "redeemRequestId": "8ae96ff3-3425-4f4c-8772-b6fd61502868" } }
-{ "id": 9, "result": { "code": "reset", "windowsReset": 2 } }
+{ "method": "account/rateLimitResetCredit/consume", "id": 8, "params": { "redeemRequestId": "8ae96ff3-3425-4f4c-8772-b6fd61502868" } }
+{ "id": 8, "result": { "code": "reset", "windowsReset": 2 } }
 ```
 
 Field notes:
@@ -1968,8 +1966,8 @@ Field notes:
 ### 9) Notify a workspace owner about a limit
 
 ```json
-{ "method": "account/sendAddCreditsNudgeEmail", "id": 10, "params": { "creditType": "credits" } }
-{ "id": 10, "result": { "status": "sent" } }
+{ "method": "account/sendAddCreditsNudgeEmail", "id": 9, "params": { "creditType": "credits" } }
+{ "id": 9, "result": { "status": "sent" } }
 ```
 
 Use `creditType: "credits"` when workspace credits are depleted, or `creditType: "usage_limit"` when the workspace usage limit has been reached. If the owner was already notified recently, the response status is `cooldown_active`.

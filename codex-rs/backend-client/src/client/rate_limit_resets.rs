@@ -1,9 +1,8 @@
 use super::Client;
 use super::PathStyle;
 use crate::types::ConsumeRateLimitResetCreditResponse;
-use crate::types::RateLimitResetCreditsSummary;
 use crate::types::RateLimitStatusWithResetCredits;
-use anyhow::Context;
+use crate::types::RateLimitsWithResetCredits;
 use anyhow::Result;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderValue;
@@ -15,11 +14,12 @@ struct ConsumeRateLimitResetCreditRequest<'a> {
 }
 
 impl Client {
-    pub async fn get_rate_limit_reset_credits(&self) -> Result<RateLimitResetCreditsSummary> {
-        self.get_rate_limit_status()
-            .await?
-            .rate_limit_reset_credits
-            .context("usage response did not include rate_limit_reset_credits")
+    pub async fn get_rate_limits_with_reset_credits(&self) -> Result<RateLimitsWithResetCredits> {
+        let payload = self.get_rate_limit_status().await?;
+        Ok(RateLimitsWithResetCredits {
+            rate_limits: Self::rate_limit_snapshots_from_payload(payload.rate_limits),
+            rate_limit_reset_credits: payload.rate_limit_reset_credits,
+        })
     }
 
     pub(super) async fn get_rate_limit_status(&self) -> Result<RateLimitStatusWithResetCredits> {

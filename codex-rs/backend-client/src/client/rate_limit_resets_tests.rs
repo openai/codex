@@ -1,5 +1,6 @@
 use super::*;
 use crate::types::ConsumeRateLimitResetCreditCode;
+use crate::types::RateLimitResetCreditsSummary;
 use pretty_assertions::assert_eq;
 
 #[test]
