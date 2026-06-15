@@ -1,5 +1,6 @@
 use crate::desktop::LaunchDesktop;
 use crate::logging;
+use crate::program_resolution::resolve_bare_program_on_path;
 use crate::proc_thread_attr::ProcThreadAttributeList;
 use crate::winutil::argv_to_command_line;
 use crate::winutil::format_last_error;
@@ -84,7 +85,8 @@ pub unsafe fn create_process_as_user(
     stdio: Option<(HANDLE, HANDLE, HANDLE)>,
     use_private_desktop: bool,
 ) -> Result<CreatedProcess> {
-    let cmdline_str = argv_to_command_line(argv);
+    let resolved_argv = resolve_bare_program_on_path(argv, cwd, env_map);
+    let cmdline_str = argv_to_command_line(&resolved_argv);
     let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
     let env_block = make_env_block(env_map);
     let desktop = LaunchDesktop::prepare(use_private_desktop, logs_base_dir)?;
