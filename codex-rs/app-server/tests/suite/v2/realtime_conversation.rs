@@ -318,6 +318,7 @@ impl RealtimeE2eHarness {
                 thread_id: self.thread_id.clone(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
+                include_startup_context: None,
                 prompt: Some(Some("backend prompt".to_string())),
                 realtime_session_id: None,
                 transport: Some(ThreadRealtimeStartTransport::Webrtc {
@@ -567,6 +568,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             thread_id: thread_start.thread.id.clone(),
             model: Some("realtime-treatment-model".to_string()),
             output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: None,
             prompt: None,
             realtime_session_id: None,
             transport: None,
@@ -781,6 +783,78 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
 }
 
 #[tokio::test]
+async fn realtime_start_can_skip_startup_context() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let responses_server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let realtime_server = start_websocket_server(vec![vec![vec![json!({
+        "type": "session.updated",
+        "session": { "id": "sess_backend", "instructions": "backend prompt" }
+    })]]])
+    .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &responses_server.uri(),
+        realtime_server.uri(),
+        /*realtime_enabled*/ true,
+        StartupContextConfig::Generated,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    login_with_api_key(&mut mcp, "sk-test-key").await?;
+
+    let thread_start_request_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_start_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
+    )
+    .await??;
+    let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
+
+    let start_request_id = mcp
+        .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
+            thread_id: thread_start.thread.id.clone(),
+            model: None,
+            output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: Some(false),
+            prompt: None,
+            realtime_session_id: None,
+            transport: None,
+            version: None,
+            voice: None,
+        })
+        .await?;
+    let start_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_request_id)),
+    )
+    .await??;
+    let _: ThreadRealtimeStartResponse = to_response(start_response)?;
+
+    read_notification::<ThreadRealtimeStartedNotification>(&mut mcp, "thread/realtime/started")
+        .await?;
+
+    let startup_context_request = realtime_server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await;
+    let startup_context_body = startup_context_request.body_json();
+    let instructions = startup_context_body["session"]["instructions"]
+        .as_str()
+        .context("expected realtime instructions")?;
+    assert_eq!(instructions, "backend prompt");
+    assert!(!instructions.contains(STARTUP_CONTEXT_HEADER));
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn realtime_text_output_modality_requests_text_output_and_final_transcript() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -843,6 +917,7 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Text,
+            include_startup_context: None,
             prompt: None,
             realtime_session_id: None,
             transport: None,
@@ -1020,6 +1095,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: None,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: None,
@@ -1120,6 +1196,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
             thread_id: thread_id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: None,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
@@ -2168,6 +2245,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
             thread_id: thread_start.thread.id,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: None,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
@@ -2230,6 +2308,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: None,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: None,

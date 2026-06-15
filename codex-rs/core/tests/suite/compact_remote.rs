@@ -204,6 +204,7 @@ async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
             architecture: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: true,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: None,

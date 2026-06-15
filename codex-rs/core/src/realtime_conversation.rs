@@ -675,6 +675,7 @@ async fn prepare_realtime_start(
         params.prompt,
         params.realtime_session_id,
         params.output_modality,
+        params.include_startup_context,
         version,
         params.voice,
     )
@@ -742,6 +743,7 @@ pub(crate) async fn build_realtime_session_config(
     prompt: Option<Option<String>>,
     realtime_session_id: Option<String>,
     output_modality: RealtimeOutputModality,
+    include_startup_context: bool,
     version: RealtimeWsVersion,
     voice: Option<RealtimeVoice>,
 ) -> CodexResult<RealtimeSessionConfig> {
@@ -750,13 +752,17 @@ pub(crate) async fn build_realtime_session_config(
         prompt,
         config.experimental_realtime_ws_backend_prompt.clone(),
     );
-    let startup_context = match config.experimental_realtime_ws_startup_context.clone() {
-        Some(startup_context) => startup_context,
-        None => {
-            build_realtime_startup_context(sess.as_ref(), REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET)
-                .await
-                .unwrap_or_default()
+    let startup_context = if include_startup_context {
+        match config.experimental_realtime_ws_startup_context.clone() {
+            Some(startup_context) => startup_context,
+            None => {
+                build_realtime_startup_context(sess.as_ref(), REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET)
+                    .await
+                    .unwrap_or_default()
+            }
         }
+    } else {
+        String::new()
     };
     let prompt = match (prompt.is_empty(), startup_context.is_empty()) {
         (true, true) => String::new(),

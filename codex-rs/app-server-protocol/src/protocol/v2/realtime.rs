@@ -76,6 +76,9 @@ pub struct ThreadRealtimeStartParams {
     /// Selects text or audio output for the realtime session. Transport and voice stay
     /// independent so clients can choose how they connect separately from what the model emits.
     pub output_modality: RealtimeOutputModality,
+    /// Set to false to start without Codex's startup context. Omitted or null includes it.
+    #[ts(optional = nullable)]
+    pub include_startup_context: Option<bool>,
     #[serde(
         default,
         deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",

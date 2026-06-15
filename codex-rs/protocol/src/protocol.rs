@@ -199,6 +199,8 @@ pub struct ConversationStartParams {
     pub model: Option<String>,
     /// Selects whether the realtime session should produce text or audio output.
     pub output_modality: RealtimeOutputModality,
+    /// Whether to append Codex's startup context to the realtime backend prompt.
+    pub include_startup_context: bool,
     pub prompt: Option<Option<String>>,
     pub realtime_session_id: Option<String>,
     pub transport: Option<ConversationStartTransport>,
