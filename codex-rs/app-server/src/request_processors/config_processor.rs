@@ -52,6 +52,7 @@ const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "remote_control",
     "remote_plugin",
     "tool_suggest",
+    "user_message_queue",
 ];
 
 #[derive(Clone)]

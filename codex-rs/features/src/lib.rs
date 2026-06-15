@@ -199,6 +199,8 @@ pub enum Feature {
     GuardianApproval,
     /// Enable persisted thread goals and automatic goal continuation.
     Goals,
+    /// Enable durable queued user messages.
+    UserMessageQueue,
     /// Add current context-window metadata to model-visible context.
     TokenBudget,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
@@ -1150,6 +1152,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "goals",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::UserMessageQueue,
+        key: "user_message_queue",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::TokenBudget,

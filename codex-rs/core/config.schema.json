@@ -671,6 +671,9 @@
             "use_linux_sandbox_bwrap": {
               "type": "boolean"
             },
+            "user_message_queue": {
+              "type": "boolean"
+            },
             "web_search": {
               "type": "boolean"
             },
@@ -4824,6 +4827,9 @@
           "type": "boolean"
         },
         "use_linux_sandbox_bwrap": {
+          "type": "boolean"
+        },
+        "user_message_queue": {
           "type": "boolean"
         },
         "web_search": {

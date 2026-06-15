@@ -40,9 +40,14 @@ pub(crate) const GENERATED_TS_HEADER: &str = "// GENERATED CODE! DO NOT MODIFY B
 const IGNORED_DEFINITIONS: &[&str] = &["Option<()>"];
 const JSON_V1_ALLOWLIST: &[&str] = &["InitializeParams", "InitializeResponse"];
 const EXPERIMENTAL_CLIENT_METHOD_DEPENDENCY_TYPES: &[&str] = &[
+    "QueuedItem",
+    "QueuedItemProvenance",
+    "QueuedItemStatus",
     "RemoteControlClient",
     "RemoteControlClientsListOrder",
     "ThreadBackgroundTerminal",
+    "TurnSubmission",
+    "TurnSubmissionParams",
 ];
 const SPECIAL_DEFINITIONS: &[&str] = &[
     "ClientNotification",

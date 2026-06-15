@@ -5,6 +5,7 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
+use codex_app_server_protocol::ThreadQueueChangedNotification;
 use codex_core::NewThread;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
@@ -150,6 +151,28 @@ impl ExtensionEventSink for AppServerExtensionEventSink {
                         .await;
                 });
             }
+            EventMsg::ThreadQueueChanged(queue_event) => {
+                let outgoing = Arc::clone(&self.outgoing);
+                let thread_state_manager = self.thread_state_manager.clone();
+                tokio::spawn(async move {
+                    let connection_ids = thread_state_manager
+                        .subscribed_connection_ids(queue_event.thread_id)
+                        .await;
+                    if connection_ids.is_empty() {
+                        return;
+                    }
+                    outgoing
+                        .send_server_notification_to_connections(
+                            &connection_ids,
+                            ServerNotification::ThreadQueueChanged(
+                                ThreadQueueChangedNotification {
+                                    thread_id: queue_event.thread_id.to_string(),
+                                },
+                            ),
+                        )
+                        .await;
+                });
+            }
             msg => {
                 tracing::debug!(event_id = %event.id, ?msg, "dropping unsupported extension event");
             }
@@ -179,9 +202,14 @@ pub(crate) fn guardian_agent_spawner(
 mod tests {
     use std::time::Duration;
 
+    use crate::outgoing_message::ConnectionId;
+    use crate::outgoing_message::OutgoingEnvelope;
+    use crate::outgoing_message::OutgoingMessage;
+    use crate::thread_state::ConnectionCapabilities;
     use codex_protocol::protocol::ThreadGoal as CoreThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
     use codex_protocol::protocol::ThreadGoalUpdatedEvent;
+    use codex_protocol::protocol::ThreadQueueChangedEvent;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc;
     use tokio::time::timeout;
@@ -232,6 +260,82 @@ mod tests {
                 "cleared".to_string()
             ],
             observed
+        );
+    }
+
+    #[tokio::test]
+    async fn app_server_event_sink_sends_queue_invalidation_to_all_subscribers() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(4);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            outgoing_tx,
+            AnalyticsEventsClient::disabled(),
+        ));
+        let thread_state_manager = ThreadStateManager::new();
+        let thread_id = ThreadId::default();
+        for connection_id in [ConnectionId(1), ConnectionId(2)] {
+            thread_state_manager
+                .connection_initialized(connection_id, ConnectionCapabilities::default())
+                .await;
+            thread_state_manager
+                .try_ensure_connection_subscribed(
+                    thread_id,
+                    connection_id,
+                    /*experimental_raw_events*/ false,
+                )
+                .await
+                .expect("initialized connection should subscribe");
+        }
+        let sink = app_server_extension_event_sink(outgoing, thread_state_manager);
+
+        sink.emit(Event {
+            id: thread_id.to_string(),
+            msg: EventMsg::ThreadQueueChanged(ThreadQueueChangedEvent { thread_id }),
+        });
+
+        let mut connection_ids = Vec::new();
+        for _ in 0..2 {
+            let envelope = timeout(Duration::from_secs(1), outgoing_rx.recv())
+                .await
+                .expect("timed out waiting for queue notification")
+                .expect("outgoing channel closed unexpectedly");
+            let OutgoingEnvelope::ToConnection {
+                connection_id,
+                message:
+                    OutgoingMessage::AppServerNotification(ServerNotification::ThreadQueueChanged(
+                        notification,
+                    )),
+                ..
+            } = envelope
+            else {
+                panic!("unexpected outgoing envelope: {envelope:?}");
+            };
+            assert_eq!(notification.thread_id, thread_id.to_string());
+            connection_ids.push(connection_id.0);
+        }
+        connection_ids.sort_unstable();
+        assert_eq!(connection_ids, vec![1, 2]);
+    }
+
+    #[tokio::test]
+    async fn app_server_event_sink_drops_queue_invalidation_without_subscribers() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(1);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            outgoing_tx,
+            AnalyticsEventsClient::disabled(),
+        ));
+        let thread_state_manager = ThreadStateManager::new();
+        let thread_id = ThreadId::default();
+        let sink = app_server_extension_event_sink(outgoing, thread_state_manager);
+
+        sink.emit(Event {
+            id: thread_id.to_string(),
+            msg: EventMsg::ThreadQueueChanged(ThreadQueueChangedEvent { thread_id }),
+        });
+
+        assert!(
+            timeout(Duration::from_millis(50), outgoing_rx.recv())
+                .await
+                .is_err()
         );
     }
 
