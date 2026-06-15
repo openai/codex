@@ -54,3 +54,5 @@ pub use marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome as PluginMarket
 pub use provider::ExecutorPluginProvider;
 pub use provider::ExecutorPluginProviderError;
 pub use provider::ResolvedExecutorPlugin;
+pub use remote::RecommendedPlugin;
+pub use remote::RecommendedPluginsMode;
