@@ -45,6 +45,7 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -853,13 +854,15 @@ impl TestCodex {
         });
         self.codex
             .submit(Op::UserInput {
-                items: vec![UserInput::Text {
-                    text: prompt.into(),
-                    text_elements: Vec::new(),
-                }],
-                final_output_json_schema: None,
-                responsesapi_client_metadata: None,
-                additional_context: Default::default(),
+                submission: UserSubmission {
+                    items: vec![UserInput::Text {
+                        text: prompt.into(),
+                        text_elements: Vec::new(),
+                    }],
+                    final_output_json_schema: None,
+                    responsesapi_client_metadata: None,
+                    additional_context: Default::default(),
+                },
                 thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                     environments: turn_environment_selections,
                     approval_policy: Some(approval_policy),

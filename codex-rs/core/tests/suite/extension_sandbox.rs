@@ -22,6 +22,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -242,13 +243,15 @@ async fn extension_tool_uses_granted_turn_permissions() -> Result<()> {
         turn_permission_fields(base_permission_profile, test.config.cwd.as_path());
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "request access and edit the image".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "request access and edit the image".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(AskForApproval::OnRequest),

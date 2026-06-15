@@ -30,6 +30,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use codex_rollout_trace::InferenceTraceContext;
 use codex_state::StateRuntime;
@@ -320,10 +321,12 @@ impl MemoryStartupContext {
         if let Err(err) = agent
             .thread
             .submit(Op::UserInput {
-                items: prompt,
-                final_output_json_schema: None,
-                responsesapi_client_metadata: None,
-                additional_context: Default::default(),
+                submission: UserSubmission {
+                    items: prompt,
+                    final_output_json_schema: None,
+                    responsesapi_client_metadata: None,
+                    additional_context: Default::default(),
+                },
                 thread_settings: Default::default(),
             })
             .await

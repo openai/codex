@@ -9,6 +9,7 @@ use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExecOutputStream;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::assert_regex_match;
@@ -176,13 +177,15 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
     fixture
         .codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "run model shell command".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "run model shell command".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(cwd)),
                 approval_policy: Some(AskForApproval::Never),

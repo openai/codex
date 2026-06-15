@@ -21,6 +21,7 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::UserMessageEvent;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use codex_web_search_extension::install as install_web_search_extension;
 use core_test_support::responses;
@@ -162,13 +163,15 @@ async fn resume_restores_dynamic_tools_from_rollout_with_sqlite_enabled() -> Res
     started
         .thread
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "persist this thread".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "persist this thread".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -259,13 +262,15 @@ async fn resume_restores_legacy_dynamic_tools_from_rollout_with_sqlite_enabled()
     started
         .thread
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "persist this thread".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "persist this thread".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -696,13 +701,15 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "call the rmcp echo tool".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "call the rmcp echo tool".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(cwd)),
                 approval_policy: Some(AskForApproval::Never),

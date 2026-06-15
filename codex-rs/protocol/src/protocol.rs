@@ -467,17 +467,30 @@ pub struct ThreadSettingsOverrides {
 }
 
 /// Source classification for client-supplied context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 pub enum AdditionalContextKind {
     Untrusted,
     Application,
 }
 
 /// Client-supplied context keyed by an opaque source identifier.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AdditionalContextEntry {
     pub value: String,
     pub kind: AdditionalContextKind,
+}
+
+/// User-authored content submitted to an active or future turn.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct UserSubmission {
+    /// User input items, see `InputItem`.
+    pub items: Vec<UserInput>,
+    /// Optional JSON Schema used to constrain the final assistant message.
+    pub final_output_json_schema: Option<Value>,
+    /// Optional turn-scoped Responses API `client_metadata`.
+    pub responsesapi_client_metadata: Option<HashMap<String, String>>,
+    /// Client-supplied context fragments keyed by an opaque source identifier.
+    pub additional_context: BTreeMap<String, AdditionalContextEntry>,
 }
 
 /// Submission operation
@@ -510,15 +523,8 @@ pub enum Op {
 
     /// User input, optionally with thread-settings overrides applied first.
     UserInput {
-        /// User input items, see `InputItem`
-        items: Vec<UserInput>,
-        /// Optional JSON Schema used to constrain the final assistant message for this turn.
-        final_output_json_schema: Option<Value>,
-        /// Optional turn-scoped Responses API `client_metadata`.
-        responsesapi_client_metadata: Option<HashMap<String, String>>,
-        /// Client-supplied context fragments keyed by an opaque source identifier.
-        additional_context: BTreeMap<String, AdditionalContextEntry>,
-
+        /// User-authored content for this submission.
+        submission: UserSubmission,
         /// Persistent thread-settings overrides to apply before the input.
         thread_settings: ThreadSettingsOverrides,
     },
@@ -650,10 +656,12 @@ pub enum ThreadMemoryMode {
 impl From<Vec<UserInput>> for Op {
     fn from(value: Vec<UserInput>) -> Self {
         Op::UserInput {
-            items: value,
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: value,
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: BTreeMap::new(),
+            },
             thread_settings: ThreadSettingsOverrides::default(),
         }
     }

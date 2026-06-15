@@ -15,6 +15,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -123,13 +124,15 @@ async fn response_body_for_remote_model(
     .await?;
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "list tools".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "list tools".into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -273,13 +276,15 @@ async fn remote_multi_agent_selector_uses_model_selected_before_first_turn() -> 
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: ROOT_PROMPT.into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: ROOT_PROMPT.into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;

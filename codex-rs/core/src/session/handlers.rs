@@ -44,6 +44,7 @@ use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
@@ -186,15 +187,18 @@ pub(super) async fn user_input_or_turn_inner(
     client_user_message_id: Option<String>,
 ) {
     let Op::UserInput {
-        items,
-        final_output_json_schema,
-        responsesapi_client_metadata,
-        additional_context,
+        submission,
         thread_settings,
     } = op
     else {
         unreachable!();
     };
+    let UserSubmission {
+        items,
+        final_output_json_schema,
+        responsesapi_client_metadata,
+        additional_context,
+    } = submission;
     let emit_thread_settings_applied = thread_settings != ThreadSettingsOverrides::default();
     let mut updates = if emit_thread_settings_applied {
         thread_settings_update(sess, thread_settings).await

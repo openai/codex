@@ -21,6 +21,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
@@ -775,13 +776,15 @@ async fn start_test_conversation(
 async fn user_turn(conversation: &Arc<CodexThread>, text: &str) {
     conversation
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: text.into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: text.into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await

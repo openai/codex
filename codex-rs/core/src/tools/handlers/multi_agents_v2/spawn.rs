@@ -108,8 +108,9 @@ async fn handle_spawn_agent(
         session.services.agent_control.spawn_agent_with_metadata(
             config,
             match initial_operation {
-                Op::UserInput { items, .. }
-                    if items
+                Op::UserInput { submission, .. }
+                    if submission
+                        .items
                         .iter()
                         .all(|item| matches!(item, UserInput::Text { .. })) =>
                 {

@@ -17,6 +17,7 @@ use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::mount_models_once;
@@ -62,13 +63,15 @@ fn read_only_text_turn_with_personality(
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::read_only(), test.cwd_path());
     Op::UserInput {
-        items: vec![UserInput::Text {
-            text: text.into(),
-            text_elements: Vec::new(),
-        }],
-        final_output_json_schema: None,
-        responsesapi_client_metadata: None,
-        additional_context: Default::default(),
+        submission: UserSubmission {
+            items: vec![UserInput::Text {
+                text: text.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+        },
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
             environments: Some(local_selections(test.config.cwd.clone())),
             approval_policy: Some(approval_policy),

@@ -20,6 +20,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::hooks::trust_discovered_hooks;
@@ -1835,13 +1836,15 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "initial prompt".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "initial prompt".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -1854,13 +1857,15 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
     for text in ["accepted queued prompt", "blocked queued prompt"] {
         test.codex
             .submit(Op::UserInput {
-                items: vec![UserInput::Text {
-                    text: text.to_string(),
-                    text_elements: Vec::new(),
-                }],
-                final_output_json_schema: None,
-                responsesapi_client_metadata: None,
-                additional_context: Default::default(),
+                submission: UserSubmission {
+                    items: vec![UserInput::Text {
+                        text: text.to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    final_output_json_schema: None,
+                    responsesapi_client_metadata: None,
+                    additional_context: Default::default(),
+                },
                 thread_settings: Default::default(),
             })
             .await?;

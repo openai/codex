@@ -18,6 +18,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionsArgs;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
@@ -203,10 +204,12 @@ pub(crate) async fn run_codex_thread_one_shot(
 
     // Send the initial input to kick off the one-shot turn.
     io.submit(Op::UserInput {
-        items: input,
-        final_output_json_schema,
-        responsesapi_client_metadata: None,
-        additional_context: Default::default(),
+        submission: UserSubmission {
+            items: input,
+            final_output_json_schema,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+        },
         thread_settings: Default::default(),
     })
     .await?;

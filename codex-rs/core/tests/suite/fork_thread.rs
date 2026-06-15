@@ -8,6 +8,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -50,13 +51,15 @@ async fn fork_thread_twice_drops_to_first_message() {
     for text in ["first", "second", "third"] {
         codex
             .submit(Op::UserInput {
-                items: vec![UserInput::Text {
-                    text: text.to_string(),
-                    text_elements: Vec::new(),
-                }],
-                final_output_json_schema: None,
-                responsesapi_client_metadata: None,
-                additional_context: Default::default(),
+                submission: UserSubmission {
+                    items: vec![UserInput::Text {
+                        text: text.to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    final_output_json_schema: None,
+                    responsesapi_client_metadata: None,
+                    additional_context: Default::default(),
+                },
                 thread_settings: Default::default(),
             })
             .await
@@ -172,13 +175,15 @@ async fn fork_thread_from_history_does_not_require_source_rollout_path() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "fork me from stored history".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "fork me from stored history".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await

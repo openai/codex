@@ -18,6 +18,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::AppsTestToolLoading;
@@ -527,13 +528,15 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     let test = builder.build(&server).await?;
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "Find the calendar create tool".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "Find the calendar create tool".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -944,13 +947,15 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "Use the automation tool".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "Use the automation tool".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -1254,13 +1259,15 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "Find the rmcp echo tool and call it.".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "Find the rmcp echo tool and call it.".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -1577,13 +1584,15 @@ async fn tool_search_matches_dynamic_tools_by_name_description_namespace_and_sch
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "Search for the dynamic tool".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "Search for the dynamic tool".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;

@@ -23,6 +23,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -79,13 +80,15 @@ async fn submit_turn_with_approval_and_environments(
     );
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: prompt.into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: prompt.into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(turn_environment_selections),
                 approval_policy: Some(AskForApproval::OnRequest),

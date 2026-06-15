@@ -4,6 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use core_test_support::fs_wait;
 use core_test_support::responses;
@@ -57,13 +58,15 @@ mv "${tmp_path}" "${payload_path}""#,
     // 1) Normal user input – should hit server once.
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello world".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello world".into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;

@@ -28,6 +28,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
@@ -76,10 +77,12 @@ fn disabled_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) ->
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
     Op::UserInput {
-        items,
-        final_output_json_schema: None,
-        responsesapi_client_metadata: None,
-        additional_context: Default::default(),
+        submission: UserSubmission {
+            items,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+        },
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),

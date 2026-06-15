@@ -22,6 +22,7 @@ use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use rmcp::model::CallToolResult;
 use rmcp::model::Content;
@@ -103,14 +104,16 @@ pub async fn run_codex_tool_session(
     let submission = Submission {
         id: sub_id.clone(),
         op: Op::UserInput {
-            items: vec![UserInput::Text {
-                text: initial_prompt.clone(),
-                // MCP tool prompts are plain text with no UI element ranges.
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: initial_prompt.clone(),
+                    // MCP tool prompts are plain text with no UI element ranges.
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         },
         client_user_message_id: None,
@@ -154,14 +157,16 @@ pub async fn run_codex_tool_session_reply(
         .insert(request_id.clone(), thread_id);
     if let Err(e) = thread
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: prompt,
-                // MCP tool prompts are plain text with no UI element ranges.
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: prompt,
+                    // MCP tool prompts are plain text with no UI element ranges.
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await

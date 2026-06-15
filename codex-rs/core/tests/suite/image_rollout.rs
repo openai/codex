@@ -8,6 +8,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use core_test_support::TempDirExt;
 use core_test_support::responses;
@@ -116,19 +117,21 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
 
     codex
         .submit(Op::UserInput {
-            items: vec![
-                UserInput::LocalImage {
-                    path: abs_path.clone(),
-                    detail: None,
-                },
-                UserInput::Text {
-                    text: "pasted image".to_string(),
-                    text_elements: Vec::new(),
-                },
-            ],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![
+                    UserInput::LocalImage {
+                        path: abs_path.clone(),
+                        detail: None,
+                    },
+                    UserInput::Text {
+                        text: "pasted image".to_string(),
+                        text_elements: Vec::new(),
+                    },
+                ],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(cwd.abs())),
                 approval_policy: Some(AskForApproval::Never),
@@ -214,19 +217,21 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
 
     codex
         .submit(Op::UserInput {
-            items: vec![
-                UserInput::Image {
-                    image_url: image_url.clone(),
-                    detail: None,
-                },
-                UserInput::Text {
-                    text: "dropped image".to_string(),
-                    text_elements: Vec::new(),
-                },
-            ],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![
+                    UserInput::Image {
+                        image_url: image_url.clone(),
+                        detail: None,
+                    },
+                    UserInput::Text {
+                        text: "dropped image".to_string(),
+                        text_elements: Vec::new(),
+                    },
+                ],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(cwd.abs())),
                 approval_policy: Some(AskForApproval::Never),

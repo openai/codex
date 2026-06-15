@@ -11,6 +11,7 @@ use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::UserSubmission;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -187,13 +188,15 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
 
     codex
         .submit(Op::UserInput {
-            items: vec![codex_protocol::user_input::UserInput::Text {
-                text: "hello".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![codex_protocol::user_input::UserInput::Text {
+                    text: "hello".into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -263,13 +266,15 @@ async fn explicit_plugin_mentions_use_apps_for_chatgpt_dual_surface_plugins() ->
 
     codex
         .submit(Op::UserInput {
-            items: vec![codex_protocol::user_input::UserInput::Mention {
-                name: "sample".into(),
-                path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![codex_protocol::user_input::UserInput::Mention {
+                    name: "sample".into(),
+                    path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -353,13 +358,15 @@ async fn explicit_plugin_mentions_keep_non_conflicting_mcp_for_chatgpt_auth() ->
 
     codex
         .submit(Op::UserInput {
-            items: vec![codex_protocol::user_input::UserInput::Mention {
-                name: "sample".into(),
-                path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![codex_protocol::user_input::UserInput::Mention {
+                    name: "sample".into(),
+                    path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -442,13 +449,15 @@ async fn explicit_plugin_mentions_use_mcp_for_api_key_dual_surface_plugins() -> 
 
     codex
         .submit(Op::UserInput {
-            items: vec![codex_protocol::user_input::UserInput::Mention {
-                name: "sample".into(),
-                path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![codex_protocol::user_input::UserInput::Mention {
+                    name: "sample".into(),
+                    path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -514,13 +523,15 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
 
     codex
         .submit(Op::UserInput {
-            items: vec![codex_protocol::user_input::UserInput::Mention {
-                name: "sample".into(),
-                path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![codex_protocol::user_input::UserInput::Mention {
+                    name: "sample".into(),
+                    path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;

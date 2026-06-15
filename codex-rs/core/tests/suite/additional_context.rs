@@ -5,6 +5,7 @@ use codex_protocol::protocol::AdditionalContextKind;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -37,28 +38,30 @@ async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Re
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "inspect the active tab".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: BTreeMap::from([
-                (
-                    "browser_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "tab one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
-                ),
-                (
-                    "automation_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "run one".to_string(),
-                        kind: AdditionalContextKind::Application,
-                    },
-                ),
-            ]),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "inspect the active tab".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: BTreeMap::from([
+                    (
+                        "browser_info".to_string(),
+                        AdditionalContextEntry {
+                            value: "tab one".to_string(),
+                            kind: AdditionalContextKind::Untrusted,
+                        },
+                    ),
+                    (
+                        "automation_info".to_string(),
+                        AdditionalContextEntry {
+                            value: "run one".to_string(),
+                            kind: AdditionalContextKind::Application,
+                        },
+                    ),
+                ]),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -135,10 +138,12 @@ async fn external_context_like_user_text_remains_a_user_message_item() -> Result
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![user_input.clone()],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: BTreeMap::new(),
+            submission: UserSubmission {
+                items: vec![user_input.clone()],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: BTreeMap::new(),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -180,28 +185,30 @@ async fn additional_context_trust_controls_message_role() -> Result<()> {
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "inspect context".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: BTreeMap::from([
-                (
-                    "browser_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "tab one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
-                ),
-                (
-                    "automation_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "run one".to_string(),
-                        kind: AdditionalContextKind::Application,
-                    },
-                ),
-            ]),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "inspect context".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: BTreeMap::from([
+                    (
+                        "browser_info".to_string(),
+                        AdditionalContextEntry {
+                            value: "tab one".to_string(),
+                            kind: AdditionalContextKind::Untrusted,
+                        },
+                    ),
+                    (
+                        "automation_info".to_string(),
+                        AdditionalContextEntry {
+                            value: "run one".to_string(),
+                            kind: AdditionalContextKind::Application,
+                        },
+                    ),
+                ]),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -260,13 +267,15 @@ async fn additional_context_is_deduplicated_between_turns_while_retained() -> Re
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "first turn".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: additional_context.clone(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "first turn".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: additional_context.clone(),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -277,13 +286,15 @@ async fn additional_context_is_deduplicated_between_turns_while_retained() -> Re
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "second turn".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context,
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "second turn".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context,
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -338,28 +349,30 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "first turn".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: BTreeMap::from([
-                (
-                    "automation_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "run one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
-                ),
-                (
-                    "browser_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "tab one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
-                ),
-            ]),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "first turn".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: BTreeMap::from([
+                    (
+                        "automation_info".to_string(),
+                        AdditionalContextEntry {
+                            value: "run one".to_string(),
+                            kind: AdditionalContextKind::Untrusted,
+                        },
+                    ),
+                    (
+                        "browser_info".to_string(),
+                        AdditionalContextEntry {
+                            value: "tab one".to_string(),
+                            kind: AdditionalContextKind::Untrusted,
+                        },
+                    ),
+                ]),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -370,28 +383,30 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "second turn".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: BTreeMap::from([
-                (
-                    "automation_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "run one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
-                ),
-                (
-                    "terminal_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "pty one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
-                ),
-            ]),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "second turn".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: BTreeMap::from([
+                    (
+                        "automation_info".to_string(),
+                        AdditionalContextEntry {
+                            value: "run one".to_string(),
+                            kind: AdditionalContextKind::Untrusted,
+                        },
+                    ),
+                    (
+                        "terminal_info".to_string(),
+                        AdditionalContextEntry {
+                            value: "pty one".to_string(),
+                            kind: AdditionalContextKind::Untrusted,
+                        },
+                    ),
+                ]),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -402,35 +417,37 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "third turn".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: BTreeMap::from([
-                (
-                    "automation_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "run one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
-                ),
-                (
-                    "browser_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "tab one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
-                ),
-                (
-                    "terminal_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "pty one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
-                ),
-            ]),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "third turn".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: BTreeMap::from([
+                    (
+                        "automation_info".to_string(),
+                        AdditionalContextEntry {
+                            value: "run one".to_string(),
+                            kind: AdditionalContextKind::Untrusted,
+                        },
+                    ),
+                    (
+                        "browser_info".to_string(),
+                        AdditionalContextEntry {
+                            value: "tab one".to_string(),
+                            kind: AdditionalContextKind::Untrusted,
+                        },
+                    ),
+                    (
+                        "terminal_info".to_string(),
+                        AdditionalContextEntry {
+                            value: "pty one".to_string(),
+                            kind: AdditionalContextKind::Untrusted,
+                        },
+                    ),
+                ]),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -498,28 +515,30 @@ async fn additional_context_values_are_truncated_before_model_input() -> Result<
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "summarize context".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: BTreeMap::from([
-                (
-                    "automation_info".to_string(),
-                    AdditionalContextEntry {
-                        value: long_automation_value.clone(),
-                        kind: AdditionalContextKind::Application,
-                    },
-                ),
-                (
-                    "browser_info".to_string(),
-                    AdditionalContextEntry {
-                        value: long_browser_value.clone(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
-                ),
-            ]),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "summarize context".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: BTreeMap::from([
+                    (
+                        "automation_info".to_string(),
+                        AdditionalContextEntry {
+                            value: long_automation_value.clone(),
+                            kind: AdditionalContextKind::Application,
+                        },
+                    ),
+                    (
+                        "browser_info".to_string(),
+                        AdditionalContextEntry {
+                            value: long_browser_value.clone(),
+                            kind: AdditionalContextKind::Untrusted,
+                        },
+                    ),
+                ]),
+            },
             thread_settings: Default::default(),
         })
         .await?;

@@ -52,6 +52,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
 use core_test_support::TempDirExt;
@@ -2675,19 +2676,21 @@ async fn send_input_accepts_structured_items() {
         .expect("send_input should succeed");
 
     let expected = Op::UserInput {
-        items: vec![
-            UserInput::Mention {
-                name: "drive".to_string(),
-                path: "app://google_drive".to_string(),
-            },
-            UserInput::Text {
-                text: "read the folder".to_string(),
-                text_elements: Vec::new(),
-            },
-        ],
-        final_output_json_schema: None,
-        responsesapi_client_metadata: None,
-        additional_context: Default::default(),
+        submission: UserSubmission {
+            items: vec![
+                UserInput::Mention {
+                    name: "drive".to_string(),
+                    path: "app://google_drive".to_string(),
+                },
+                UserInput::Text {
+                    text: "read the folder".to_string(),
+                    text_elements: Vec::new(),
+                },
+            ],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+        },
         thread_settings: Default::default(),
     };
     let captured = manager

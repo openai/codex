@@ -22,6 +22,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use core_test_support::TempDirExt;
 use core_test_support::load_default_config_for_test;
@@ -155,13 +156,15 @@ async fn remote_models_config_context_window_override_clamps_to_max_context_wind
 
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "check context window".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "check context window".into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -222,13 +225,15 @@ async fn remote_models_config_override_above_max_uses_max_context_window() -> Re
 
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "check context window".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "check context window".into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -288,13 +293,15 @@ async fn remote_models_use_context_window_when_config_override_is_absent() -> Re
 
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "check context window".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "check context window".into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -368,13 +375,15 @@ async fn remote_models_long_model_slug_is_sent_with_custom_reasoning() -> Result
 
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "check model slug".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "check model slug".into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -418,13 +427,15 @@ async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() 
 
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "check namespaced model metadata".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "check namespaced model metadata".into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -576,13 +587,15 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "run call".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "run call".into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(cwd_path)),
                 approval_policy: Some(AskForApproval::Never),
@@ -804,13 +817,15 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello remote".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello remote".into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(cwd_path)),
                 approval_policy: Some(AskForApproval::Never),
