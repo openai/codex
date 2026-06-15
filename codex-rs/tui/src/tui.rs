@@ -287,6 +287,7 @@ pub fn restore() -> Result<()> {
 /// races with [`set_modes`], crossterm still believes raw mode is enabled even though the terminal
 /// has returned to canonical, echoing mode. Clearing crossterm's saved state before enabling raw
 /// mode again makes the kernel state authoritative once the shell has completed its handoff.
+#[cfg(unix)]
 pub(super) fn reapply_raw_mode_after_resume() -> Result<()> {
     disable_raw_mode()?;
     enable_raw_mode()
