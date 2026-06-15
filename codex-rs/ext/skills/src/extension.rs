@@ -299,12 +299,14 @@ impl<C> SkillsExtension<C> {
     ) -> SkillCatalog {
         let include_orchestrator_skills = query.include_orchestrator_skills;
         let orchestrator_query = query.clone();
+        let mcp_resources = orchestrator_query.mcp_resources.clone();
         query.include_orchestrator_skills = false;
 
         let mut catalog = self.providers.list_for_turn(query).await;
         if include_orchestrator_skills {
             let orchestrator_catalog = thread_state
                 .orchestrator_catalog_snapshot(
+                    mcp_resources.as_deref(),
                     self.providers
                         .list_orchestrator_for_turn(orchestrator_query),
                 )
@@ -325,11 +327,11 @@ impl<C> SkillsExtension<C> {
             .read_skill(
                 &self.providers,
                 SkillReadRequest {
-                authority: entry.authority.clone(),
-                package: entry.id.clone(),
-                resource: entry.main_prompt.clone(),
-                host: host_loaded_skills,
-                mcp_resources: session_store.get::<McpResourceClient>(),
+                    authority: entry.authority.clone(),
+                    package: entry.id.clone(),
+                    resource: entry.main_prompt.clone(),
+                    host: host_loaded_skills,
+                    mcp_resources: session_store.get::<McpResourceClient>(),
                 },
             )
             .await

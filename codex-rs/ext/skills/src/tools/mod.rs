@@ -63,8 +63,9 @@ impl SkillToolContext {
         match authority {
             SkillToolAuthority::Orchestrator => {
                 self.thread_state
-                    .orchestrator_catalog_snapshot(self.providers.list_orchestrator_for_turn(
-                        SkillListQuery {
+                    .orchestrator_catalog_snapshot(
+                        self.mcp_resources.as_deref(),
+                        self.providers.list_orchestrator_for_turn(SkillListQuery {
                             turn_id: turn_id.to_string(),
                             executor_roots: Vec::new(),
                             host: None,
@@ -72,8 +73,8 @@ impl SkillToolContext {
                             include_bundled_skills: false,
                             include_orchestrator_skills: true,
                             mcp_resources: self.mcp_resources.clone(),
-                        },
-                    ))
+                        }),
+                    )
                     .await
             }
         }

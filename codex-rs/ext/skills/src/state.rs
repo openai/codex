@@ -1,19 +1,23 @@
-use codex_protocol::capabilities::SelectedCapabilityRoot;
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::Arc;
 use std::sync::Mutex;
+
+use codex_mcp::McpResourceClient;
+use codex_mcp::McpResourceClientCacheKey;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use tokio::sync::OnceCell;
 
 use crate::SkillsExtensionConfig;
+use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
+use crate::catalog::SkillPackageId;
+use crate::catalog::SkillProviderError;
 use crate::catalog::SkillProviderResult;
 use crate::catalog::SkillReadResult;
-use crate::catalog::SkillSourceKind;
-use crate::catalog::SkillProviderError;
-use crate::catalog::SkillAuthority;
-use crate::catalog::SkillPackageId;
 use crate::catalog::SkillResourceId;
+use crate::catalog::SkillSourceKind;
 use crate::provider::SkillReadRequest;
 use crate::sources::SkillProviders;
 
@@ -25,8 +29,7 @@ pub(crate) struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
     selected_roots: Vec<SelectedCapabilityRoot>,
     orchestrator_skills_enabled: bool,
-    orchestrator_catalog: OnceCell<SkillCatalog>,
-    orchestrator_resources: Mutex<OrchestratorResourceCache>,
+    orchestrator_cache: Mutex<Option<Arc<OrchestratorGenerationCache>>>,
 }
 
 impl SkillsThreadState {
@@ -39,8 +42,7 @@ impl SkillsThreadState {
             config: Mutex::new(config),
             selected_roots,
             orchestrator_skills_enabled,
-            orchestrator_catalog: OnceCell::new(),
-            orchestrator_resources: Mutex::new(OrchestratorResourceCache::default()),
+            orchestrator_cache: Mutex::new(None),
         }
     }
 
@@ -68,9 +70,11 @@ impl SkillsThreadState {
 
     pub(crate) async fn orchestrator_catalog_snapshot(
         &self,
+        mcp_resources: Option<&McpResourceClient>,
         initialize: impl Future<Output = Result<SkillCatalog, SkillProviderError>> + Send,
     ) -> SkillCatalog {
-        self.orchestrator_catalog
+        self.orchestrator_cache(mcp_resources)
+            .catalog
             .get_or_init(|| async {
                 initialize.await.unwrap_or_else(|err| SkillCatalog {
                     warnings: vec![err.message],
@@ -90,9 +94,10 @@ impl SkillsThreadState {
             return providers.read(request).await;
         }
 
+        let cache = self.orchestrator_cache(request.mcp_resources.as_deref());
         let cache_key = SkillReadCacheKey::from(&request);
-        if let Some(result) = self
-            .orchestrator_resources
+        if let Some(result) = cache
+            .resources
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&cache_key)
@@ -105,11 +110,49 @@ impl SkillsThreadState {
             return Ok(result);
         }
 
-        Ok(self
-            .orchestrator_resources
+        Ok(cache
+            .resources
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(cache_key, result))
+    }
+
+    fn orchestrator_cache(
+        &self,
+        mcp_resources: Option<&McpResourceClient>,
+    ) -> Arc<OrchestratorGenerationCache> {
+        let mut cache = self
+            .orchestrator_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cache_key = mcp_resources.map(McpResourceClient::cache_key);
+        if let Some(cache) = cache
+            .as_ref()
+            .filter(|cache| cache.mcp_cache_key == cache_key)
+        {
+            return Arc::clone(cache);
+        }
+
+        let next_cache = Arc::new(OrchestratorGenerationCache::new(cache_key));
+        *cache = Some(Arc::clone(&next_cache));
+        next_cache
+    }
+}
+
+#[derive(Debug)]
+struct OrchestratorGenerationCache {
+    mcp_cache_key: Option<McpResourceClientCacheKey>,
+    catalog: OnceCell<SkillCatalog>,
+    resources: Mutex<OrchestratorResourceCache>,
+}
+
+impl OrchestratorGenerationCache {
+    fn new(mcp_cache_key: Option<McpResourceClientCacheKey>) -> Self {
+        Self {
+            mcp_cache_key,
+            catalog: OnceCell::new(),
+            resources: Mutex::new(OrchestratorResourceCache::default()),
+        }
     }
 }
 

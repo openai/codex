@@ -82,6 +82,8 @@ const SKILL_REFERENCE_CONTENTS: &str =
 const SKILLS_LIST_CALL_ID: &str = "skills-list";
 const SKILLS_READ_CALL_ID: &str = "skills-read";
 const SKILLS_READ_AGAIN_CALL_ID: &str = "skills-read-again";
+const SKILLS_LIST_AFTER_REFRESH_CALL_ID: &str = "skills-list-after-refresh";
+const SKILLS_READ_AFTER_REFRESH_CALL_ID: &str = "skills-read-after-refresh";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
@@ -207,12 +209,49 @@ async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -
                 responses::ev_assistant_message("msg-orchestrator-skill", "Done"),
                 responses::ev_completed("resp-orchestrator-skill"),
             ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-skills-list-after-refresh"),
+                responses::ev_function_call_with_namespace(
+                    SKILLS_LIST_AFTER_REFRESH_CALL_ID,
+                    "skills",
+                    "list",
+                    &json!({
+                        "authority": {
+                            "kind": "orchestrator",
+                        },
+                    })
+                    .to_string(),
+                ),
+                responses::ev_completed("resp-skills-list-after-refresh"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-skills-read-after-refresh"),
+                responses::ev_function_call_with_namespace(
+                    SKILLS_READ_AFTER_REFRESH_CALL_ID,
+                    "skills",
+                    "read",
+                    &json!({
+                        "authority": {
+                            "kind": "orchestrator",
+                        },
+                        "package": SKILL_RESOURCE_URI,
+                        "resource": SKILL_REFERENCE_URI,
+                    })
+                    .to_string(),
+                ),
+                responses::ev_completed("resp-skills-read-after-refresh"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-orchestrator-skill-after-refresh"),
+                responses::ev_assistant_message("msg-orchestrator-skill-after-refresh", "Done"),
+                responses::ev_completed("resp-orchestrator-skill-after-refresh"),
+            ]),
         ],
     )
     .await;
     let turn_start_id = mcp
         .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id,
+            thread_id: thread.id.clone(),
             input: vec![UserInput::Text {
                 text: format!("Use ${SKILL_NAME}"),
                 text_elements: Vec::new(),
@@ -300,13 +339,68 @@ async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -
     );
     let repeated_read_output = requests[3]
         .function_call_output_text(SKILLS_READ_AGAIN_CALL_ID)
-        .ok_or_else(|| anyhow::anyhow!("repeated skills.read output should be sent to the model"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("repeated skills.read output should be sent to the model")
+        })?;
     assert_eq!(read_output, repeated_read_output);
     assert_eq!(
         ResourceAppsMcpCallCounts {
             list_resources: 3,
             main_prompt_reads: 1,
             reference_reads: 1,
+        },
+        apps_server_calls.snapshot()
+    );
+
+    let refresh_request_id = mcp
+        .send_raw_request("config/mcpServer/reload", /*params*/ None)
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(refresh_request_id)),
+    )
+    .await??;
+
+    let refreshed_turn_start_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![UserInput::Text {
+                text: format!("Use ${SKILL_NAME} after refreshing MCP"),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(refreshed_turn_start_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 7);
+    let refreshed_list_output = requests[5]
+        .function_call_output_text(SKILLS_LIST_AFTER_REFRESH_CALL_ID)
+        .ok_or_else(|| {
+            anyhow::anyhow!("refreshed skills.list output should be sent to the model")
+        })?;
+    assert_eq!(list_output, refreshed_list_output);
+    let refreshed_read_output = requests[6]
+        .function_call_output_text(SKILLS_READ_AFTER_REFRESH_CALL_ID)
+        .ok_or_else(|| {
+            anyhow::anyhow!("refreshed skills.read output should be sent to the model")
+        })?;
+    assert_eq!(read_output, refreshed_read_output);
+    assert_eq!(
+        ResourceAppsMcpCallCounts {
+            list_resources: 6,
+            main_prompt_reads: 2,
+            reference_reads: 2,
         },
         apps_server_calls.snapshot()
     );
@@ -684,9 +778,7 @@ impl ServerHandler for ResourceAppsMcpServer {
     ) -> Result<ReadResourceResult, rmcp::ErrorData> {
         let uri = request.uri;
         if uri == SKILL_MAIN_PROMPT_URI {
-            self.calls
-                .main_prompt_reads
-                .fetch_add(1, Ordering::Relaxed);
+            self.calls.main_prompt_reads.fetch_add(1, Ordering::Relaxed);
             return Ok(ReadResourceResult::new(vec![
                 ResourceContents::TextResourceContents {
                     uri: SKILL_MAIN_PROMPT_URI.to_string(),
@@ -697,9 +789,7 @@ impl ServerHandler for ResourceAppsMcpServer {
             ]));
         }
         if uri == SKILL_REFERENCE_URI {
-            self.calls
-                .reference_reads
-                .fetch_add(1, Ordering::Relaxed);
+            self.calls.reference_reads.fetch_add(1, Ordering::Relaxed);
             return Ok(ReadResourceResult::new(vec![
                 ResourceContents::TextResourceContents {
                     uri: SKILL_REFERENCE_URI.to_string(),
