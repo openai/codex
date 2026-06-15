@@ -2468,7 +2468,7 @@ plugin_sharing = false
 }
 
 #[tokio::test]
-async fn plugin_installed_includes_created_by_me_remote_with_plugin_sharing() -> Result<()> {
+async fn plugin_installed_includes_created_by_me_when_remote_plugins_enabled() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     std::fs::write(
@@ -2478,8 +2478,8 @@ async fn plugin_installed_includes_created_by_me_remote_with_plugin_sharing() ->
 
 [features]
 plugins = true
-remote_plugin = false
-plugin_sharing = true
+remote_plugin = true
+plugin_sharing = false
 "#,
             server.uri()
         ),
@@ -2736,8 +2736,8 @@ async fn plugin_list_fetches_user_plugins_in_created_by_me_remote_marketplace() 
 
 [features]
 plugins = true
-remote_plugin = false
-plugin_sharing = true
+remote_plugin = true
+plugin_sharing = false
 "#,
             server.uri()
         ),
@@ -3059,7 +3059,7 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
 }
 
 #[tokio::test]
-async fn plugin_list_omits_sharing_marketplace_kinds_when_plugin_sharing_disabled() -> Result<()> {
+async fn plugin_list_omits_shared_with_me_kind_when_plugin_sharing_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     std::fs::write(
@@ -3089,10 +3089,7 @@ plugin_sharing = false
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
-            marketplace_kinds: Some(vec![
-                PluginListMarketplaceKind::SharedWithMe,
-                PluginListMarketplaceKind::CreatedByMeRemote,
-            ]),
+            marketplace_kinds: Some(vec![PluginListMarketplaceKind::SharedWithMe]),
         })
         .await?;
 
@@ -3117,6 +3114,60 @@ plugin_sharing = false
         /*expected_count*/ 0,
     )
     .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_omits_created_by_me_when_remote_plugins_disabled() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"chatgpt_base_url = "{}/backend-api/"
+
+[features]
+plugins = true
+remote_plugin = false
+plugin_sharing = true
+"#,
+            server.uri()
+        ),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: None,
+            marketplace_kinds: Some(vec![PluginListMarketplaceKind::CreatedByMeRemote]),
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginListResponse = to_response(response)?;
+
+    assert_eq!(
+        response,
+        PluginListResponse {
+            marketplaces: Vec::new(),
+            marketplace_load_errors: Vec::new(),
+            featured_plugin_ids: Vec::new(),
+        }
+    );
     wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 0).await?;
     Ok(())
 }

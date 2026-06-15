@@ -157,10 +157,10 @@ fn remote_installed_plugin_visible_marketplaces(config: &Config) -> Vec<&'static
     let mut marketplaces = Vec::new();
     if config.features.enabled(Feature::RemotePlugin) {
         marketplaces.push(REMOTE_GLOBAL_MARKETPLACE_NAME);
+        marketplaces.push(REMOTE_CREATED_BY_ME_MARKETPLACE_NAME);
     }
     marketplaces.push(REMOTE_WORKSPACE_MARKETPLACE_NAME);
     if config.features.enabled(Feature::PluginSharing) {
-        marketplaces.push(REMOTE_CREATED_BY_ME_MARKETPLACE_NAME);
         marketplaces.push(REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME);
         marketplaces.push(REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME);
         marketplaces.push(REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME);
@@ -554,8 +554,9 @@ impl PluginRequestProcessor {
         let plugins_input = config.plugins_config_input();
         let include_shared_with_me =
             marketplace_kinds.contains(&PluginListMarketplaceKind::SharedWithMe);
-        let include_created_by_me_remote =
-            marketplace_kinds.contains(&PluginListMarketplaceKind::CreatedByMeRemote);
+        let include_created_by_me_remote = marketplace_kinds
+            .contains(&PluginListMarketplaceKind::CreatedByMeRemote)
+            && config.features.enabled(Feature::RemotePlugin);
         let include_global_remote =
             !explicit_marketplace_kinds && config.features.enabled(Feature::RemotePlugin);
         let remote_plugin_service_config = RemotePluginServiceConfig {
@@ -665,7 +666,7 @@ impl PluginRequestProcessor {
         if include_global_remote {
             remote_sources.push(RemoteMarketplaceSource::Global);
         }
-        if include_created_by_me_remote && config.features.enabled(Feature::PluginSharing) {
+        if include_created_by_me_remote {
             remote_sources.push(RemoteMarketplaceSource::CreatedByMeRemote);
         }
         if marketplace_kinds.contains(&PluginListMarketplaceKind::WorkspaceDirectory) {
