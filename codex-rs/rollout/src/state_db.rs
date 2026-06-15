@@ -297,6 +297,23 @@ pub fn normalize_cwd_for_state_db(cwd: &Path) -> PathBuf {
     normalize_for_path_comparison(cwd).unwrap_or_else(|_| cwd.to_path_buf())
 }
 
+fn session_source_filter_to_state_db_string(source: &SessionSource) -> String {
+    match source {
+        SessionSource::Cli => "cli".to_string(),
+        SessionSource::VSCode => "vscode".to_string(),
+        SessionSource::Exec => "exec".to_string(),
+        SessionSource::Mcp => "mcp".to_string(),
+        SessionSource::Unknown => "unknown".to_string(),
+        SessionSource::Custom(_) | SessionSource::Internal(_) | SessionSource::SubAgent(_) => {
+            match serde_json::to_value(source) {
+                Ok(Value::String(s)) => s,
+                Ok(other) => other.to_string(),
+                Err(_) => String::new(),
+            }
+        }
+    }
+}
+
 /// List thread ids from SQLite for parity checks without rollout scanning.
 #[allow(clippy::too_many_arguments)]
 pub async fn list_thread_ids_db(
@@ -322,11 +339,7 @@ pub async fn list_thread_ids_db(
     let anchor = cursor_to_anchor(cursor);
     let allowed_sources: Vec<String> = allowed_sources
         .iter()
-        .map(|value| match serde_json::to_value(value) {
-            Ok(Value::String(s)) => s,
-            Ok(other) => other.to_string(),
-            Err(_) => String::new(),
-        })
+        .map(session_source_filter_to_state_db_string)
         .collect();
     let model_providers = model_providers.map(<[String]>::to_vec);
     match ctx
@@ -379,11 +392,7 @@ pub async fn list_threads_db(
     let anchor = cursor_to_anchor(cursor);
     let allowed_sources: Vec<String> = allowed_sources
         .iter()
-        .map(|value| match serde_json::to_value(value) {
-            Ok(Value::String(s)) => s,
-            Ok(other) => other.to_string(),
-            Err(_) => String::new(),
-        })
+        .map(session_source_filter_to_state_db_string)
         .collect();
     let model_providers = model_providers.map(<[String]>::to_vec);
     let normalized_cwd_filters = cwd_filters.map(|filters| {
@@ -424,11 +433,15 @@ pub async fn list_threads_db(
             let mut valid_items = Vec::with_capacity(page.items.len());
             for item in page.items {
                 if let Some(existing_path) =
-                    crate::compression::existing_rollout_path(item.rollout_path.as_path()).await
+                    crate::compression::existing_rollout_path_blocking(item.rollout_path.as_path())
                 {
                     let mut item = item;
                     item.rollout_path = existing_path;
                     valid_items.push(item);
+                } else if let Some(repaired_item) =
+                    repair_stale_rollout_path_from_metadata(ctx, codex_home, &item, archived).await
+                {
+                    valid_items.push(repaired_item);
                 } else {
                     warn!(
                         "state db list_threads returned stale rollout path for thread {}: {}",
@@ -447,6 +460,56 @@ pub async fn list_threads_db(
             None
         }
     }
+}
+
+async fn repair_stale_rollout_path_from_metadata(
+    ctx: &codex_state::StateRuntime,
+    codex_home: &Path,
+    item: &codex_state::ThreadMetadata,
+    archived: bool,
+) -> Option<codex_state::ThreadMetadata> {
+    let candidate = rollout_path_from_metadata(codex_home, item, archived);
+    let existing_path = crate::compression::existing_rollout_path_blocking(candidate.as_path())?;
+
+    warn!(
+        "state db list_threads repaired stale rollout path for thread {}: {} -> {}",
+        item.id,
+        item.rollout_path.display(),
+        existing_path.display()
+    );
+    let mut item = item.clone();
+    item.rollout_path = existing_path;
+    if let Err(err) = ctx.upsert_thread(&item).await {
+        warn!(
+            "state db list_threads stale path repair upsert failed for thread {}: {err}",
+            item.id
+        );
+    }
+    Some(item)
+}
+
+fn rollout_path_from_metadata(
+    codex_home: &Path,
+    item: &codex_state::ThreadMetadata,
+    archived: bool,
+) -> PathBuf {
+    let created_at = item.created_at;
+    let file_name = format!(
+        "rollout-{}-{}.jsonl",
+        created_at.format("%Y-%m-%dT%H-%M-%S"),
+        item.id
+    );
+    if archived {
+        return codex_home
+            .join(crate::ARCHIVED_SESSIONS_SUBDIR)
+            .join(file_name);
+    }
+    codex_home
+        .join(crate::SESSIONS_SUBDIR)
+        .join(created_at.format("%Y").to_string())
+        .join(created_at.format("%m").to_string())
+        .join(created_at.format("%d").to_string())
+        .join(file_name)
 }
 
 /// Look up the rollout path for a thread id using SQLite.
@@ -572,28 +635,9 @@ pub async fn read_repair_rollout_path(
         && let Ok(Some(metadata)) = ctx.get_thread(thread_id).await
     {
         saw_existing_metadata = true;
-        let mut repaired = metadata.clone();
-        repaired.rollout_path = rollout_path.to_path_buf();
-        repaired.cwd = normalize_cwd_for_state_db(&repaired.cwd);
-        match archived_only {
-            Some(true) if repaired.archived_at.is_none() => {
-                repaired.archived_at = Some(repaired.updated_at);
-            }
-            Some(false) => {
-                repaired.archived_at = None;
-            }
-            Some(true) | None => {}
-        }
-        if repaired == metadata {
-            return;
-        }
-        warn!("state db discrepancy during read_repair_rollout_path: upsert_needed (fast path)");
-        if let Err(err) = ctx.upsert_thread(&repaired).await {
-            warn!(
-                "state db read-repair upsert failed for {}: {err}",
-                rollout_path.display()
-            );
-        } else {
+        if read_repair_rollout_path_from_metadata(Some(ctx), metadata, archived_only, rollout_path)
+            .await
+        {
             return;
         }
     }
@@ -618,6 +662,44 @@ pub async fn read_repair_rollout_path(
         /*new_thread_memory_mode*/ None,
     )
     .await;
+}
+
+/// Repair a rollout path when the caller already has the metadata row.
+pub async fn read_repair_rollout_path_from_metadata(
+    context: Option<&codex_state::StateRuntime>,
+    mut metadata: codex_state::ThreadMetadata,
+    archived_only: Option<bool>,
+    rollout_path: &Path,
+) -> bool {
+    let Some(ctx) = context else {
+        return true;
+    };
+
+    let original = metadata.clone();
+    metadata.rollout_path = rollout_path.to_path_buf();
+    metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
+    match archived_only {
+        Some(true) if metadata.archived_at.is_none() => {
+            metadata.archived_at = Some(metadata.updated_at);
+        }
+        Some(false) => {
+            metadata.archived_at = None;
+        }
+        Some(true) | None => {}
+    }
+    if metadata == original {
+        return true;
+    }
+
+    warn!("state db discrepancy during read_repair_rollout_path: upsert_needed (fast path)");
+    if let Err(err) = ctx.upsert_thread(&metadata).await {
+        warn!(
+            "state db read-repair upsert failed for {}: {err}",
+            rollout_path.display()
+        );
+        return false;
+    }
+    true
 }
 
 /// Apply rollout items incrementally to SQLite.

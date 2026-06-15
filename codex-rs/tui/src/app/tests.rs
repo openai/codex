@@ -4873,6 +4873,7 @@ fn session_start_error_surfaces_archived_guidance_without_rollout_path() {
             "/Users/me/.codex/archived_sessions/rollout.jsonl",
         )),
         thread_id,
+        cwd: None,
     };
     let expected = format!(
         "session {thread_id} is archived. Run `codex unarchive {thread_id}` to unarchive it first."

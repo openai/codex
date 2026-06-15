@@ -75,6 +75,11 @@ pub(super) async fn list_threads(
         })
         .collect::<Vec<_>>();
 
+    // Startup --last lookups use this internal mode only to resolve id/path.
+    if params.use_state_db_only && params.page_size == 1 && params.search_term.is_none() {
+        return Ok(ThreadPage { items, next_cursor });
+    }
+
     let thread_ids = items
         .iter()
         .map(|thread| thread.thread_id)

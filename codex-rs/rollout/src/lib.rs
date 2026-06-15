@@ -48,6 +48,7 @@ pub use list::ThreadListConfig;
 pub use list::ThreadListLayout;
 pub use list::ThreadSortKey;
 pub use list::ThreadsPage;
+pub use list::find_any_thread_path_by_id_str;
 pub use list::find_archived_thread_path_by_id_str;
 pub use list::find_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]

@@ -1,9 +1,13 @@
 //! Persist Codex session rollouts (.jsonl) so sessions can be replayed or inspected later.
 
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::fs;
 use std::fs::File;
+use std::io::BufRead;
+use std::io::BufReader;
 use std::io::Error as IoError;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,6 +17,7 @@ use chrono::SecondsFormat;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::ResponseItem;
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
@@ -55,13 +60,15 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_state::StateRuntime;
 use codex_utils_path as path_utils;
+
+const ROLLOUT_HISTORY_READ_BUFFER_SIZE: usize = 64 * 1024;
+const ROLLOUT_HISTORY_BYTES_PER_ITEM_HINT: u64 = 128;
 
 /// Writes canonical session rollout items to JSONL.
 ///
@@ -389,9 +396,14 @@ impl RolloutRecorder {
             || model_providers.is_some()
             || cwd_filters.is_some()
             || search_term.is_some();
-        // Filesystem-first listing intentionally overfetches so we can repair stale/missing
-        // SQLite rows before returning the scan page for filtered listings or the DB page for
-        // unfiltered listings.
+        // Filesystem-first listing intentionally overfetches only when SQLite is present, so we
+        // can repair stale/missing rows before returning the scan page for filtered listings or
+        // the DB page for unfiltered listings.
+        let fs_page_size = if state_db_ctx.is_none() {
+            page_size
+        } else {
+            page_size.saturating_mul(2)
+        };
         let fs_page = match sort_direction {
             SortDirection::Asc => {
                 list_threads_from_files_asc(
@@ -411,7 +423,7 @@ impl RolloutRecorder {
             SortDirection::Desc => {
                 list_threads_from_files_desc(
                     codex_home,
-                    page_size.saturating_mul(2),
+                    fs_page_size,
                     cursor,
                     sort_key,
                     allowed_sources,
@@ -847,59 +859,22 @@ impl RolloutRecorder {
         path: &Path,
     ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
         trace!("Resuming rollout from {path:?}");
-        let mut items: Vec<RolloutItem> = Vec::new();
-        let mut thread_id: Option<ThreadId> = None;
-        let mut parse_errors = 0usize;
-        let mut reader = compression::open_rollout_line_reader(path).await?;
-        let mut saw_non_empty_line = false;
-        while let Some(line) = reader.next_line().await? {
-            if line.trim().is_empty() {
-                continue;
-            }
-            saw_non_empty_line = true;
-            let mut v: Value = match serde_json::from_str(&line) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("failed to parse line as JSON: {line:?}, error: {e}");
-                    parse_errors = parse_errors.saturating_add(1);
-                    continue;
+        let requested_path = path.to_path_buf();
+        for _ in 0..3 {
+            let path = requested_path.clone();
+            let result = tokio::task::spawn_blocking(move || load_rollout_items_blocking(path))
+                .await
+                .map_err(IoError::other)?;
+            match result {
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
-            };
-            if strip_legacy_ghost_snapshot_rollout_line(&mut v) {
-                trace!("skipping legacy ghost_snapshot rollout line");
-                continue;
-            }
-
-            // Parse the rollout line structure
-            match serde_json::from_value::<RolloutLine>(v.clone()) {
-                Ok(rollout_line) => {
-                    let item = rollout_line.item;
-                    // Use the FIRST SessionMeta encountered in the file as the canonical
-                    // thread id and main session information. Keep all items intact.
-                    if thread_id.is_none()
-                        && let RolloutItem::SessionMeta(session_meta_line) = &item
-                    {
-                        thread_id = Some(session_meta_line.meta.id);
-                    }
-                    items.push(item);
-                }
-                Err(e) => {
-                    trace!("failed to parse rollout line: {e}");
-                    parse_errors = parse_errors.saturating_add(1);
-                }
+                other => return other,
             }
         }
-        if !saw_non_empty_line {
-            return Err(IoError::other("empty session file"));
-        }
-
-        tracing::debug!(
-            "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
-            items.len(),
-            thread_id,
-            parse_errors,
-        );
-        Ok((items, thread_id, parse_errors))
+        tokio::task::spawn_blocking(move || load_rollout_items_blocking(requested_path))
+            .await
+            .map_err(IoError::other)?
     }
 
     pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
@@ -945,6 +920,199 @@ impl RolloutRecorder {
         };
         Ok(())
     }
+}
+
+fn load_rollout_items_blocking(
+    path: PathBuf,
+) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
+    let (file, path) = open_rollout_file_for_history(path)?;
+    let capacity_hint = file
+        .metadata()
+        .ok()
+        .map(|metadata| rollout_items_capacity_hint(metadata.len()))
+        .unwrap_or_default();
+    if is_compressed_rollout_path(path.as_path()) {
+        let decoder = zstd::stream::read::Decoder::new(file)?;
+        load_rollout_items_from_reader(
+            BufReader::with_capacity(ROLLOUT_HISTORY_READ_BUFFER_SIZE, decoder),
+            capacity_hint,
+        )
+    } else {
+        load_rollout_items_from_reader(
+            BufReader::with_capacity(ROLLOUT_HISTORY_READ_BUFFER_SIZE, file),
+            capacity_hint,
+        )
+    }
+}
+
+fn open_rollout_file_for_history(path: PathBuf) -> std::io::Result<(File, PathBuf)> {
+    let plain_path = compression::plain_rollout_path(path.as_path());
+    if let Some(file) = open_regular_file(plain_path.as_path())? {
+        return Ok((file, plain_path));
+    }
+
+    let compressed_path = compressed_rollout_path(plain_path.as_path());
+    if let Some(file) = open_regular_file(compressed_path.as_path())? {
+        return Ok((file, compressed_path));
+    }
+
+    Err(IoError::new(
+        ErrorKind::NotFound,
+        format!("rollout file not found: {}", path.display()),
+    ))
+}
+
+fn open_regular_file(path: &Path) -> std::io::Result<Option<File>> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    if file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+        return Ok(Some(file));
+    }
+    Ok(None)
+}
+
+fn compressed_rollout_path(path: &Path) -> PathBuf {
+    if is_compressed_rollout_path(path) {
+        return path.to_path_buf();
+    }
+    let mut file_name = path
+        .file_name()
+        .map(OsStr::to_os_string)
+        .unwrap_or_else(|| OsStr::new("rollout.jsonl").to_os_string());
+    file_name.push(".zst");
+    path.with_file_name(file_name)
+}
+
+fn is_compressed_rollout_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".jsonl.zst"))
+}
+
+fn load_rollout_items_from_reader<R: BufRead>(
+    mut reader: R,
+    capacity_hint: usize,
+) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
+    let mut items: Vec<RolloutItem> = Vec::with_capacity(capacity_hint);
+    let mut thread_id: Option<ThreadId> = None;
+    let mut parse_errors = 0usize;
+    let mut saw_non_empty_line = false;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
+        let trimmed_line = trim_ascii_whitespace(line.as_slice());
+        if trimmed_line.is_empty() {
+            continue;
+        }
+        saw_non_empty_line = true;
+        // Parse the rollout line structure
+        match parse_rollout_item_preserving_legacy_ghost_snapshot_filter(trimmed_line) {
+            Ok(None) => continue,
+            Ok(Some(item)) => {
+                // Use the FIRST SessionMeta encountered in the file as the canonical
+                // thread id and main session information. Keep all items intact.
+                if thread_id.is_none()
+                    && let RolloutItem::SessionMeta(session_meta_line) = &item
+                {
+                    thread_id = Some(session_meta_line.meta.id);
+                }
+                items.push(item);
+            }
+            Err(e) => {
+                if matches!(
+                    e.classify(),
+                    serde_json::error::Category::Eof | serde_json::error::Category::Syntax
+                ) {
+                    warn!("failed to parse line as JSON: {line:?}, error: {e}");
+                } else {
+                    trace!("failed to parse rollout line: {e}");
+                }
+                parse_errors = parse_errors.saturating_add(1);
+            }
+        }
+    }
+    if !saw_non_empty_line {
+        return Err(IoError::other("empty session file"));
+    }
+
+    tracing::debug!(
+        "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
+        items.len(),
+        thread_id,
+        parse_errors,
+    );
+    Ok((items, thread_id, parse_errors))
+}
+
+fn rollout_items_capacity_hint(file_size_bytes: u64) -> usize {
+    usize::try_from(file_size_bytes / ROLLOUT_HISTORY_BYTES_PER_ITEM_HINT)
+        .unwrap_or(usize::MAX)
+        .saturating_add(1)
+        .min(16_384)
+}
+
+fn trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
+    let mut start = 0usize;
+    let mut end = bytes.len();
+    while start < end && bytes[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    while end > start && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    &bytes[start..end]
+}
+
+fn parse_rollout_item_preserving_legacy_ghost_snapshot_filter(
+    line: &[u8],
+) -> Result<Option<RolloutItem>, serde_json::Error> {
+    match serde_json::from_slice::<RolloutItem>(line) {
+        Ok(item) => {
+            if rollout_item_needs_legacy_ghost_snapshot_filter(&item)
+                && contains_bytes(line, b"\"ghost_snapshot\"")
+            {
+                return parse_rollout_item_after_legacy_ghost_snapshot_strip(line);
+            }
+            Ok(Some(item))
+        }
+        Err(err) => {
+            if contains_bytes(line, b"\"ghost_snapshot\"") {
+                parse_rollout_item_after_legacy_ghost_snapshot_strip(line)
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
+fn rollout_item_needs_legacy_ghost_snapshot_filter(item: &RolloutItem) -> bool {
+    matches!(
+        item,
+        RolloutItem::ResponseItem(ResponseItem::Other) | RolloutItem::Compacted(_)
+    )
+}
+
+fn parse_rollout_item_after_legacy_ghost_snapshot_strip(
+    line: &[u8],
+) -> Result<Option<RolloutItem>, serde_json::Error> {
+    let mut v: Value = serde_json::from_slice(line)?;
+    if strip_legacy_ghost_snapshot_rollout_line(&mut v) {
+        trace!("skipping legacy ghost_snapshot rollout line");
+        return Ok(None);
+    }
+    serde_json::from_value::<RolloutItem>(v).map(Some)
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 fn strip_legacy_ghost_snapshot_rollout_line(value: &mut Value) -> bool {
@@ -1713,11 +1881,7 @@ fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadI
         git_branch: item.git_branch,
         git_sha: item.git_sha,
         git_origin_url: item.git_origin_url,
-        source: Some(
-            serde_json::from_str(item.source.as_str())
-                .or_else(|_| serde_json::from_value(Value::String(item.source)))
-                .unwrap_or(SessionSource::Unknown),
-        ),
+        source: Some(session_source_from_state_string(item.source)),
         parent_thread_id: None,
         agent_nickname: item.agent_nickname,
         agent_role: item.agent_role,
@@ -1725,6 +1889,19 @@ fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadI
         cli_version: Some(item.cli_version),
         created_at: Some(item.created_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
         updated_at: Some(item.updated_at.to_rfc3339_opts(SecondsFormat::Millis, true)),
+    }
+}
+
+fn session_source_from_state_string(source: String) -> SessionSource {
+    match source.as_str() {
+        "cli" => SessionSource::Cli,
+        "vscode" => SessionSource::VSCode,
+        "exec" => SessionSource::Exec,
+        "mcp" => SessionSource::Mcp,
+        "unknown" => SessionSource::Unknown,
+        _ => serde_json::from_str(source.as_str())
+            .or_else(|_| serde_json::from_value(Value::String(source)))
+            .unwrap_or(SessionSource::Unknown),
     }
 }
 

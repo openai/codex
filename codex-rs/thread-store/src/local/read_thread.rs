@@ -5,7 +5,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_rollout::RolloutRecorder;
-use codex_rollout::find_archived_thread_path_by_id_str;
+use codex_rollout::find_any_thread_path_by_id_str;
 use codex_rollout::find_thread_name_by_id;
 use codex_rollout::find_thread_path_by_id_str;
 use codex_rollout::read_session_meta_line;
@@ -209,7 +209,7 @@ async fn resolve_rollout_path(
 
     let state_db_ctx = store.state_db().await;
     if include_archived {
-        match find_thread_path_by_id_str(
+        find_any_thread_path_by_id_str(
             store.config.codex_home.as_path(),
             &thread_id.to_string(),
             state_db_ctx.as_deref(),
@@ -217,18 +217,7 @@ async fn resolve_rollout_path(
         .await
         .map_err(|err| ThreadStoreError::InvalidRequest {
             message: format!("failed to locate thread id {thread_id}: {err}"),
-        })? {
-            Some(path) => Ok(Some(path)),
-            None => find_archived_thread_path_by_id_str(
-                store.config.codex_home.as_path(),
-                &thread_id.to_string(),
-                state_db_ctx.as_deref(),
-            )
-            .await
-            .map_err(|err| ThreadStoreError::InvalidRequest {
-                message: format!("failed to locate archived thread id {thread_id}: {err}"),
-            }),
-        }
+        })
     } else {
         find_thread_path_by_id_str(
             store.config.codex_home.as_path(),

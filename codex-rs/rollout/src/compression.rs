@@ -40,6 +40,10 @@ pub(crate) async fn file_modified_time(path: &Path) -> io::Result<Option<time::O
     Ok(modified.map(time::OffsetDateTime::from))
 }
 
+pub(crate) fn file_modified_time_blocking(path: &Path) -> Option<time::OffsetDateTime> {
+    path::file_modified_time_blocking(path).map(time::OffsetDateTime::from)
+}
+
 /// Opens a rollout line reader that transparently handles plain `.jsonl` and `.jsonl.zst` files.
 ///
 /// If the requested path disappears during a representation transition, this briefly retries
@@ -55,6 +59,10 @@ pub async fn open_rollout_line_reader(path: &Path) -> io::Result<RolloutLineRead
         }
     }
     reader::open_once(path).await
+}
+
+pub(crate) fn existing_rollout_path_blocking(path: &Path) -> Option<PathBuf> {
+    path::existing_rollout_path_blocking(path)
 }
 
 /// Returns the compressed `.jsonl.zst` path for a rollout path.
@@ -902,6 +910,7 @@ mod path {
     use std::ffi::OsStr;
     use std::path::Path;
     use std::path::PathBuf;
+    use std::time::SystemTime;
 
     use super::COMPRESSED_SUFFIX;
 
@@ -947,6 +956,35 @@ mod path {
         if matches!(tokio::fs::metadata(compressed_path.as_path()).await, Ok(metadata) if metadata.is_file())
         {
             return Some(compressed_path);
+        }
+        None
+    }
+
+    pub(super) fn existing_rollout_path_blocking(path: &Path) -> Option<PathBuf> {
+        let plain_path = plain_rollout_path(path);
+        if matches!(std::fs::metadata(plain_path.as_path()), Ok(metadata) if metadata.is_file()) {
+            return Some(plain_path);
+        }
+        let compressed_path = compressed_rollout_path(plain_path.as_path());
+        if matches!(std::fs::metadata(compressed_path.as_path()), Ok(metadata) if metadata.is_file())
+        {
+            return Some(compressed_path);
+        }
+        None
+    }
+
+    pub(super) fn file_modified_time_blocking(path: &Path) -> Option<SystemTime> {
+        let plain_path = plain_rollout_path(path);
+        if let Ok(metadata) = std::fs::metadata(plain_path.as_path())
+            && metadata.is_file()
+        {
+            return metadata.modified().ok();
+        }
+        let compressed_path = compressed_rollout_path(plain_path.as_path());
+        if let Ok(metadata) = std::fs::metadata(compressed_path.as_path())
+            && metadata.is_file()
+        {
+            return metadata.modified().ok();
         }
         None
     }

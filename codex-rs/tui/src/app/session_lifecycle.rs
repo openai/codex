@@ -747,8 +747,7 @@ impl App {
                 tui,
                 self.state_db.as_deref(),
                 &current_cwd,
-                target_session.thread_id,
-                target_session.path.as_deref(),
+                &target_session,
                 CwdPromptAction::Resume,
                 /*allow_prompt*/ true,
             )

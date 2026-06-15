@@ -1,7 +1,12 @@
 #![allow(warnings, clippy::all)]
 
+use chrono::DateTime;
+use chrono::Datelike;
+use chrono::Timelike;
+use chrono::Utc;
 use codex_utils_path as path_utils;
 use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::ffi::OsStr;
 use std::io;
 use std::num::NonZero;
@@ -23,7 +28,6 @@ use crate::state_db;
 use codex_file_search as file_search;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
@@ -515,11 +519,11 @@ async fn traverse_directories_for_paths_created(
     })
 }
 
-/// Walk the rollout directory tree to collect files by updated_at, then sort by
-/// file mtime (updated_at) and apply pagination/filtering in that order.
+/// Walk the rollout directory tree to collect files by updated_at, then pop
+/// candidates by file mtime (updated_at) and apply pagination/filtering in that order.
 ///
 /// Because updated_at is not encoded in filenames, this path must scan all
-/// files up to the scan cap, then sort and filter by the anchor cursor.
+/// files up to the scan cap, then order and filter by the anchor cursor.
 ///
 /// NOTE: This can be optimized in the future if we store additional state on disk
 /// to cache updated_at timestamps.
@@ -536,13 +540,24 @@ async fn traverse_directories_for_paths_updated(
     let mut anchor_state = AnchorState::new(anchor);
     let mut more_matches_available = false;
 
-    let mut candidates = collect_files_by_updated_at(&root, &mut scanned_files).await?;
-    candidates.sort_by_key(|candidate| {
-        let ts = candidate.updated_at.unwrap_or(OffsetDateTime::UNIX_EPOCH);
-        (Reverse(ts), Reverse(candidate.id))
-    });
+    if page_size == 1
+        && anchor_state.passed
+        && let Some(page) = try_latest_updated_at_page(
+            &root,
+            allowed_sources,
+            provider_matcher,
+            cwd_filters,
+            UpdatedAtScanLayout::Nested,
+        )
+        .await?
+    {
+        return Ok(page);
+    }
 
-    for candidate in candidates.into_iter() {
+    let mut candidates =
+        BinaryHeap::from(collect_files_by_updated_at(&root, &mut scanned_files).await?);
+
+    while let Some(candidate) = candidates.pop() {
         let ts = candidate.updated_at.unwrap_or(OffsetDateTime::UNIX_EPOCH);
         if anchor_state.should_skip(ts, candidate.id) {
             continue;
@@ -563,6 +578,10 @@ async fn traverse_directories_for_paths_updated(
         .await
         {
             items.push(item);
+            if items.len() == page_size && !candidates.is_empty() {
+                more_matches_available = true;
+                break;
+            }
         }
     }
 
@@ -654,13 +673,24 @@ async fn traverse_flat_paths_updated(
     let mut anchor_state = AnchorState::new(anchor);
     let mut more_matches_available = false;
 
-    let mut candidates = collect_flat_files_by_updated_at(&root, &mut scanned_files).await?;
-    candidates.sort_by_key(|candidate| {
-        let ts = candidate.updated_at.unwrap_or(OffsetDateTime::UNIX_EPOCH);
-        (Reverse(ts), Reverse(candidate.id))
-    });
+    if page_size == 1
+        && anchor_state.passed
+        && let Some(page) = try_latest_updated_at_page(
+            &root,
+            allowed_sources,
+            provider_matcher,
+            cwd_filters,
+            UpdatedAtScanLayout::Flat,
+        )
+        .await?
+    {
+        return Ok(page);
+    }
 
-    for candidate in candidates.into_iter() {
+    let mut candidates =
+        BinaryHeap::from(collect_flat_files_by_updated_at(&root, &mut scanned_files).await?);
+
+    while let Some(candidate) = candidates.pop() {
         let ts = candidate.updated_at.unwrap_or(OffsetDateTime::UNIX_EPOCH);
         if anchor_state.should_skip(ts, candidate.id) {
             continue;
@@ -681,6 +711,10 @@ async fn traverse_flat_paths_updated(
         .await
         {
             items.push(item);
+            if items.len() == page_size && !candidates.is_empty() {
+                more_matches_available = true;
+                break;
+            }
         }
     }
 
@@ -928,18 +962,60 @@ pub(crate) fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDa
     // Expected: rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl[.zst]
     let name = compression::parse_rollout_file_name(name)?;
     let core = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
-
-    // Scan from the right for a '-' such that the suffix parses as a UUID.
-    let (sep_idx, uuid) = core
-        .match_indices('-')
-        .rev()
-        .find_map(|(i, _)| Uuid::parse_str(&core[i + 1..]).ok().map(|u| (i, u)))?;
-
-    let ts_str = &core[..sep_idx];
-    let format: &[FormatItem] =
-        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
-    let ts = PrimitiveDateTime::parse(ts_str, format).ok()?.assume_utc();
+    let uuid_start = core.len().checked_sub(36)?;
+    let (ts_with_sep, uuid_str) = core.split_at(uuid_start);
+    let ts_str = ts_with_sep.strip_suffix('-')?;
+    let uuid = Uuid::parse_str(uuid_str).ok()?;
+    let ts = parse_rollout_filename_timestamp(ts_str)?;
     Some((ts, uuid))
+}
+
+fn parse_rollout_filename_timestamp(ts_str: &str) -> Option<OffsetDateTime> {
+    let bytes = ts_str.as_bytes();
+    if bytes.len() != 19
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b'-'
+        || bytes[16] != b'-'
+    {
+        return None;
+    }
+
+    let year = parse_decimal_i32(&bytes[0..4])?;
+    let month = parse_decimal_u8(&bytes[5..7])?;
+    let day = parse_decimal_u8(&bytes[8..10])?;
+    let hour = parse_decimal_u8(&bytes[11..13])?;
+    let minute = parse_decimal_u8(&bytes[14..16])?;
+    let second = parse_decimal_u8(&bytes[17..19])?;
+    let date =
+        time::Date::from_calendar_date(year, time::Month::try_from(month).ok()?, day).ok()?;
+    let time = time::Time::from_hms(hour, minute, second).ok()?;
+    Some(time::PrimitiveDateTime::new(date, time).assume_utc())
+}
+
+fn parse_decimal_i32(bytes: &[u8]) -> Option<i32> {
+    let mut value = 0i32;
+    for &byte in bytes {
+        let digit = byte.checked_sub(b'0')?;
+        if digit > 9 {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add(i32::from(digit))?;
+    }
+    Some(value)
+}
+
+fn parse_decimal_u8(bytes: &[u8]) -> Option<u8> {
+    let mut value = 0u8;
+    for &byte in bytes {
+        let digit = byte.checked_sub(b'0')?;
+        if digit > 9 {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add(digit)?;
+    }
+    Some(value)
 }
 
 struct ThreadCandidate {
@@ -948,16 +1024,107 @@ struct ThreadCandidate {
     updated_at: Option<OffsetDateTime>,
 }
 
+impl ThreadCandidate {
+    fn updated_at_or_epoch(&self) -> OffsetDateTime {
+        self.updated_at.unwrap_or(OffsetDateTime::UNIX_EPOCH)
+    }
+}
+
+impl Ord for ThreadCandidate {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.updated_at_or_epoch()
+            .cmp(&other.updated_at_or_epoch())
+            .then_with(|| self.id.cmp(&other.id))
+    }
+}
+
+impl PartialOrd for ThreadCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for ThreadCandidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.updated_at_or_epoch() == other.updated_at_or_epoch() && self.id == other.id
+    }
+}
+
+impl Eq for ThreadCandidate {}
+
+#[derive(Clone, Copy)]
+enum UpdatedAtScanLayout {
+    Nested,
+    Flat,
+}
+
+struct LatestCandidateScan {
+    candidate: Option<ThreadCandidate>,
+    scanned_files: usize,
+    saw_more_candidates: bool,
+}
+
+async fn try_latest_updated_at_page(
+    root: &Path,
+    allowed_sources: &[SessionSource],
+    provider_matcher: Option<&ProviderMatcher<'_>>,
+    cwd_filters: Option<&[PathBuf]>,
+    layout: UpdatedAtScanLayout,
+) -> io::Result<Option<ThreadsPage>> {
+    let scan = match layout {
+        UpdatedAtScanLayout::Nested => latest_file_by_updated_at(root).await?,
+        UpdatedAtScanLayout::Flat => latest_flat_file_by_updated_at(root).await?,
+    };
+    let reached_scan_cap = scan.scanned_files >= MAX_SCAN_FILES;
+    if reached_scan_cap && matches!(layout, UpdatedAtScanLayout::Nested) {
+        return Ok(None);
+    }
+    let Some(candidate) = scan.candidate else {
+        return Ok(Some(ThreadsPage {
+            items: Vec::new(),
+            next_cursor: None,
+            num_scanned_files: scan.scanned_files,
+            reached_scan_cap,
+        }));
+    };
+
+    let updated_at_fallback = candidate.updated_at.and_then(format_rfc3339);
+    let Some(item) = build_thread_item(
+        candidate.path,
+        allowed_sources,
+        provider_matcher,
+        cwd_filters,
+        updated_at_fallback,
+    )
+    .await
+    else {
+        return Ok(None);
+    };
+
+    let items = vec![item];
+    let next_cursor = if scan.saw_more_candidates || reached_scan_cap {
+        build_next_cursor(&items, ThreadSortKey::UpdatedAt)
+    } else {
+        None
+    };
+    Ok(Some(ThreadsPage {
+        items,
+        next_cursor,
+        num_scanned_files: scan.scanned_files,
+        reached_scan_cap,
+    }))
+}
+
 async fn collect_files_by_updated_at(
     root: &Path,
     scanned_files: &mut usize,
 ) -> io::Result<Vec<ThreadCandidate>> {
-    let mut candidates = Vec::new();
-    let mut visitor = FilesByUpdatedAtVisitor {
-        candidates: &mut candidates,
-    };
-    walk_rollout_files(root, scanned_files, &mut visitor).await?;
-
+    let root = root.to_path_buf();
+    let (candidates, scanned) =
+        tokio::task::spawn_blocking(move || collect_files_by_updated_at_blocking(root.as_path()))
+            .await
+            .map_err(io::Error::other)??;
+    *scanned_files = scanned_files.saturating_add(scanned);
     Ok(candidates)
 }
 
@@ -965,42 +1132,363 @@ async fn collect_flat_files_by_updated_at(
     root: &Path,
     scanned_files: &mut usize,
 ) -> io::Result<Vec<ThreadCandidate>> {
+    let root = root.to_path_buf();
+    let (candidates, scanned) = tokio::task::spawn_blocking(move || {
+        collect_flat_files_by_updated_at_blocking(root.as_path())
+    })
+    .await
+    .map_err(io::Error::other)??;
+    *scanned_files = scanned_files.saturating_add(scanned);
+    Ok(candidates)
+}
+
+async fn latest_file_by_updated_at(root: &Path) -> io::Result<LatestCandidateScan> {
+    let root = root.to_path_buf();
+    tokio::task::spawn_blocking(move || latest_file_by_updated_at_blocking(root.as_path()))
+        .await
+        .map_err(io::Error::other)?
+}
+
+async fn latest_flat_file_by_updated_at(root: &Path) -> io::Result<LatestCandidateScan> {
+    let root = root.to_path_buf();
+    tokio::task::spawn_blocking(move || latest_flat_file_by_updated_at_blocking(root.as_path()))
+        .await
+        .map_err(io::Error::other)?
+}
+
+fn collect_files_by_updated_at_blocking(root: &Path) -> io::Result<(Vec<ThreadCandidate>, usize)> {
     let mut candidates = Vec::new();
-    let mut dir = tokio::fs::read_dir(root).await?;
-    while let Some(entry) = dir.next_entry().await? {
-        if *scanned_files >= MAX_SCAN_FILES {
+    let mut scanned_files = 0usize;
+
+    let year_dirs = collect_dirs_desc_blocking(root, |s| s.parse::<u16>().ok())?;
+    'outer: for (_year, year_path) in year_dirs.iter() {
+        if scanned_files >= MAX_SCAN_FILES {
             break;
         }
-        if !entry
-            .file_type()
-            .await
-            .map(|ft| ft.is_file())
-            .unwrap_or(false)
-        {
-            continue;
+        let month_dirs = collect_dirs_desc_blocking(year_path, |s| s.parse::<u8>().ok())?;
+        for (_month, month_path) in month_dirs.iter() {
+            if scanned_files >= MAX_SCAN_FILES {
+                break 'outer;
+            }
+            let day_dirs = collect_dirs_desc_blocking(month_path, |s| s.parse::<u8>().ok())?;
+            for (_day, day_path) in day_dirs.iter() {
+                if scanned_files >= MAX_SCAN_FILES {
+                    break 'outer;
+                }
+                let mut day_files = collect_rollout_day_files_with_updated_at_blocking(day_path)?;
+                let remaining = MAX_SCAN_FILES.saturating_sub(scanned_files);
+                if day_files.len() > remaining {
+                    day_files.sort_unstable_by_key(|(id, path, _updated_at)| {
+                        (
+                            Reverse(rollout_created_at_from_path(path.as_path())),
+                            Reverse(*id),
+                        )
+                    });
+                }
+                for (id, path, updated_at) in day_files.into_iter().take(remaining) {
+                    scanned_files += 1;
+                    candidates.push(ThreadCandidate {
+                        updated_at,
+                        path,
+                        id,
+                    });
+                }
+                if scanned_files >= MAX_SCAN_FILES {
+                    break 'outer;
+                }
+            }
         }
-        let Some(rollout_file) = compression::RolloutFile::from_path(entry.path()) else {
-            continue;
-        };
-        let Some((_ts, id)) = parse_timestamp_uuid_from_filename(rollout_file.plain_file_name())
-        else {
-            continue;
-        };
-        *scanned_files += 1;
-        if *scanned_files > MAX_SCAN_FILES {
+    }
+
+    Ok((candidates, scanned_files))
+}
+
+fn latest_file_by_updated_at_blocking(root: &Path) -> io::Result<LatestCandidateScan> {
+    let mut scan = LatestCandidateScan {
+        candidate: None,
+        scanned_files: 0,
+        saw_more_candidates: false,
+    };
+
+    let year_dirs = collect_dirs_desc_blocking(root, |s| s.parse::<u16>().ok())?;
+    'outer: for (_year, year_path) in year_dirs.iter() {
+        if scan.scanned_files >= MAX_SCAN_FILES {
             break;
         }
-        let updated_at = file_modified_time(rollout_file.path())
-            .await
-            .unwrap_or(None);
+        let month_dirs = collect_dirs_desc_blocking(year_path, |s| s.parse::<u8>().ok())?;
+        for (_month, month_path) in month_dirs.iter() {
+            if scan.scanned_files >= MAX_SCAN_FILES {
+                break 'outer;
+            }
+            let day_dirs = collect_dirs_desc_blocking(month_path, |s| s.parse::<u8>().ok())?;
+            for (_day, day_path) in day_dirs.iter() {
+                if scan.scanned_files >= MAX_SCAN_FILES {
+                    break 'outer;
+                }
+                let dir = match std::fs::read_dir(day_path) {
+                    Ok(dir) => dir,
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                    Err(err) => return Err(err),
+                };
+                for entry in dir {
+                    if scan.scanned_files >= MAX_SCAN_FILES {
+                        break 'outer;
+                    }
+                    let entry = entry?;
+                    consider_latest_updated_at_entry(&entry, &mut scan);
+                }
+            }
+        }
+    }
+
+    Ok(scan)
+}
+
+fn collect_flat_files_by_updated_at_blocking(
+    root: &Path,
+) -> io::Result<(Vec<ThreadCandidate>, usize)> {
+    let mut candidates = Vec::new();
+    let mut scanned_files = 0usize;
+    let dir = match std::fs::read_dir(root) {
+        Ok(dir) => dir,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok((candidates, 0)),
+        Err(err) => return Err(err),
+    };
+    for entry in dir {
+        if scanned_files >= MAX_SCAN_FILES {
+            break;
+        }
+        let entry = entry?;
+        if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let Some((id, path)) = rollout_id_path_from_blocking_dir_entry(&entry) else {
+            continue;
+        };
+        scanned_files += 1;
+        if scanned_files > MAX_SCAN_FILES {
+            break;
+        }
+        let updated_at = entry
+            .metadata()
+            .ok()
+            .and_then(|metadata| modified_time_from_metadata(&metadata));
         candidates.push(ThreadCandidate {
-            path: rollout_file.into_path(),
-            id,
             updated_at,
+            path,
+            id,
         });
     }
 
-    Ok(candidates)
+    Ok((candidates, scanned_files))
+}
+
+fn latest_flat_file_by_updated_at_blocking(root: &Path) -> io::Result<LatestCandidateScan> {
+    let mut scan = LatestCandidateScan {
+        candidate: None,
+        scanned_files: 0,
+        saw_more_candidates: false,
+    };
+    let dir = match std::fs::read_dir(root) {
+        Ok(dir) => dir,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(scan),
+        Err(err) => return Err(err),
+    };
+    for entry in dir {
+        if scan.scanned_files >= MAX_SCAN_FILES {
+            break;
+        }
+        let entry = entry?;
+        consider_latest_updated_at_entry(&entry, &mut scan);
+    }
+    Ok(scan)
+}
+
+fn collect_dirs_desc_blocking<T, F>(parent: &Path, parse: F) -> io::Result<Vec<(T, PathBuf)>>
+where
+    T: Ord + Copy,
+    F: Fn(&str) -> Option<T>,
+{
+    let dir = match std::fs::read_dir(parent) {
+        Ok(dir) => dir,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    let mut vec = Vec::new();
+    for entry in dir {
+        let entry = entry?;
+        if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
+            && let Some(s) = entry.file_name().to_str()
+            && let Some(v) = parse(s)
+        {
+            vec.push((v, entry.path()));
+        }
+    }
+    vec.sort_by_key(|(v, _)| Reverse(*v));
+    Ok(vec)
+}
+
+fn collect_rollout_day_files_blocking(
+    day_path: &Path,
+) -> io::Result<Vec<(OffsetDateTime, Uuid, PathBuf)>> {
+    let dir = match std::fs::read_dir(day_path) {
+        Ok(dir) => dir,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    let mut day_files = Vec::new();
+    for entry in dir {
+        let entry = entry?;
+        if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+            continue;
+        }
+        if let Some((ts, id, path)) = rollout_parts_from_blocking_dir_entry(&entry) {
+            day_files.push((ts, id, path));
+        }
+    }
+    day_files.sort_by_key(|(ts, sid, _path)| (Reverse(*ts), Reverse(*sid)));
+    Ok(day_files)
+}
+
+fn collect_rollout_day_files_with_updated_at_blocking(
+    day_path: &Path,
+) -> io::Result<Vec<(Uuid, PathBuf, Option<OffsetDateTime>)>> {
+    let dir = match std::fs::read_dir(day_path) {
+        Ok(dir) => dir,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    let mut day_files = Vec::new();
+    for entry in dir {
+        let entry = entry?;
+        if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+            continue;
+        }
+        if let Some((id, path)) = rollout_id_path_from_blocking_dir_entry(&entry) {
+            let updated_at = entry
+                .metadata()
+                .ok()
+                .and_then(|metadata| modified_time_from_metadata(&metadata));
+            day_files.push((id, path, updated_at));
+        }
+    }
+    Ok(day_files)
+}
+
+fn rollout_parts_from_blocking_dir_entry(
+    entry: &std::fs::DirEntry,
+) -> Option<(OffsetDateTime, Uuid, PathBuf)> {
+    let file_name = entry.file_name();
+    let file_name = file_name.to_str()?;
+    let plain_file_name = compression::parse_rollout_file_name(file_name)?;
+    if plain_file_name.len() == file_name.len() {
+        let (ts, id) = parse_timestamp_uuid_from_filename(plain_file_name)?;
+        return Some((ts, id, entry.path()));
+    }
+
+    let rollout_file = compression::RolloutFile::from_path(entry.path())?;
+    let (ts, id) = parse_timestamp_uuid_from_filename(rollout_file.plain_file_name())?;
+    Some((ts, id, rollout_file.into_path()))
+}
+
+fn rollout_id_path_from_blocking_dir_entry(entry: &std::fs::DirEntry) -> Option<(Uuid, PathBuf)> {
+    let file_name = entry.file_name();
+    let file_name = file_name.to_str()?;
+    let plain_file_name = compression::parse_rollout_file_name(file_name)?;
+    let id = parse_uuid_from_plain_rollout_file_name(plain_file_name)?;
+    if plain_file_name.len() == file_name.len() {
+        return Some((id, entry.path()));
+    }
+
+    let rollout_file = compression::RolloutFile::from_path(entry.path())?;
+    Some((id, rollout_file.into_path()))
+}
+
+fn consider_latest_updated_at_entry(entry: &std::fs::DirEntry, scan: &mut LatestCandidateScan) {
+    if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+        return;
+    }
+    let file_name = entry.file_name();
+    let Some(file_name) = file_name.to_str() else {
+        return;
+    };
+    let Some(plain_file_name) = compression::parse_rollout_file_name(file_name) else {
+        return;
+    };
+    let Some(id) = parse_uuid_from_plain_rollout_file_name(plain_file_name) else {
+        return;
+    };
+
+    let compressed_rollout = if plain_file_name.len() == file_name.len() {
+        None
+    } else {
+        let Some(rollout_file) = compression::RolloutFile::from_path(entry.path()) else {
+            return;
+        };
+        Some(rollout_file)
+    };
+    let updated_at = entry
+        .metadata()
+        .ok()
+        .and_then(|metadata| modified_time_from_metadata(&metadata));
+
+    scan.scanned_files = scan.scanned_files.saturating_add(1);
+    let is_newer = scan
+        .candidate
+        .as_ref()
+        .is_none_or(|best| candidate_is_newer(best, updated_at, id));
+    if !is_newer {
+        scan.saw_more_candidates = true;
+        return;
+    }
+    if scan.candidate.is_some() {
+        scan.saw_more_candidates = true;
+    }
+    let path = compressed_rollout.map_or_else(|| entry.path(), compression::RolloutFile::into_path);
+    scan.candidate = Some(ThreadCandidate {
+        path,
+        id,
+        updated_at,
+    });
+}
+
+fn candidate_is_newer(
+    best: &ThreadCandidate,
+    updated_at: Option<OffsetDateTime>,
+    id: Uuid,
+) -> bool {
+    updated_at.unwrap_or(OffsetDateTime::UNIX_EPOCH) > best.updated_at_or_epoch()
+        || (updated_at.unwrap_or(OffsetDateTime::UNIX_EPOCH) == best.updated_at_or_epoch()
+            && id > best.id)
+}
+
+fn parse_uuid_from_plain_rollout_file_name(name: &str) -> Option<Uuid> {
+    let core = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
+    let uuid_start = core.len().checked_sub(36)?;
+    if uuid_start == 0 || core.as_bytes().get(uuid_start - 1) != Some(&b'-') {
+        return None;
+    }
+    Uuid::parse_str(&core[uuid_start..]).ok()
+}
+
+fn rollout_created_at_from_path(path: &Path) -> OffsetDateTime {
+    path.file_name()
+        .and_then(OsStr::to_str)
+        .and_then(parse_timestamp_uuid_from_filename)
+        .map(|(ts, _id)| ts)
+        .unwrap_or(OffsetDateTime::UNIX_EPOCH)
+}
+
+fn modified_time_from_metadata(metadata: &std::fs::Metadata) -> Option<OffsetDateTime> {
+    metadata
+        .modified()
+        .ok()
+        .map(OffsetDateTime::from)
+        .and_then(truncate_to_millis)
+}
+
+fn file_modified_time_blocking(path: &Path) -> Option<OffsetDateTime> {
+    compression::file_modified_time_blocking(path).and_then(truncate_to_millis)
 }
 
 async fn walk_rollout_files(
@@ -1087,10 +1575,10 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
         }
         lines_scanned += 1;
 
-        let parsed: Result<RolloutLine, _> = serde_json::from_str(trimmed);
-        let Ok(rollout_line) = parsed else { continue };
+        let parsed: Result<RolloutItem, _> = serde_json::from_str(trimmed);
+        let Ok(rollout_item) = parsed else { continue };
 
-        match rollout_line.item {
+        match rollout_item {
             RolloutItem::SessionMeta(session_meta_line) => {
                 if !summary.saw_session_meta {
                     summary.source = Some(session_meta_line.meta.source.clone());
@@ -1118,9 +1606,8 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                 }
             }
             RolloutItem::ResponseItem(_) | RolloutItem::InterAgentCommunication(_) => {
-                summary
-                    .created_at
-                    .get_or_insert_with(|| rollout_line.timestamp.clone());
+                // The listing path only returns files with session metadata, which carries
+                // the canonical creation timestamp.
             }
             RolloutItem::TurnContext(_) => {
                 // Not included in `head`; skip.
@@ -1167,8 +1654,8 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
         if trimmed.is_empty() {
             continue;
         }
-        if let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) {
-            match rollout_line.item {
+        if let Ok(rollout_item) = serde_json::from_str::<RolloutItem>(trimmed) {
+            match rollout_item {
                 RolloutItem::SessionMeta(session_meta_line) => {
                     if let Ok(value) = serde_json::to_value(session_meta_line) {
                         head.push(value);
@@ -1229,19 +1716,32 @@ fn event_msg_preview(event: &EventMsg) -> Option<String> {
 /// Read the SessionMetaLine from the head of a rollout file for reuse by
 /// callers that need the session metadata (e.g. to derive a cwd for config).
 pub async fn read_session_meta_line(path: &Path) -> io::Result<SessionMetaLine> {
-    let head = read_head_for_summary(path).await?;
-    let Some(first) = head.first() else {
-        return Err(io::Error::other(format!(
-            "rollout at {} is empty",
-            path.display()
-        )));
-    };
-    serde_json::from_value::<SessionMetaLine>(first.clone()).map_err(|_| {
-        io::Error::other(format!(
-            "rollout at {} does not start with session metadata",
-            path.display()
-        ))
-    })
+    let mut lines = compression::open_rollout_line_reader(path).await?;
+    while let Some(line) = lines.next_line().await? {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(rollout_item) = serde_json::from_str::<RolloutItem>(trimmed) else {
+            continue;
+        };
+        return match rollout_item {
+            RolloutItem::SessionMeta(session_meta_line) => Ok(session_meta_line),
+            RolloutItem::ResponseItem(_) | RolloutItem::InterAgentCommunication(_) => {
+                Err(io::Error::other(format!(
+                    "rollout at {} does not start with session metadata",
+                    path.display()
+                )))
+            }
+            RolloutItem::Compacted(_) | RolloutItem::TurnContext(_) | RolloutItem::EventMsg(_) => {
+                continue;
+            }
+        };
+    }
+    Err(io::Error::other(format!(
+        "rollout at {} is empty",
+        path.display()
+    )))
 }
 
 async fn file_modified_time(path: &Path) -> io::Result<Option<OffsetDateTime>> {
@@ -1266,9 +1766,9 @@ async fn find_thread_path_by_id_str_in_subdir(
     state_db_ctx: Option<&codex_state::StateRuntime>,
 ) -> io::Result<Option<PathBuf>> {
     // Validate UUID format early.
-    if Uuid::parse_str(id_str).is_err() {
+    let Ok(target_uuid) = Uuid::parse_str(id_str) else {
         return Ok(None);
-    }
+    };
 
     // Prefer DB lookup, then fall back to rollout file search.
     // TODO(jif): sqlite migration phase 1
@@ -1279,18 +1779,22 @@ async fn find_thread_path_by_id_str_in_subdir(
     };
     let thread_id = ThreadId::from_string(id_str).ok();
     let mut unverified_db_path = None;
+    let mut state_metadata_path = None;
     let mut fallback_reason = state_db_ctx.is_none().then_some("db_unavailable");
     if let Some(state_db_ctx) = state_db_ctx
         && let Some(thread_id) = thread_id
     {
         match state_db_ctx
-            .find_rollout_path_by_id(thread_id, archived_only)
+            .find_rollout_path_and_created_at_by_id(thread_id, archived_only)
             .await
         {
-            Ok(Some(db_path)) => {
+            Ok(Some((db_path, created_at))) => {
                 if let Some(existing_db_path) =
-                    compression::existing_rollout_path(db_path.as_path()).await
+                    compression::existing_rollout_path_blocking(db_path.as_path())
                 {
+                    if rollout_file_name_matches_uuid(existing_db_path.as_path(), target_uuid) {
+                        return Ok(Some(existing_db_path));
+                    }
                     match read_session_meta_line(&existing_db_path).await {
                         Ok(meta_line) if meta_line.meta.id == thread_id => {
                             return Ok(Some(existing_db_path));
@@ -1309,6 +1813,17 @@ async fn find_thread_path_by_id_str_in_subdir(
                                 "mismatch",
                                 /*telemetry_override*/ None,
                             );
+                            state_metadata_path = find_rollout_path_by_id_from_state_created_at(
+                                codex_home,
+                                subdir,
+                                target_uuid,
+                                thread_id,
+                                archived_only,
+                                state_db_ctx,
+                                db_path.as_path(),
+                                created_at,
+                            )
+                            .await;
                         }
                         Err(err) => {
                             tracing::debug!(
@@ -1331,6 +1846,17 @@ async fn find_thread_path_by_id_str_in_subdir(
                         "stale_path",
                         /*telemetry_override*/ None,
                     );
+                    state_metadata_path = find_rollout_path_by_id_from_state_created_at(
+                        codex_home,
+                        subdir,
+                        target_uuid,
+                        thread_id,
+                        archived_only,
+                        state_db_ctx,
+                        db_path.as_path(),
+                        created_at,
+                    )
+                    .await;
                 }
             }
             Ok(None) => fallback_reason = Some("missing_row"),
@@ -1343,61 +1869,13 @@ async fn find_thread_path_by_id_str_in_subdir(
         }
     }
 
-    let mut root = codex_home.to_path_buf();
-    root.push(subdir);
-    if !root.exists() {
-        return Ok(unverified_db_path);
-    }
-    let (filename_match, filename_scan_error) = match find_rollout_path_by_id_from_filenames(
-        root.as_path(),
-        id_str,
-    )
-    .await
-    {
-        Ok(path) => (path, None),
-        Err(err) => {
-            tracing::warn!(
-                "rollout filename lookup failed during find_thread_path_by_id_str_in_subdir: {err}"
-            );
-            (None, Some(err))
+    let mut found_path_repaired = false;
+    let found = match state_metadata_path {
+        Some((path, repaired)) => {
+            found_path_repaired = repaired;
+            Some(path)
         }
-    };
-
-    let found = match filename_match {
-        Some(path) => Some(path),
-        None => {
-            // This is safe because we know the values are valid.
-            #[allow(clippy::unwrap_used)]
-            let limit = NonZero::new(1).unwrap();
-            let options = file_search::FileSearchOptions {
-                limit,
-                compute_indices: false,
-                respect_gitignore: false,
-                ..Default::default()
-            };
-
-            let results = file_search::run(
-                id_str,
-                vec![root.clone()],
-                options,
-                /*cancel_flag*/ None,
-            )
-            .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
-
-            let found = results
-                .matches
-                .into_iter()
-                .map(|m| m.full_path())
-                .find_map(compression::RolloutFile::from_path)
-                .map(compression::RolloutFile::into_path);
-
-            if found.is_none()
-                && let Some(err) = filename_scan_error
-            {
-                return Err(err);
-            }
-            found
-        }
+        None => find_thread_path_by_id_str_in_subdir_without_db(codex_home, subdir, id_str).await?,
     };
     if let Some(found_path) = found.as_ref() {
         tracing::debug!("state db missing rollout path for thread {id_str}");
@@ -1411,16 +1889,289 @@ async fn find_thread_path_by_id_str_in_subdir(
                 /*telemetry_override*/ None,
             );
         }
-        state_db::read_repair_rollout_path(
-            state_db_ctx,
-            thread_id,
-            archived_only,
-            found_path.as_path(),
-        )
-        .await;
+        if !found_path_repaired {
+            state_db::read_repair_rollout_path(
+                state_db_ctx,
+                thread_id,
+                archived_only,
+                found_path.as_path(),
+            )
+            .await;
+        }
     }
 
     Ok(found.or(unverified_db_path))
+}
+
+async fn find_thread_path_by_id_str_in_any_subdir(
+    codex_home: &Path,
+    id_str: &str,
+    state_db_ctx: Option<&codex_state::StateRuntime>,
+) -> io::Result<Option<PathBuf>> {
+    let Ok(target_uuid) = Uuid::parse_str(id_str) else {
+        return Ok(None);
+    };
+    let thread_id = ThreadId::from_string(id_str).ok();
+    let mut preferred_subdir = None;
+    let mut fallback_reason = state_db_ctx.is_none().then_some("db_unavailable");
+    if let Some(state_db_ctx) = state_db_ctx
+        && let Some(thread_id) = thread_id
+    {
+        match state_db_ctx
+            .find_rollout_path_and_created_at_by_id(thread_id, /*archived_only*/ None)
+            .await
+        {
+            Ok(Some((db_path, created_at))) => {
+                preferred_subdir = rollout_subdir_hint(codex_home, db_path.as_path());
+                if let Some(existing_db_path) =
+                    compression::existing_rollout_path_blocking(db_path.as_path())
+                {
+                    if rollout_file_name_matches_uuid(existing_db_path.as_path(), target_uuid) {
+                        return Ok(Some(existing_db_path));
+                    }
+                    match read_session_meta_line(&existing_db_path).await {
+                        Ok(meta_line) if meta_line.meta.id == thread_id => {
+                            return Ok(Some(existing_db_path));
+                        }
+                        Ok(meta_line) => {
+                            tracing::error!(
+                                "state db returned rollout path for thread {id_str} but file belongs to thread {}: {}",
+                                meta_line.meta.id,
+                                existing_db_path.display()
+                            );
+                            tracing::warn!(
+                                "state db discrepancy during find_thread_path_by_id_str_in_any_subdir: mismatched_db_path"
+                            );
+                            codex_state::record_fallback(
+                                "find_thread_path",
+                                "mismatch",
+                                /*telemetry_override*/ None,
+                            );
+                            fallback_reason = Some("mismatch");
+                        }
+                        Err(err) => {
+                            tracing::debug!(
+                                "state db returned rollout path for thread {id_str} that could not be verified: {}: {err}",
+                                existing_db_path.display()
+                            );
+                            return Ok(Some(existing_db_path));
+                        }
+                    }
+                } else {
+                    tracing::error!(
+                        "state db returned stale rollout path for thread {id_str}: {}",
+                        db_path.display()
+                    );
+                    tracing::warn!(
+                        "state db discrepancy during find_thread_path_by_id_str_in_any_subdir: stale_db_path"
+                    );
+                    codex_state::record_fallback(
+                        "find_thread_path",
+                        "stale_path",
+                        /*telemetry_override*/ None,
+                    );
+                    fallback_reason = Some("stale_path");
+                }
+                if let Some(subdir) = preferred_subdir
+                    && let Some((path, _repaired)) = find_rollout_path_by_id_from_state_created_at(
+                        codex_home,
+                        subdir,
+                        target_uuid,
+                        thread_id,
+                        archived_only_for_subdir(subdir),
+                        state_db_ctx,
+                        db_path.as_path(),
+                        created_at,
+                    )
+                    .await
+                {
+                    return Ok(Some(path));
+                }
+            }
+            Ok(None) => fallback_reason = Some("missing_row"),
+            Err(err) => {
+                tracing::warn!(
+                    "state db find_rollout_path_by_id failed during find_any_path_query: {err}"
+                );
+                fallback_reason = Some("db_error");
+            }
+        }
+    }
+
+    for (subdir, archived_only) in ordered_session_subdirs(preferred_subdir) {
+        if let Some(path) =
+            find_thread_path_by_id_str_in_subdir_without_db(codex_home, subdir, id_str).await?
+        {
+            tracing::debug!("state db missing rollout path for thread {id_str}");
+            tracing::warn!(
+                "state db discrepancy during find_thread_path_by_id_str_in_any_subdir: falling_back"
+            );
+            if let Some(reason) = fallback_reason {
+                codex_state::record_fallback(
+                    "find_thread_path",
+                    reason,
+                    /*telemetry_override*/ None,
+                );
+            }
+            state_db::read_repair_rollout_path(
+                state_db_ctx,
+                thread_id,
+                archived_only,
+                path.as_path(),
+            )
+            .await;
+            return Ok(Some(path));
+        }
+    }
+
+    Ok(None)
+}
+
+async fn find_thread_path_by_id_str_in_subdir_without_db(
+    codex_home: &Path,
+    subdir: &str,
+    id_str: &str,
+) -> io::Result<Option<PathBuf>> {
+    let mut root = codex_home.to_path_buf();
+    root.push(subdir);
+    if !root.exists() {
+        return Ok(None);
+    }
+    let (filename_match, filename_scan_error) = match find_rollout_path_by_id_from_filenames(
+        root.as_path(),
+        id_str,
+    )
+    .await
+    {
+        Ok(path) => (path, None),
+        Err(err) => {
+            tracing::warn!(
+                "rollout filename lookup failed during find_thread_path_by_id_str fallback scan: {err}"
+            );
+            (None, Some(err))
+        }
+    };
+
+    match filename_match {
+        Some(path) => Ok(Some(path)),
+        None => {
+            #[allow(clippy::unwrap_used)]
+            let limit = NonZero::new(1).unwrap();
+            let options = file_search::FileSearchOptions {
+                limit,
+                compute_indices: false,
+                respect_gitignore: false,
+                ..Default::default()
+            };
+
+            let results = file_search::run(id_str, vec![root], options, /*cancel_flag*/ None)
+                .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+
+            let found = results
+                .matches
+                .into_iter()
+                .map(|m| m.full_path())
+                .find_map(compression::RolloutFile::from_path)
+                .map(compression::RolloutFile::into_path);
+
+            if found.is_none()
+                && let Some(err) = filename_scan_error
+            {
+                return Err(err);
+            }
+            Ok(found)
+        }
+    }
+}
+
+fn archived_only_for_subdir(subdir: &str) -> Option<bool> {
+    match subdir {
+        SESSIONS_SUBDIR => Some(false),
+        ARCHIVED_SESSIONS_SUBDIR => Some(true),
+        _ => None,
+    }
+}
+
+fn rollout_subdir_hint(codex_home: &Path, path: &Path) -> Option<&'static str> {
+    if path.starts_with(codex_home.join(ARCHIVED_SESSIONS_SUBDIR)) {
+        return Some(ARCHIVED_SESSIONS_SUBDIR);
+    }
+    if path.starts_with(codex_home.join(SESSIONS_SUBDIR)) {
+        return Some(SESSIONS_SUBDIR);
+    }
+    None
+}
+
+fn ordered_session_subdirs(
+    preferred_subdir: Option<&'static str>,
+) -> [(&'static str, Option<bool>); 2] {
+    match preferred_subdir {
+        Some(ARCHIVED_SESSIONS_SUBDIR) => [
+            (ARCHIVED_SESSIONS_SUBDIR, Some(true)),
+            (SESSIONS_SUBDIR, Some(false)),
+        ],
+        _ => [
+            (SESSIONS_SUBDIR, Some(false)),
+            (ARCHIVED_SESSIONS_SUBDIR, Some(true)),
+        ],
+    }
+}
+
+async fn find_rollout_path_by_id_from_state_created_at(
+    codex_home: &Path,
+    subdir: &str,
+    target_uuid: Uuid,
+    thread_id: ThreadId,
+    archived_only: Option<bool>,
+    state_db_ctx: &codex_state::StateRuntime,
+    stale_path: &Path,
+    created_at: DateTime<Utc>,
+) -> Option<(PathBuf, bool)> {
+    let file_name = format!(
+        "rollout-{:04}-{:02}-{:02}T{:02}-{:02}-{:02}-{target_uuid}.jsonl",
+        created_at.year(),
+        created_at.month(),
+        created_at.day(),
+        created_at.hour(),
+        created_at.minute(),
+        created_at.second(),
+    );
+    let candidate = if subdir == ARCHIVED_SESSIONS_SUBDIR {
+        codex_home.join(subdir).join(file_name)
+    } else {
+        codex_home
+            .join(subdir)
+            .join(format!("{:04}", created_at.year()))
+            .join(format!("{:02}", created_at.month()))
+            .join(format!("{:02}", created_at.day()))
+            .join(file_name)
+    };
+    let existing_path = compression::existing_rollout_path_blocking(candidate.as_path())?;
+    if !rollout_file_name_matches_uuid(existing_path.as_path(), target_uuid) {
+        return None;
+    }
+    let repaired = state_db_ctx
+        .update_thread_rollout_path_if_current(
+            thread_id,
+            stale_path,
+            existing_path.as_path(),
+            archived_only,
+        )
+        .await
+        .unwrap_or_else(|err| {
+            tracing::warn!(
+                "state db stale path direct repair failed for thread {thread_id}: {err}"
+            );
+            false
+        });
+    Some((existing_path, repaired))
+}
+
+fn rollout_file_name_matches_uuid(path: &Path, target: Uuid) -> bool {
+    path.file_name()
+        .and_then(OsStr::to_str)
+        .and_then(parse_timestamp_uuid_from_filename)
+        .is_some_and(|(_ts, id)| id == target)
 }
 
 async fn find_rollout_path_by_id_from_filenames(
@@ -1430,33 +2181,41 @@ async fn find_rollout_path_by_id_from_filenames(
     let Ok(target) = Uuid::parse_str(id_str) else {
         return Ok(None);
     };
+    let root = root.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        find_rollout_path_by_id_from_filenames_blocking(root.as_path(), target)
+    })
+    .await
+    .map_err(io::Error::other)?
+}
+
+fn find_rollout_path_by_id_from_filenames_blocking(
+    root: &Path,
+    target: Uuid,
+) -> io::Result<Option<PathBuf>> {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let mut read_dir = match tokio::fs::read_dir(dir.as_path()).await {
+        let read_dir = match std::fs::read_dir(dir.as_path()) {
             Ok(read_dir) => read_dir,
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
             Err(err) => return Err(err),
         };
-        while let Some(entry) = read_dir.next_entry().await? {
-            let path = entry.path();
-            let file_type = entry.file_type().await?;
+        for entry in read_dir {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
             if file_type.is_dir() {
+                let path = entry.path();
                 stack.push(path);
                 continue;
             }
             if !file_type.is_file() {
                 continue;
             }
-            let Some(rollout_file) = compression::RolloutFile::from_path(path) else {
-                continue;
-            };
-            let Some((_ts, id)) =
-                parse_timestamp_uuid_from_filename(rollout_file.plain_file_name())
-            else {
+            let Some((_ts, id, path)) = rollout_parts_from_blocking_dir_entry(&entry) else {
                 continue;
             };
             if id == target {
-                return Ok(Some(rollout_file.into_path()));
+                return Ok(Some(path));
             }
         }
     }
@@ -1482,6 +2241,15 @@ pub async fn find_archived_thread_path_by_id_str(
 ) -> io::Result<Option<PathBuf>> {
     find_thread_path_by_id_str_in_subdir(codex_home, ARCHIVED_SESSIONS_SUBDIR, id_str, state_db_ctx)
         .await
+}
+
+/// Locate a recorded thread rollout file by UUID across active and archived session roots.
+pub async fn find_any_thread_path_by_id_str(
+    codex_home: &Path,
+    id_str: &str,
+    state_db_ctx: Option<&codex_state::StateRuntime>,
+) -> io::Result<Option<PathBuf>> {
+    find_thread_path_by_id_str_in_any_subdir(codex_home, id_str, state_db_ctx).await
 }
 
 /// Extract the `YYYY/MM/DD` directory components from a rollout filename.
