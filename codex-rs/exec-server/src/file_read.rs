@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 pub(crate) const FILE_READ_BLOCK_SIZE: usize = 1024 * 1024;
-const MAX_OPEN_FILE_READS: usize = 32;
+const MAX_OPEN_FILE_READS: usize = 128;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct FileReadBlock {

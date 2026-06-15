@@ -28,7 +28,7 @@ use crate::common::exec_server::ExecServerHarness;
 use crate::common::exec_server::exec_server;
 
 const BLOCK_SIZE: usize = 1024 * 1024;
-const OPEN_FILE_LIMIT: usize = 32;
+const OPEN_FILE_LIMIT: usize = 128;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
