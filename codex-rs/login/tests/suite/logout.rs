@@ -29,7 +29,7 @@ use wiremock::matchers::path;
 const ACCESS_TOKEN: &str = "access-token";
 const REFRESH_TOKEN: &str = "refresh-token";
 
-#[serial_test::serial(logout_revoke)]
+#[serial_test::serial(auth_env)]
 #[tokio::test]
 async fn logout_with_revoke_revokes_refresh_token_then_removes_auth() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -86,7 +86,7 @@ async fn logout_with_revoke_revokes_refresh_token_then_removes_auth() -> Result<
     Ok(())
 }
 
-#[serial_test::serial(logout_revoke)]
+#[serial_test::serial(auth_env)]
 #[tokio::test]
 async fn logout_with_revoke_uses_stored_auth_when_access_token_env_is_set() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -128,7 +128,7 @@ async fn logout_with_revoke_uses_stored_auth_when_access_token_env_is_set() -> R
     Ok(())
 }
 
-#[serial_test::serial(logout_revoke)]
+#[serial_test::serial(auth_env)]
 #[tokio::test]
 async fn logout_with_revoke_removes_auth_when_revoke_fails() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -171,7 +171,7 @@ async fn logout_with_revoke_removes_auth_when_revoke_fails() -> Result<()> {
     Ok(())
 }
 
-#[serial_test::serial(logout_revoke)]
+#[serial_test::serial(auth_env)]
 #[tokio::test]
 async fn auth_manager_logout_with_revoke_uses_cached_auth() -> Result<()> {
     skip_if_no_network!(Ok(()));
