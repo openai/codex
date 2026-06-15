@@ -569,7 +569,7 @@ impl ToolRegistry {
             Ok((_, success)) => *success,
             Err(_) => false,
         };
-        emit_metric_for_tool_read(&invocation, success).await;
+        emit_metric_for_tool_read(&invocation, success);
         let post_tool_use_payload = if success {
             let guard = response_cell.lock().await;
             guard
