@@ -2028,7 +2028,7 @@ async fn find_thread_path_by_id_str_in_any_subdir(
     Ok(None)
 }
 
-async fn find_thread_path_by_id_str_in_subdir_without_db(
+pub(crate) async fn find_thread_path_by_id_str_in_subdir_without_db(
     codex_home: &Path,
     subdir: &str,
     id_str: &str,

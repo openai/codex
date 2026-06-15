@@ -468,7 +468,19 @@ async fn repair_stale_rollout_path_from_metadata(
     item: &codex_state::ThreadMetadata,
     archived: bool,
 ) -> Option<codex_state::ThreadMetadata> {
-    let candidate = rollout_path_from_metadata(codex_home, item, archived);
+    let subdir = if archived {
+        crate::ARCHIVED_SESSIONS_SUBDIR
+    } else {
+        crate::SESSIONS_SUBDIR
+    };
+    let candidate = crate::list::find_thread_path_by_id_str_in_subdir_without_db(
+        codex_home,
+        subdir,
+        &item.id.to_string(),
+    )
+    .await
+    .ok()
+    .flatten()?;
     let existing_path = crate::compression::existing_rollout_path_blocking(candidate.as_path())?;
 
     warn!(
@@ -486,30 +498,6 @@ async fn repair_stale_rollout_path_from_metadata(
         );
     }
     Some(item)
-}
-
-fn rollout_path_from_metadata(
-    codex_home: &Path,
-    item: &codex_state::ThreadMetadata,
-    archived: bool,
-) -> PathBuf {
-    let created_at = item.created_at;
-    let file_name = format!(
-        "rollout-{}-{}.jsonl",
-        created_at.format("%Y-%m-%dT%H-%M-%S"),
-        item.id
-    );
-    if archived {
-        return codex_home
-            .join(crate::ARCHIVED_SESSIONS_SUBDIR)
-            .join(file_name);
-    }
-    codex_home
-        .join(crate::SESSIONS_SUBDIR)
-        .join(created_at.format("%Y").to_string())
-        .join(created_at.format("%m").to_string())
-        .join(created_at.format("%d").to_string())
-        .join(file_name)
 }
 
 /// Look up the rollout path for a thread id using SQLite.
