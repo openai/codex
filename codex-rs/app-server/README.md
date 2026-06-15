@@ -1952,7 +1952,7 @@ Field notes:
 
 ```json
 { "method": "account/rateLimitResetCredit/consume", "id": 8, "params": { "idempotencyKey": "8ae96ff3-3425-4f4c-8772-b6fd61502868" } }
-{ "id": 8, "result": { "code": "reset", "windowsReset": 2 } }
+{ "id": 8, "result": { "outcome": "reset", "windowsReset": 2 } }
 ```
 
 Field notes:

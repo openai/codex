@@ -5,7 +5,7 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
-use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditCode;
+use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditOutcome;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditParams;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
 use codex_app_server_protocol::GetAccountParams;
@@ -66,31 +66,31 @@ async fn consume_rate_limit_reset_credit_requires_chatgpt_auth() -> Result<()> {
 }
 
 #[tokio::test]
-async fn consume_account_rate_limit_reset_credit_maps_backend_codes() -> Result<()> {
+async fn consume_account_rate_limit_reset_credit_maps_backend_outcomes() -> Result<()> {
     let (codex_home, server) = chatgpt_test_context().await?;
     let cases = [
         (
             "request-reset",
             "reset",
-            ConsumeAccountRateLimitResetCreditCode::Reset,
+            ConsumeAccountRateLimitResetCreditOutcome::Reset,
             2,
         ),
         (
             "request-nothing",
             "nothing_to_reset",
-            ConsumeAccountRateLimitResetCreditCode::NothingToReset,
+            ConsumeAccountRateLimitResetCreditOutcome::NothingToReset,
             0,
         ),
         (
             "request-no-credit",
             "no_credit",
-            ConsumeAccountRateLimitResetCreditCode::NoCredit,
+            ConsumeAccountRateLimitResetCreditOutcome::NoCredit,
             0,
         ),
         (
             "request-retry",
             "already_redeemed",
-            ConsumeAccountRateLimitResetCreditCode::AlreadyRedeemed,
+            ConsumeAccountRateLimitResetCreditOutcome::AlreadyRedeemed,
             0,
         ),
     ];
@@ -109,11 +109,11 @@ async fn consume_account_rate_limit_reset_credit_maps_backend_codes() -> Result<
     }
 
     let mut mcp = initialized_app_server(codex_home.path()).await?;
-    for (idempotency_key, _, expected_code, windows_reset) in cases {
+    for (idempotency_key, _, expected_outcome, windows_reset) in cases {
         assert_eq!(
             consume_reset_credit(&mut mcp, idempotency_key).await?,
             ConsumeAccountRateLimitResetCreditResponse {
-                code: expected_code,
+                outcome: expected_outcome,
                 windows_reset,
             }
         );

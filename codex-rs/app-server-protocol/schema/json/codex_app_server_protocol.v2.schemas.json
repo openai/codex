@@ -4790,7 +4790,7 @@
       ],
       "type": "object"
     },
-    "ConsumeAccountRateLimitResetCreditCode": {
+    "ConsumeAccountRateLimitResetCreditOutcome": {
       "enum": [
         "reset",
         "nothing_to_reset",
@@ -4816,8 +4816,8 @@
     "ConsumeAccountRateLimitResetCreditResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
-        "code": {
-          "$ref": "#/definitions/ConsumeAccountRateLimitResetCreditCode"
+        "outcome": {
+          "$ref": "#/definitions/ConsumeAccountRateLimitResetCreditOutcome"
         },
         "windowsReset": {
           "format": "int64",
@@ -4825,7 +4825,7 @@
         }
       },
       "required": [
-        "code",
+        "outcome",
         "windowsReset"
       ],
       "title": "ConsumeAccountRateLimitResetCreditResponse",

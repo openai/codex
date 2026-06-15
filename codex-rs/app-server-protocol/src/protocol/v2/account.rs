@@ -279,14 +279,14 @@ pub struct ConsumeAccountRateLimitResetCreditParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConsumeAccountRateLimitResetCreditResponse {
-    pub code: ConsumeAccountRateLimitResetCreditCode,
+    pub outcome: ConsumeAccountRateLimitResetCreditOutcome,
     pub windows_reset: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/", rename_all = "snake_case")]
-pub enum ConsumeAccountRateLimitResetCreditCode {
+pub enum ConsumeAccountRateLimitResetCreditOutcome {
     Reset,
     NothingToReset,
     NoCredit,
