@@ -1,8 +1,8 @@
 //! Terminal keyboard enhancement setup and teardown helpers.
 //!
 //! The TUI uses crossterm's keyboard enhancement stack while it owns the terminal, but
-//! suspend and process exit get a stronger reset so the parent shell does not inherit
-//! enhanced key reporting if a terminal misses the normal stack pop.
+//! process exit gets a stronger reset so the parent shell does not inherit enhanced key
+//! reporting if a terminal misses the normal stack pop.
 
 use std::fmt;
 use std::io::stdout;
@@ -202,7 +202,7 @@ pub(super) fn restore_keyboard_enhancement_stack() {
     );
 }
 
-pub(super) fn reset_keyboard_reporting() {
+pub(super) fn reset_keyboard_reporting_after_exit() {
     let _ = execute!(
         stdout(),
         PopKeyboardEnhancementFlags,

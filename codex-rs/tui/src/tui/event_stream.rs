@@ -24,16 +24,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::task::Context;
 use std::task::Poll;
-#[cfg(unix)]
-use std::time::Duration;
-#[cfg(unix)]
-use std::time::Instant;
 
 use crossterm::event::Event;
-#[cfg(unix)]
-use crossterm::event::KeyCode;
-#[cfg(unix)]
-use crossterm::event::KeyEventKind;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tokio_stream::Stream;
@@ -154,143 +146,6 @@ pub struct TuiEventStream<S: EventSource + Default + Unpin = CrosstermEventSourc
     suspend_context: crate::tui::job_control::SuspendContext,
     #[cfg(unix)]
     alt_screen_active: Arc<AtomicBool>,
-    #[cfg(unix)]
-    post_resume_input_guard: PostResumeInputGuard,
-}
-
-#[cfg(unix)]
-const POST_RESUME_INPUT_GUARD_DURATION: Duration = Duration::from_millis(/*millis*/ 500);
-
-#[cfg(unix)]
-#[derive(Debug, Default)]
-struct PostResumeInputGuard {
-    expires_at: Option<Instant>,
-    focus_sequence_index: u8,
-}
-
-#[cfg(unix)]
-impl PostResumeInputGuard {
-    fn arm(&mut self, now: Instant) {
-        self.expires_at = now.checked_add(POST_RESUME_INPUT_GUARD_DURATION);
-        self.focus_sequence_index = 0;
-        tracing::trace!(
-            event = "tui_post_resume_input_guard_armed",
-            duration_ms = %POST_RESUME_INPUT_GUARD_DURATION.as_millis(),
-            "armed post-resume terminal input guard"
-        );
-    }
-
-    fn should_drop(&mut self, event: &Event, now: Instant) -> bool {
-        if !self.expires_at.is_some_and(|expires_at| now <= expires_at) {
-            self.disarm();
-            return false;
-        }
-
-        self.trace_event(event);
-
-        match event {
-            Event::Paste(pasted) => {
-                let should_drop = pasted.as_bytes() == b"\x1b[I";
-                if should_drop {
-                    tracing::debug!(
-                        event = "tui_post_resume_focus_report_suppressed",
-                        delivery = "paste",
-                        "suppressed literal focus report after resume"
-                    );
-                }
-                self.disarm();
-                should_drop
-            }
-            Event::FocusGained => {
-                self.disarm();
-                false
-            }
-            Event::Key(key_event)
-                if matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
-            {
-                let matches_focus_sequence = match self.focus_sequence_index {
-                    0 => matches!(key_event.code, KeyCode::Esc | KeyCode::Char('\x1b')),
-                    1 => matches!(key_event.code, KeyCode::Char('[')),
-                    2 => matches!(key_event.code, KeyCode::Char('I')),
-                    _ => false,
-                };
-                if !matches_focus_sequence {
-                    self.disarm();
-                    return false;
-                }
-
-                self.focus_sequence_index += 1;
-                if self.focus_sequence_index == 3 {
-                    tracing::debug!(
-                        event = "tui_post_resume_focus_report_suppressed",
-                        delivery = "split_key_events",
-                        "suppressed split focus report after resume"
-                    );
-                    self.disarm();
-                }
-                true
-            }
-            Event::Key(_) => false,
-            _ => false,
-        }
-    }
-
-    fn trace_event(&self, event: &Event) {
-        let event_kind = match event {
-            Event::Key(key_event) => match key_event.code {
-                KeyCode::Esc => "key_escape",
-                KeyCode::Char('\x1b') => "key_escape_char",
-                KeyCode::Char('^') => "key_caret",
-                KeyCode::Char('[') => "key_left_bracket",
-                KeyCode::Char('I') => "key_upper_i",
-                KeyCode::Char(_) => "key_char_other",
-                _ => "key_other",
-            },
-            Event::Paste(pasted) if pasted.as_bytes() == b"\x1b[I" => "paste_focus_report",
-            Event::Paste(_) => "paste_other",
-            Event::FocusGained => "focus_gained",
-            Event::FocusLost => "focus_lost",
-            Event::Resize(_, _) => "resize",
-            _ => "other",
-        };
-        let paste_byte_len = match event {
-            Event::Paste(pasted) => Some(pasted.len()),
-            _ => None,
-        };
-        let paste_contains_escape = match event {
-            Event::Paste(pasted) => Some(pasted.contains('\x1b')),
-            _ => None,
-        };
-        let paste_matches_visible_focus_report = match event {
-            Event::Paste(pasted) => Some(pasted == "^[[I"),
-            _ => None,
-        };
-        let key_kind = match event {
-            Event::Key(key_event) => Some(key_event.kind),
-            _ => None,
-        };
-        let key_modifiers = match event {
-            Event::Key(key_event) => Some(key_event.modifiers),
-            _ => None,
-        };
-
-        tracing::trace!(
-            event = "tui_post_resume_input_observed",
-            event_kind,
-            focus_sequence_index = self.focus_sequence_index,
-            ?paste_byte_len,
-            ?paste_contains_escape,
-            ?paste_matches_visible_focus_report,
-            ?key_kind,
-            ?key_modifiers,
-            "observed terminal input after resume"
-        );
-    }
-
-    fn disarm(&mut self) {
-        self.expires_at = None;
-        self.focus_sequence_index = 0;
-    }
 }
 
 impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
@@ -312,8 +167,6 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             suspend_context,
             #[cfg(unix)]
             alt_screen_active,
-            #[cfg(unix)]
-            post_resume_input_guard: PostResumeInputGuard::default(),
         }
     }
 
@@ -382,14 +235,6 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
 
     /// Map a crossterm event to a [`TuiEvent`], skipping events we don't use (mouse events, etc.).
     fn map_crossterm_event(&mut self, event: Event) -> Option<TuiEvent> {
-        #[cfg(unix)]
-        if self
-            .post_resume_input_guard
-            .should_drop(&event, Instant::now())
-        {
-            return None;
-        }
-
         match event {
             Event::Key(key_event) => {
                 #[cfg(unix)]
@@ -397,13 +242,12 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                     self.broker.pause_events();
                     let suspend_result = self.suspend_context.suspend(&self.alt_screen_active);
                     self.broker.resume_events();
-                    match suspend_result {
-                        Ok(()) => self.post_resume_input_guard.arm(Instant::now()),
-                        Err(err) => tracing::warn!(
+                    if let Err(err) = suspend_result {
+                        tracing::warn!(
                             event = "tui_suspend_failed",
                             error = %err,
                             "failed to suspend TUI process"
-                        ),
+                        );
                     }
                     return Some(TuiEvent::Draw);
                 }
@@ -466,7 +310,6 @@ mod tests {
     use std::task::Context;
     use std::task::Poll;
     use std::time::Duration;
-    use std::time::Instant;
     use tokio::sync::broadcast;
     use tokio::sync::mpsc;
     use tokio::time::timeout;
@@ -552,56 +395,6 @@ mod tests {
         let (draw_tx, draw_rx) = broadcast::channel(1);
         let terminal_focused = Arc::new(AtomicBool::new(true));
         (broker, handle, draw_tx, draw_rx, terminal_focused)
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn post_resume_guard_suppresses_literal_focus_report_paste() {
-        let now = Instant::now();
-        let mut guard = PostResumeInputGuard::default();
-        guard.arm(now);
-
-        assert!(guard.should_drop(&Event::Paste("\x1b[I".to_string()), now));
-        assert!(!guard.should_drop(
-            &Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
-            now
-        ));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn post_resume_guard_suppresses_split_focus_report_keys() {
-        let now = Instant::now();
-        let mut guard = PostResumeInputGuard::default();
-        guard.arm(now);
-
-        assert!(guard.should_drop(
-            &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-            now
-        ));
-        assert!(guard.should_drop(
-            &Event::Key(KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE)),
-            now
-        ));
-        assert!(guard.should_drop(
-            &Event::Key(KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT)),
-            now
-        ));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn post_resume_guard_expires_before_filtering_user_input() {
-        let now = Instant::now();
-        let mut guard = PostResumeInputGuard::default();
-        guard.arm(now);
-        let after_guard =
-            now + POST_RESUME_INPUT_GUARD_DURATION + Duration::from_millis(/*millis*/ 1);
-
-        assert!(!guard.should_drop(
-            &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-            after_guard
-        ));
     }
 
     #[tokio::test(flavor = "current_thread")]
