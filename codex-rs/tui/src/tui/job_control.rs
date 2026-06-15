@@ -71,7 +71,29 @@ impl SuspendContext {
         }
         let y = self.suspend_cursor_y.load(Ordering::Relaxed);
         let _ = execute!(stdout(), MoveTo(0, y), Show);
-        suspend_process()
+        suspend_process()?;
+
+        // The shell writes its job-control status and the resumed command after `fg`, so the
+        // cursor may no longer be on the row cached before suspending. The event stream remains
+        // paused until this method returns, which makes it safe for the probe to consume both an
+        // interleaved focus report and the cursor-position response without racing the background
+        // input reader.
+        match crate::terminal_probe::cursor_position(crate::terminal_probe::DEFAULT_TIMEOUT) {
+            Ok(Some(position)) => self.set_cursor_y(position.y),
+            Ok(None) => tracing::debug!("terminal cursor position unavailable after resume"),
+            Err(err) => tracing::debug!(
+                error = %err,
+                "failed to read terminal cursor position after resume"
+            ),
+        }
+        super::flush_terminal_input_buffer();
+        tracing::trace!(
+            event = "tui_suspend_stage_changed",
+            stage = "terminal_input_flushed",
+            "flushed terminal input after resume"
+        );
+
+        Ok(())
     }
 
     /// Consume the pending resume intent and precompute any viewport changes needed post-resume.
@@ -203,12 +225,6 @@ fn suspend_process() -> Result<()> {
         event = "tui_suspend_stage_changed",
         stage = "terminal_modes_reenabled",
         "re-enabled terminal modes after resume"
-    );
-    super::flush_terminal_input_buffer();
-    tracing::trace!(
-        event = "tui_suspend_stage_changed",
-        stage = "terminal_input_flushed",
-        "flushed terminal input after resume"
     );
     Ok(())
 }
