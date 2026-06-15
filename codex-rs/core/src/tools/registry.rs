@@ -630,9 +630,8 @@ impl ToolRegistry {
             }
         }
 
-        // A blocking PostToolUse hook rejects only the caller-facing code-mode dispatch. The
-        // underlying handler still completed, so lifecycle contributors observe that completion;
-        // the dispatch trace records the caller-facing failure below.
+        // PostToolUse runs after the tool completes. A blocking hook rejects the
+        // code-mode call below, but the tool lifecycle still records the completed execution.
         let lifecycle_outcome = match &result {
             Ok(_) => {
                 let guard = response_cell.lock().await;
