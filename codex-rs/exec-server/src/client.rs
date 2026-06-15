@@ -505,7 +505,16 @@ impl ExecServerClient {
                     )));
                 }
                 if response.eof {
-                    registration.active = false;
+                    if registration
+                        .client
+                        .fs_close(FsCloseParams {
+                            handle_id: registration.handle_id.clone(),
+                        })
+                        .await
+                        .is_ok()
+                    {
+                        registration.active = false;
+                    }
                     return if chunk.is_empty() {
                         Ok(None)
                     } else {

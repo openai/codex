@@ -64,7 +64,7 @@ impl FileReadHandleManager {
                     "file read task stopped unexpectedly: {error}"
                 ))),
             };
-        if result.is_err() || result.as_ref().is_ok_and(|block| block.eof) {
+        if result.is_err() {
             self.close(handle_id).await;
         }
         result

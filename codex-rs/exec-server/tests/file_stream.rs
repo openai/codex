@@ -70,6 +70,30 @@ async fn stream_stops_after_an_exact_block_boundary() -> Result<()> {
 }
 
 #[tokio::test]
+async fn completed_streams_release_handle_capacity() -> Result<()> {
+    let server = exec_server().await?;
+    let client = connect_client(server.websocket_url()).await?;
+    let tmp = TempDir::new()?;
+    let path = tmp.path().join("repeated.txt");
+    std::fs::write(&path, b"repeated")?;
+    let path = PathUri::from_path(path)?;
+
+    for _ in 0..=OPEN_FILE_LIMIT {
+        let chunks = client
+            .stream(FsReadFileParams {
+                path: path.clone(),
+                sandbox: None,
+            })
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        assert_eq!(chunks, vec![bytes::Bytes::from_static(b"repeated")]);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn stream_rejects_platform_sandbox() -> Result<()> {
     let server = exec_server().await?;
     let client = connect_client(server.websocket_url()).await?;
@@ -212,6 +236,22 @@ async fn read_block_supports_non_sequential_offsets_and_lengths() -> Result<()> 
         .await?,
         (b"89".to_vec(), true)
     );
+    assert_eq!(
+        read_block(
+            &mut server,
+            &open.handle_id,
+            /*offset*/ 0,
+            /*len*/ 2
+        )
+        .await?,
+        (b"01".to_vec(), false)
+    );
+    let _: serde_json::Value = rpc_call(
+        &mut server,
+        "fs/close",
+        serde_json::json!({ "handleId": open.handle_id }),
+    )
+    .await?;
     server.shutdown().await?;
     Ok(())
 }
