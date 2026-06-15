@@ -337,11 +337,10 @@ mod tests {
         }]);
         let permissions =
             PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
-        let sandbox_context =
-            codex_file_system::FileSystemSandboxContext::from_permission_profile_with_cwd(
-                permissions,
-                path_uri("host-checkout"),
-            );
+        let sandbox_context = FileSystemSandboxContext::from_permission_profile_with_cwd(
+            permissions,
+            path_uri("host-checkout"),
+        );
 
         let remote_context =
             remote_sandbox_context(Some(&sandbox_context)).expect("remote sandbox context");
@@ -361,10 +360,7 @@ mod tests {
             PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
         let cwd = path_uri("host-checkout");
         let sandbox_context =
-            codex_file_system::FileSystemSandboxContext::from_permission_profile_with_cwd(
-                permissions,
-                cwd.clone(),
-            );
+            FileSystemSandboxContext::from_permission_profile_with_cwd(permissions, cwd.clone());
 
         let remote_context =
             remote_sandbox_context(Some(&sandbox_context)).expect("remote sandbox context");

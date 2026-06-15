@@ -3,7 +3,6 @@ use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::FileSystemPath;
-use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -106,16 +105,6 @@ impl FileSystemSandboxContext {
             windows_sandbox_private_desktop: false,
             use_legacy_landlock: false,
         }
-    }
-
-    pub fn should_run_in_sandbox(&self) -> io::Result<bool> {
-        let permissions: PermissionProfile<AbsolutePathBuf> =
-            self.permissions.clone().try_into()?;
-        let file_system_policy = permissions.file_system_sandbox_policy();
-        Ok(
-            matches!(file_system_policy.kind, FileSystemSandboxKind::Restricted)
-                && !file_system_policy.has_full_disk_write_access(),
-        )
     }
 
     pub fn has_cwd_dependent_permissions(&self) -> bool {

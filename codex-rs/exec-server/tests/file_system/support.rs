@@ -105,10 +105,8 @@ pub(crate) fn workspace_write_sandbox(
 }
 
 fn sandbox_context(entries: Vec<FileSystemSandboxEntry>) -> FileSystemSandboxContext {
-    codex_file_system::FileSystemSandboxContext::from_permission_profile(
-        PermissionProfile::from_runtime_permissions(
-            &FileSystemSandboxPolicy::restricted(entries),
-            NetworkSandboxPolicy::Restricted,
-        ),
-    )
+    FileSystemSandboxContext::from_permission_profile(PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(entries),
+        NetworkSandboxPolicy::Restricted,
+    ))
 }

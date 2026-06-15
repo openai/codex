@@ -1,3 +1,5 @@
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::path::Path;
@@ -702,7 +704,12 @@ fn reject_platform_sandbox_context(sandbox: Option<&FileSystemSandboxContext>) -
 pub(crate) fn should_run_in_platform_sandbox(
     sandbox: &FileSystemSandboxContext,
 ) -> io::Result<bool> {
-    sandbox.should_run_in_sandbox()
+    let permissions: PermissionProfile = sandbox.permissions.clone().try_into()?;
+    let file_system_policy = permissions.file_system_sandbox_policy();
+    Ok(
+        matches!(file_system_policy.kind, FileSystemSandboxKind::Restricted)
+            && !file_system_policy.has_full_disk_write_access(),
+    )
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> io::Result<()> {

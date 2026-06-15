@@ -885,7 +885,7 @@ mod tests {
         )
         .expect("absolute current exe");
         let path = codex_utils_path_uri::PathUri::from_abs_path(&path);
-        let sandbox = codex_file_system::FileSystemSandboxContext::from_permission_profile(
+        let sandbox = crate::FileSystemSandboxContext::from_permission_profile(
             codex_protocol::models::PermissionProfile::from_runtime_permissions(
                 &codex_protocol::permissions::FileSystemSandboxPolicy::restricted(Vec::new()),
                 codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
