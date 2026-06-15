@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use arc_swap::ArcSwap;
+use arc_swap::ArcSwapAny;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::error::CodexErr;
@@ -30,22 +30,22 @@ pub(crate) fn default_thread_environment_selections(
         .collect()
 }
 
-type SnapshotTask = Shared<BoxFuture<'static, TurnEnvironmentSnapshot>>;
+type SharedSnapshotTask = Arc<Shared<BoxFuture<'static, TurnEnvironmentSnapshot>>>;
 
 pub(crate) struct ThreadEnvironments {
     environment_manager: Arc<EnvironmentManager>,
-    snapshot_task: ArcSwap<SnapshotTask>,
+    snapshot_task: ArcSwapAny<SharedSnapshotTask>,
 }
 
 impl ThreadEnvironments {
     pub(crate) fn new(environment_manager: Arc<EnvironmentManager>) -> Self {
         Self {
             environment_manager,
-            snapshot_task: ArcSwap::from_pointee(
+            snapshot_task: ArcSwapAny::new(Arc::new(
                 futures::future::ready(TurnEnvironmentSnapshot::default())
                     .boxed()
                     .shared(),
-            ),
+            )),
         }
     }
 
@@ -62,9 +62,9 @@ impl ThreadEnvironments {
             Self::resolve_snapshot(environment_manager, previous, environments).await
         }
         .remote_handle();
-        drop(tokio::spawn(snapshot_task));
         self.snapshot_task
             .store(Arc::new(snapshot.boxed().shared()));
+        drop(tokio::spawn(snapshot_task));
     }
 
     async fn resolve_snapshot(
