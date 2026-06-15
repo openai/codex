@@ -2,6 +2,8 @@ use super::*;
 #[cfg(target_os = "windows")]
 use codex_feedback::WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME;
 
+const MAX_FEEDBACK_TREE_THREADS: usize = 8;
+
 #[derive(Clone)]
 pub(crate) struct FeedbackRequestProcessor {
     auth_manager: Arc<AuthManager>,
@@ -125,6 +127,14 @@ impl FeedbackRequestProcessor {
                 },
                 None => Vec::new(),
             };
+            let mut feedback_thread_ids = feedback_thread_ids;
+            let original_len = feedback_thread_ids.len();
+            if original_len > MAX_FEEDBACK_TREE_THREADS {
+                feedback_thread_ids.truncate(MAX_FEEDBACK_TREE_THREADS);
+                warn!(
+                    "feedback log upload for thread_id={conversation_id:?} truncated from {original_len} threads to {MAX_FEEDBACK_TREE_THREADS}"
+                );
+            }
             let sqlite_feedback_logs = if let Some(state_db_ctx) = state_db_ctx.as_ref()
                 && !feedback_thread_ids.is_empty()
             {
