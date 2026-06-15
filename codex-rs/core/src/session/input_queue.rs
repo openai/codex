@@ -19,6 +19,12 @@ pub(crate) enum TurnInput {
     InterAgentCommunication(InterAgentCommunication),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum InputQueueActivity {
+    Mailbox,
+    Steer,
+}
+
 /// Turn-local pending input storage owned by the input queue flow.
 #[derive(Default)]
 pub(crate) struct TurnInputQueue {
@@ -27,41 +33,40 @@ pub(crate) struct TurnInputQueue {
 
 /// Session-scoped pending input storage and active-turn mailbox delivery coordination.
 pub(crate) struct InputQueue {
-    mailbox_tx: watch::Sender<()>,
-    steer_tx: watch::Sender<()>,
+    activity_tx: watch::Sender<InputQueueActivity>,
     mailbox_pending_mails: Mutex<VecDeque<InterAgentCommunication>>,
 }
 
 impl InputQueue {
     pub(crate) fn new() -> Self {
-        let (mailbox_tx, _) = watch::channel(());
-        let (steer_tx, _) = watch::channel(());
+        let (activity_tx, _) = watch::channel(InputQueueActivity::Mailbox);
         Self {
-            mailbox_tx,
-            steer_tx,
+            activity_tx,
             mailbox_pending_mails: Mutex::new(VecDeque::new()),
         }
     }
 
-    pub(crate) async fn subscribe_mailbox(&self) -> watch::Receiver<()> {
-        let mut mailbox_rx = self.mailbox_tx.subscribe();
-        if self.has_pending_mailbox_items().await {
-            mailbox_rx.mark_changed();
-        }
-        mailbox_rx
-    }
-
-    pub(crate) async fn subscribe_steer(
+    pub(crate) async fn subscribe_activity(
         &self,
         turn_state: Option<&Mutex<TurnState>>,
-    ) -> watch::Receiver<()> {
-        let mut steer_rx = self.steer_tx.subscribe();
-        if let Some(turn_state) = turn_state
-            && turn_state.lock().await.pending_input.has_user_input()
-        {
-            steer_rx.mark_changed();
-        }
-        steer_rx
+    ) -> (
+        watch::Receiver<InputQueueActivity>,
+        Option<InputQueueActivity>,
+    ) {
+        let activity_rx = self.activity_tx.subscribe();
+        let has_pending_steer = if let Some(turn_state) = turn_state {
+            turn_state.lock().await.pending_input.has_user_input()
+        } else {
+            false
+        };
+        let pending_activity = if has_pending_steer {
+            Some(InputQueueActivity::Steer)
+        } else if self.has_pending_mailbox_items().await {
+            Some(InputQueueActivity::Mailbox)
+        } else {
+            None
+        };
+        (activity_rx, pending_activity)
     }
 
     pub(crate) async fn enqueue_mailbox_communication(
@@ -72,7 +77,7 @@ impl InputQueue {
             .lock()
             .await
             .push_back(communication);
-        self.mailbox_tx.send_replace(());
+        self.activity_tx.send_replace(InputQueueActivity::Mailbox);
     }
 
     pub(crate) async fn has_pending_mailbox_items(&self) -> bool {
@@ -167,7 +172,7 @@ impl InputQueue {
             turn_state.pending_input.items.extend(input);
             turn_state.accept_mailbox_delivery_for_current_turn();
         }
-        self.steer_tx.send_replace(());
+        self.activity_tx.send_replace(InputQueueActivity::Steer);
     }
 
     pub(crate) async fn extend_pending_input_for_turn_state(
@@ -279,7 +284,9 @@ mod tests {
     #[tokio::test]
     async fn input_queue_notifies_mailbox_subscribers() {
         let input_queue = InputQueue::new();
-        let mut mailbox_rx = input_queue.subscribe_mailbox().await;
+        let (mut activity_rx, pending_activity) =
+            input_queue.subscribe_activity(/*turn_state*/ None).await;
+        assert_eq!(pending_activity, None);
 
         input_queue
             .enqueue_mailbox_communication(make_mail(
@@ -298,14 +305,20 @@ mod tests {
             ))
             .await;
 
-        mailbox_rx.changed().await.expect("mailbox update");
+        activity_rx.changed().await.expect("mailbox update");
+        assert_eq!(
+            *activity_rx.borrow_and_update(),
+            InputQueueActivity::Mailbox
+        );
     }
 
     #[tokio::test]
     async fn input_queue_notifies_steer_subscribers() {
         let input_queue = InputQueue::new();
         let turn_state = Mutex::new(TurnState::default());
-        let mut steer_rx = input_queue.subscribe_steer(Some(&turn_state)).await;
+        let (mut activity_rx, pending_activity) =
+            input_queue.subscribe_activity(Some(&turn_state)).await;
+        assert_eq!(pending_activity, None);
 
         input_queue
             .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
@@ -320,11 +333,12 @@ mod tests {
             )
             .await;
 
-        steer_rx.changed().await.expect("steer update");
+        activity_rx.changed().await.expect("steer update");
+        assert_eq!(*activity_rx.borrow_and_update(), InputQueueActivity::Steer);
     }
 
     #[tokio::test]
-    async fn input_queue_marks_already_pending_steer_as_changed() {
+    async fn input_queue_reports_already_pending_steer() {
         let input_queue = InputQueue::new();
         let turn_state = Mutex::new(TurnState::default());
         input_queue
@@ -340,9 +354,10 @@ mod tests {
             )
             .await;
 
-        let mut steer_rx = input_queue.subscribe_steer(Some(&turn_state)).await;
+        let (_activity_rx, pending_activity) =
+            input_queue.subscribe_activity(Some(&turn_state)).await;
 
-        steer_rx.changed().await.expect("already pending steer");
+        assert_eq!(pending_activity, Some(InputQueueActivity::Steer));
     }
 
     #[tokio::test]

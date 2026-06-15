@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::InputQueueActivity;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v2;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -69,10 +70,9 @@ impl Handler {
             .input_queue
             .turn_state_for_sub_id(&session.active_turn, &turn.sub_id)
             .await;
-        let mut mailbox_rx = session.input_queue.subscribe_mailbox().await;
-        let mut steer_rx = session
+        let (mut activity_rx, pending_activity) = session
             .input_queue
-            .subscribe_steer(turn_state.as_deref())
+            .subscribe_activity(turn_state.as_deref())
             .await;
 
         session
@@ -90,7 +90,7 @@ impl Handler {
             .await;
 
         let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-        let outcome = wait_for_activity(&mut mailbox_rx, &mut steer_rx, deadline).await;
+        let outcome = wait_for_activity(&mut activity_rx, pending_activity, deadline).await;
         let result = WaitAgentResult::from_outcome(outcome);
 
         session
@@ -169,18 +169,21 @@ enum WaitOutcome {
 }
 
 async fn wait_for_activity(
-    mailbox_rx: &mut tokio::sync::watch::Receiver<()>,
-    steer_rx: &mut tokio::sync::watch::Receiver<()>,
+    activity_rx: &mut tokio::sync::watch::Receiver<InputQueueActivity>,
+    pending_activity: Option<InputQueueActivity>,
     deadline: Instant,
 ) -> WaitOutcome {
-    let activity = async {
-        tokio::select! {
-            result = mailbox_rx.changed() => result.map(|()| WaitOutcome::MailboxActivity),
-            result = steer_rx.changed() => result.map(|()| WaitOutcome::Steered),
-        }
-    };
-    match timeout_at(deadline, activity).await {
-        Ok(Ok(outcome)) => outcome,
+    if let Some(activity) = pending_activity {
+        return match activity {
+            InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
+            InputQueueActivity::Steer => WaitOutcome::Steered,
+        };
+    }
+    match timeout_at(deadline, activity_rx.changed()).await {
+        Ok(Ok(())) => match *activity_rx.borrow_and_update() {
+            InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
+            InputQueueActivity::Steer => WaitOutcome::Steered,
+        },
         Ok(Err(_)) | Err(_) => WaitOutcome::TimedOut,
     }
 }
