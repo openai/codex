@@ -969,6 +969,7 @@ impl Session {
                     config: config.as_ref(),
                     session_source: &session_configuration.session_source,
                     persistent_thread_state_available: state_db_ctx.is_some(),
+                    environments: session_configuration.environment_selections(),
                     session_store: &session_extension_data,
                     thread_store: &thread_extension_data,
                 }).await;

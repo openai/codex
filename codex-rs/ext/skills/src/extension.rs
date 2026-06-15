@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use codex_core_skills::HostLoadedSkills;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ContextualUserFragment;
@@ -60,9 +61,14 @@ where
                 .get::<Vec<SelectedCapabilityRoot>>()
                 .map(|selected_roots| selected_roots.as_ref().clone())
                 .unwrap_or_default();
+            let orchestrator_skills_enabled = !input
+                .environments
+                .iter()
+                .any(|environment| environment.environment_id == LOCAL_ENVIRONMENT_ID);
             input.thread_store.insert(SkillsThreadState::new(
                 (self.config_from_host)(input.config),
                 selected_roots,
+                orchestrator_skills_enabled,
             ));
         })
     }
@@ -83,7 +89,12 @@ where
         if let Some(state) = thread_store.get::<SkillsThreadState>() {
             state.set_config(next_config);
         } else {
-            thread_store.insert(SkillsThreadState::new(next_config, Vec::new()));
+            let orchestrator_skills_enabled = true;
+            thread_store.insert(SkillsThreadState::new(
+                next_config,
+                Vec::new(),
+                orchestrator_skills_enabled,
+            ));
         }
     }
 }
@@ -113,7 +124,7 @@ where
                         host: None,
                         include_host_skills: false,
                         include_bundled_skills: config.bundled_skills_enabled,
-                        include_orchestrator_skills: true,
+                        include_orchestrator_skills: thread_state.orchestrator_skills_enabled(),
                         mcp_resources: session_store.get::<McpResourceClient>(),
                     },
                     &thread_state,
@@ -137,9 +148,13 @@ where
     fn tools(
         &self,
         session_store: &ExtensionData,
-        _thread_store: &ExtensionData,
+        thread_store: &ExtensionData,
     ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
-        if !self.providers.has_orchestrator_provider() {
+        if !self.providers.has_orchestrator_provider()
+            || !thread_store
+                .get::<SkillsThreadState>()
+                .is_some_and(|state| state.orchestrator_skills_enabled())
+        {
             return Vec::new();
         }
 
@@ -174,7 +189,7 @@ where
                 host: host_loaded_skills.clone(),
                 include_host_skills: true,
                 include_bundled_skills: config.bundled_skills_enabled,
-                include_orchestrator_skills: true,
+                include_orchestrator_skills: thread_state.orchestrator_skills_enabled(),
                 mcp_resources: session_store.get::<McpResourceClient>(),
             };
             let catalog = self.list_skills(query, &thread_state).await;

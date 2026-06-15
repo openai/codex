@@ -282,6 +282,78 @@ async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_executor_does_not_expose_orchestrator_skills() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let (apps_server_url, apps_server_handle) = start_resource_apps_mcp_server().await?;
+    let responses_server_uri = responses_server.uri();
+    let (_codex_home, mut mcp) =
+        start_resource_test_app_server(&apps_server_url, &responses_server_uri).await?;
+
+    let thread_start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(thread_start_resp)?;
+
+    let response_mock = responses::mount_sse_once(
+        &responses_server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-no-orchestrator-skill"),
+            responses::ev_assistant_message("msg-no-orchestrator-skill", "Done"),
+            responses::ev_completed("resp-no-orchestrator-skill"),
+        ]),
+    )
+    .await;
+    let turn_start_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![UserInput::Text {
+                text: format!("Use ${SKILL_NAME}"),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_start_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let request = response_mock.single_request();
+    assert!(request.tool_by_name("skills", "list").is_none());
+    assert!(request.tool_by_name("skills", "read").is_none());
+    assert!(
+        request
+            .message_input_texts("developer")
+            .iter()
+            .all(|text| !text.contains(SKILL_NAME))
+    );
+    assert!(
+        request
+            .message_input_texts("user")
+            .iter()
+            .all(|text| !text.contains(SKILL_MARKER))
+    );
+
+    apps_server_handle.abort();
+    let _ = apps_server_handle.await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_resource_read_returns_resource_contents_without_thread() -> Result<()> {
     let (apps_server_url, apps_server_handle) = start_resource_apps_mcp_server().await?;
 

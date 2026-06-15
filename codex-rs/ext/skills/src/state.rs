@@ -12,6 +12,7 @@ use crate::catalog::SkillProviderError;
 pub(crate) struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
     selected_roots: Vec<SelectedCapabilityRoot>,
+    orchestrator_skills_enabled: bool,
     orchestrator_catalog: OnceCell<SkillCatalog>,
 }
 
@@ -19,10 +20,12 @@ impl SkillsThreadState {
     pub(crate) fn new(
         config: SkillsExtensionConfig,
         selected_roots: Vec<SelectedCapabilityRoot>,
+        orchestrator_skills_enabled: bool,
     ) -> Self {
         Self {
             config: Mutex::new(config),
             selected_roots,
+            orchestrator_skills_enabled,
             orchestrator_catalog: OnceCell::new(),
         }
     }
@@ -43,6 +46,10 @@ impl SkillsThreadState {
 
     pub(crate) fn selected_roots(&self) -> &[SelectedCapabilityRoot] {
         &self.selected_roots
+    }
+
+    pub(crate) fn orchestrator_skills_enabled(&self) -> bool {
+        self.orchestrator_skills_enabled
     }
 
     pub(crate) async fn orchestrator_catalog_snapshot(
