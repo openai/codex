@@ -2715,6 +2715,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-config",
  "codex-core-skills",
+ "codex-desktop-installation",
  "codex-exec-server",
  "codex-git-utils",
  "codex-hooks",

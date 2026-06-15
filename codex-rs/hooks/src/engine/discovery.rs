@@ -56,7 +56,9 @@ struct HookDiscoveryPolicy {
 
 impl HookDiscoveryPolicy {
     fn allows(self, source: &HookHandlerSource<'_>) -> bool {
-        !self.allow_managed_hooks_only || source.is_managed
+        !self.allow_managed_hooks_only
+            || source.is_managed
+            || source.source == HookSource::AppBundledInternal
     }
 }
 
@@ -223,7 +225,14 @@ fn append_plugin_hook_sources(
             source_path,
             source_relative_path,
             hooks,
+            source,
         } = source;
+        if !matches!(source, HookSource::Plugin | HookSource::AppBundledInternal) {
+            warnings.push(format!(
+                "skipping plugin hook source with invalid source {source:?}"
+            ));
+            continue;
+        }
         let mut env = HashMap::new();
         let plugin_root_value = plugin_root.display().to_string();
         let plugin_data_root_value = plugin_data_root.display().to_string();
@@ -245,7 +254,7 @@ fn append_plugin_hook_sources(
                     plugin_id.as_str(),
                     source_relative_path.as_str(),
                 ),
-                source: HookSource::Plugin,
+                source,
                 is_managed: false,
                 bypass_hook_trust: policy.bypass_hook_trust,
                 hook_states,
@@ -502,30 +511,37 @@ fn append_matcher_groups(
                     // TODO(abhinav): replace this positional suffix with a durable hook id.
                     let key =
                         crate::hook_key(&source.key_source, event_name, group_index, handler_index);
-                    let state = source.hook_states.get(&key);
-                    let enabled = hook_enabled(source.is_managed, state);
+                    let is_forced = source.source == HookSource::AppBundledInternal;
+                    let state = (!is_forced).then(|| source.hook_states.get(&key)).flatten();
+                    let enabled = is_forced || hook_enabled(source.is_managed, state);
                     let trusted_hash = hook_trusted_hash(source.is_managed, state);
-                    let trust_status =
-                        hook_trust_status(source.is_managed, &current_hash, trusted_hash);
-                    hook_entries.push(HookListEntry {
-                        key,
-                        event_name,
-                        handler_type: HookHandlerType::Command,
-                        matcher: matcher.map(ToOwned::to_owned),
-                        command: Some(command.clone()),
-                        timeout_sec,
-                        status_message: status_message.clone(),
-                        source_path: source.path.clone(),
-                        source: source.source,
-                        plugin_id: source.plugin_id.clone(),
-                        display_order: *display_order,
-                        enabled,
-                        is_managed: source.is_managed,
-                        current_hash,
-                        trust_status,
-                    });
+                    let trust_status = if is_forced {
+                        HookTrustStatus::Trusted
+                    } else {
+                        hook_trust_status(source.is_managed, &current_hash, trusted_hash)
+                    };
+                    if !is_forced {
+                        hook_entries.push(HookListEntry {
+                            key,
+                            event_name,
+                            handler_type: HookHandlerType::Command,
+                            matcher: matcher.map(ToOwned::to_owned),
+                            command: Some(command.clone()),
+                            timeout_sec,
+                            status_message: status_message.clone(),
+                            source_path: source.path.clone(),
+                            source: source.source,
+                            plugin_id: source.plugin_id.clone(),
+                            display_order: *display_order,
+                            enabled,
+                            is_managed: source.is_managed,
+                            current_hash,
+                            trust_status,
+                        });
+                    }
                     if enabled
-                        && (source.bypass_hook_trust
+                        && (is_forced
+                            || source.bypass_hook_trust
                             || matches!(
                                 trust_status,
                                 HookTrustStatus::Managed | HookTrustStatus::Trusted

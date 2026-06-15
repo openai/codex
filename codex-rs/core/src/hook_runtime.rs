@@ -5,6 +5,8 @@ use std::time::Duration;
 use codex_analytics::CompactionTrigger;
 use codex_analytics::HookRunFact;
 use codex_analytics::build_track_events_context;
+use codex_analytics::hook_event_name;
+use codex_analytics::hook_source_name;
 use codex_hooks::PermissionRequestDecision;
 use codex_hooks::PermissionRequestOutcome;
 use codex_hooks::PermissionRequestRequest;
@@ -27,7 +29,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
-use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookSource;
@@ -613,12 +614,19 @@ fn additional_context_messages(additional_contexts: Vec<String>) -> Vec<Response
         .collect()
 }
 
+/// Emits lifecycle-start events for user-visible hooks.
+///
+/// App-bundled internal hooks still run, but their lifecycle is intentionally omitted from the
+/// public event stream because they are a Desktop implementation detail.
 async fn emit_hook_started_events(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     preview_runs: Vec<HookRunSummary>,
 ) {
     for run in preview_runs {
+        if run.source == HookSource::AppBundledInternal {
+            continue;
+        }
         sess.send_event(
             turn_context,
             EventMsg::HookStarted(HookStartedEvent {
@@ -630,6 +638,11 @@ async fn emit_hook_started_events(
     }
 }
 
+/// Records metrics and analytics for every completed hook, while emitting lifecycle-completion
+/// events only for user-visible hooks.
+///
+/// App-bundled internal hook notifications are intentionally suppressed because they are a
+/// Desktop implementation detail.
 pub(crate) async fn emit_hook_completed_events(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -638,6 +651,9 @@ pub(crate) async fn emit_hook_completed_events(
     for completed in completed_events {
         emit_hook_completed_metrics(turn_context, &completed);
         track_hook_completed_analytics(sess, turn_context, &completed);
+        if completed.run.source == HookSource::AppBundledInternal {
+            continue;
+        }
         sess.send_event(turn_context, EventMsg::HookCompleted(completed))
             .await;
     }
@@ -694,31 +710,6 @@ fn hook_run_analytics_payload(
 }
 
 fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 3] {
-    let hook_name = match run.event_name {
-        HookEventName::PreToolUse => "PreToolUse",
-        HookEventName::PermissionRequest => "PermissionRequest",
-        HookEventName::PostToolUse => "PostToolUse",
-        HookEventName::PreCompact => "PreCompact",
-        HookEventName::PostCompact => "PostCompact",
-        HookEventName::SessionStart => "SessionStart",
-        HookEventName::UserPromptSubmit => "UserPromptSubmit",
-        HookEventName::SubagentStart => "SubagentStart",
-        HookEventName::SubagentStop => "SubagentStop",
-        HookEventName::Stop => "Stop",
-    };
-    let hook_source = match run.source {
-        HookSource::System => "system",
-        HookSource::User => "user",
-        HookSource::Project => "project",
-        HookSource::Mdm => "mdm",
-        HookSource::SessionFlags => "session_flags",
-        HookSource::Plugin => "plugin",
-        HookSource::CloudRequirements => "cloud_requirements",
-        HookSource::CloudManagedConfig => "cloud_managed_config",
-        HookSource::LegacyManagedConfigFile => "legacy_managed_config_file",
-        HookSource::LegacyManagedConfigMdm => "legacy_managed_config_mdm",
-        HookSource::Unknown => "unknown",
-    };
     let status = match run.status {
         HookRunStatus::Running => "running",
         HookRunStatus::Completed => "completed",
@@ -728,8 +719,8 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
     };
 
     [
-        ("hook_name", hook_name),
-        ("source", hook_source),
+        ("hook_name", hook_event_name(run.event_name)),
+        ("source", hook_source_name(run.source)),
         ("status", status),
     ]
 }
@@ -785,9 +776,13 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::additional_context_messages;
+    use super::emit_hook_completed_events;
+    use super::emit_hook_started_events;
     use super::hook_run_analytics_payload;
     use super::hook_run_metric_tags;
     use crate::session::tests::make_session_and_context;
+    use crate::session::tests::make_session_and_context_with_rx;
+    use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::HookCompletedEvent;
     use codex_protocol::protocol::HookRunSummary;
     use codex_utils_absolute_path::test_support::PathBufExt;
@@ -862,6 +857,38 @@ mod tests {
         assert_eq!(hook.status, HookRunStatus::Failed);
     }
 
+    #[tokio::test]
+    async fn user_visible_hook_notifications_are_emitted() {
+        let (session, turn_context, rx_event) = make_session_and_context_with_rx().await;
+        while rx_event.try_recv().is_ok() {}
+
+        let regular = sample_hook_run(HookRunStatus::Completed, HookSource::Plugin);
+        emit_hook_started_events(&session, &turn_context, vec![regular.clone()]).await;
+        emit_hook_completed_events(
+            &session,
+            &turn_context,
+            vec![HookCompletedEvent {
+                turn_id: Some(turn_context.sub_id.clone()),
+                run: regular,
+            }],
+        )
+        .await;
+        assert!(matches!(
+            rx_event.try_recv().expect("regular hook started event"),
+            codex_protocol::protocol::Event {
+                msg: EventMsg::HookStarted(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            rx_event.try_recv().expect("regular hook completed event"),
+            codex_protocol::protocol::Event {
+                msg: EventMsg::HookCompleted(_),
+                ..
+            }
+        ));
+    }
+
     #[test]
     fn hook_run_metric_tags_match_analytics_shape() {
         let run = sample_hook_run(HookRunStatus::Blocked, HookSource::Project);
@@ -897,6 +924,16 @@ mod tests {
             [
                 ("hook_name", "Stop"),
                 ("source", "legacy_managed_config_mdm"),
+                ("status", "completed"),
+            ]
+        );
+
+        let internal = sample_hook_run(HookRunStatus::Completed, HookSource::AppBundledInternal);
+        assert_eq!(
+            hook_run_metric_tags(&internal),
+            [
+                ("hook_name", "Stop"),
+                ("source", "app_bundled_internal"),
                 ("status", "completed"),
             ]
         );

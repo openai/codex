@@ -1,3 +1,4 @@
+mod app_bundled_internal;
 mod discoverable;
 pub mod installed_marketplaces;
 pub mod loader;

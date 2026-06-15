@@ -53,6 +53,9 @@ v2_enum_from_core!(
         LegacyManagedConfigMdm,
         Unknown,
     }
+    aliases {
+        AppBundledInternal => Plugin,
+    }
 );
 
 v2_enum_from_core!(

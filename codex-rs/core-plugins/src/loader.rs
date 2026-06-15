@@ -1,4 +1,6 @@
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
+use crate::app_bundled_internal::is_app_bundled_plugin;
+use crate::app_bundled_internal::load_app_bundled_internal_hooks;
 use crate::manifest::PluginManifestHooks;
 use crate::manifest::PluginManifestPaths;
 use crate::manifest::load_plugin_manifest;
@@ -34,6 +36,7 @@ use codex_plugin::PluginIdError;
 use codex_plugin::PluginLoadOutcome;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_plugin::app_connector_ids_from_declarations;
+use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -706,12 +709,21 @@ async fn load_plugin(
         }
         PluginLoadScope::HooksOnly => {}
     }
-    let (hook_sources, hook_load_warnings) = load_plugin_hooks(
-        &plugin_root,
-        &loaded_plugin_id,
-        &store.plugin_data_root(&loaded_plugin_id),
-        manifest_paths,
-    );
+    let plugin_data_root = store.plugin_data_root(&loaded_plugin_id);
+    // Hooks load from Desktop resources; runtime-variant plugin capabilities remain cache-backed.
+    let (hook_sources, hook_load_warnings) = if is_app_bundled_plugin(&loaded_plugin_id) {
+        (
+            load_app_bundled_internal_hooks(&loaded_plugin_id, &plugin_data_root).await,
+            Vec::new(),
+        )
+    } else {
+        load_plugin_hooks(
+            &plugin_root,
+            &loaded_plugin_id,
+            &plugin_data_root,
+            manifest_paths,
+        )
+    };
     loaded_plugin.hook_sources = hook_sources;
     loaded_plugin.hook_load_warnings = hook_load_warnings;
     loaded_plugin
@@ -914,6 +926,7 @@ pub fn load_plugin_hooks(
                     source_path: manifest_path.clone(),
                     source_relative_path: format!("plugin.json#hooks[{index}]"),
                     hooks: hooks_file.hooks.clone(),
+                    source: HookSource::Plugin,
                 });
             }
         }
@@ -982,6 +995,7 @@ fn append_plugin_hook_file(
         source_path: path.clone(),
         source_relative_path,
         hooks: parsed.hooks,
+        source: HookSource::Plugin,
     });
 }
 

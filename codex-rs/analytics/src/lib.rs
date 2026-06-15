@@ -21,6 +21,8 @@ pub use events::GuardianReviewSessionKind;
 pub use events::GuardianReviewTerminalStatus;
 pub use events::GuardianReviewTrackContext;
 pub use events::GuardianReviewedAction;
+pub use events::hook_event_name;
+pub use events::hook_source_name;
 pub use facts::AcceptedLineFingerprint;
 pub use facts::AnalyticsJsonRpcError;
 pub use facts::AppInvocation;

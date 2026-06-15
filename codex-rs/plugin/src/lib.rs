@@ -11,6 +11,7 @@ mod plugin_id;
 mod provider;
 
 use codex_config::HookEventsToml;
+use codex_protocol::protocol::HookSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 pub use load_outcome::EffectiveSkillRoots;
 pub use load_outcome::LoadedPlugin;
@@ -66,6 +67,7 @@ pub struct PluginHookSource {
     pub source_path: AbsolutePathBuf,
     pub source_relative_path: String,
     pub hooks: HookEventsToml,
+    pub source: HookSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

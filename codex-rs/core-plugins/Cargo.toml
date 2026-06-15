@@ -18,6 +18,7 @@ codex-analytics = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-config = { workspace = true }
 codex-core-skills = { workspace = true }
+codex-desktop-installation = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-hooks = { workspace = true }

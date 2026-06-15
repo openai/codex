@@ -24,6 +24,10 @@ macro_rules! v2_enum_from_core {
         pub enum $Name:ident from $Src:path {
             $( $(#[$variant_meta:meta])* $Variant:ident ),+ $(,)?
         }
+        // Map private core-only variants onto existing public wire variants.
+        $(aliases {
+            $( $SourceVariant:ident => $TargetVariant:ident ),+ $(,)?
+        })?
     ) => {
         #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
         $(#[$enum_meta])*
@@ -41,7 +45,10 @@ macro_rules! v2_enum_from_core {
 
         impl From<$Src> for $Name {
             fn from(value: $Src) -> Self {
-                match value { $( <$Src>::$Variant => $Name::$Variant ),+ }
+                match value {
+                    $( <$Src>::$Variant => $Name::$Variant ),+,
+                    $( $( <$Src>::$SourceVariant => $Name::$TargetVariant ),+ )?
+                }
             }
         }
     };

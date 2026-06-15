@@ -20,11 +20,13 @@ use codex_config::TomlValue;
 use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
+use codex_utils_absolute_path::test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
@@ -900,6 +902,7 @@ fn allow_managed_hooks_only_skips_unmanaged_plugin_hooks() {
         source_path,
         source_relative_path: "hooks/hooks.json".to_string(),
         hooks: pre_tool_use_hook_events("python3 /tmp/plugin-hook.py"),
+        source: HookSource::Plugin,
     }];
     let (requirements, requirements_toml) = requirements_with_managed_hooks_only(
         /*allow_managed_hooks_only*/ true, /*managed_hooks*/ None,
@@ -921,6 +924,126 @@ fn allow_managed_hooks_only_skips_unmanaged_plugin_hooks() {
 
     assert!(engine.handlers.is_empty());
     assert!(engine.warnings().is_empty());
+}
+
+fn build_engine(
+    enabled: bool,
+    config_layer_stack: Option<&ConfigLayerStack>,
+    plugin_hook_sources: Vec<PluginHookSource>,
+) -> ClaudeHooksEngine {
+    ClaudeHooksEngine::new(
+        enabled,
+        /*bypass_hook_trust*/ false,
+        config_layer_stack,
+        plugin_hook_sources,
+        Vec::new(),
+        CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        },
+    )
+}
+
+fn plugin_hook_source(root: &Path, source: HookSource) -> PluginHookSource {
+    let plugin_root = AbsolutePathBuf::try_from(root.join("demo-plugin")).expect("plugin root");
+    let plugin_data_root =
+        AbsolutePathBuf::try_from(root.join("plugin-data")).expect("plugin data root");
+    let source_path = plugin_root.join("hooks/hooks.json");
+    PluginHookSource {
+        plugin_id: PluginId::parse("demo-plugin@test-marketplace").expect("plugin id"),
+        plugin_root,
+        plugin_data_root,
+        source_path,
+        source_relative_path: "hooks/hooks.json".to_string(),
+        hooks: pre_tool_use_hook_events(r#""${PLUGIN_ROOT}/internal-hook""#),
+        source,
+    }
+}
+
+#[test]
+fn plugin_hook_source_rejects_non_plugin_provenance() {
+    let temp = tempdir().expect("create temp dir");
+    let invalid_engine = build_engine(
+        /*enabled*/ true,
+        /*config_layer_stack*/ None,
+        vec![plugin_hook_source(temp.path(), HookSource::User)],
+    );
+    assert!(invalid_engine.handlers.is_empty());
+    assert_eq!(
+        invalid_engine.warnings(),
+        &["skipping plugin hook source with invalid source User".to_string()]
+    );
+}
+
+#[test]
+fn app_bundled_internal_hooks_ignore_user_controls_and_are_hidden() {
+    let temp = tempdir().expect("create temp dir");
+    let plugin_hook_sources = vec![plugin_hook_source(
+        temp.path(),
+        HookSource::AppBundledInternal,
+    )];
+    let key_source = crate::declarations::plugin_hook_key_source(
+        "demo-plugin@test-marketplace",
+        "hooks/hooks.json",
+    );
+    let hook_key = crate::hook_key(
+        &key_source,
+        HookEventName::PreToolUse,
+        /*group_index*/ 0,
+        /*handler_index*/ 0,
+    );
+    let state = [(
+        hook_key,
+        serde_json::json!({ "enabled": false, "trusted_hash": "stale" }),
+    )]
+    .into_iter()
+    .collect::<serde_json::Map<_, _>>();
+    let config = serde_json::from_value(serde_json::json!({
+        "hooks": { "state": state },
+    }))
+    .expect("config TOML should deserialize");
+    let disabled_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: temp.path().join("config.toml").abs(),
+                profile: None,
+            },
+            config,
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("config stack");
+    let disabled_state_engine = build_engine(
+        /*enabled*/ true,
+        Some(&disabled_stack),
+        plugin_hook_sources.clone(),
+    );
+    assert_eq!(disabled_state_engine.handlers.len(), 1);
+
+    let (requirements, requirements_toml) = requirements_with_managed_hooks_only(
+        /*allow_managed_hooks_only*/ true, /*managed_hooks*/ None,
+    );
+    let managed_only_stack =
+        ConfigLayerStack::new(Vec::new(), requirements, requirements_toml).expect("config stack");
+    let managed_only_engine = build_engine(
+        /*enabled*/ true,
+        Some(&managed_only_stack),
+        plugin_hook_sources.clone(),
+    );
+    assert_eq!(managed_only_engine.handlers.len(), 1);
+
+    let listed = crate::list_hooks(crate::HooksConfig {
+        legacy_notify_argv: None,
+        feature_enabled: false,
+        bypass_hook_trust: false,
+        config_layer_stack: None,
+        plugin_hook_sources,
+        plugin_hook_load_warnings: Vec::new(),
+        shell_program: None,
+        shell_args: Vec::new(),
+    });
+    assert!(listed.hooks.is_empty());
 }
 
 #[test]
@@ -1324,6 +1447,7 @@ print(json.dumps({
             }],
             ..Default::default()
         },
+        source: HookSource::Plugin,
     }];
     let config_layer_stack = trusted_plugin_hook_stack(
         AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path"),
@@ -1443,6 +1567,7 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
             }],
             ..Default::default()
         },
+        source: HookSource::Plugin,
     }];
     let config_layer_stack = trusted_plugin_hook_stack(
         AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path"),

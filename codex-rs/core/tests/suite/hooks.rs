@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 
@@ -17,6 +18,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
@@ -46,6 +48,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use serial_test::serial;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -58,6 +61,33 @@ const SECOND_CONTINUATION_PROMPT: &str = "Now tighten it to just: meow.";
 const BLOCKED_PROMPT_CONTEXT: &str = "Remember the blocked lighthouse note.";
 const PERMISSION_REQUEST_HOOK_MATCHER: &str = "^Bash$";
 const PERMISSION_REQUEST_ALLOW_REASON: &str = "should not be used for allow";
+const DESKTOP_RESOURCES_PATH_ENV_VAR: &str = "CODEX_DESKTOP_RESOURCES_PATH";
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
+        let original = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.original {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
 
 fn restrictive_workspace_write_profile() -> PermissionProfile {
     PermissionProfile::workspace_write_with(
@@ -2814,6 +2844,206 @@ text(output.output);
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(desktop_resources)]
+async fn app_bundled_internal_pre_tool_use_runs_with_hooks_disabled_without_lifecycle_events()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let resources = TempDir::new()?;
+    let resources_root = resources.path();
+    let marketplace_root = resources_root.join("plugins/openai-bundled");
+    let plugin_root = marketplace_root.join("plugins/computer-use");
+    let hooks_dir = plugin_root.join("hooks");
+    let hook_log_path = resources_root.join("internal_hook_log.jsonl");
+    fs::create_dir_all(marketplace_root.join(".agents/plugins"))
+        .context("create bundled marketplace metadata directory")?;
+    fs::create_dir_all(plugin_root.join(".codex-plugin"))
+        .context("create bundled plugin manifest directory")?;
+    fs::create_dir_all(&hooks_dir).context("create bundled plugin hooks directory")?;
+    fs::write(
+        marketplace_root.join(".agents/plugins/marketplace.json"),
+        serde_json::json!({
+            "name": "openai-bundled",
+            "plugins": [{
+                "name": "computer-use",
+                "source": {"source": "local", "path": "./plugins/computer-use"}
+            }]
+        })
+        .to_string(),
+    )
+    .context("write bundled marketplace metadata")?;
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"computer-use"}"#,
+    )
+    .context("write bundled plugin manifest")?;
+    fs::write(
+        hooks_dir.join("pre_tool_use_hook.py"),
+        format!(
+            r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+with Path(r"{hook_log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+print(json.dumps({{
+    "hookSpecificOutput": {{
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": "blocked by app-bundled internal hook"
+    }}
+}}))
+"#,
+            hook_log_path = hook_log_path.display(),
+        ),
+    )
+    .context("write bundled pre tool use hook script")?;
+    fs::write(
+        hooks_dir.join("hooks.json"),
+        r#"{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "^Bash$",
+      "hooks": [{
+        "type": "command",
+        "command": "python3 ${PLUGIN_ROOT}/hooks/pre_tool_use_hook.py"
+      }]
+    }]
+  }
+}"#,
+    )
+    .context("write bundled hooks config")?;
+
+    let _desktop_resources =
+        EnvVarGuard::set(DESKTOP_RESOURCES_PATH_ENV_VAR, resources_root.as_os_str());
+    let server = start_mock_server().await;
+    let call_id = "app-bundled-internal-pretooluse-shell-command";
+    let marker = resources_root.join("blocked-command-marker");
+    let command = format!("printf should-not-run > {}", marker.display());
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "internal hook blocked it"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let home = Arc::new(TempDir::new()?);
+    let cached_plugin_root = home
+        .path()
+        .join("plugins/cache/openai-bundled/computer-use/local");
+    fs::create_dir_all(cached_plugin_root.join(".codex-plugin"))
+        .context("create cached plugin manifest directory")?;
+    fs::write(
+        cached_plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"computer-use"}"#,
+    )
+    .context("write cached plugin manifest")?;
+    fs::write(
+        home.path().join("config.toml"),
+        r#"[plugins."computer-use@openai-bundled"]
+enabled = true
+"#,
+    )
+    .context("write app-bundled plugin config")?;
+
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Plugins)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .disable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run the shell command blocked by an internal hook".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(codex_protocol::protocol::SandboxPolicy::DangerFullAccess),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let mut turn_id = None;
+    let mut saw_hook_started = false;
+    let mut saw_hook_completed = false;
+    timeout(Duration::from_secs(10), async {
+        loop {
+            let event = test
+                .codex
+                .next_event()
+                .await
+                .expect("event stream should remain open");
+            match event.msg {
+                EventMsg::HookStarted(_) => saw_hook_started = true,
+                EventMsg::HookCompleted(_) => saw_hook_completed = true,
+                EventMsg::TurnStarted(event) => turn_id = Some(event.turn_id),
+                EventMsg::TurnComplete(event)
+                    if turn_id.as_deref() == Some(event.turn_id.as_str()) =>
+                {
+                    break;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .context("wait for app-bundled internal hook turn")?;
+
+    assert!(!saw_hook_started, "internal hook start should stay hidden");
+    assert!(
+        !saw_hook_completed,
+        "internal hook completion should stay hidden"
+    );
+    assert!(!marker.exists(), "internal hook should block execution");
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell command output string");
+    assert!(
+        output.contains("Command blocked by PreToolUse hook: blocked by app-bundled internal hook"),
+        "blocked tool output should surface the internal hook reason",
+    );
+    let hook_inputs = read_hook_inputs_from_log(&hook_log_path)?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["hook_event_name"], "PreToolUse");
+    assert_eq!(hook_inputs[0]["tool_name"], "Bash");
+    assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn plugin_pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -2916,6 +3146,7 @@ print(json.dumps({{
         hooks: serde_json::from_str::<codex_config::HooksFile>(plugin_hooks_json)
             .context("parse plugin hooks")?
             .hooks,
+        source: HookSource::Plugin,
     }];
 
     let mut builder = test_codex()
