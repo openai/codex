@@ -28,9 +28,6 @@ use crate::outgoing_message::OutgoingMessageSender;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadStateManager;
 
-// TODO(jif): Enable once /ps/mcp serves complete hosted skill packages.
-const ORCHESTRATOR_SKILLS_ENABLED: bool = false;
-
 pub(crate) struct ThreadExtensionDependencies {
     pub(crate) event_sink: Arc<dyn ExtensionEventSink>,
     pub(crate) auth_manager: Arc<AuthManager>,
@@ -80,13 +77,11 @@ where
     codex_mcp_extension::install_executor_plugins(&mut builder, environment_manager);
     codex_web_search_extension::install(&mut builder, auth_manager.clone());
     codex_image_generation_extension::install(&mut builder, auth_manager);
-    let mut skill_providers = codex_skills_extension::SkillProviders::new()
-        .with_executor_provider(executor_skill_provider);
-    if ORCHESTRATOR_SKILLS_ENABLED {
-        skill_providers = skill_providers.with_orchestrator_provider(Arc::new(
+    let skill_providers = codex_skills_extension::SkillProviders::new()
+        .with_executor_provider(executor_skill_provider)
+        .with_orchestrator_provider(Arc::new(
             codex_skills_extension::OrchestratorSkillProvider::new(),
         ));
-    }
     codex_skills_extension::install_with_providers(
         &mut builder,
         skill_providers,
