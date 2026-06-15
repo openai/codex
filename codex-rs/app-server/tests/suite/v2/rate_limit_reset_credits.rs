@@ -28,6 +28,8 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(/*secs*/ 10);
+const RATE_LIMIT_RESET_REQUEST_TIMEOUT_ENV_VAR: &str =
+    "CODEX_TEST_RATE_LIMIT_RESET_REQUEST_TIMEOUT_MS";
 const SERVER_TIMEOUT_READ_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(/*secs*/ 15);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
@@ -170,13 +172,21 @@ async fn consume_timeout_releases_account_auth_queue() -> Result<()> {
         .and(path("/api/codex/rate-limit-reset-credits/consume"))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_delay(std::time::Duration::from_secs(/*secs*/ 30))
+                .set_delay(std::time::Duration::from_secs(/*secs*/ 1))
                 .set_body_json(json!({ "code": "reset", "windows_reset": 2 })),
         )
         .mount(&server)
         .await;
 
-    let mut mcp = initialized_app_server(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.path(),
+        &[
+            ("OPENAI_API_KEY", None),
+            (RATE_LIMIT_RESET_REQUEST_TIMEOUT_ENV_VAR, Some("100")),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let consume_id = send_consume_reset_credit(&mut mcp, "request-timeout").await?;
     let account_id = mcp
         .send_get_account_request(GetAccountParams {
