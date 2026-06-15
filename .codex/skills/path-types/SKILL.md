@@ -1,9 +1,9 @@
 ---
-name: codex-path-types
-description: Choose Rust path types that meet Codex's compatibility requirements. Use when defining new path-bearing Rust types or when explicitly asked to migrate existing types in app-server, exec-server, or dependencies shared by them.
+name: path-types
+description: Choose Rust types for operating system paths across the Codex repository. Use when defining new path-bearing types or explicitly migrating existing ones.
 ---
 
-# Codex Path Types
+# Path Types
 
 Apply this guidance when defining new types. Change existing code only when explicitly requested,
 and keep edits minimal and proportional. Treat these rules as the target state of an ongoing
