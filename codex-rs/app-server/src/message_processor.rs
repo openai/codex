@@ -329,7 +329,7 @@ impl MessageProcessor {
         let restriction_product = session_source.restriction_product();
         let executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider> = Arc::new(
             codex_skills_extension::ExecutorSkillProvider::new_with_restriction_product(
-                environment_manager_for_extensions,
+                Arc::clone(&environment_manager_for_extensions),
                 restriction_product,
             ),
         );
@@ -352,6 +352,7 @@ impl MessageProcessor {
                         analytics_events_client: analytics_events_client.clone(),
                         thread_manager: thread_manager.clone(),
                         goal_service: Arc::clone(&goal_service),
+                        environment_manager: Arc::clone(&environment_manager_for_extensions),
                         executor_skill_provider: Arc::clone(&executor_skill_provider),
                         thread_store: Arc::clone(&thread_store),
                     },
