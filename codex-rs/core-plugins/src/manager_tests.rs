@@ -2975,7 +2975,7 @@ plugins = true
 
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[], true)
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
         .unwrap()
         .marketplaces;
 
@@ -3031,7 +3031,7 @@ plugins = true
 
     let config = load_config(tmp.path(), tmp.path()).await;
     let outcome = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[], false)
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ false)
         .unwrap();
 
     assert_eq!(outcome.errors, Vec::new());
@@ -3210,7 +3210,7 @@ source = "/tmp/debug"
     .unwrap();
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[], true)
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
         .unwrap()
         .marketplaces;
 
@@ -3286,7 +3286,7 @@ source = "/tmp/debug"
 
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[], true)
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
         .unwrap()
         .marketplaces;
 
@@ -3341,7 +3341,7 @@ plugins = true
     .unwrap();
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[], true)
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
         .unwrap()
         .marketplaces;
 
