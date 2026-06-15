@@ -120,6 +120,16 @@ pub fn discover_installed_distribution()
     platform::discover()
 }
 
+/// Validates a macOS Codex app bundle at a known path using the same identity and containment
+/// checks as installed-app discovery. Returns `Ok(None)` when the path is not a trusted Codex
+/// Desktop distribution.
+#[cfg(target_os = "macos")]
+pub fn validate_installed_distribution_at(
+    app_root: impl AsRef<Path>,
+) -> Result<Option<InstalledDesktop>, DesktopDistributionError> {
+    platform::validate_candidate(app_root.as_ref())
+}
+
 #[derive(Clone, Copy)]
 enum ResourceKind {
     Directory,

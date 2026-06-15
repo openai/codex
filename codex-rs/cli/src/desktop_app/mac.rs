@@ -1,5 +1,6 @@
 use anyhow::Context as _;
 use codex_desktop_distribution::discover_installed_distribution;
+use codex_desktop_distribution::validate_installed_distribution_at;
 use std::ffi::CString;
 use std::path::Path;
 use std::path::PathBuf;
@@ -154,11 +155,11 @@ async fn install_codex_app_bundle(app_in_volume: &Path) -> anyhow::Result<PathBu
 
         let dest_app = applications_dir.join("Codex.app");
         if dest_app.is_dir() {
-            return Ok(dest_app);
+            return validate_installed_codex_app(dest_app).await;
         }
 
         match copy_app_bundle(app_in_volume, &dest_app).await {
-            Ok(()) => return Ok(dest_app),
+            Ok(()) => return validate_installed_codex_app(dest_app).await,
             Err(err) => {
                 eprintln!(
                     "warning: failed to install Codex.app to {applications_dir}: {err}",
@@ -169,6 +170,19 @@ async fn install_codex_app_bundle(app_in_volume: &Path) -> anyhow::Result<PathBu
     }
 
     anyhow::bail!("failed to install Codex.app to any applications directory");
+}
+
+async fn validate_installed_codex_app(app_path: PathBuf) -> anyhow::Result<PathBuf> {
+    let candidate = app_path.clone();
+    let distribution =
+        tokio::task::spawn_blocking(move || validate_installed_distribution_at(candidate))
+            .await
+            .context("Desktop validation task failed")??;
+    let app_path_display = app_path.display();
+    let distribution = distribution.with_context(|| {
+        format!("refusing to launch unverified Codex Desktop at {app_path_display}")
+    })?;
+    Ok(distribution.app_root().to_path_buf())
 }
 
 fn candidate_applications_dirs() -> anyhow::Result<Vec<PathBuf>> {

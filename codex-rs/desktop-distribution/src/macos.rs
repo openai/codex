@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -18,12 +19,18 @@ pub(crate) fn discover() -> Result<Option<InstalledDesktop>, DesktopDistribution
         return Ok(None);
     }
     let app_root = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    validate_candidate(&app_root)
+}
+
+pub(crate) fn validate_candidate(
+    app_root: &Path,
+) -> Result<Option<InstalledDesktop>, DesktopDistributionError> {
     let resources_root = app_root.join("Contents/Resources");
     if app_root.extension().is_some_and(|value| value == "app")
         && resources_root.is_dir()
-        && has_openai_signature(&app_root)?
+        && has_openai_signature(app_root)?
     {
-        return InstalledDesktop::from_paths(app_root, resources_root).map(Some);
+        return InstalledDesktop::from_paths(app_root.to_path_buf(), resources_root).map(Some);
     }
     Ok(None)
 }
