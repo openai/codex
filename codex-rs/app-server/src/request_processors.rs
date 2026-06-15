@@ -318,6 +318,7 @@ use codex_core_plugins::PluginInstallError as CorePluginInstallError;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::PluginReadRequest;
 use codex_core_plugins::PluginUninstallError as CorePluginUninstallError;
+use codex_core_plugins::PluginsManager;
 use codex_core_plugins::loader::load_plugin_apps;
 use codex_core_plugins::loader::load_plugin_mcp_servers;
 use codex_core_plugins::loader::plugin_telemetry_metadata_from_root;

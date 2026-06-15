@@ -2258,7 +2258,6 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-connectors",
  "codex-core",
- "codex-core-plugins",
  "codex-git-utils",
  "codex-login",
  "codex-model-provider",
