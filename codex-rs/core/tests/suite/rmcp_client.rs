@@ -32,6 +32,7 @@ use codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY;
 use codex_models_manager::manager::RefreshStrategy;
 
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -40,6 +41,10 @@ use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
@@ -672,6 +677,120 @@ async fn stdio_server_adapts_inline_mcp_file_input() -> anyhow::Result<()> {
             .get("x-mcp-file")
             .is_none()
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn stdio_server_rejects_mcp_file_input_denied_by_turn_sandbox() -> anyhow::Result<()> {
+    let model_server = responses::start_mock_server().await;
+    let files = tempdir()?;
+    let denied_path = files.path().join("denied.txt");
+    let call_marker = files.path().join("tool-called");
+    fs::write(&denied_path, b"must not leave the sandbox")?;
+    let call_id = "file-call-denied";
+    let server_name = "rmcp_files_denied";
+    let namespace = format!("mcp__{server_name}");
+    let arguments = serde_json::to_string(&json!({"file": denied_path}))?;
+    responses::mount_sse_sequence(
+        &model_server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_function_call_with_namespace(
+                    call_id,
+                    &namespace,
+                    "file_round_trip",
+                    &arguments,
+                ),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-1", "The file read was denied."),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let call_marker_for_config = call_marker.clone();
+    let fixture = test_codex()
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::McpFileTransfer)
+                .expect("test feature should enable");
+            insert_mcp_server(
+                config,
+                server_name,
+                stdio_transport(
+                    rmcp_test_server_bin,
+                    Some(HashMap::from([
+                        ("MCP_TEST_FILE_INLINE".to_string(), "1".to_string()),
+                        (
+                            "MCP_TEST_FILE_CALL_MARKER".to_string(),
+                            call_marker_for_config.display().to_string(),
+                        ),
+                    ])),
+                    Vec::new(),
+                ),
+                TestMcpServerOptions::default(),
+            );
+        })
+        .build(&model_server)
+        .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
+    let permission_profile = PermissionProfile::Managed {
+        file_system: ManagedFileSystemPermissions::Restricted {
+            entries: vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+                    },
+                    access: FileSystemAccessMode::Read,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: denied_path.as_path().try_into()?,
+                    },
+                    access: FileSystemAccessMode::Deny,
+                },
+            ],
+            glob_scan_max_depth: None,
+        },
+        network: NetworkSandboxPolicy::Restricted,
+    };
+    fixture
+        .codex
+        .submit(user_turn_with_permission_profile(
+            &fixture,
+            "send the denied local file",
+            fixture.session_configured.model.clone(),
+            permission_profile,
+        ))
+        .await?;
+
+    let end_event = wait_for_event(&fixture.codex, |event| {
+        matches!(event, EventMsg::McpToolCallEnd(_))
+    })
+    .await;
+    let EventMsg::McpToolCallEnd(end) = end_event else {
+        unreachable!("event guard guarantees McpToolCallEnd");
+    };
+    let error = end.result.expect_err("sandbox-denied file should fail");
+    assert!(
+        error.contains("failed to read"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        !call_marker.exists(),
+        "MCP server must not receive file input"
+    );
+    wait_for_event(&fixture.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
     Ok(())
 }
 

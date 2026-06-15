@@ -30,16 +30,18 @@ fn model_file_ref_accepts_string_and_blob_like_values() {
 
 #[tokio::test]
 async fn transfer_rejects_non_https_remote_urls() {
+    let (session, _) = crate::session::tests::make_session_and_context().await;
     assert_eq!(
         put_transfer_file(
+            &session,
             &codex_mcp::FileTransferDescriptor {
                 transport: Some("https".to_string()),
                 method: "PUT".to_string(),
                 url: "http://example.com/upload".to_string(),
                 expires_at: None,
             },
-            std::path::Path::new("unused"),
-            0,
+            Vec::new(),
+            /*max_size*/ 0,
         )
         .await
         .expect_err("remote HTTP must be rejected"),
@@ -122,9 +124,51 @@ fn validates_opaque_mcp_file_uris() {
     );
 }
 
+#[test]
+fn rejects_non_public_transfer_addresses() {
+    for address in [
+        "127.0.0.1",
+        "10.0.0.1",
+        "100.64.0.1",
+        "169.254.169.254",
+        "192.168.0.1",
+        "198.18.0.1",
+        "224.0.0.1",
+        "::1",
+        "fc00::1",
+        "fe80::1",
+        "ff02::1",
+        "::ffff:127.0.0.1",
+    ] {
+        assert!(is_disallowed_transfer_address(
+            address.parse().expect("IP address")
+        ));
+    }
+    for address in ["1.1.1.1", "8.8.8.8", "2606:4700:4700::1111"] {
+        assert!(!is_disallowed_transfer_address(
+            address.parse().expect("IP address")
+        ));
+    }
+}
+
+#[test]
+fn direct_transfers_require_trusted_storage_hosts() {
+    assert!(is_trusted_direct_transfer_host(
+        "account.blob.core.windows.net"
+    ));
+    assert!(is_trusted_direct_transfer_host("files.oaiusercontent.com"));
+    assert!(is_trusted_direct_transfer_host("FILES.OAIUSERCONTENT.COM."));
+    assert!(!is_trusted_direct_transfer_host("oaiusercontent.com"));
+    assert!(!is_trusted_direct_transfer_host(
+        "files.oaiusercontent.com.attacker.example"
+    ));
+    assert!(!is_trusted_direct_transfer_host("example.com"));
+}
+
 #[tokio::test]
 async fn inline_rewrite_turns_a_local_path_into_a_data_uri() {
-    let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+    let (session, mut turn_context) = crate::session::tests::make_session_and_context().await;
+    turn_context.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
     let directory = tempfile::tempdir().expect("temp dir");
     let path = directory.path().join("report.txt");
     tokio::fs::write(&path, b"hello")
@@ -159,6 +203,7 @@ async fn inline_rewrite_turns_a_local_path_into_a_data_uri() {
 
 #[tokio::test]
 async fn upload_transfer_streams_the_exact_file_bytes() {
+    let (session, _) = crate::session::tests::make_session_and_context().await;
     let server = MockServer::start().await;
     Mock::given(method("PUT"))
         .and(path("/upload"))
@@ -168,21 +213,16 @@ async fn upload_transfer_streams_the_exact_file_bytes() {
         .expect(1)
         .mount(&server)
         .await;
-    let directory = tempdir().expect("temp dir");
-    let file = directory.path().join("upload.txt");
-    tokio::fs::write(&file, b"stream me")
-        .await
-        .expect("write upload");
-
     put_transfer_file(
+        &session,
         &codex_mcp::FileTransferDescriptor {
             transport: Some("https".to_string()),
             method: "PUT".to_string(),
             url: format!("{}/upload", server.uri()),
             expires_at: None,
         },
-        &file,
-        32,
+        b"stream me".to_vec(),
+        /*max_size*/ 32,
     )
     .await
     .expect("upload succeeds");
@@ -190,6 +230,7 @@ async fn upload_transfer_streams_the_exact_file_bytes() {
 
 #[tokio::test]
 async fn upload_transfer_accepts_post_descriptors() {
+    let (session, _) = crate::session::tests::make_session_and_context().await;
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/upload"))
@@ -199,21 +240,16 @@ async fn upload_transfer_accepts_post_descriptors() {
         .expect(1)
         .mount(&server)
         .await;
-    let directory = tempdir().expect("temp dir");
-    let file = directory.path().join("upload.txt");
-    tokio::fs::write(&file, b"stream me")
-        .await
-        .expect("write upload");
-
     put_transfer_file(
+        &session,
         &codex_mcp::FileTransferDescriptor {
             transport: None,
             method: "POST".to_string(),
             url: format!("{}/upload", server.uri()),
             expires_at: None,
         },
-        &file,
-        32,
+        b"stream me".to_vec(),
+        /*max_size*/ 32,
     )
     .await
     .expect("upload succeeds");
@@ -221,6 +257,7 @@ async fn upload_transfer_accepts_post_descriptors() {
 
 #[tokio::test]
 async fn download_transfer_materializes_exact_bytes() {
+    let (session, _) = crate::session::tests::make_session_and_context().await;
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/download"))
@@ -232,6 +269,7 @@ async fn download_transfer_materializes_exact_bytes() {
     let output = directory.path().join("download.txt");
 
     let size = download_transfer_file(
+        &session,
         &codex_mcp::FileTransferDescriptor {
             transport: Some("https".to_string()),
             method: "GET".to_string(),
@@ -239,7 +277,7 @@ async fn download_transfer_materializes_exact_bytes() {
             expires_at: None,
         },
         &output,
-        32,
+        /*max_size*/ 32,
     )
     .await
     .expect("download succeeds");
@@ -253,6 +291,7 @@ async fn download_transfer_materializes_exact_bytes() {
 
 #[tokio::test]
 async fn transfer_errors_do_not_expose_signed_urls() {
+    let (session, _) = crate::session::tests::make_session_and_context().await;
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/download"))
@@ -264,6 +303,7 @@ async fn transfer_errors_do_not_expose_signed_urls() {
     let secret = "sensitive-signature";
 
     let error = download_transfer_file(
+        &session,
         &codex_mcp::FileTransferDescriptor {
             transport: None,
             method: "GET".to_string(),
@@ -271,7 +311,7 @@ async fn transfer_errors_do_not_expose_signed_urls() {
             expires_at: None,
         },
         &output,
-        32,
+        /*max_size*/ 32,
     )
     .await
     .expect_err("failed transfer");
@@ -285,6 +325,7 @@ async fn transfer_errors_do_not_expose_signed_urls() {
 
 #[tokio::test]
 async fn failed_download_removes_partial_file() {
+    let (session, _) = crate::session::tests::make_session_and_context().await;
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/download"))
@@ -295,6 +336,7 @@ async fn failed_download_removes_partial_file() {
     let output = directory.path().join("download.txt");
 
     let error = download_transfer_file(
+        &session,
         &codex_mcp::FileTransferDescriptor {
             transport: None,
             method: "GET".to_string(),
@@ -302,7 +344,7 @@ async fn failed_download_removes_partial_file() {
             expires_at: None,
         },
         &output,
-        32,
+        /*max_size*/ 32,
     )
     .await
     .expect_err("oversized transfer");

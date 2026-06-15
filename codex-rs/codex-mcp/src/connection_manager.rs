@@ -817,7 +817,7 @@ impl McpConnectionManager {
         let params = serde_json::to_value(params).context("failed to serialize file request")?;
         let result = client
             .client
-            .send_custom_request(method, Some(params), client.tool_timeout)
+            .send_custom_request_with_timeout(method, Some(params), client.tool_timeout)
             .await
             .with_context(|| format!("MCP file request `{method}` failed for `{server}`"))?;
         let ServerResult::CustomResult(result) = result else {

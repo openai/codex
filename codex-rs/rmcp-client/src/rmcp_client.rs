@@ -669,6 +669,15 @@ impl RmcpClient {
         &self,
         method: &str,
         params: Option<serde_json::Value>,
+    ) -> Result<ServerResult> {
+        self.send_custom_request_with_timeout(method, params, /*timeout*/ None)
+            .await
+    }
+
+    pub async fn send_custom_request_with_timeout(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
         timeout: Option<Duration>,
     ) -> Result<ServerResult> {
         self.refresh_oauth_if_needed().await;

@@ -45,6 +45,7 @@ const MEMO_CONTENT: &str = "This is a sample MCP resource served by the rmcp tes
 const SANDBOX_STATE_META_CAPABILITY: &str = "codex/sandbox-state-meta";
 const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 const FILE_INLINE_ENV: &str = "MCP_TEST_FILE_INLINE";
+const FILE_CALL_MARKER_ENV: &str = "MCP_TEST_FILE_CALL_MARKER";
 
 pub fn stdio() -> (tokio::io::Stdin, tokio::io::Stdout) {
     (tokio::io::stdin(), tokio::io::stdout())
@@ -189,11 +190,13 @@ impl TestToolServer {
             "additionalProperties": false
         }))
         .expect("file round-trip tool schema should deserialize");
-        Tool::new(
+        let mut tool = Tool::new(
             Cow::Borrowed("file_round_trip"),
             Cow::Borrowed("Accept an uploaded file and return a downloadable file."),
             Arc::new(schema),
-        )
+        );
+        tool.annotations = Some(ToolAnnotations::new().read_only(true));
+        tool
     }
 
     fn sync_tool() -> Tool {
@@ -517,6 +520,10 @@ impl ServerHandler for TestToolServer {
     ) -> Result<CallToolResult, McpError> {
         match request.name.as_ref() {
             "file_round_trip" => {
+                if let Ok(marker) = std::env::var(FILE_CALL_MARKER_ENV) {
+                    std::fs::write(marker, b"called")
+                        .map_err(|err| McpError::internal_error(err.to_string(), None))?;
+                }
                 let args = Self::parse_call_args::<FileRoundTripArgs>(&request, "file_round_trip")?;
                 if args.file != "data:text/plain;base64,dXBsb2FkIG1l" {
                     return Err(McpError::invalid_params(
