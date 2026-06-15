@@ -2,7 +2,7 @@ use super::*;
 use crate::SkillLoadOutcome;
 use crate::agents_md::LoadedAgentsMd;
 use crate::config::GhostSnapshotConfig;
-use crate::environment_selection::TurnEnvironments;
+use crate::environment_selection::TurnEnvironmentsSnapshot;
 use codex_core_skills::HostLoadedSkills;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
@@ -102,7 +102,7 @@ pub struct TurnContext {
     pub(crate) session_source: SessionSource,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
-    pub(crate) environments: TurnEnvironments,
+    pub(crate) environments: TurnEnvironmentsSnapshot,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
@@ -199,7 +199,7 @@ impl TurnContext {
     }
 
     pub(crate) fn tool_environment_mode(&self) -> ToolEnvironmentMode {
-        ToolEnvironmentMode::from_count(self.environments.turn_environments.len())
+        ToolEnvironmentMode::from_count(self.environments.len())
     }
 
     pub(crate) async fn with_model(
@@ -502,7 +502,7 @@ impl Session {
         model_info: ModelInfo,
         models_manager: &SharedModelsManager,
         network: Option<NetworkProxy>,
-        environments: TurnEnvironments,
+        environments: TurnEnvironmentsSnapshot,
         cwd: AbsolutePathBuf,
         sub_id: String,
         skills_outcome: Arc<SkillLoadOutcome>,
@@ -617,7 +617,6 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> CodexResult<Arc<TurnContext>> {
-        let updated_turn_environments = self.turn_environments_for_update(&updates).await;
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let update_result: CodexResult<_> = {
             let mut state = self.state.lock().await;
@@ -637,9 +636,6 @@ impl Session {
                     let new_config = notify_config_contributors
                         .then(|| Self::build_effective_session_config(&next));
                     state.session_configuration = next.clone();
-                    if let Some(turn_environments) = updated_turn_environments {
-                        state.turn_environments = turn_environments;
-                    }
                     Ok((
                         next,
                         permission_profile_changed,
@@ -677,7 +673,12 @@ impl Session {
                 return Err(CodexErr::InvalidRequest(message));
             }
         };
-
+        if let Some(environments) = &updates.environments {
+            self.services
+                .turn_environments
+                .update_selections(&environments.environments)
+                .await;
+        }
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         self.maybe_refresh_shell_snapshot_for_cwd(
             &previous_cwd,
@@ -700,19 +701,6 @@ impl Session {
             .await)
     }
 
-    pub(super) async fn turn_environments_for_update(
-        &self,
-        updates: &SessionSettingsUpdate,
-    ) -> Option<TurnEnvironments> {
-        let selections = updates.environments.as_ref()?.environments.as_slice();
-        let mut turn_environments = {
-            let state = self.state.lock().await;
-            state.turn_environments.clone()
-        };
-        turn_environments.update_selections(selections).await;
-        Some(turn_environments)
-    }
-
     #[instrument(name = "turn_context.build", level = "trace", skip_all)]
     async fn new_turn_context_from_state(
         &self,
@@ -720,13 +708,11 @@ impl Session {
         final_output_json_schema: Option<Option<Value>>,
         multi_agent_runtime: TurnMultiAgentRuntime,
     ) -> Arc<TurnContext> {
-        let (session_configuration, turn_environments) = {
+        let session_configuration = {
             let state = self.state.lock().await;
-            (
-                state.session_configuration.clone(),
-                state.turn_environments.clone(),
-            )
+            state.session_configuration.clone()
         };
+        let turn_environments = self.services.turn_environments.snapshot().await;
         let primary_turn_environment = turn_environments.primary().cloned();
         let cwd = primary_turn_environment
             .as_ref()

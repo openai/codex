@@ -11,7 +11,6 @@ use super::AdditionalContextStore;
 use super::auto_compact_window::AutoCompactWindow;
 use super::auto_compact_window::AutoCompactWindowSnapshot;
 use crate::context_manager::ContextManager;
-use crate::environment_selection::TurnEnvironments;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::SessionConfiguration;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
@@ -24,8 +23,6 @@ use codex_utils_output_truncation::TruncationPolicy;
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
-    /// Resolved runtime environments matching `session_configuration.environments`.
-    pub(crate) turn_environments: TurnEnvironments,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) server_reasoning_included: bool,
@@ -47,14 +44,10 @@ pub(crate) struct SessionState {
 
 impl SessionState {
     /// Create a new session state mirroring previous `State::default()` semantics.
-    pub(crate) fn new(
-        session_configuration: SessionConfiguration,
-        turn_environments: TurnEnvironments,
-    ) -> Self {
+    pub(crate) fn new(session_configuration: SessionConfiguration) -> Self {
         let history = ContextManager::new();
         Self {
             session_configuration,
-            turn_environments,
             history,
             latest_rate_limits: None,
             server_reasoning_included: false,

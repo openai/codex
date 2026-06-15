@@ -125,7 +125,7 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
     };
     let environment = turn_context
         .environments
-        .primary()
+        .first()
         .expect("primary environment")
         .selection();
     let response = tokio::time::timeout(
@@ -221,7 +221,7 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
         async move {
             let environment = turn_context
                 .environments
-                .primary()
+                .first()
                 .expect("primary environment")
                 .selection();
             session

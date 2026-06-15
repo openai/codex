@@ -1,19 +1,14 @@
 use super::*;
-use crate::environment_selection::TurnEnvironments;
 use crate::session::tests::make_session_configuration_for_tests;
 use crate::state::AutoCompactWindowSnapshot;
-use codex_exec_server::EnvironmentManager;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::SpendControlLimitSnapshot;
 use pretty_assertions::assert_eq;
-use std::sync::Arc;
 
 async fn make_session_state() -> SessionState {
     let session_configuration = make_session_configuration_for_tests().await;
-    let turn_environments =
-        TurnEnvironments::resolve(Arc::new(EnvironmentManager::default_for_tests()), &[]).await;
-    SessionState::new(session_configuration, turn_environments)
+    SessionState::new(session_configuration)
 }
 
 #[tokio::test]

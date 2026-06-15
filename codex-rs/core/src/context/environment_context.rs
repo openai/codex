@@ -421,7 +421,7 @@ impl EnvironmentContext {
     pub(crate) fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
         let mut context = Self::new(
             EnvironmentContextEnvironment::from_turn_environments(
-                &turn_context.environments.turn_environments,
+                &turn_context.environments,
                 shell,
             ),
             turn_context.current_date.clone(),

@@ -156,7 +156,6 @@ fn resolve_tool_environment<'a>(
         || Ok(turn.environments.primary()),
         |environment_id| {
             turn.environments
-                .turn_environments
                 .iter()
                 .find(|environment| environment.environment_id == environment_id)
                 .map(Some)

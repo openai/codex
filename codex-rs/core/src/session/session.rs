@@ -2,6 +2,7 @@ use super::input_queue::InputQueue;
 use super::*;
 use crate::agents_md::LoadedAgentsMd;
 use crate::config::ConstraintError;
+use crate::environment_selection::TurnEnvironmentsSnapshot;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
 use codex_extension_api::ExtensionDataInit;
@@ -437,7 +438,7 @@ async fn warm_plugins_and_skills_for_session_init(
     config: Arc<Config>,
     plugins_manager: Arc<PluginsManager>,
     skills_manager: Arc<SkillsManager>,
-    turn_environments: TurnEnvironments,
+    turn_environments: TurnEnvironmentsSnapshot,
 ) -> Vec<SkillError> {
     let fs = turn_environments.primary_filesystem();
     let plugins_input = config.plugins_config_input();
@@ -480,7 +481,7 @@ impl Session {
         extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
         thread_extension_init: ExtensionDataInit,
         agent_control: AgentControl,
-        turn_environments: TurnEnvironments,
+        turn_environments: Arc<TurnEnvironments>,
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
@@ -622,7 +623,7 @@ impl Session {
             Arc::clone(&config),
             Arc::clone(&plugins_manager),
             Arc::clone(&skills_manager),
-            turn_environments.clone(),
+            turn_environments.snapshot().await,
         )
         .instrument(info_span!(
             "session_init.plugin_skill_warmup",
@@ -847,7 +848,7 @@ impl Session {
             session_configuration.thread_name = thread_name.clone();
             validate_config_lock_if_configured(&session_configuration).await?;
             export_config_lock_if_configured(&session_configuration, thread_id).await?;
-            let state = SessionState::new(session_configuration.clone(), turn_environments);
+            let state = SessionState::new(session_configuration.clone());
             let managed_network_requirements_configured = config
                 .config_layer_stack
                 .requirements_toml()
@@ -962,6 +963,7 @@ impl Session {
             }
 
             let services = SessionServices {
+                turn_environments: Arc::clone(&turn_environments),
                 // Initialize the MCP connection manager with an uninitialized
                 // instance. It will be replaced with one created via
                 // McpConnectionManager::new() once all its constructor args are
@@ -1108,14 +1110,13 @@ impl Session {
                 cancel_token
             };
             let mcp_runtime_context = {
-                let state = sess.state.lock().await;
-                let cwd = state
-                    .turn_environments
+                let turn_environments = sess.services.turn_environments.snapshot().await;
+                let cwd = turn_environments
                     .primary()
                     .map(|turn_environment| turn_environment.cwd().to_path_buf())
                     .unwrap_or_else(|| session_configuration.cwd().to_path_buf());
                 McpRuntimeContext::new(
-                    Arc::clone(&state.turn_environments.environment_manager),
+                    sess.services.turn_environments.environment_manager(),
                     cwd,
                 )
             };

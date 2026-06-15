@@ -520,6 +520,7 @@ impl Codex {
             inherited_multi_agent_version,
         } = args;
         let turn_environments = TurnEnvironments::resolve(environment_manager, &environments).await;
+        let resolved_environments = turn_environments.snapshot().await;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
@@ -532,7 +533,7 @@ impl Codex {
             .startup_warnings
             .extend(user_instruction_provider_warnings);
         let loaded_agents_md =
-            load_project_instructions(&mut config, user_instructions, &turn_environments).await;
+            load_project_instructions(&mut config, user_instructions, &resolved_environments).await;
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -622,7 +623,7 @@ impl Codex {
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             environments: TurnEnvironmentSelections::new(
                 config.cwd.clone(),
-                turn_environments.to_selections(),
+                resolved_environments.to_selections(),
             ),
             workspace_roots: config.workspace_roots.clone(),
             codex_home: config.codex_home.clone(),
@@ -1431,7 +1432,6 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        let updated_turn_environments = self.turn_environments_for_update(&updates).await;
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let (
             previous_config,
@@ -1464,9 +1464,6 @@ impl Session {
             let codex_home = updated.codex_home.clone();
             let session_source = updated.session_source.clone();
             state.session_configuration = updated;
-            if let Some(turn_environments) = updated_turn_environments {
-                state.turn_environments = turn_environments;
-            }
             (
                 previous_config,
                 new_config,
@@ -1477,7 +1474,12 @@ impl Session {
                 session_source,
             )
         };
-
+        if let Some(environments) = &updates.environments {
+            self.services
+                .turn_environments
+                .update_selections(&environments.environments)
+                .await;
+        }
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         self.maybe_refresh_shell_snapshot_for_cwd(
             &previous_cwd,
@@ -2356,7 +2358,6 @@ impl Session {
         let turn_environment = match args.environment_id.as_deref() {
             Some(environment_id) => turn_context
                 .environments
-                .turn_environments
                 .iter()
                 .find(|environment| environment.environment_id == environment_id),
             None => turn_context.environments.primary(),

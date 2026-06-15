@@ -628,7 +628,6 @@ fn unified_exec_should_include_shell_parameter(turn_context: &TurnContext) -> bo
         UnifiedExecShellMode::ZshFork(_)
     ) || turn_context
         .environments
-        .turn_environments
         .iter()
         .any(|environment| environment.environment.is_remote())
 }

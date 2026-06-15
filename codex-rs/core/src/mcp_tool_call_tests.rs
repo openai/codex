@@ -1268,7 +1268,7 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         CancellationToken::new(),
         turn_context.permission_profile(),
         codex_mcp::McpRuntimeContext::new(
-            Arc::clone(&turn_context.environments.environment_manager),
+            session.services.turn_environments.environment_manager(),
             {
                 #[allow(deprecated)]
                 turn_context.cwd.to_path_buf()
