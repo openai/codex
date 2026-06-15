@@ -12,7 +12,7 @@ use std::time::UNIX_EPOCH;
 
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
-use crate::agent::agent_status_from_event;
+use crate::agent::status::agent_status_after_event;
 use crate::agent::status::is_final;
 use crate::agents_md::LoadedAgentsMd;
 use crate::attestation::AttestationProvider;
@@ -1758,9 +1758,7 @@ impl Session {
             return;
         };
 
-        let Some(status) = agent_status_from_event(msg) else {
-            return;
-        };
+        let status = self.agent_status.borrow().clone();
         if !is_final(&status) {
             return;
         }
@@ -1863,7 +1861,8 @@ impl Session {
 
     async fn deliver_event_raw(&self, event: Event) {
         // Record the last known agent status.
-        if let Some(status) = agent_status_from_event(&event.msg) {
+        let current_status = self.agent_status.borrow().clone();
+        if let Some(status) = agent_status_after_event(&current_status, &event.msg) {
             self.agent_status.send_replace(status);
         }
         if let Err(e) = self.tx_event.send(event).await {

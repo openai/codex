@@ -2,7 +2,8 @@ use super::*;
 use crate::CodexThread;
 use crate::StateDbHandle;
 use crate::ThreadManager;
-use crate::agent::agent_status_from_event;
+use crate::agent::status::agent_status_after_event;
+use crate::agent::status::agent_status_from_event;
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
@@ -322,6 +323,20 @@ async fn on_event_updates_status_from_error() {
 
     let expected = AgentStatus::Errored("boom".to_string());
     assert_eq!(status, Some(expected));
+}
+
+#[test]
+fn terminal_error_survives_turn_complete_status_update() {
+    let current = AgentStatus::Errored("stream disconnected".to_string());
+    let event = EventMsg::TurnComplete(TurnCompleteEvent {
+        turn_id: "turn-1".to_string(),
+        last_agent_message: None,
+        completed_at: None,
+        duration_ms: None,
+        time_to_first_token_ms: None,
+    });
+
+    assert_eq!(agent_status_after_event(&current, &event), Some(current));
 }
 
 #[tokio::test]
