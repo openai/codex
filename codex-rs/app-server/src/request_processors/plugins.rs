@@ -551,6 +551,8 @@ impl PluginRequestProcessor {
         {
             return Ok(empty_response());
         }
+        let auth_mode = auth.as_ref().map(CodexAuth::api_auth_mode);
+        plugins_manager.set_auth_mode(auth_mode);
         let plugins_input = config.plugins_config_input();
         let include_shared_with_me =
             marketplace_kinds.contains(&PluginListMarketplaceKind::SharedWithMe);
@@ -559,10 +561,12 @@ impl PluginRequestProcessor {
             && config.features.enabled(Feature::RemotePlugin);
         let include_global_remote =
             !explicit_marketplace_kinds && config.features.enabled(Feature::RemotePlugin);
+        let use_remote_global_catalog =
+            include_global_remote && auth_mode.is_some_and(AuthMode::uses_codex_backend);
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
-        let refresh_global_remote_catalog_cache = include_global_remote
+        let refresh_global_remote_catalog_cache = use_remote_global_catalog
             && codex_core_plugins::remote::has_cached_global_remote_plugin_catalog(
                 config.codex_home.as_path(),
                 &remote_plugin_service_config,
@@ -578,7 +582,7 @@ impl PluginRequestProcessor {
                     .list_marketplaces_for_config(
                         &config_for_marketplace_listing,
                         &roots_for_marketplace_listing,
-                        /*include_openai_curated*/ !include_global_remote,
+                        /*include_openai_curated*/ !use_remote_global_catalog,
                     )?;
                 Ok::<
                     (
@@ -667,7 +671,7 @@ impl PluginRequestProcessor {
         }
 
         let mut remote_sources = Vec::new();
-        if include_global_remote {
+        if use_remote_global_catalog {
             remote_sources.push(RemoteMarketplaceSource::Global);
         }
         if include_created_by_me_remote {
@@ -798,6 +802,7 @@ impl PluginRequestProcessor {
         {
             return Ok(empty_response());
         }
+        plugins_manager.set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
 
         let plugins_input = config.plugins_config_input();
         let remote_installed_plugin_visible_marketplaces =

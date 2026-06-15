@@ -2166,6 +2166,61 @@ async fn plugin_list_skips_explicit_openai_curated_remote_collection_for_api_aut
 }
 
 #[tokio::test]
+async fn plugin_list_includes_api_curated_marketplace_for_api_auth_when_remote_plugin_enabled()
+-> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_remote_plugin_catalog_config(
+        codex_home.path(),
+        &format!("{}/backend-api/", server.uri()),
+    )?;
+    write_openai_api_curated_marketplace(codex_home.path(), &["api-plugin"])?;
+    login_with_api_key(
+        codex_home.path(),
+        "sk-test-key",
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: None,
+            marketplace_kinds: None,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginListResponse = to_response(response)?;
+
+    let api_curated_marketplace = response
+        .marketplaces
+        .iter()
+        .find(|marketplace| marketplace.name == "openai-api-curated")
+        .expect("expected API curated marketplace");
+    assert_eq!(
+        api_curated_marketplace
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.display_name.as_deref()),
+        Some("OpenAI Curated")
+    );
+    assert_eq!(api_curated_marketplace.plugins.len(), 1);
+    assert_eq!(
+        api_curated_marketplace.plugins[0].id,
+        "api-plugin@openai-api-curated"
+    );
+    assert!(response.marketplace_load_errors.is_empty());
+    wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 0).await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_list_does_not_query_openai_curated_remote_collection_by_default() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
@@ -3991,6 +4046,58 @@ fn write_openai_curated_marketplace(
         format!(
             r#"{{
   "name": "openai-curated",
+  "plugins": [
+{plugins}
+  ]
+}}"#
+        ),
+    )?;
+
+    for plugin_name in plugin_names {
+        let plugin_root = curated_root.join(format!("plugins/{plugin_name}/.codex-plugin"));
+        std::fs::create_dir_all(&plugin_root)?;
+        std::fs::write(
+            plugin_root.join("plugin.json"),
+            format!(r#"{{"name":"{plugin_name}"}}"#),
+        )?;
+    }
+    std::fs::create_dir_all(codex_home.join(".tmp"))?;
+    std::fs::write(
+        codex_home.join(".tmp/plugins.sha"),
+        format!("{TEST_CURATED_PLUGIN_SHA}\n"),
+    )?;
+    Ok(())
+}
+
+fn write_openai_api_curated_marketplace(
+    codex_home: &std::path::Path,
+    plugin_names: &[&str],
+) -> std::io::Result<()> {
+    let curated_root = codex_home.join(".tmp/plugins");
+    std::fs::create_dir_all(curated_root.join(".agents/plugins"))?;
+    let plugins = plugin_names
+        .iter()
+        .map(|plugin_name| {
+            format!(
+                r#"{{
+      "name": "{plugin_name}",
+      "source": {{
+        "source": "local",
+        "path": "./plugins/{plugin_name}"
+      }}
+    }}"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
+    std::fs::write(
+        curated_root.join(".agents/plugins/api_marketplace.json"),
+        format!(
+            r#"{{
+  "name": "openai-api-curated",
+  "interface": {{
+    "displayName": "OpenAI Curated"
+  }},
   "plugins": [
 {plugins}
   ]
