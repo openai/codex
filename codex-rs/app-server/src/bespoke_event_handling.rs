@@ -1836,7 +1836,6 @@ async fn on_request_permissions_response(
         Ok(None) => return,
         Err(err) => {
             let message = format!("failed to localize granted filesystem paths: {err}");
-            error!("{message}");
             handle_error_notification(
                 conversation_id,
                 &turn_id,
