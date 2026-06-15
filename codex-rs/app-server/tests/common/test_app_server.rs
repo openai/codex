@@ -1133,6 +1133,11 @@ impl TestAppServer {
         self.send_request("config/read", params).await
     }
 
+    pub async fn send_config_requirements_read_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("configRequirements/read", /*params*/ None)
+            .await
+    }
+
     pub async fn send_config_value_write_request(
         &mut self,
         params: ConfigValueWriteParams,

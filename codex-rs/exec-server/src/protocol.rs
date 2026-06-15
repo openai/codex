@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use crate::FileSystemSandboxContext;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -77,7 +76,8 @@ pub struct EnvironmentInfo {
 pub struct ShellInfo {
     /// Stable shell name, for example `zsh`, `bash`, `powershell`, `sh`, or `cmd`.
     pub name: String,
-    /// Path the exec server would use for that shell.
+    /// Target-native shell executable path or command name. Fallbacks such as `cmd.exe` need not
+    /// be absolute, so this is not a [`PathUri`].
     pub path: String,
 }
 
@@ -88,7 +88,8 @@ pub struct ExecParams {
     /// This is a protocol key, not an OS pid.
     pub process_id: ProcessId,
     pub argv: Vec<String>,
-    pub cwd: PathBuf,
+    /// Working directory URI, interpreted using the exec-server host's path rules at launch time.
+    pub cwd: PathUri,
     #[serde(default)]
     pub env_policy: Option<ExecEnvPolicy>,
     pub env: HashMap<String, String>,
@@ -96,6 +97,8 @@ pub struct ExecParams {
     /// Keep non-tty stdin writable through `process/write`.
     #[serde(default)]
     pub pipe_stdin: bool,
+    /// Optional process-visible argv0 override. Values such as `codex-linux-sandbox` are command
+    /// names rather than paths, so this is not a [`PathUri`].
     pub arg0: Option<String>,
 }
 
@@ -244,6 +247,7 @@ pub struct FsGetMetadataResponse {
     pub is_directory: bool,
     pub is_file: bool,
     pub is_symlink: bool,
+    pub size: u64,
     pub created_at_ms: i64,
     pub modified_at_ms: i64,
 }
@@ -450,6 +454,8 @@ mod base64_bytes {
 mod tests {
     use super::FsReadFileParams;
     use super::HttpRequestParams;
+    use crate::FileSystemSandboxContext;
+    use codex_protocol::models::PermissionProfile;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
 
@@ -458,14 +464,22 @@ mod tests {
         let legacy_path = std::env::current_dir()
             .expect("current directory")
             .join("legacy-file.txt");
+        let legacy_cwd = std::env::current_dir().expect("current directory");
+        let expected_sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+            PermissionProfile::default(),
+            PathUri::from_path(&legacy_cwd).expect("cwd URI"),
+        );
+        let mut legacy_sandbox =
+            serde_json::to_value(&expected_sandbox).expect("sandbox should serialize");
+        legacy_sandbox["cwd"] = serde_json::json!(legacy_cwd.to_string_lossy());
         let params: FsReadFileParams = serde_json::from_value(serde_json::json!({
             "path": legacy_path.to_string_lossy(),
-            "sandbox": null,
+            "sandbox": legacy_sandbox,
         }))
         .expect("legacy absolute path should deserialize");
         let expected = FsReadFileParams {
             path: PathUri::from_path(legacy_path).expect("path URI"),
-            sandbox: None,
+            sandbox: Some(expected_sandbox.clone()),
         };
 
         assert_eq!(params, expected);
@@ -473,7 +487,8 @@ mod tests {
             serde_json::to_value(params).expect("params should serialize"),
             serde_json::json!({
                 "path": expected.path.to_string(),
-                "sandbox": null,
+                "sandbox": serde_json::to_value(expected_sandbox)
+                    .expect("sandbox should serialize"),
             })
         );
     }

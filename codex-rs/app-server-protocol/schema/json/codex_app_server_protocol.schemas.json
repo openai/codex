@@ -6056,6 +6056,26 @@
         "oneOf": [
           {
             "properties": {
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "input_text"
+                ],
+                "title": "InputTextAgentMessageInputContentType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "type"
+            ],
+            "title": "InputTextAgentMessageInputContent",
+            "type": "object"
+          },
+          {
+            "properties": {
               "encrypted_content": {
                 "type": "string"
               },
@@ -6584,6 +6604,16 @@
       },
       "AppsDefaultConfig": {
         "properties": {
+          "approvals_reviewer": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ApprovalsReviewer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "destructive_enabled": {
             "default": true,
             "type": "boolean"
@@ -8109,6 +8139,12 @@
               "null"
             ]
           },
+          "allowRemoteControl": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "allowedApprovalPolicies": {
             "items": {
               "$ref": "#/definitions/v2/AskForApproval"
@@ -8508,6 +8544,13 @@
         ],
         "title": "ContextCompactedNotification",
         "type": "object"
+      },
+      "ConversationTextRole": {
+        "enum": [
+          "user",
+          "developer"
+        ],
+        "type": "string"
       },
       "CreditsSnapshot": {
         "properties": {
@@ -12536,6 +12579,12 @@
             },
             "type": "array"
           },
+          "shareUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "skills": {
             "items": {
               "$ref": "#/definitions/v2/SkillSummary"
@@ -13788,6 +13837,13 @@
         ],
         "title": "RawResponseItemCompletedNotification",
         "type": "object"
+      },
+      "RealtimeConversationArchitecture": {
+        "enum": [
+          "realtimeapi",
+          "avas"
+        ],
+        "type": "string"
       },
       "RealtimeConversationVersion": {
         "enum": [

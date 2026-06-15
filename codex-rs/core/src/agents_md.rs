@@ -57,7 +57,7 @@ pub(crate) async fn load_project_instructions(
             config,
             filesystem.as_ref(),
             &turn_environment.environment_id,
-            &turn_environment.cwd,
+            turn_environment.cwd(),
         )
         .await
         {
@@ -113,7 +113,7 @@ async fn read_agents_md(
             break;
         }
 
-        let path_uri = PathUri::from_abs_path(&p)?;
+        let path_uri = PathUri::from_abs_path(&p);
         match fs.get_metadata(&path_uri, /*sandbox*/ None).await {
             Ok(metadata) if !metadata.is_file => continue,
             Ok(_) => {}
@@ -194,7 +194,7 @@ async fn agents_md_paths(
         for ancestor in dir.ancestors() {
             for marker in &project_root_markers {
                 let marker_path = ancestor.join(marker);
-                let marker_path_uri = PathUri::from_abs_path(&marker_path)?;
+                let marker_path_uri = PathUri::from_abs_path(&marker_path);
                 let marker_exists = match fs.get_metadata(&marker_path_uri, /*sandbox*/ None).await
                 {
                     Ok(_) => true,
@@ -236,7 +236,7 @@ async fn agents_md_paths(
     for d in search_dirs {
         for name in &candidate_filenames {
             let candidate = d.join(name);
-            let candidate_uri = PathUri::from_abs_path(&candidate)?;
+            let candidate_uri = PathUri::from_abs_path(&candidate);
             match fs.get_metadata(&candidate_uri, /*sandbox*/ None).await {
                 Ok(md) if md.is_file => {
                     found.push(candidate);

@@ -5,8 +5,10 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::PluginSkillRoot;
 
 use crate::AppConnectorId;
+use crate::AppDeclaration;
 use crate::PluginCapabilitySummary;
 use crate::PluginHookSource;
+use crate::app_connector_ids_from_declarations;
 
 const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
 
@@ -22,7 +24,7 @@ pub struct LoadedPlugin<M> {
     pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
     pub has_enabled_skills: bool,
     pub mcp_servers: HashMap<String, M>,
-    pub apps: Vec<AppConnectorId>,
+    pub apps: Vec<AppDeclaration>,
     pub hook_sources: Vec<PluginHookSource>,
     pub hook_load_warnings: Vec<String>,
     pub error: Option<String>,
@@ -54,7 +56,7 @@ fn plugin_capability_summary_from_loaded<M>(
         description: prompt_safe_plugin_description(plugin.manifest_description.as_deref()),
         has_skills: plugin.has_enabled_skills,
         mcp_server_names,
-        app_connector_ids: plugin.apps.clone(),
+        app_connector_ids: app_connector_ids_from_declarations(&plugin.apps),
     };
 
     (summary.has_skills
@@ -150,18 +152,12 @@ impl<M: Clone> PluginLoadOutcome<M> {
     }
 
     pub fn effective_apps(&self) -> Vec<AppConnectorId> {
-        let mut apps = Vec::new();
-        let mut seen_connector_ids = HashSet::new();
-
-        for plugin in self.plugins.iter().filter(|plugin| plugin.is_active()) {
-            for connector_id in &plugin.apps {
-                if seen_connector_ids.insert(connector_id.clone()) {
-                    apps.push(connector_id.clone());
-                }
-            }
-        }
-
-        apps
+        app_connector_ids_from_declarations(
+            self.plugins
+                .iter()
+                .filter(|plugin| plugin.is_active())
+                .flat_map(|plugin| plugin.apps.iter()),
+        )
     }
 
     pub fn effective_plugin_hook_sources(&self) -> Vec<PluginHookSource> {
