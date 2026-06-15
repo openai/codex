@@ -7,6 +7,7 @@ use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::CLIENT_ID;
+use codex_login::CLIENT_ID_OVERRIDE_ENV_VAR;
 use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_login::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::logout_with_revoke;
@@ -33,6 +34,7 @@ const REFRESH_TOKEN: &str = "refresh-token";
 async fn logout_with_revoke_revokes_refresh_token_then_removes_auth() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let _client_id_guard = EnvGuard::set(CLIENT_ID_OVERRIDE_ENV_VAR, "staging-client".to_string());
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/revoke"))
@@ -77,7 +79,7 @@ async fn logout_with_revoke_revokes_refresh_token_then_removes_auth() -> Result<
         json!({
             "token": REFRESH_TOKEN,
             "token_type_hint": "refresh_token",
-            "client_id": CLIENT_ID,
+            "client_id": "staging-client",
         })
     );
     server.verify().await;

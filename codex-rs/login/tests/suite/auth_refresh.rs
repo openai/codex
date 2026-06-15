@@ -8,6 +8,7 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
+use codex_login::CLIENT_ID_OVERRIDE_ENV_VAR;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::RefreshTokenError;
 use codex_login::load_auth_dot_json;
@@ -36,6 +37,7 @@ const INITIAL_REFRESH_TOKEN: &str = "initial-refresh-token";
 async fn refresh_token_succeeds_updates_storage() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let _client_id_guard = EnvGuard::set(CLIENT_ID_OVERRIDE_ENV_VAR, "staging-client".to_string());
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
@@ -65,6 +67,16 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
         .refresh_token_from_authority()
         .await
         .context("refresh should succeed")?;
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&requests[0].body)?,
+        json!({
+            "client_id": "staging-client",
+            "grant_type": "refresh_token",
+            "refresh_token": INITIAL_REFRESH_TOKEN,
+        })
+    );
 
     let refreshed_tokens = TokenData {
         access_token: "new-access-token".to_string(),
