@@ -1,6 +1,7 @@
 use std::io::Cursor;
 use std::num::NonZeroUsize;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::LazyLock;
 
 use base64::Engine;
@@ -9,7 +10,6 @@ use codex_utils_cache::BlockingLruCache;
 use codex_utils_cache::sha1_digest;
 use image::ColorType;
 use image::DynamicImage;
-use image::GenericImageView;
 use image::ImageDecoder;
 use image::ImageEncoder;
 use image::ImageFormat;
@@ -28,6 +28,7 @@ pub const MAX_DIMENSION: u32 = 2048;
 /// This is a high sanity guard against pathological inputs, not a protocol
 /// requirement or target upload size.
 pub const MAX_PROMPT_IMAGE_INPUT_BYTES: usize = 1024 * 1024 * 1024;
+const MAX_IMAGE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 pub mod error;
 
@@ -35,7 +36,7 @@ pub use crate::error::ImageProcessingError;
 
 #[derive(Debug, Clone)]
 pub struct EncodedImage {
-    pub bytes: Vec<u8>,
+    pub bytes: Arc<[u8]>,
     pub mime: String,
     pub width: u32,
     pub height: u32,
@@ -77,7 +78,9 @@ struct ImageCacheKey {
     mode: PromptImageMode,
 }
 
-static IMAGE_CACHE: LazyLock<BlockingLruCache<ImageCacheKey, EncodedImage>> =
+type ImageCache = BlockingLruCache<ImageCacheKey, EncodedImage>;
+
+static IMAGE_CACHE: LazyLock<ImageCache> =
     LazyLock::new(|| BlockingLruCache::new(NonZeroUsize::new(32).unwrap_or(NonZeroUsize::MIN)));
 
 pub fn load_for_prompt_bytes(
@@ -92,7 +95,11 @@ pub fn load_for_prompt_bytes(
         mode,
     };
 
-    IMAGE_CACHE.get_or_try_insert_with(key, move || {
+    if let Some(image) = IMAGE_CACHE.get(&key) {
+        return Ok(image);
+    }
+
+    let image = (move || {
         let guessed_format = image::guess_format(&file_bytes)
             .map_err(|source| ImageProcessingError::decode_error(&path_buf, source))?;
         let format = match guessed_format {
@@ -106,6 +113,27 @@ pub fn load_for_prompt_bytes(
         let mut decoder = ImageReader::with_format(Cursor::new(&file_bytes), guessed_format)
             .into_decoder()
             .map_err(|source| ImageProcessingError::decode_error(&path_buf, source))?;
+        let (width, height) = decoder.dimensions();
+
+        let can_pass_through = match mode {
+            PromptImageMode::ResizeToFit => width <= MAX_DIMENSION && height <= MAX_DIMENSION,
+            PromptImageMode::Original => true,
+            PromptImageMode::ResizeWithLimits(limits) => {
+                prompt_image_dimensions_fit(width, height, limits)
+            }
+        };
+        if can_pass_through
+            && let Some(format) = format.filter(|format| can_preserve_source_bytes(*format))
+        {
+            drop(decoder);
+            return Ok(EncodedImage {
+                bytes: file_bytes.into(),
+                mime: format_to_mime(format),
+                width,
+                height,
+            });
+        }
+
         // Preserve the metadata most important for rendering prompt images faithfully: the color
         // profile and EXIF data, including orientation. Other format-specific metadata is
         // intentionally not copied.
@@ -122,8 +150,6 @@ pub fn load_for_prompt_bytes(
         };
         let dynamic = DynamicImage::from_decoder(decoder)
             .map_err(|source| ImageProcessingError::decode_error(&path_buf, source))?;
-
-        let (width, height) = dynamic.dimensions();
 
         let target_dimensions = match mode {
             PromptImageMode::ResizeToFit if width > MAX_DIMENSION || height > MAX_DIMENSION => {
@@ -151,7 +177,7 @@ pub fn load_for_prompt_bytes(
             let (bytes, output_format) = encode_image(&resized, target_format, metadata)?;
             let mime = format_to_mime(output_format);
             EncodedImage {
-                bytes,
+                bytes: bytes.into(),
                 mime,
                 width,
                 height,
@@ -160,7 +186,7 @@ pub fn load_for_prompt_bytes(
             if let Some(format) = format.filter(|format| can_preserve_source_bytes(*format)) {
                 let mime = format_to_mime(format);
                 EncodedImage {
-                    bytes: file_bytes,
+                    bytes: file_bytes.into(),
                     mime,
                     width,
                     height,
@@ -169,7 +195,7 @@ pub fn load_for_prompt_bytes(
                 let (bytes, output_format) = encode_image(&dynamic, ImageFormat::Png, metadata)?;
                 let mime = format_to_mime(output_format);
                 EncodedImage {
-                    bytes,
+                    bytes: bytes.into(),
                     mime,
                     width,
                     height,
@@ -178,7 +204,30 @@ pub fn load_for_prompt_bytes(
         };
 
         Ok(encoded)
-    })
+    })()?;
+
+    cache_image(&IMAGE_CACHE, key, image.clone(), MAX_IMAGE_CACHE_BYTES);
+    Ok(image)
+}
+
+fn cache_image(cache: &ImageCache, key: ImageCacheKey, image: EncodedImage, byte_capacity: usize) {
+    if image.bytes.len() > byte_capacity {
+        return;
+    }
+
+    cache.with_mut(|cache| {
+        cache.put(key, image);
+        let mut cached_bytes = cache
+            .iter()
+            .map(|(_, image)| image.bytes.len())
+            .sum::<usize>();
+        while cached_bytes > byte_capacity {
+            let Some((_, evicted)) = cache.pop_lru() else {
+                break;
+            };
+            cached_bytes -= evicted.bytes.len();
+        }
+    });
 }
 
 pub fn load_data_url_for_prompt(
