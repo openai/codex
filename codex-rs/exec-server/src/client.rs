@@ -25,6 +25,7 @@ use tokio::sync::watch;
 
 use tokio::time::timeout;
 use tracing::debug;
+use uuid::Uuid;
 
 use crate::ProcessId;
 use crate::client_api::ExecServerClientConnectOptions;
@@ -470,18 +471,18 @@ impl ExecServerClient {
         &self,
         params: FsReadFileParams,
     ) -> Result<FileReadStream, ExecServerError> {
-        let response = self
-            .fs_open(FsOpenParams {
-                path: params.path,
-                sandbox: params.sandbox,
-            })
-            .await?;
         let registration = FileReadRegistration {
             client: self.clone(),
-            handle_id: response.handle_id,
+            handle_id: Uuid::new_v4().to_string(),
             runtime: tokio::runtime::Handle::try_current().ok(),
             active: true,
         };
+        self.fs_open(FsOpenParams {
+            handle_id: registration.handle_id.clone(),
+            path: params.path,
+            sandbox: params.sandbox,
+        })
+        .await?;
         Ok(FileReadStream {
             inner: futures::stream::try_unfold(Some((registration, 0_u64)), |state| async move {
                 let Some((mut registration, offset)) = state else {

@@ -4,7 +4,6 @@ use std::io;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use uuid::Uuid;
 
 pub(crate) const FILE_READ_BLOCK_SIZE: usize = 1024 * 1024;
 const MAX_OPEN_FILE_READS: usize = 128;
@@ -21,16 +20,25 @@ pub(crate) struct FileReadHandleManager {
 }
 
 impl FileReadHandleManager {
-    pub(crate) async fn open(&self, file: tokio::fs::File) -> io::Result<String> {
+    pub(crate) async fn open(
+        &self,
+        handle_id: String,
+        file: tokio::fs::File,
+    ) -> io::Result<String> {
         let file = Arc::new(file.into_std().await);
         let mut handles = self.handles.lock().await;
+        if handles.contains_key(&handle_id) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("file read handle `{handle_id}` already exists"),
+            ));
+        }
         if handles.len() >= MAX_OPEN_FILE_READS {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("at most {MAX_OPEN_FILE_READS} file reads may be open per connection"),
             ));
         }
-        let handle_id = Uuid::new_v4().to_string();
         handles.insert(handle_id.clone(), file);
         Ok(handle_id)
     }

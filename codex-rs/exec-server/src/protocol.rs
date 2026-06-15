@@ -216,6 +216,7 @@ pub struct FsReadFileResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FsOpenParams {
+    pub handle_id: String,
     pub path: PathUri,
     pub sandbox: Option<FileSystemSandboxContext>,
 }

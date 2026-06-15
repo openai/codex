@@ -23,6 +23,7 @@ use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tempfile::TempDir;
+use uuid::Uuid;
 
 use crate::common::exec_server::ExecServerHarness;
 use crate::common::exec_server::exec_server;
@@ -168,6 +169,7 @@ async fn read_block_supports_non_sequential_offsets_and_lengths() -> Result<()> 
         &mut server,
         "fs/open",
         serde_json::json!({
+            "handleId": Uuid::new_v4().to_string(),
             "path": PathUri::from_path(path)?,
             "sandbox": null,
         }),
@@ -221,7 +223,11 @@ async fn open_enforces_the_per_connection_limit_and_close_releases_capacity() ->
         let open: OpenFileResponse = rpc_call(
             &mut server,
             "fs/open",
-            serde_json::json!({ "path": path, "sandbox": null }),
+            serde_json::json!({
+                "handleId": Uuid::new_v4().to_string(),
+                "path": path,
+                "sandbox": null,
+            }),
         )
         .await?;
         handles.push(open.handle_id);
@@ -230,7 +236,11 @@ async fn open_enforces_the_per_connection_limit_and_close_releases_capacity() ->
     let response = rpc_message(
         &mut server,
         "fs/open",
-        serde_json::json!({ "path": path, "sandbox": null }),
+        serde_json::json!({
+            "handleId": Uuid::new_v4().to_string(),
+            "path": path,
+            "sandbox": null,
+        }),
     )
     .await?;
     let JSONRPCMessage::Error(JSONRPCError { error, .. }) = response else {
@@ -253,7 +263,11 @@ async fn open_enforces_the_per_connection_limit_and_close_releases_capacity() ->
     let _: OpenFileResponse = rpc_call(
         &mut server,
         "fs/open",
-        serde_json::json!({ "path": path, "sandbox": null }),
+        serde_json::json!({
+            "handleId": Uuid::new_v4().to_string(),
+            "path": path,
+            "sandbox": null,
+        }),
     )
     .await?;
     server.shutdown().await?;

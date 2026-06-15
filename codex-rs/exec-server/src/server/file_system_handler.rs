@@ -66,7 +66,11 @@ impl FileSystemHandler {
             .open_file_for_read(&params.path, params.sandbox.as_ref())
             .await
             .map_err(map_fs_error)?;
-        let handle_id = self.file_reads.open(file).await.map_err(map_fs_error)?;
+        let handle_id = self
+            .file_reads
+            .open(params.handle_id, file)
+            .await
+            .map_err(map_fs_error)?;
         Ok(FsOpenResponse { handle_id })
     }
 
