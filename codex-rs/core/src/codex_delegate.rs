@@ -90,6 +90,10 @@ pub(crate) async fn run_codex_thread_interactive(
         installation_id: parent_session.installation_id.clone(),
         auth_manager,
         models_manager,
+        environment_manager: parent_session
+            .services
+            .turn_environments
+            .environment_manager(),
         skills_manager: Arc::clone(&parent_session.services.skills_manager),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
@@ -107,11 +111,7 @@ pub(crate) async fn run_codex_thread_interactive(
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         parent_trace: None,
-        environment_manager: parent_session
-            .services
-            .turn_environments
-            .environment_manager(),
-        environments: parent_ctx.environments.to_selections(),
+        environment_selections: parent_ctx.environments.to_selections(),
         thread_extension_init: codex_extension_api::ExtensionDataInit::default(),
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         thread_store: Arc::clone(&parent_session.services.thread_store),

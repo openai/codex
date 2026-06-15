@@ -3313,7 +3313,7 @@ async fn set_rate_limits_retains_previous_credits() {
         user_shell_override: None,
     };
 
-    let mut state = session_state_for_tests(session_configuration);
+    let mut state = SessionState::new(session_configuration);
     let initial = RateLimitSnapshot {
         limit_id: None,
         limit_name: None,
@@ -3420,7 +3420,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         user_shell_override: None,
     };
 
-    let mut state = session_state_for_tests(session_configuration);
+    let mut state = SessionState::new(session_configuration);
     let initial = RateLimitSnapshot {
         limit_id: None,
         limit_name: None,
@@ -4042,10 +4042,6 @@ async fn turn_environments_for_configuration(
     .await
 }
 
-fn session_state_for_tests(session_configuration: SessionConfiguration) -> SessionState {
-    SessionState::new(session_configuration)
-}
-
 #[tokio::test]
 async fn session_configuration_apply_preserves_profile_file_system_policy_on_cwd_only_update() {
     let mut session_configuration = make_session_configuration_for_tests().await;
@@ -4405,7 +4401,7 @@ async fn active_profile_update_rebuilds_network_proxy_config() -> std::io::Resul
 #[cfg_attr(windows, ignore)]
 #[tokio::test]
 async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
-    let (session, turn_context) = make_session_and_context().await;
+    let (session, _turn_context) = make_session_and_context().await;
     let parent_config = session.get_config().await;
     let codex_home = parent_config.codex_home.clone();
     let skill_dir = codex_home.join("skills").join("demo");
@@ -4417,10 +4413,12 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
     )
     .expect("write skill");
 
-    let skill_fs = turn_context
-        .environments
-        .first()
-        .map(|environment| environment.environment.get_filesystem())
+    let skill_fs = session
+        .services
+        .turn_environments
+        .environment_manager()
+        .default_environment()
+        .map(|environment| environment.get_filesystem())
         .unwrap_or_else(|| std::sync::Arc::clone(&codex_exec_server::LOCAL_FS));
     let parent_outcome = session
         .services
@@ -4657,7 +4655,8 @@ async fn session_update_settings_does_not_rewrite_sticky_environment_cwds() {
 async fn relative_cwd_update_without_environments_resolves_under_session_cwd() {
     let (session, _turn_context) = make_session_and_context().await;
     let original_cwd = {
-        let state = session.state.lock().await;
+        let mut state = session.state.lock().await;
+        state.session_configuration.environments.environments = Vec::new();
         state.session_configuration.cwd().clone()
     };
     let updated_cwd = original_cwd.join("project");
@@ -4744,7 +4743,7 @@ async fn absolute_cwd_update_with_turn_environment_is_allowed() {
     let turn_cwd = turn_context.cwd.clone();
     assert_eq!(turn_cwd, absolute_cwd);
     assert_eq!(turn_context.config.cwd, absolute_cwd);
-    assert_eq!(turn_context.environments.len(), 1);
+    assert_eq!(turn_context.environments.turn_environments.len(), 1);
 }
 
 #[tokio::test]
@@ -4930,12 +4929,12 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         session_configuration.session_source.clone(),
     );
 
-    let state = session_state_for_tests(session_configuration.clone());
+    let state = SessionState::new(session_configuration.clone());
     let turn_environments = turn_environments_for_configuration(&session_configuration).await;
     let resolved_turn_environments = turn_environments.snapshot().await;
     let environment = Arc::clone(
         &resolved_turn_environments
-            .first()
+            .primary()
             .expect("primary environment")
             .environment,
     );
@@ -4947,7 +4946,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
     let services = SessionServices {
-        turn_environments: Arc::clone(&turn_environments),
         mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from_pointee(
             McpConnectionManager::new_uninitialized_with_permission_profile(
                 &config.permissions.approval_policy,
@@ -5016,6 +5014,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         tool_search_handler_cache: Default::default(),
+        turn_environments: Arc::clone(&turn_environments),
     };
 
     let plugin_outcome = services
@@ -5596,7 +5595,7 @@ async fn request_permissions_emits_event_when_granular_policy_allows_requests() 
         async move {
             let environment = turn_context
                 .environments
-                .first()
+                .primary()
                 .expect("primary environment")
                 .selection();
             session
@@ -5669,8 +5668,8 @@ async fn request_permissions_tool_resolves_relative_paths_against_selected_envir
             mcp_elicitations: true,
         }))
         .expect("test setup should allow updating approval policy");
-    let current_environment = turn_context_mut.environments[0].clone();
-    turn_context_mut.environments.environments_mut()[0] = TurnEnvironment::new(
+    let current_environment = turn_context_mut.environments.turn_environments[0].clone();
+    turn_context_mut.environments.turn_environments[0] = TurnEnvironment::new(
         "remote".to_string(),
         current_environment.environment,
         environment_cwd.clone(),
@@ -5829,7 +5828,7 @@ async fn request_permissions_response_materializes_session_cwd_grants_before_rec
         async move {
             let environment = turn_context
                 .environments
-                .first()
+                .primary()
                 .expect("primary environment")
                 .selection();
             session
@@ -5920,7 +5919,7 @@ async fn request_permissions_is_auto_denied_when_granular_policy_blocks_tool_req
     let call_id = "call-1".to_string();
     let environment = turn_context
         .environments
-        .first()
+        .primary()
         .expect("primary environment")
         .selection();
     let response = session
@@ -6191,16 +6190,16 @@ async fn turn_environments_set_primary_environment() {
         .expect("turn should start");
 
     let turn_environments = &turn_context.environments;
-    assert_eq!(turn_environments.len(), 1);
+    assert_eq!(turn_environments.turn_environments.len(), 1);
     let turn_environment = turn_context
         .environments
-        .first()
+        .primary()
         .expect("primary environment should be set");
     assert!(std::sync::Arc::ptr_eq(
         &turn_environment.environment,
-        &turn_environments[0].environment
+        &turn_environments.turn_environments[0].environment
     ));
-    assert!(!turn_context.environments.is_empty());
+    assert!(!turn_context.environments.turn_environments.is_empty());
     #[allow(deprecated)]
     let turn_cwd = turn_context.cwd.clone();
     assert_eq!(turn_cwd.as_path(), selected_cwd.as_path());
@@ -6212,8 +6211,7 @@ async fn turn_environments_set_primary_environment() {
             .turn_environments
             .snapshot()
             .await
-            .first()
-            .map(|environment| Arc::clone(&environment.environment))
+            .primary_environment()
             .expect("stored primary environment")
     };
     assert!(Arc::ptr_eq(
@@ -6226,7 +6224,7 @@ async fn turn_environments_set_primary_environment() {
         &stored_environment,
         &default_turn
             .environments
-            .first()
+            .primary()
             .expect("default turn primary environment")
             .environment
     ));
@@ -6251,14 +6249,14 @@ async fn default_turn_does_not_overlay_legacy_fallback_cwd_onto_stored_thread_en
     let turn_context = session.new_default_turn().await;
 
     let turn_environments = &turn_context.environments;
-    assert_eq!(turn_environments.len(), 1);
+    assert_eq!(turn_environments.turn_environments.len(), 1);
     let turn_environment = turn_context
         .environments
-        .first()
+        .primary()
         .expect("primary environment should be set");
     assert!(std::sync::Arc::ptr_eq(
         &turn_environment.environment,
-        &turn_environments[0].environment
+        &turn_environments.turn_environments[0].environment
     ));
     #[allow(deprecated)]
     let turn_cwd = turn_context.cwd.clone();
@@ -6283,23 +6281,24 @@ async fn default_turn_honors_empty_stored_thread_environments() {
 
     let turn_context = session.new_default_turn().await;
 
-    assert!(turn_context.environments.is_empty());
+    assert!(turn_context.environments.primary().is_none());
+    assert!(turn_context.environments.turn_environments.is_empty());
     #[allow(deprecated)]
     let turn_cwd = turn_context.cwd.clone();
     assert_eq!(turn_cwd, session_cwd);
     assert_eq!(turn_context.config.cwd, session_cwd);
-    assert_eq!(turn_context.environments.len(), 0);
+    assert_eq!(turn_context.environments.turn_environments.len(), 0);
 }
 
 #[tokio::test]
 async fn primary_environment_uses_first_turn_environment() {
     let (_session, mut turn_context) = make_session_and_context().await;
-    let first_environment = turn_context.environments[0].clone();
+    let first_environment = turn_context.environments.turn_environments[0].clone();
     #[allow(deprecated)]
     let second_cwd = turn_context.cwd.join("second");
     turn_context
         .environments
-        .environments_mut()
+        .turn_environments
         .push(TurnEnvironment::new(
             "second".to_string(),
             Arc::clone(&first_environment.environment),
@@ -6310,7 +6309,7 @@ async fn primary_environment_uses_first_turn_environment() {
     assert_eq!(
         turn_context
             .environments
-            .first()
+            .primary()
             .expect("primary environment")
             .environment_id,
         first_environment.environment_id
@@ -6318,14 +6317,18 @@ async fn primary_environment_uses_first_turn_environment() {
     assert_eq!(
         turn_context
             .environments
+            .turn_environments
             .iter()
             .find(|environment| environment.environment_id == "second")
             .expect("second environment")
             .cwd(),
         &second_cwd
     );
-    assert_eq!(turn_context.environments.len(), 2);
-    assert_eq!(turn_context.environments[1].cwd(), &second_cwd);
+    assert_eq!(turn_context.environments.turn_environments.len(), 2);
+    assert_eq!(
+        turn_context.environments.turn_environments[1].cwd(),
+        &second_cwd
+    );
 }
 
 #[tokio::test]
@@ -6346,7 +6349,8 @@ async fn empty_turn_environments_clear_primary_environment() {
         .await
         .expect("turn should start");
 
-    assert!(turn_context.environments.is_empty());
+    assert!(turn_context.environments.primary().is_none());
+    assert!(turn_context.environments.turn_environments.is_empty());
     #[allow(deprecated)]
     let turn_cwd = turn_context.cwd.clone();
     assert_eq!(turn_cwd, session.get_config().await.cwd);
@@ -6968,12 +6972,12 @@ where
         session_configuration.session_source.clone(),
     );
 
-    let state = session_state_for_tests(session_configuration.clone());
+    let state = SessionState::new(session_configuration.clone());
     let turn_environments = turn_environments_for_configuration(&session_configuration).await;
     let resolved_turn_environments = turn_environments.snapshot().await;
     let environment = Arc::clone(
         &resolved_turn_environments
-            .first()
+            .primary()
             .expect("primary environment")
             .environment,
     );
@@ -6985,7 +6989,6 @@ where
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
     let services = SessionServices {
-        turn_environments: Arc::clone(&turn_environments),
         mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from_pointee(
             McpConnectionManager::new_uninitialized_with_permission_profile(
                 &config.permissions.approval_policy,
@@ -7054,6 +7057,7 @@ where
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         tool_search_handler_cache: Default::default(),
+        turn_environments: Arc::clone(&turn_environments),
     };
 
     let plugin_outcome = services
@@ -7279,7 +7283,7 @@ async fn environment_context_uses_session_shell_when_environment_shell_is_absent
         shell_type: crate::shell::ShellType::PowerShell,
         shell_path: PathBuf::from("powershell"),
     });
-    for environment in turn_context.environments.environments_mut() {
+    for environment in &mut turn_context.environments.turn_environments {
         environment.shell = None;
     }
 
@@ -7296,7 +7300,7 @@ async fn environment_context_uses_session_shell_when_environment_shell_is_absent
 
     let primary_environment = turn_context
         .environments
-        .environments_mut()
+        .turn_environments
         .first_mut()
         .expect("primary environment");
     primary_environment.shell = Some(crate::shell::Shell {

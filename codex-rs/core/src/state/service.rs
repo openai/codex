@@ -41,7 +41,6 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
-    pub(crate) turn_environments: Arc<TurnEnvironments>,
     /// The latest manager; callers retain an owned handle while performing MCP I/O.
     pub(crate) mcp_connection_manager: Arc<ArcSwap<McpConnectionManager>>,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
@@ -84,6 +83,7 @@ pub(crate) struct SessionServices {
     pub(crate) model_client: ModelClient,
     pub(crate) code_mode_service: CodeModeService,
     pub(crate) tool_search_handler_cache: ToolSearchHandlerCache,
+    pub(crate) turn_environments: Arc<TurnEnvironments>,
 }
 
 impl SessionServices {

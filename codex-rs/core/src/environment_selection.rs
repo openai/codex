@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::ops::Deref;
 use std::sync::Arc;
 
 use codex_exec_server::EnvironmentManager;
@@ -55,7 +54,7 @@ impl TurnEnvironments {
             if !seen_environment_ids.insert(selected_environment.environment_id.as_str()) {
                 continue;
             }
-            let turn_environment = match current.iter().find(|environment| {
+            let turn_environment = match current.turn_environments.iter().find(|environment| {
                 environment.environment_id == selected_environment.environment_id
                     && environment.cwd_uri() == &selected_environment.cwd
             }) {
@@ -73,7 +72,7 @@ impl TurnEnvironments {
             };
             turn_environments.push(turn_environment);
         }
-        *self.snapshot.lock().await = TurnEnvironmentsSnapshot(turn_environments);
+        *self.snapshot.lock().await = TurnEnvironmentsSnapshot { turn_environments };
     }
 
     async fn resolve_selection(
@@ -125,15 +124,26 @@ impl TurnEnvironments {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct TurnEnvironmentsSnapshot(Vec<TurnEnvironment>);
+pub(crate) struct TurnEnvironmentsSnapshot {
+    pub(crate) turn_environments: Vec<TurnEnvironment>,
+}
 
 impl TurnEnvironmentsSnapshot {
     pub(crate) fn primary(&self) -> Option<&TurnEnvironment> {
-        self.first()
+        self.turn_environments.first()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn primary_environment(&self) -> Option<Arc<codex_exec_server::Environment>> {
+        self.primary()
+            .map(|environment| Arc::clone(&environment.environment))
     }
 
     pub(crate) fn to_selections(&self) -> Vec<TurnEnvironmentSelection> {
-        self.iter().map(TurnEnvironment::selection).collect()
+        self.turn_environments
+            .iter()
+            .map(TurnEnvironment::selection)
+            .collect()
     }
 
     pub(crate) fn primary_filesystem(&self) -> Option<Arc<dyn ExecutorFileSystem>> {
@@ -142,34 +152,11 @@ impl TurnEnvironmentsSnapshot {
     }
 
     pub(crate) fn single_local_environment_cwd(&self) -> Option<&AbsolutePathBuf> {
-        let [environment] = self.as_slice() else {
+        let [environment] = self.turn_environments.as_slice() else {
             return None;
         };
 
         (!environment.environment.is_remote()).then_some(environment.cwd())
-    }
-
-    pub(crate) fn as_slice(&self) -> &[TurnEnvironment] {
-        &self.0
-    }
-
-    #[cfg(test)]
-    pub(crate) fn environments_mut(&mut self) -> &mut Vec<TurnEnvironment> {
-        &mut self.0
-    }
-}
-
-impl Deref for TurnEnvironmentsSnapshot {
-    type Target = [TurnEnvironment];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl From<Vec<TurnEnvironment>> for TurnEnvironmentsSnapshot {
-    fn from(environments: Vec<TurnEnvironment>) -> Self {
-        Self(environments)
     }
 }
 
@@ -302,13 +289,13 @@ url = "ws://127.0.0.1:8765"
         let resolved = resolved.snapshot().await;
         assert_eq!(
             resolved
-                .first()
+                .primary()
                 .expect("primary environment")
                 .environment_id,
             "local"
         );
         assert_eq!(
-            resolved.first().expect("primary environment").shell,
+            resolved.primary().expect("primary environment").shell,
             Some(
                 Shell::from_environment_shell_info(
                     manager
@@ -387,21 +374,21 @@ url = "ws://127.0.0.1:8765"
 
         assert!(Arc::ptr_eq(
             &initial_snapshot
-                .first()
+                .primary()
                 .expect("initial environment")
                 .environment,
             &reused_snapshot
-                .first()
+                .primary()
                 .expect("reused environment")
                 .environment,
         ));
         assert!(!Arc::ptr_eq(
             &reused_snapshot
-                .first()
+                .primary()
                 .expect("reused environment")
                 .environment,
             &changed_snapshot
-                .first()
+                .primary()
                 .expect("changed environment")
                 .environment,
         ));
@@ -425,21 +412,25 @@ url = "ws://127.0.0.1:8765"
             Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
                 .expect("remote environment"),
         );
-        let remote = TurnEnvironmentsSnapshot::from(vec![TurnEnvironment::new(
-            REMOTE_ENVIRONMENT_ID.to_string(),
-            remote_environment.clone(),
-            cwd.clone(),
-            /*shell*/ None,
-        )]);
-        let multiple = TurnEnvironmentsSnapshot::from(vec![
-            local.first().expect("local environment").clone(),
-            TurnEnvironment::new(
+        let remote = TurnEnvironmentsSnapshot {
+            turn_environments: vec![TurnEnvironment::new(
                 REMOTE_ENVIRONMENT_ID.to_string(),
-                remote_environment,
+                remote_environment.clone(),
                 cwd.clone(),
                 /*shell*/ None,
-            ),
-        ]);
+            )],
+        };
+        let multiple = TurnEnvironmentsSnapshot {
+            turn_environments: vec![
+                local.primary().expect("local environment").clone(),
+                TurnEnvironment::new(
+                    REMOTE_ENVIRONMENT_ID.to_string(),
+                    remote_environment,
+                    cwd.clone(),
+                    /*shell*/ None,
+                ),
+            ],
+        };
 
         assert_eq!(local.single_local_environment_cwd(), Some(&cwd));
         assert_eq!(remote.single_local_environment_cwd(), None);

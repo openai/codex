@@ -281,10 +281,11 @@ mod tests {
     fn replace_primary_environment_cwd(turn: &mut crate::TurnContext, cwd: AbsolutePathBuf) {
         let current = turn
             .environments
+            .turn_environments
             .first()
             .cloned()
             .expect("default local turn environment");
-        turn.environments.environments_mut()[0] = TurnEnvironment::new(
+        turn.environments.turn_environments[0] = TurnEnvironment::new(
             current.environment_id,
             current.environment,
             cwd,

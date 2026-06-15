@@ -199,7 +199,7 @@ impl TurnContext {
     }
 
     pub(crate) fn tool_environment_mode(&self) -> ToolEnvironmentMode {
-        ToolEnvironmentMode::from_count(self.environments.len())
+        ToolEnvironmentMode::from_count(self.environments.turn_environments.len())
     }
 
     pub(crate) async fn with_model(
@@ -693,25 +693,51 @@ impl Session {
         }
 
         Ok(self
-            .new_turn_context_from_state(
+            .new_turn_from_configuration(
                 sub_id,
+                session_configuration,
                 updates.final_output_json_schema,
-                TurnMultiAgentRuntime::ResolveAndStore,
             )
             .await)
     }
 
-    #[instrument(name = "turn_context.build", level = "trace", skip_all)]
-    async fn new_turn_context_from_state(
+    async fn new_turn_from_configuration(
         &self,
         sub_id: String,
+        session_configuration: SessionConfiguration,
+        final_output_json_schema: Option<Option<Value>>,
+    ) -> Arc<TurnContext> {
+        self.new_turn_context_from_configuration(
+            sub_id,
+            session_configuration,
+            final_output_json_schema,
+            TurnMultiAgentRuntime::ResolveAndStore,
+        )
+        .await
+    }
+
+    async fn new_startup_prewarm_turn_from_configuration(
+        &self,
+        sub_id: String,
+        session_configuration: SessionConfiguration,
+    ) -> Arc<TurnContext> {
+        self.new_turn_context_from_configuration(
+            sub_id,
+            session_configuration,
+            /*final_output_json_schema*/ None,
+            TurnMultiAgentRuntime::Preview,
+        )
+        .await
+    }
+
+    #[instrument(name = "turn_context.build", level = "trace", skip_all)]
+    async fn new_turn_context_from_configuration(
+        &self,
+        sub_id: String,
+        session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
         multi_agent_runtime: TurnMultiAgentRuntime,
     ) -> Arc<TurnContext> {
-        let session_configuration = {
-            let state = self.state.lock().await;
-            state.session_configuration.clone()
-        };
         let turn_environments = self.services.turn_environments.snapshot().await;
         let primary_turn_environment = turn_environments.primary().cloned();
         let cwd = primary_turn_environment
@@ -825,10 +851,11 @@ impl Session {
     }
 
     pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {
-        self.new_turn_context_from_state(
+        let session_configuration = self.default_turn_configuration().await;
+        self.new_turn_from_configuration(
             sub_id,
+            session_configuration,
             /*final_output_json_schema*/ None,
-            TurnMultiAgentRuntime::ResolveAndStore,
         )
         .await
     }
@@ -837,11 +864,13 @@ impl Session {
         &self,
         sub_id: String,
     ) -> Arc<TurnContext> {
-        self.new_turn_context_from_state(
-            sub_id,
-            /*final_output_json_schema*/ None,
-            TurnMultiAgentRuntime::Preview,
-        )
-        .await
+        let session_configuration = self.default_turn_configuration().await;
+        self.new_startup_prewarm_turn_from_configuration(sub_id, session_configuration)
+            .await
+    }
+
+    async fn default_turn_configuration(&self) -> SessionConfiguration {
+        let state = self.state.lock().await;
+        state.session_configuration.clone()
     }
 }

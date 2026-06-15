@@ -349,11 +349,9 @@ impl ToolExecutor<ExtensionToolCall> for DeferredExtensionTool {
 }
 
 fn duplicate_primary_environment(turn: &mut TurnContext) {
-    let mut second_environment = turn.environments[0].clone();
+    let mut second_environment = turn.environments.turn_environments[0].clone();
     second_environment.environment_id = "secondary".to_string();
-    turn.environments
-        .environments_mut()
-        .push(second_environment);
+    turn.environments.turn_environments.push(second_environment);
 }
 
 fn mcp_tool(server: &str, namespace: &str, name: &str) -> ToolInfo {
@@ -586,11 +584,11 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
             codex_tools::UnifiedExecShellMode::ZshFork(zsh_fork_config_for_spec_plan_tests());
         let remote_cwd = turn
             .environments
-            .first()
+            .primary()
             .expect("primary environment")
             .cwd()
             .clone();
-        turn.environments.environments_mut().push(
+        turn.environments.turn_environments.push(
             crate::session::turn_context::TurnEnvironment::new(
                 "remote".to_string(),
                 Arc::new(
@@ -617,7 +615,7 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
 #[tokio::test]
 async fn environment_count_controls_environment_backed_tools() {
     let no_environment = probe(|turn| {
-        turn.environments.environments_mut().clear();
+        turn.environments.turn_environments.clear();
         set_feature(turn, Feature::ShellTool, /*enabled*/ true);
         turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
     })

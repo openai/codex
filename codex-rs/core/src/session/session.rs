@@ -963,7 +963,6 @@ impl Session {
             }
 
             let services = SessionServices {
-                turn_environments: Arc::clone(&turn_environments),
                 // Initialize the MCP connection manager with an uninitialized
                 // instance. It will be replaced with one created via
                 // McpConnectionManager::new() once all its constructor args are
@@ -1028,6 +1027,7 @@ impl Session {
                 ),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 tool_search_handler_cache: Default::default(),
+                turn_environments: Arc::clone(&turn_environments),
             };
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
                 watch::channel(false);

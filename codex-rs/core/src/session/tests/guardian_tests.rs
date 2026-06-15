@@ -125,7 +125,7 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
     };
     let environment = turn_context
         .environments
-        .first()
+        .primary()
         .expect("primary environment")
         .selection();
     let response = tokio::time::timeout(
@@ -221,7 +221,7 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
         async move {
             let environment = turn_context
                 .environments
-                .first()
+                .primary()
                 .expect("primary environment")
                 .selection();
             session
@@ -708,6 +708,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
         models_manager,
+        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         skills_manager,
         plugins_manager,
         mcp_manager,
@@ -727,8 +728,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell_override: None,
         parent_trace: None,
-        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
-        environments: Vec::new(),
+        environment_selections: Vec::new(),
         thread_extension_init: codex_extension_api::ExtensionDataInit::default(),
         analytics_events_client: None,
         thread_store,

@@ -413,7 +413,7 @@ pub(crate) async fn run_turn(
 #[instrument(level = "trace", skip_all)]
 async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, PathBuf)> {
     let mut display_roots = Vec::new();
-    for turn_environment in turn_context.environments.iter() {
+    for turn_environment in &turn_context.environments.turn_environments {
         let root = get_git_repo_root_with_fs(
             turn_environment.environment.get_filesystem().as_ref(),
             turn_environment.cwd(),
@@ -631,6 +631,7 @@ async fn build_extension_turn_input_items(
 
     let environments = turn_context
         .environments
+        .turn_environments
         .iter()
         .enumerate()
         .map(|(index, environment)| TurnInputEnvironment {

@@ -51,7 +51,7 @@ pub(crate) async fn load_project_instructions(
     environments: &TurnEnvironmentsSnapshot,
 ) -> Option<LoadedAgentsMd> {
     let mut loaded = LoadedAgentsMd::from_user_instructions(user_instructions);
-    for turn_environment in environments.iter() {
+    for turn_environment in &environments.turn_environments {
         let filesystem = turn_environment.environment.get_filesystem();
         match read_agents_md(
             config,

@@ -205,8 +205,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         sandbox_cwd: turn.cwd.clone(),
         environment: turn
             .environments
-            .first()
-            .map(|environment| Arc::clone(&environment.environment))
+            .primary_environment()
             .expect("primary environment"),
         shell_mode: codex_tools::UnifiedExecShellMode::Direct,
         network: None,

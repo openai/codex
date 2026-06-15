@@ -408,6 +408,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) installation_id: String,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: SharedModelsManager,
+    pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
@@ -429,8 +430,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) parent_rollout_thread_trace: ThreadTraceContext,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
-    pub(crate) environment_manager: Arc<EnvironmentManager>,
-    pub(crate) environments: Vec<TurnEnvironmentSelection>,
+    pub(crate) environment_selections: Vec<TurnEnvironmentSelection>,
     pub(crate) thread_extension_init: ExtensionDataInit,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
@@ -494,6 +494,7 @@ impl Codex {
             installation_id,
             auth_manager,
             models_manager,
+            environment_manager,
             skills_manager,
             plugins_manager,
             mcp_manager,
@@ -511,15 +512,15 @@ impl Codex {
             inherited_exec_policy,
             parent_rollout_thread_trace,
             parent_trace: _,
-            environment_manager,
-            environments,
+            environment_selections,
             thread_extension_init,
             analytics_events_client,
             thread_store,
             attestation_provider,
             inherited_multi_agent_version,
         } = args;
-        let turn_environments = TurnEnvironments::resolve(environment_manager, &environments).await;
+        let turn_environments =
+            TurnEnvironments::resolve(environment_manager, &environment_selections).await;
         let resolved_environments = turn_environments.snapshot().await;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -2358,6 +2359,7 @@ impl Session {
         let turn_environment = match args.environment_id.as_deref() {
             Some(environment_id) => turn_context
                 .environments
+                .turn_environments
                 .iter()
                 .find(|environment| environment.environment_id == environment_id),
             None => turn_context.environments.primary(),
