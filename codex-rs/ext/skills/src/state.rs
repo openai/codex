@@ -24,7 +24,6 @@ use crate::sources::SkillProviders;
 const MAX_CACHED_ORCHESTRATOR_RESOURCES: usize = 100;
 const MAX_CACHED_ORCHESTRATOR_CONTENT_BYTES: usize = 8 * 1024 * 1024;
 
-#[derive(Debug)]
 pub(crate) struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
     selected_roots: Vec<SelectedCapabilityRoot>,
@@ -133,27 +132,20 @@ impl SkillsThreadState {
             return Arc::clone(cache);
         }
 
-        let next_cache = Arc::new(OrchestratorGenerationCache::new(cache_key));
+        let next_cache = Arc::new(OrchestratorGenerationCache {
+            mcp_cache_key: cache_key,
+            catalog: OnceCell::new(),
+            resources: Mutex::new(OrchestratorResourceCache::default()),
+        });
         *cache = Some(Arc::clone(&next_cache));
         next_cache
     }
 }
 
-#[derive(Debug)]
 struct OrchestratorGenerationCache {
     mcp_cache_key: Option<McpResourceClientCacheKey>,
     catalog: OnceCell<SkillCatalog>,
     resources: Mutex<OrchestratorResourceCache>,
-}
-
-impl OrchestratorGenerationCache {
-    fn new(mcp_cache_key: Option<McpResourceClientCacheKey>) -> Self {
-        Self {
-            mcp_cache_key,
-            catalog: OnceCell::new(),
-            resources: Mutex::new(OrchestratorResourceCache::default()),
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -173,7 +165,7 @@ impl From<&SkillReadRequest> for SkillReadCacheKey {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct OrchestratorResourceCache {
     entries: HashMap<SkillReadCacheKey, SkillReadResult>,
     contents_bytes: usize,

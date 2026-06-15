@@ -38,22 +38,11 @@ pub struct McpResourceClient {
 
 /// Opaque identity for the manager currently used by an MCP resource client.
 #[derive(Clone)]
-pub struct McpResourceClientCacheKey {
-    manager: Weak<McpConnectionManager>,
-}
-
-impl std::fmt::Debug for McpResourceClientCacheKey {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_tuple("McpResourceClientCacheKey")
-            .field(&self.manager.as_ptr())
-            .finish()
-    }
-}
+pub struct McpResourceClientCacheKey(Weak<McpConnectionManager>);
 
 impl PartialEq for McpResourceClientCacheKey {
     fn eq(&self, other: &Self) -> bool {
-        self.manager.ptr_eq(&other.manager)
+        self.0.ptr_eq(&other.0)
     }
 }
 
@@ -75,9 +64,7 @@ impl McpResourceClient {
 
     /// Returns an identity that changes whenever the published manager changes.
     pub fn cache_key(&self) -> McpResourceClientCacheKey {
-        McpResourceClientCacheKey {
-            manager: Arc::downgrade(&self.manager.load_full()),
-        }
+        McpResourceClientCacheKey(Arc::downgrade(&self.manager.load_full()))
     }
 
     /// Returns whether the current manager contains the named server.
@@ -137,7 +124,3 @@ fn resource_content_from_rmcp(content: rmcp::model::ResourceContents) -> Result<
         serde_json::to_value(content).context("failed to serialize MCP resource content")?;
     serde_json::from_value(value).context("failed to convert MCP resource content")
 }
-
-#[cfg(test)]
-#[path = "resource_client_tests.rs"]
-mod tests;

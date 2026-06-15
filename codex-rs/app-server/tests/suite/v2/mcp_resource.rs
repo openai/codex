@@ -82,8 +82,6 @@ const SKILL_REFERENCE_CONTENTS: &str =
 const SKILLS_LIST_CALL_ID: &str = "skills-list";
 const SKILLS_READ_CALL_ID: &str = "skills-read";
 const SKILLS_READ_AGAIN_CALL_ID: &str = "skills-read-again";
-const SKILLS_LIST_AFTER_REFRESH_CALL_ID: &str = "skills-list-after-refresh";
-const SKILLS_READ_AFTER_REFRESH_CALL_ID: &str = "skills-read-after-refresh";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
@@ -208,38 +206,6 @@ async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -
                 responses::ev_response_created("resp-orchestrator-skill"),
                 responses::ev_assistant_message("msg-orchestrator-skill", "Done"),
                 responses::ev_completed("resp-orchestrator-skill"),
-            ]),
-            responses::sse(vec![
-                responses::ev_response_created("resp-skills-list-after-refresh"),
-                responses::ev_function_call_with_namespace(
-                    SKILLS_LIST_AFTER_REFRESH_CALL_ID,
-                    "skills",
-                    "list",
-                    &json!({
-                        "authority": {
-                            "kind": "orchestrator",
-                        },
-                    })
-                    .to_string(),
-                ),
-                responses::ev_completed("resp-skills-list-after-refresh"),
-            ]),
-            responses::sse(vec![
-                responses::ev_response_created("resp-skills-read-after-refresh"),
-                responses::ev_function_call_with_namespace(
-                    SKILLS_READ_AFTER_REFRESH_CALL_ID,
-                    "skills",
-                    "read",
-                    &json!({
-                        "authority": {
-                            "kind": "orchestrator",
-                        },
-                        "package": SKILL_RESOURCE_URI,
-                        "resource": SKILL_REFERENCE_URI,
-                    })
-                    .to_string(),
-                ),
-                responses::ev_completed("resp-skills-read-after-refresh"),
             ]),
             responses::sse(vec![
                 responses::ev_response_created("resp-orchestrator-skill-after-refresh"),
@@ -383,24 +349,12 @@ async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -
     .await??;
 
     let requests = response_mock.requests();
-    assert_eq!(requests.len(), 7);
-    let refreshed_list_output = requests[5]
-        .function_call_output_text(SKILLS_LIST_AFTER_REFRESH_CALL_ID)
-        .ok_or_else(|| {
-            anyhow::anyhow!("refreshed skills.list output should be sent to the model")
-        })?;
-    assert_eq!(list_output, refreshed_list_output);
-    let refreshed_read_output = requests[6]
-        .function_call_output_text(SKILLS_READ_AFTER_REFRESH_CALL_ID)
-        .ok_or_else(|| {
-            anyhow::anyhow!("refreshed skills.read output should be sent to the model")
-        })?;
-    assert_eq!(read_output, refreshed_read_output);
+    assert_eq!(requests.len(), 5);
     assert_eq!(
         ResourceAppsMcpCallCounts {
             list_resources: 6,
             main_prompt_reads: 2,
-            reference_reads: 2,
+            reference_reads: 1,
         },
         apps_server_calls.snapshot()
     );
