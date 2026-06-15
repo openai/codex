@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use arc_swap::ArcSwapAny;
+use arc_swap::ArcSwap;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::error::CodexErr;
@@ -30,22 +30,22 @@ pub(crate) fn default_thread_environment_selections(
         .collect()
 }
 
-type SharedSnapshotTask = Arc<Shared<BoxFuture<'static, TurnEnvironmentSnapshot>>>;
+type SnapshotTask = Shared<BoxFuture<'static, TurnEnvironmentSnapshot>>;
 
 pub(crate) struct ThreadEnvironments {
     environment_manager: Arc<EnvironmentManager>,
-    snapshot_task: ArcSwapAny<SharedSnapshotTask>,
+    snapshot_task: ArcSwap<SnapshotTask>,
 }
 
 impl ThreadEnvironments {
     pub(crate) fn new(environment_manager: Arc<EnvironmentManager>) -> Self {
         Self {
             environment_manager,
-            snapshot_task: ArcSwapAny::new(Arc::new(
+            snapshot_task: ArcSwap::from_pointee(
                 futures::future::ready(TurnEnvironmentSnapshot::default())
                     .boxed()
                     .shared(),
-            )),
+            ),
         }
     }
 
