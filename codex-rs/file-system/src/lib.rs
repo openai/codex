@@ -108,14 +108,16 @@ impl FileSystemSandboxContext {
         }
     }
 
-    pub fn should_run_in_sandbox(&self) -> io::Result<bool> {
-        let permissions: PermissionProfile<AbsolutePathBuf> =
-            self.permissions.clone().try_into()?;
+    pub fn should_run_in_sandbox(&self) -> bool {
+        let Ok(permissions) =
+            PermissionProfile::<AbsolutePathBuf>::try_from(self.permissions.clone())
+        else {
+            // A sandbox context for another host must not select the unsandboxed filesystem.
+            return true;
+        };
         let file_system_policy = permissions.file_system_sandbox_policy();
-        Ok(
-            matches!(file_system_policy.kind, FileSystemSandboxKind::Restricted)
-                && !file_system_policy.has_full_disk_write_access(),
-        )
+        matches!(file_system_policy.kind, FileSystemSandboxKind::Restricted)
+            && !file_system_policy.has_full_disk_write_access()
     }
 
     pub fn has_cwd_dependent_permissions(&self) -> bool {

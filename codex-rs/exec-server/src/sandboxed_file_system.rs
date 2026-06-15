@@ -342,14 +342,7 @@ fn require_platform_sandbox(
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> FileSystemResult<&FileSystemSandboxContext> {
     sandbox
-        .map(|sandbox| {
-            sandbox
-                .should_run_in_sandbox()
-                .map(|required| (sandbox, required))
-        })
-        .transpose()?
-        .filter(|(_, required)| *required)
-        .map(|(sandbox, _)| sandbox)
+        .filter(|sandbox| sandbox.should_run_in_sandbox())
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,

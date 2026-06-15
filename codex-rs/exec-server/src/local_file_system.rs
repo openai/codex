@@ -70,11 +70,7 @@ impl LocalFileSystem {
         &'a dyn ExecutorFileSystem,
         Option<&'a FileSystemSandboxContext>,
     )> {
-        if sandbox
-            .map(FileSystemSandboxContext::should_run_in_sandbox)
-            .transpose()?
-            .unwrap_or(false)
-        {
+        if sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox) {
             Ok((self.sandboxed()?, sandbox))
         } else {
             Ok((&self.unsandboxed, sandbox))
@@ -686,11 +682,7 @@ fn reject_sandbox_context(sandbox: Option<&FileSystemSandboxContext>) -> io::Res
 }
 
 fn reject_platform_sandbox_context(sandbox: Option<&FileSystemSandboxContext>) -> io::Result<()> {
-    if sandbox
-        .map(FileSystemSandboxContext::should_run_in_sandbox)
-        .transpose()?
-        .unwrap_or(false)
-    {
+    if sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "sandboxed filesystem operations require configured runtime paths",
