@@ -5,7 +5,11 @@ use codex_tools::ResponsesApiTool;
 use codex_tools::ToolSpec;
 use std::collections::BTreeMap;
 
-pub(crate) fn create_request_plugin_install_tool() -> ToolSpec {
+use crate::tools::router::ToolSuggestPresentation;
+
+pub(crate) fn create_request_plugin_install_tool(
+    presentation: ToolSuggestPresentation,
+) -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "tool_type".to_string(),
@@ -31,9 +35,13 @@ pub(crate) fn create_request_plugin_install_tool() -> ToolSpec {
         ),
     ]);
 
-    let description = format!(
-        "# Request plugin/connector install\n\nUse this tool only after `{LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}` returns a plugin or connector that exactly matches the user's explicit request.\n\nDo not use it for adjacent capabilities, broad recommendations, or tools that merely seem useful. Pass the returned `tool_type` through directly, and pass the returned `id` as `tool_id`.\n\nIMPORTANT: DO NOT call this tool in parallel with other tools."
-    );
+    let description = match presentation {
+        ToolSuggestPresentation::ListTool => format!(
+            "# Request plugin/connector install\n\nUse this tool only after `{LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}` returns a plugin or connector that exactly matches the user's explicit request.\n\nDo not use it for adjacent capabilities, broad recommendations, or tools that merely seem useful. Pass the returned `tool_type` through directly, and pass the returned `id` as `tool_id`.\n\nIMPORTANT: DO NOT call this tool in parallel with other tools."
+        ),
+        ToolSuggestPresentation::DeveloperContext =>
+            "# Suggest a recommended plugin installation\n\nSuggest installing a plugin from the developer `<recommended_plugins>` list when it would help with the user's current request. Briefly explain why in `suggest_reason`.".to_string(),
+    };
 
     ToolSpec::Function(ResponsesApiTool {
         name: REQUEST_PLUGIN_INSTALL_TOOL_NAME.to_string(),
@@ -62,7 +70,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn create_request_plugin_install_tool_uses_expected_wire_shape() {
+    fn create_request_plugin_install_tool_uses_expected_legacy_wire_shape() {
         let expected_description = concat!(
             "# Request plugin/connector install\n\n",
             "Use this tool only after `list_available_plugins_to_install` returns a plugin or connector that exactly matches the user's explicit request.\n\n",
@@ -71,7 +79,7 @@ mod tests {
         );
 
         assert_eq!(
-            create_request_plugin_install_tool(),
+            create_request_plugin_install_tool(ToolSuggestPresentation::ListTool),
             ToolSpec::Function(ResponsesApiTool {
                 name: "request_plugin_install".to_string(),
                 description: expected_description.to_string(),
@@ -115,5 +123,19 @@ mod tests {
                 output_schema: None,
             })
         );
+    }
+
+    #[test]
+    fn developer_recommendations_change_only_the_description() {
+        let mut expected = create_request_plugin_install_tool(ToolSuggestPresentation::ListTool);
+        let recommendations =
+            create_request_plugin_install_tool(ToolSuggestPresentation::DeveloperContext);
+
+        let ToolSpec::Function(expected_function) = &mut expected else {
+            panic!("expected function tool specs");
+        };
+        expected_function.description = "# Suggest a recommended plugin installation\n\nSuggest installing a plugin from the developer `<recommended_plugins>` list when it would help with the user's current request. Briefly explain why in `suggest_reason`.".to_string();
+
+        assert_eq!(recommendations, expected);
     }
 }
