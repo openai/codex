@@ -685,6 +685,7 @@ pub fn user_message_item(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        metadata: None,
     }
 }
 

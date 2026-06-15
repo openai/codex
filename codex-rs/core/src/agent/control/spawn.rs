@@ -51,7 +51,7 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::Compaction { .. }
-            | ResponseItem::CompactionTrigger
+            | ResponseItem::CompactionTrigger { .. }
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other,
         ) => false,

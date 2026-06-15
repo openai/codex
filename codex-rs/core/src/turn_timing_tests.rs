@@ -112,6 +112,7 @@ fn response_item_records_turn_ttft_for_first_output_signals() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
+            metadata: None,
         }
     ));
     assert!(response_item_records_turn_ttft(
@@ -121,6 +122,7 @@ fn response_item_records_turn_ttft_for_first_output_signals() {
             call_id: "call-2".to_string(),
             name: "custom".to_string(),
             input: "echo hi".to_string(),
+            metadata: None,
         }
     ));
     assert!(response_item_records_turn_ttft(&ResponseItem::Message {
@@ -130,6 +132,7 @@ fn response_item_records_turn_ttft_for_first_output_signals() {
             text: "hello".to_string(),
         }],
         phase: None,
+        metadata: None,
     }));
 }
 
@@ -142,11 +145,13 @@ fn response_item_records_turn_ttft_ignores_empty_non_output_items() {
             text: String::new(),
         }],
         phase: None,
+        metadata: None,
     }));
     assert!(!response_item_records_turn_ttft(
         &ResponseItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
+            metadata: None,
         }
     ));
 }
