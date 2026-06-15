@@ -9,6 +9,10 @@ permissions:
 jobs:
   probe-models-endpoint:
     if: github.repository == 'openai/codex'
+    strategy:
+      fail-fast: false
+      matrix:
+        probe: [1, 2, 3, 4]
     environment:
       name: rust-release-prepare
       deployment: false
@@ -30,7 +34,7 @@ jobs:
           user_agent="codex_cli_rs/99.99.99 (Linux $(uname -r); $(uname -m)) ${terminal_info}"
           base_url="${OPENAI_BASE_URL:-https://chatgpt.com/backend-api/codex}"
           url="${base_url%/}/models?client_version=${client_version}"
-          attempts=10
+          attempts=3
           successes=0
           failures=0
 
@@ -69,16 +73,18 @@ jobs:
               "${attempt}" "${curl_exit}" "${status}" "${total_time}" "${remote_ip}" "${size_download}" \
               >> "${GITHUB_STEP_SUMMARY}"
 
+            echo "::group::probe ${{ matrix.probe }} attempt ${attempt} selected response headers"
+            awk 'BEGIN { IGNORECASE = 1 }
+              /^(date|age|cache-control|vary|via|server|content-type|content-length|etag|cf-ray|cf-cache-status|x-cache|x-request-id|traceparent|server-timing|x-openai-[^:]*|x-envoy-[^:]*):/ { print }' \
+              "${headers_file}" | tr -d '\r'
+            echo "::endgroup::"
+
             if [[ "${curl_exit}" -eq 0 && "${status}" =~ ^2[0-9][0-9]$ ]] \
               && jq -e 'type == "object"' "${body_file}" >/dev/null; then
               successes=$((successes + 1))
             else
               failures=$((failures + 1))
-              echo "::group::attempt ${attempt} diagnostic response"
-              echo "Selected response headers:"
-              awk 'BEGIN { IGNORECASE = 1 }
-                /^(date|content-type|content-length|cf-ray|x-request-id|traceparent|server-timing|x-openai-[^:]*):/ { print }' \
-                "${headers_file}" | tr -d '\r'
+              echo "::group::probe ${{ matrix.probe }} attempt ${attempt} response body"
               echo "Response body (first 4096 bytes):"
               head -c 4096 "${body_file}"
               echo
