@@ -121,7 +121,6 @@ impl ChatWidget {
                 SelectionItem {
                     name: "Use a reset".to_string(),
                     description: Some("Reset your current Codex usage windows.".to_string()),
-                    is_default: true,
                     actions: vec![Box::new(move |tx| {
                         tx.send(AppEvent::ConsumeRateLimitResetCredit {
                             idempotency_key: idempotency_key.clone(),
@@ -136,6 +135,7 @@ impl ChatWidget {
                     ..Default::default()
                 },
             ],
+            initial_selected_idx: Some(1),
             ..Default::default()
         }
     }

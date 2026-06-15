@@ -12,8 +12,8 @@ expression: "states.join(\"\\n---\\n\")"
   Rate-limit resets
   You have 2 rate-limit resets available.
 
-› 1. Use a reset (default)  Reset your current Codex usage windows.
-  2. Cancel
+  1. Use a reset  Reset your current Codex usage windows.
+› 2. Cancel
 
   Press enter to confirm or esc to go back
 ---

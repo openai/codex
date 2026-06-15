@@ -155,6 +155,21 @@ async fn rate_limit_reset_popup_states_snapshot() {
 }
 
 #[tokio::test]
+async fn rate_limit_reset_confirmation_selects_cancel_by_default() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let request_id = chat.show_rate_limit_reset_loading_popup();
+    assert!(chat.finish_rate_limit_reset_credits_refresh(
+        request_id,
+        Ok(RateLimitResetCreditsSummary { available_count: 1 }),
+    ));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+    assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn rate_limit_reset_retry_reuses_idempotency_key() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let request_id = chat.show_rate_limit_reset_consuming_popup();
