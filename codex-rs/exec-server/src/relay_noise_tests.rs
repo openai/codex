@@ -170,11 +170,19 @@ async fn duplicate_handshake_expires_pending_validation() -> Result<()> {
     assert_eq!(reset.validate()?, RelayFrameBodyKind::Reset);
 
     release.notify_one();
-    assert!(
-        timeout(Duration::from_millis(100), harness_websocket.next())
-            .await
-            .is_err()
-    );
+    let unexpected_message = timeout(Duration::from_millis(100), async {
+        loop {
+            let message = harness_websocket.next().await;
+            if !matches!(
+                message,
+                Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)))
+            ) {
+                break message;
+            }
+        }
+    })
+    .await;
+    assert!(unexpected_message.is_err());
 
     harness_websocket.close(None).await?;
     timeout(Duration::from_secs(1), environment_task).await??;

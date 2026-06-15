@@ -17,8 +17,10 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
+use codex_utils_path_uri::PathUri;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use tracing::instrument;
 
 #[derive(Clone, Debug)]
 pub(crate) struct TurnSkillsContext {
@@ -39,15 +41,45 @@ impl TurnSkillsContext {
 pub(crate) struct TurnEnvironment {
     pub(crate) environment_id: String,
     pub(crate) environment: Arc<Environment>,
-    pub(crate) cwd: AbsolutePathBuf,
+    // Keep both representations together while cwd consumers migrate to URI semantics. Keeping
+    // them synchronized means neither representation can be exposed through a mutable reference;
+    // updates must rebuild the validated pair through `TurnEnvironment::new`. Once
+    // `TurnEnvironment::cwd` itself becomes a `PathUri`, convert only at native filesystem and
+    // process-launch boundaries and remove this paired migration state.
+    cwd: AbsolutePathBuf,
+    cwd_uri: PathUri,
     pub(crate) shell: Option<shell::Shell>,
 }
 
 impl TurnEnvironment {
+    pub(crate) fn new(
+        environment_id: String,
+        environment: Arc<Environment>,
+        cwd: AbsolutePathBuf,
+        shell: Option<shell::Shell>,
+    ) -> Self {
+        let cwd_uri = PathUri::from_abs_path(&cwd);
+        Self {
+            environment_id,
+            environment,
+            cwd,
+            cwd_uri,
+            shell,
+        }
+    }
+
+    pub(crate) fn cwd(&self) -> &AbsolutePathBuf {
+        &self.cwd
+    }
+
+    pub(crate) fn cwd_uri(&self) -> &PathUri {
+        &self.cwd_uri
+    }
+
     pub(crate) fn selection(&self) -> TurnEnvironmentSelection {
         TurnEnvironmentSelection {
             environment_id: self.environment_id.clone(),
-            cwd: self.cwd.clone(),
+            cwd: self.cwd_uri.clone(),
         }
     }
 }
@@ -291,7 +323,7 @@ impl TurnContext {
     pub(crate) fn file_system_sandbox_context(
         &self,
         additional_permissions: Option<AdditionalPermissionProfile>,
-        cwd: &AbsolutePathBuf,
+        cwd: &PathUri,
     ) -> FileSystemSandboxContext {
         let (base_file_system_sandbox_policy, base_network_sandbox_policy) =
             self.permission_profile.to_runtime_permissions();
@@ -553,7 +585,7 @@ impl Session {
             user_instructions: session_configuration
                 .loaded_agents_md
                 .as_ref()
-                .map(LoadedAgentsMd::text),
+                .map(LoadedAgentsMd::render),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
             multi_agent_version,
             personality: session_configuration.personality,
@@ -693,6 +725,7 @@ impl Session {
         .await
     }
 
+    #[instrument(name = "turn_context.build", level = "trace", skip_all)]
     async fn new_turn_context_from_configuration(
         &self,
         sub_id: String,
@@ -712,7 +745,7 @@ impl Session {
         let primary_turn_environment = turn_environments.primary().cloned();
         let cwd = primary_turn_environment
             .as_ref()
-            .map(|turn_environment| turn_environment.cwd.clone())
+            .map(|turn_environment| turn_environment.cwd().clone())
             .unwrap_or_else(|| session_configuration.cwd().clone());
         let per_turn_config = Self::build_per_turn_config(&session_configuration, cwd.clone());
         {

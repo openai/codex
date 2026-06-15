@@ -195,6 +195,8 @@ pub struct ListThreadsParams {
     pub archived: bool,
     /// Optional substring/full-text search term for thread title/preview.
     pub search_term: Option<String>,
+    /// Optional direct parent thread filter.
+    pub parent_thread_id: Option<ThreadId>,
     /// Return directly from the state DB without scanning JSONL rollouts to repair metadata.
     pub use_state_db_only: bool,
 }

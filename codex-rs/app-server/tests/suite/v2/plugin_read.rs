@@ -23,6 +23,7 @@ use codex_app_server_protocol::HookEventName;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
+use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
@@ -392,7 +393,7 @@ async fn plugin_read_returns_share_context_for_shared_remote_plugin() -> Result<
 }
 
 #[tokio::test]
-async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() -> Result<()> {
+async fn plugin_read_includes_share_url_for_admin_disabled_remote_plugin() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     write_remote_plugin_catalog_config(
@@ -410,29 +411,31 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
 
     let detail_body = r#"{
   "id": "plugins~Plugin_00000000000000000000000000000000",
-  "name": "linear",
+  "name": "example-plugin",
   "scope": "GLOBAL",
+  "share_url": "https://chatgpt.example/plugins/share/example-plugin",
+  "status": "DISABLED_BY_ADMIN",
   "installation_policy": "AVAILABLE",
   "authentication_policy": "ON_USE",
   "release": {
-    "display_name": "Linear",
-    "description": "Track work in Linear",
+    "display_name": "Example Plugin",
+    "description": "Exercise example workflows",
     "app_ids": [],
     "app_templates": [
       {
-        "template_id": "templated_apps_GitHubEnterprise",
-        "name": "GitHub Enterprise",
-        "description": "Connect GitHub Enterprise",
+        "template_id": "templated_apps_SourceControlEnterprise",
+        "name": "Source Control Enterprise",
+        "description": "Connect source control",
         "category": "Developer Tools",
-        "canonical_connector_id": "github_enterprise",
-        "logo_url": "https://example.com/ghe-light.png",
-        "logo_url_dark": "https://example.com/ghe-dark.png",
-        "materialized_app_ids": ["asdk_app_ghe"],
+        "canonical_connector_id": "source_control_enterprise",
+        "logo_url": "https://example.com/source-control-light.png",
+        "logo_url_dark": "https://example.com/source-control-dark.png",
+        "materialized_app_ids": ["asdk_app_source_control"],
         "reason": null
       },
       {
-        "template_id": "templated_apps_Databricks",
-        "name": "Databricks",
+        "template_id": "templated_apps_DataWarehouse",
+        "name": "Data Warehouse",
         "description": null,
         "canonical_connector_id": null,
         "logo_url": null,
@@ -441,19 +444,19 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
         "reason": "NOT_CONFIGURED_FOR_WORKSPACE"
       }
     ],
-    "keywords": ["issue-tracking", "project management"],
+    "keywords": ["workflow", "example"],
     "interface": {
-      "short_description": "Plan and track work",
+      "short_description": "Run example workflows",
       "capabilities": ["Read", "Write"],
-      "default_prompt": "Use the legacy Linear prompt",
-      "default_prompts": ["Create a Linear issue", "Review my Linear projects"],
-      "logo_url": "https://example.com/linear.png",
-      "screenshot_urls": ["https://example.com/linear-shot.png"]
+      "default_prompt": "Use the legacy example prompt",
+      "default_prompts": ["Create an example item", "Review example projects"],
+      "logo_url": "https://example.com/example-plugin.png",
+      "screenshot_urls": ["https://example.com/example-plugin-shot.png"]
     },
     "skills": [
       {
         "name": "plan-work",
-        "description": "Plan work from Linear issues",
+        "description": "Plan example work",
         "plugin_release_skill_id": "skill-1",
         "interface": {
           "display_name": "Plan Work",
@@ -467,24 +470,24 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
   "plugins": [
     {
       "id": "plugins~Plugin_00000000000000000000000000000000",
-      "name": "linear",
+      "name": "example-plugin",
       "scope": "GLOBAL",
       "installation_policy": "AVAILABLE",
       "authentication_policy": "ON_USE",
       "release": {
-        "display_name": "Linear",
-        "description": "Track work in Linear",
+        "display_name": "Example Plugin",
+        "description": "Exercise example workflows",
         "app_ids": [],
         "interface": {
-          "short_description": "Plan and track work",
+          "short_description": "Run example workflows",
           "capabilities": ["Read", "Write"],
-          "logo_url": "https://example.com/linear.png",
-          "screenshot_urls": ["https://example.com/linear-shot.png"]
+          "logo_url": "https://example.com/example-plugin.png",
+          "screenshot_urls": ["https://example.com/example-plugin-shot.png"]
         },
         "skills": [
           {
             "name": "plan-work",
-            "description": "Plan work from Linear issues",
+            "description": "Plan example work",
             "plugin_release_skill_id": "skill-1",
             "interface": {
               "display_name": "Plan Work",
@@ -542,24 +545,33 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     assert_eq!(response.plugin.marketplace_name, "openai-curated-remote");
     assert_eq!(response.plugin.marketplace_path, None);
     assert_eq!(response.plugin.summary.source, PluginSource::Remote);
-    assert_eq!(response.plugin.summary.id, "linear@openai-curated-remote");
+    assert_eq!(
+        response.plugin.summary.id,
+        "example-plugin@openai-curated-remote"
+    );
     assert_eq!(
         response.plugin.summary.remote_plugin_id.as_deref(),
         Some("plugins~Plugin_00000000000000000000000000000000")
     );
-    assert_eq!(response.plugin.summary.name, "linear");
+    assert_eq!(response.plugin.summary.name, "example-plugin");
     assert_eq!(response.plugin.summary.installed, true);
     assert_eq!(response.plugin.summary.enabled, false);
     assert_eq!(
+        response.plugin.summary.availability,
+        PluginAvailability::DisabledByAdmin
+    );
+    assert_eq!(response.plugin.summary.share_context, None);
+    assert_eq!(
+        response.plugin.share_url.as_deref(),
+        Some("https://chatgpt.example/plugins/share/example-plugin")
+    );
+    assert_eq!(
         response.plugin.description.as_deref(),
-        Some("Track work in Linear")
+        Some("Exercise example workflows")
     );
     assert_eq!(
         response.plugin.summary.keywords,
-        vec![
-            "issue-tracking".to_string(),
-            "project management".to_string()
-        ]
+        vec!["workflow".to_string(), "example".to_string()]
     );
     assert_eq!(
         response
@@ -569,8 +581,8 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
             .as_ref()
             .and_then(|interface| interface.default_prompt.clone()),
         Some(vec![
-            "Create a Linear issue".to_string(),
-            "Review my Linear projects".to_string(),
+            "Create an example item".to_string(),
+            "Review example projects".to_string(),
         ])
     );
     assert_eq!(response.plugin.skills.len(), 1);
@@ -582,19 +594,19 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
         response.plugin.app_templates,
         vec![
             AppTemplateSummary {
-                template_id: "templated_apps_GitHubEnterprise".to_string(),
-                name: "GitHub Enterprise".to_string(),
-                description: Some("Connect GitHub Enterprise".to_string()),
+                template_id: "templated_apps_SourceControlEnterprise".to_string(),
+                name: "Source Control Enterprise".to_string(),
+                description: Some("Connect source control".to_string()),
                 category: Some("Developer Tools".to_string()),
-                canonical_connector_id: Some("github_enterprise".to_string()),
-                logo_url: Some("https://example.com/ghe-light.png".to_string()),
-                logo_url_dark: Some("https://example.com/ghe-dark.png".to_string()),
-                materialized_app_ids: vec!["asdk_app_ghe".to_string()],
+                canonical_connector_id: Some("source_control_enterprise".to_string()),
+                logo_url: Some("https://example.com/source-control-light.png".to_string()),
+                logo_url_dark: Some("https://example.com/source-control-dark.png".to_string()),
+                materialized_app_ids: vec!["asdk_app_source_control".to_string()],
                 reason: None,
             },
             AppTemplateSummary {
-                template_id: "templated_apps_Databricks".to_string(),
-                name: "Databricks".to_string(),
+                template_id: "templated_apps_DataWarehouse".to_string(),
+                name: "Data Warehouse".to_string(),
                 description: None,
                 category: None,
                 canonical_connector_id: None,

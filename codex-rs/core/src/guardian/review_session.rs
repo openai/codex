@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use codex_analytics::GuardianReviewAnalyticsResult;
+use codex_analytics::GuardianReviewSessionAnalyticsParams;
 use codex_analytics::GuardianReviewSessionKind;
 use codex_extension_api::UserInstructions;
 use codex_protocol::ThreadId;
@@ -78,6 +79,10 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) schema: Value,
     pub(crate) model: String,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
+    pub(crate) guardian_default_review_model_id: String,
+    pub(crate) guardian_catalog_contains_auto_review: bool,
+    pub(crate) guardian_review_model_overridden: bool,
+    pub(crate) guardian_review_model_override: Option<String>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) personality: Option<Personality>,
     pub(crate) external_cancel: Option<CancellationToken>,
@@ -680,13 +685,19 @@ async fn run_review_on_session(
     } else {
         None
     };
-    let mut analytics_result = GuardianReviewAnalyticsResult::from_session(
-        review_session.codex.session.thread_id.to_string(),
-        guardian_session_kind,
-        params.model.clone(),
-        guardian_reasoning_effort.map(|effort| effort.to_string()),
-        had_prior_review_context(&prompt_mode),
-    );
+    let mut analytics_result =
+        GuardianReviewAnalyticsResult::from_session(GuardianReviewSessionAnalyticsParams {
+            guardian_thread_id: review_session.codex.session.thread_id.to_string(),
+            guardian_session_kind,
+            guardian_model: params.model.clone(),
+            guardian_reasoning_effort: guardian_reasoning_effort.map(|effort| effort.to_string()),
+            guardian_default_review_model_id: params.guardian_default_review_model_id.clone(),
+            guardian_catalog_contains_auto_review: params.guardian_catalog_contains_auto_review,
+            guardian_review_model_overridden: params.guardian_review_model_overridden,
+            guardian_review_model_override: params.guardian_review_model_override.clone(),
+            guardian_model_provider_id: params.spawn_config.model_provider_id.clone(),
+            had_prior_review_context: had_prior_review_context(&prompt_mode),
+        });
     if send_followup_reminder {
         append_guardian_followup_reminder(review_session).await;
     }
@@ -743,7 +754,7 @@ async fn run_review_on_session(
         .parent_turn
         .environments
         .primary()
-        .map(|environment| environment.cwd.clone())
+        .map(|environment| environment.cwd().clone())
         .unwrap_or_else(|| params.parent_turn.config.cwd.clone());
 
     let submit_result = run_before_review_deadline(
@@ -946,6 +957,8 @@ pub(crate) fn build_guardian_review_session_config(
     guardian_config.model_provider.request_max_retries = Some(1);
     guardian_config.model_provider.stream_max_retries = Some(1);
     guardian_config.include_skill_instructions = false;
+    guardian_config.memories.use_memories = false;
+    guardian_config.memories.dedicated_tools = false;
     guardian_config.base_instructions = Some(
         parent_config
             .guardian_policy_config
@@ -1172,6 +1185,10 @@ mod tests {
             schema: super::super::prompt::guardian_output_schema(),
             model,
             reasoning_effort,
+            guardian_default_review_model_id: "codex-auto-review".to_string(),
+            guardian_catalog_contains_auto_review: true,
+            guardian_review_model_overridden: false,
+            guardian_review_model_override: None,
             reasoning_summary,
             personality,
             external_cancel: None,

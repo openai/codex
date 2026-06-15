@@ -597,6 +597,7 @@ async fn request_user_input_notification_overrides_pending_agent_turn_complete_n
                 description: "Update only Plan mode.".to_string(),
             }]),
         }],
+        auto_resolution_ms: None,
     });
 
     assert_matches!(
@@ -626,6 +627,7 @@ async fn handle_request_user_input_sets_pending_notification() {
                 description: "Update only Plan mode.".to_string(),
             }]),
         }],
+        auto_resolution_ms: None,
     });
 
     assert_matches!(
@@ -1492,6 +1494,7 @@ async fn make_startup_chat_with_cli_overrides(
         initial_user_message: None,
         enhanced_keys_supported: false,
         has_chatgpt_account: false,
+        has_codex_backend_auth: false,
         model_catalog: test_model_catalog(&cfg),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,

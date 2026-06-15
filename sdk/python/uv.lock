@@ -289,8 +289,16 @@ dependencies = [
     { name = "pydantic" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
+    { name = "datamodel-code-generator" },
+    { name = "pytest" },
+    { name = "ruff" },
+]
+format = [
+    { name = "ruff" },
+]
+test = [
     { name = "datamodel-code-generator" },
     { name = "pytest" },
     { name = "ruff" },
@@ -298,13 +306,22 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "datamodel-code-generator", marker = "extra == 'dev'", specifier = "==0.31.2" },
     { name = "openai-codex-cli-bin", specifier = "==0.137.0a4" },
     { name = "pydantic", specifier = ">=2.12" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.8" },
 ]
-provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "datamodel-code-generator", specifier = "==0.31.2" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "ruff", specifier = ">=0.15.8" },
+]
+format = [{ name = "ruff", specifier = ">=0.15.8" }]
+test = [
+    { name = "datamodel-code-generator", specifier = "==0.31.2" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "ruff", specifier = ">=0.15.8" },
+]
 
 [[package]]
 name = "openai-codex-cli-bin"

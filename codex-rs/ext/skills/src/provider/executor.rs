@@ -131,12 +131,7 @@ impl SkillProvider for ExecutorSkillProvider {
                     "executor skill resource references unavailable environment `{environment_id}`"
                 )));
             };
-            let resource_path = PathUri::from_abs_path(resource_path).map_err(|err| {
-                SkillProviderError::new(format!(
-                    "failed to read executor skill resource {}: {err}",
-                    request.resource.as_str()
-                ))
-            })?;
+            let resource_path = PathUri::from_abs_path(resource_path);
             let contents = environment
                 .get_filesystem()
                 .read_file_text(&resource_path, /*sandbox*/ None)
