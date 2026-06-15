@@ -5024,13 +5024,13 @@ async fn remote_v2_compaction_keeps_creation_time_instructions_after_same_path_m
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 4);
     assert_single_instruction_fragment(&requests[3], &old_fragment);
-    let resumed_input = requests[3].input();
+    let resumed_input = requests[3].raw_input();
     assert_eq!(
         resumed_input.get(..replacement_history.len()),
         Some(replacement_history.as_slice()),
         "remote-v2 cold resume should replay persisted replacement history verbatim"
     );
-    let post_compact_input = requests[2].input();
+    let post_compact_input = requests[2].raw_input();
     assert_eq!(
         resumed_input.get(..post_compact_input.len()),
         Some(post_compact_input.as_slice()),

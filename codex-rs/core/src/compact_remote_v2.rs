@@ -234,9 +234,7 @@ async fn run_remote_compact_task_inner_impl(
     )
     .await?;
     let mut input = prompt_input.clone();
-    input.push(ResponseItem::CompactionTrigger {
-        internal_chat_message_metadata_passthrough: None,
-    });
+    input.push(ResponseItem::CompactionTrigger {});
     let prompt = Prompt {
         input,
         tools: tool_router.model_visible_specs(),

@@ -915,6 +915,20 @@ pub struct InternalChatMessageMetadataPassthrough {
     pub turn_id: Option<String>,
 }
 
+impl InternalChatMessageMetadataPassthrough {
+    pub(crate) fn set_turn_id_if_missing(metadata: &mut Option<Self>, turn_id: &str) {
+        if turn_id.is_empty()
+            || metadata
+                .as_ref()
+                .and_then(|metadata| metadata.turn_id.as_deref())
+                .is_some_and(|turn_id| !turn_id.is_empty())
+        {
+            return;
+        }
+        metadata.get_or_insert_with(Self::default).turn_id = Some(turn_id.to_string());
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
@@ -1120,13 +1134,8 @@ pub enum ResponseItem {
         #[ts(optional)]
         internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     },
-    // Compaction triggers are request controls, and the Responses API does not
-    // accept an `id` field for them.
-    CompactionTrigger {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
-    },
+    // Compaction triggers are request controls, not durable response items.
+    CompactionTrigger {},
     ContextCompaction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -1198,16 +1207,11 @@ impl ResponseItem {
     }
 
     /// Stamps the item with `turn_id` unless it already has a non-empty turn ID.
-    pub fn stamp_turn_id_if_missing(&mut self, turn_id: &str) {
-        if turn_id.is_empty() || self.turn_id().is_some() {
-            return;
-        }
+    pub fn set_turn_id_if_missing(&mut self, turn_id: &str) {
         let Some(metadata) = self.internal_chat_message_metadata_passthrough_mut() else {
             return;
         };
-        metadata
-            .get_or_insert_with(InternalChatMessageMetadataPassthrough::default)
-            .turn_id = Some(turn_id.to_string());
+        InternalChatMessageMetadataPassthrough::set_turn_id_if_missing(metadata, turn_id);
     }
 
     /// Removes internal chat message metadata passthrough before sending to a provider that does
@@ -1274,15 +1278,11 @@ impl ResponseItem {
                 internal_chat_message_metadata_passthrough: metadata,
                 ..
             }
-            | Self::CompactionTrigger {
-                internal_chat_message_metadata_passthrough: metadata,
-                ..
-            }
             | Self::ContextCompaction {
                 internal_chat_message_metadata_passthrough: metadata,
                 ..
             } => metadata.as_ref(),
-            Self::Other => None,
+            Self::CompactionTrigger { .. } | Self::Other => None,
         }
     }
 
@@ -1342,15 +1342,11 @@ impl ResponseItem {
                 internal_chat_message_metadata_passthrough: metadata,
                 ..
             }
-            | Self::CompactionTrigger {
-                internal_chat_message_metadata_passthrough: metadata,
-                ..
-            }
             | Self::ContextCompaction {
                 internal_chat_message_metadata_passthrough: metadata,
                 ..
             } => Some(metadata),
-            Self::Other => None,
+            Self::CompactionTrigger { .. } | Self::Other => None,
         }
     }
 }
@@ -2206,23 +2202,23 @@ mod tests {
         }))?;
         assert_eq!(unknown_metadata, item);
 
-        item.stamp_turn_id_if_missing("turn-2");
+        item.set_turn_id_if_missing("turn-2");
         assert_eq!(item.turn_id(), Some("turn-1"));
 
         let mut empty_turn_id =
             response_item_with_passthrough_metadata(Some(passthrough_metadata("")));
-        empty_turn_id.stamp_turn_id_if_missing("turn-1");
+        empty_turn_id.set_turn_id_if_missing("turn-1");
         assert_eq!(empty_turn_id.turn_id(), Some("turn-1"));
 
         let mut missing_turn_id = response_item_with_passthrough_metadata(
             /*internal_chat_message_metadata_passthrough*/ None,
         );
-        missing_turn_id.stamp_turn_id_if_missing("");
-        missing_turn_id.stamp_turn_id_if_missing("turn-1");
+        missing_turn_id.set_turn_id_if_missing("");
+        missing_turn_id.set_turn_id_if_missing("turn-1");
         assert_eq!(missing_turn_id.turn_id(), Some("turn-1"));
 
         let mut other = ResponseItem::Other;
-        other.stamp_turn_id_if_missing("turn-1");
+        other.set_turn_id_if_missing("turn-1");
         assert_eq!(other.turn_id(), None);
         Ok(())
     }
@@ -3111,33 +3107,12 @@ mod tests {
 
     #[test]
     fn serializes_compaction_trigger_without_payload() -> Result<()> {
-        let item = ResponseItem::CompactionTrigger {
-            internal_chat_message_metadata_passthrough: None,
-        };
+        let item = ResponseItem::CompactionTrigger {};
 
         assert_eq!(
             serde_json::to_value(item)?,
             serde_json::json!({
                 "type": "compaction_trigger",
-            })
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn serializes_stamped_compaction_trigger_passthrough_metadata() -> Result<()> {
-        let mut item = ResponseItem::CompactionTrigger {
-            internal_chat_message_metadata_passthrough: None,
-        };
-        item.stamp_turn_id_if_missing("turn-1");
-
-        assert_eq!(
-            serde_json::to_value(item)?,
-            serde_json::json!({
-                "type": "compaction_trigger",
-                "internal_chat_message_metadata_passthrough": {
-                    "turn_id": "turn-1",
-                },
             })
         );
         Ok(())
@@ -3149,12 +3124,7 @@ mod tests {
 
         let item: ResponseItem = serde_json::from_str(json)?;
 
-        assert_eq!(
-            item,
-            ResponseItem::CompactionTrigger {
-                internal_chat_message_metadata_passthrough: None,
-            }
-        );
+        assert_eq!(item, ResponseItem::CompactionTrigger {});
         Ok(())
     }
 
