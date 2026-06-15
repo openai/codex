@@ -6,6 +6,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use std::borrow::Cow;
+use std::time::Instant;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
@@ -246,6 +247,10 @@ impl RequestUserInputOverlay {
 
     /// Render the full request-user-input overlay.
     pub(super) fn render_ui(&self, area: Rect, buf: &mut Buffer) {
+        self.render_ui_at(area, buf, Instant::now());
+    }
+
+    pub(super) fn render_ui_at(&self, area: Rect, buf: &mut Buffer, now: Instant) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -261,20 +266,16 @@ impl RequestUserInputOverlay {
         }
         let sections = self.layout_sections(content_area);
         let notes_visible = self.notes_ui_visible();
-        let unanswered = self.unanswered_count();
 
         // Progress header keeps the user oriented across multiple questions.
-        let progress_line = if self.question_count() > 0 {
-            let idx = self.current_index() + 1;
-            let total = self.question_count();
-            let base = format!("Question {idx}/{total}");
-            if unanswered > 0 {
-                Line::from(format!("{base} ({unanswered} unanswered)").dim())
-            } else {
-                Line::from(base.dim())
-            }
+        let progress_line = if let Some(countdown) = self.auto_resolution_countdown_text_at(now) {
+            Line::from(vec![
+                self.progress_prefix_text().dim(),
+                " · ".dim(),
+                countdown.red(),
+            ])
         } else {
-            Line::from("No questions".dim())
+            Line::from(self.progress_prefix_text().dim())
         };
         Paragraph::new(progress_line).render(sections.progress_area, buf);
 
