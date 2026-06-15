@@ -371,10 +371,10 @@ mod tests {
         );
 
         assert_eq!(metadata.cwd, PathBuf::from("/child/worktree"));
+        let permission_profile: PermissionProfile = PermissionProfile::Disabled;
         assert_eq!(
             metadata.sandbox_policy,
-            serde_json::to_string(&PermissionProfile::Disabled)
-                .expect("serialize permission profile")
+            serde_json::to_string(&permission_profile).expect("serialize permission profile")
         );
         assert_eq!(metadata.approval_mode, "never");
     }

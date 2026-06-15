@@ -731,8 +731,9 @@ mod tests {
         builder.model_provider = Some(config.default_model_provider_id.clone());
         builder.cwd = home.path().to_path_buf();
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
+        let permission_profile: PermissionProfile = PermissionProfile::Disabled;
         metadata.sandbox_policy =
-            serde_json::to_string(&PermissionProfile::Disabled).expect("serialize profile");
+            serde_json::to_string(&permission_profile).expect("serialize profile");
         runtime
             .upsert_thread(&metadata)
             .await

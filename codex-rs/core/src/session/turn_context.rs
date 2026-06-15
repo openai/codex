@@ -4,6 +4,7 @@ use crate::agents_md::LoadedAgentsMd;
 use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use codex_core_skills::HostLoadedSkills;
+use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
@@ -341,7 +342,7 @@ impl TurnContext {
             network_sandbox_policy,
         );
         FileSystemSandboxContext {
-            permissions,
+            permissions: permissions.into(),
             cwd: Some(cwd.clone()),
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: self

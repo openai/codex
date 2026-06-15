@@ -2627,6 +2627,7 @@ dependencies = [
  "codex-extension-api",
  "codex-features",
  "codex-feedback",
+ "codex-file-system",
  "codex-git-utils",
  "codex-home",
  "codex-hooks",
@@ -3040,6 +3041,7 @@ name = "codex-file-system"
 version = "0.0.0"
 dependencies = [
  "codex-protocol",
+ "codex-utils-absolute-path",
  "codex-utils-path-uri",
  "serde",
 ]
