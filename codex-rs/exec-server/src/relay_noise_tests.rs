@@ -109,7 +109,7 @@ async fn pending_harness_key_validation_does_not_block_new_handshakes() -> Resul
 }
 
 #[tokio::test]
-async fn duplicate_handshake_expires_pending_validation() -> Result<()> {
+async fn duplicate_handshakes_exhaust_failure_budget() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let websocket_url = format!("ws://{}", listener.local_addr()?);
     let harness_connection = tokio::spawn(connect_async(websocket_url));
@@ -156,36 +156,52 @@ async fn duplicate_handshake_expires_pending_validation() -> Result<()> {
     })
     .await?;
 
+    for attempt in 1..MAX_FAILED_NOISE_HANDSHAKES {
+        if attempt > 1 {
+            harness_websocket
+                .send(Message::Binary(encoded.clone().into()))
+                .await?;
+            timeout(Duration::from_secs(1), async {
+                while calls.load(Ordering::SeqCst) != attempt {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await?;
+        }
+        harness_websocket
+            .send(Message::Binary(encoded.clone().into()))
+            .await?;
+        let payload = timeout(Duration::from_secs(1), async {
+            loop {
+                match harness_websocket.next().await {
+                    Some(Ok(Message::Binary(payload))) => break Ok(payload),
+                    Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => {}
+                    Some(Ok(message)) => anyhow::bail!("expected reset frame, got {message:?}"),
+                    Some(Err(error)) => break Err(error.into()),
+                    None => anyhow::bail!("environment closed before sending reset"),
+                }
+            }
+        })
+        .await??;
+        let reset = decode_relay_message_frame(payload.as_ref())?;
+        assert_eq!(reset.stream_id, stream_id);
+        assert_eq!(reset.validate()?, RelayFrameBodyKind::Reset);
+    }
+
+    harness_websocket
+        .send(Message::Binary(encoded.clone().into()))
+        .await?;
+    timeout(Duration::from_secs(1), async {
+        while calls.load(Ordering::SeqCst) != MAX_FAILED_NOISE_HANDSHAKES {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
     harness_websocket
         .send(Message::Binary(encoded.into()))
         .await?;
-    let Message::Binary(payload) = timeout(Duration::from_secs(1), harness_websocket.next())
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("environment closed before sending reset"))??
-    else {
-        anyhow::bail!("expected binary reset frame");
-    };
-    let reset = decode_relay_message_frame(payload.as_ref())?;
-    assert_eq!(reset.stream_id, stream_id);
-    assert_eq!(reset.validate()?, RelayFrameBodyKind::Reset);
-
-    release.notify_one();
-    let unexpected_message = timeout(Duration::from_millis(100), async {
-        loop {
-            let message = harness_websocket.next().await;
-            if !matches!(
-                message,
-                Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)))
-            ) {
-                break message;
-            }
-        }
-    })
-    .await;
-    assert!(unexpected_message.is_err());
-
-    harness_websocket.close(None).await?;
     timeout(Duration::from_secs(1), environment_task).await??;
+    release.notify_waiters();
     Ok(())
 }
 

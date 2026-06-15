@@ -59,13 +59,13 @@ identity plus endpoint-owned reliability metadata:
 ```text
 version
 stream_id
-body              // data | ack_frame | resume | reset | heartbeat
+body              // handshake | data | ack_frame | resume | reset | heartbeat
 ack               // highest contiguous peer segment seq received
 ack_bits          // bitset for peer segment seqs after ack
 seq               // data only: segment sequence number
 segment_index     // data only: 0-based index within message
 segment_count     // data only: number of segments in message
-payload           // data only: JSON-RPC message bytes or segment bytes
+payload           // handshake bytes or encrypted data record
 next_seq          // resume only: next sender seq
 reason            // reset only: reset reason
 ```

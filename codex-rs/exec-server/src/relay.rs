@@ -483,7 +483,7 @@ pub(crate) async fn run_multiplexed_environment<S, V>(
                 _ = keepalive.tick() => Message::Ping(Vec::new().into()),
             };
             if let Err(error) = websocket_sink.send(message).await {
-                debug!("Noise multiplexed environment websocket write failed: {error}");
+                warn!("Noise multiplexed environment websocket write failed: {error}");
                 break;
             }
         }
@@ -658,6 +658,10 @@ pub(crate) async fn run_multiplexed_environment<S, V>(
                 // Removing pending state makes the in-flight validation result stale.
                 if pending_handshakes.remove(&stream_id).is_some() {
                     send_reset(&physical_outgoing_tx, stream_id);
+                    if failed_handshake_budget_exhausted(&mut failed_handshakes) {
+                        warn!("closing Noise relay after repeated handshake failures");
+                        break;
+                    }
                     continue;
                 }
                 if streams.len() >= MAX_ACTIVE_NOISE_RELAY_STREAMS {
