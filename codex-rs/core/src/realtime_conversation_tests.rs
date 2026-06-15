@@ -1,4 +1,3 @@
-use super::RealtimeCodexOutputConfig;
 use super::RealtimeHandoffState;
 use super::RealtimeSessionKind;
 use super::realtime_delegation_from_handoff;
@@ -131,10 +130,8 @@ async fn clears_active_handoff_explicitly() {
     let (tx, _rx) = bounded(1);
     let state = RealtimeHandoffState::new(
         tx,
-        RealtimeCodexOutputConfig {
-            responses_as_items: false,
-            response_item_prefix: None,
-        },
+        /*codex_responses_as_items*/ false,
+        /*codex_response_item_prefix*/ None,
         RealtimeSessionKind::V1,
     );
 

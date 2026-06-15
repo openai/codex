@@ -107,7 +107,8 @@ struct RealtimeHandoffState {
     output_tx: Sender<RealtimeOutbound>,
     active_handoff: Arc<Mutex<Option<String>>>,
     last_output_text: Arc<Mutex<Option<String>>>,
-    codex_output: RealtimeCodexOutputConfig,
+    codex_responses_as_items: bool,
+    codex_response_item_prefix: Option<String>,
     session_kind: RealtimeSessionKind,
 }
 
@@ -118,12 +119,6 @@ enum RealtimeOutbound {
     CompletedHandoff { handoff_id: String, text: String },
     ConversationItem { text: String },
     HandoffCompleteAck { handoff_id: String },
-}
-
-#[derive(Clone, Debug)]
-struct RealtimeCodexOutputConfig {
-    responses_as_items: bool,
-    response_item_prefix: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -215,14 +210,16 @@ struct RealtimeInputChannels {
 impl RealtimeHandoffState {
     fn new(
         output_tx: Sender<RealtimeOutbound>,
-        codex_output: RealtimeCodexOutputConfig,
+        codex_responses_as_items: bool,
+        codex_response_item_prefix: Option<String>,
         session_kind: RealtimeSessionKind,
     ) -> Self {
         Self {
             output_tx,
             active_handoff: Arc::new(Mutex::new(None)),
             last_output_text: Arc::new(Mutex::new(None)),
-            codex_output,
+            codex_responses_as_items,
+            codex_response_item_prefix,
             session_kind,
         }
     }
@@ -243,7 +240,8 @@ struct RealtimeStart {
     api_provider: ApiProvider,
     architecture: RealtimeConversationArchitecture,
     extra_headers: Option<HeaderMap>,
-    codex_output: RealtimeCodexOutputConfig,
+    codex_responses_as_items: bool,
+    codex_response_item_prefix: Option<String>,
     realtime_call_api_provider: Option<ApiProvider>,
     session_config: RealtimeSessionConfig,
     model_client: ModelClient,
@@ -298,7 +296,8 @@ impl RealtimeConversationManager {
             api_provider,
             architecture,
             extra_headers,
-            codex_output,
+            codex_responses_as_items,
+            codex_response_item_prefix,
             realtime_call_api_provider,
             session_config,
             model_client,
@@ -320,7 +319,12 @@ impl RealtimeConversationManager {
             async_channel::bounded::<RealtimeEvent>(OUTPUT_EVENTS_QUEUE_CAPACITY);
 
         let realtime_active = Arc::new(AtomicBool::new(true));
-        let handoff = RealtimeHandoffState::new(handoff_output_tx, codex_output, session_kind);
+        let handoff = RealtimeHandoffState::new(
+            handoff_output_tx,
+            codex_responses_as_items,
+            codex_response_item_prefix,
+            session_kind,
+        );
         let input_channels = RealtimeInputChannels {
             text_rx,
             handoff_output_rx,
@@ -491,11 +495,11 @@ impl RealtimeConversationManager {
             Some(handoff_id) => {
                 let output_text = realtime_backend_output(output_text, handoff.session_kind);
                 *handoff.last_output_text.lock().await = Some(output_text.clone());
-                if handoff.codex_output.responses_as_items {
+                if handoff.codex_responses_as_items {
                     RealtimeOutbound::ConversationItem {
                         text: realtime_backend_item(
                             output_text,
-                            handoff.codex_output.response_item_prefix.as_deref(),
+                            handoff.codex_response_item_prefix.as_deref(),
                         ),
                     }
                 } else {
@@ -508,11 +512,11 @@ impl RealtimeConversationManager {
             None if output_text.trim().is_empty() => return Ok(()),
             None => {
                 let output_text = realtime_backend_output(output_text, handoff.session_kind);
-                if handoff.codex_output.responses_as_items {
+                if handoff.codex_responses_as_items {
                     RealtimeOutbound::ConversationItem {
                         text: realtime_backend_item(
                             output_text,
-                            handoff.codex_output.response_item_prefix.as_deref(),
+                            handoff.codex_response_item_prefix.as_deref(),
                         ),
                     }
                 } else {
@@ -573,7 +577,7 @@ impl RealtimeConversationManager {
             return Ok(());
         };
 
-        let output = if handoff.codex_output.responses_as_items {
+        let output = if handoff.codex_responses_as_items {
             RealtimeOutbound::HandoffCompleteAck { handoff_id }
         } else {
             RealtimeOutbound::CompletedHandoff {
@@ -671,7 +675,8 @@ struct PreparedRealtimeConversationStart {
     api_provider: ApiProvider,
     architecture: RealtimeConversationArchitecture,
     extra_headers: Option<HeaderMap>,
-    codex_output: RealtimeCodexOutputConfig,
+    codex_responses_as_items: bool,
+    codex_response_item_prefix: Option<String>,
     realtime_call_api_provider: Option<ApiProvider>,
     requested_realtime_session_id: Option<String>,
     version: RealtimeWsVersion,
@@ -747,10 +752,8 @@ async fn prepare_realtime_start(
         api_provider,
         architecture,
         extra_headers,
-        codex_output: RealtimeCodexOutputConfig {
-            responses_as_items: params.codex_responses_as_items,
-            response_item_prefix: params.codex_response_item_prefix,
-        },
+        codex_responses_as_items: params.codex_responses_as_items,
+        codex_response_item_prefix: params.codex_response_item_prefix,
         realtime_call_api_provider,
         requested_realtime_session_id,
         version,
@@ -909,7 +912,8 @@ async fn handle_start_inner(
         api_provider,
         architecture,
         extra_headers,
-        codex_output,
+        codex_responses_as_items,
+        codex_response_item_prefix,
         realtime_call_api_provider,
         requested_realtime_session_id,
         version,
@@ -925,7 +929,8 @@ async fn handle_start_inner(
         api_provider,
         architecture,
         extra_headers,
-        codex_output,
+        codex_responses_as_items,
+        codex_response_item_prefix,
         realtime_call_api_provider,
         session_config,
         model_client: sess.services.model_client.clone(),
