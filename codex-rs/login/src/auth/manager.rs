@@ -109,6 +109,7 @@ const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 pub(super) const REVOKE_TOKEN_URL: &str = "https://auth.openai.com/oauth/revoke";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
 pub const REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REVOKE_TOKEN_URL_OVERRIDE";
+pub const CLIENT_ID_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_CLIENT_ID";
 static NEXT_DUMMY_AUTH_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Error)]
@@ -1021,7 +1022,7 @@ async fn request_chatgpt_token_refresh(
     client: &CodexHttpClient,
 ) -> Result<RefreshResponse, RefreshTokenError> {
     let refresh_request = RefreshRequest {
-        client_id: CLIENT_ID,
+        client_id: oauth_client_id(),
         grant_type: "refresh_token",
         refresh_token,
     };
@@ -1116,7 +1117,7 @@ fn extract_refresh_token_error_code(body: &str) -> Option<String> {
 
 #[derive(Serialize)]
 struct RefreshRequest {
-    client_id: &'static str,
+    client_id: String,
     grant_type: &'static str,
     refresh_token: String,
 }
@@ -1130,6 +1131,13 @@ struct RefreshResponse {
 
 // Shared constant for token refresh (client id used for oauth token refresh flow)
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+
+pub fn oauth_client_id() -> String {
+    std::env::var(CLIENT_ID_OVERRIDE_ENV_VAR)
+        .ok()
+        .filter(|client_id| !client_id.trim().is_empty())
+        .unwrap_or_else(|| CLIENT_ID.to_string())
+}
 
 fn refresh_token_endpoint() -> String {
     std::env::var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR)

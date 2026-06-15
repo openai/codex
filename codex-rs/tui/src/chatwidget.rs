@@ -598,6 +598,9 @@ pub(crate) struct ChatWidget {
     ide_context: IdeContextState,
     plugins_cache: PluginsCacheState,
     plugins_fetch_state: PluginListFetchState,
+    plugin_remote_sections_loading: bool,
+    plugin_remote_sections_loaded: bool,
+    plugin_remote_section_errors: Vec<crate::app_event::PluginRemoteSectionError>,
     plugin_install_apps_needing_auth: Vec<AppSummary>,
     plugin_install_auth_flow: Option<PluginInstallAuthFlowState>,
     plugins_active_tab_id: Option<String>,
@@ -1652,9 +1655,8 @@ impl ChatWidget {
 
     /// Update resize-sensitive chat widget state after the terminal width changes.
     ///
-    /// The app calls this even when terminal resize reflow is disabled so live stream wrapping
-    /// remains consistent with the current viewport. Finalized transcript rebuilding stays gated at
-    /// the app layer.
+    /// Live stream wrapping stays consistent with the current viewport while finalized transcript
+    /// rebuilding runs through app-level resize reflow.
     pub(crate) fn on_terminal_resize(&mut self, width: u16) {
         let had_rendered_width = self.last_rendered_width.get().is_some();
         self.last_rendered_width.set(Some(width as usize));

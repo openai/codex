@@ -644,6 +644,12 @@ impl PluginRequestProcessor {
                     data.push(remote_marketplace_to_info(remote_marketplace));
                 }
                 Ok(None) => {}
+                Err(err) if explicit_marketplace_kinds => {
+                    return Err(remote_plugin_catalog_error_to_jsonrpc(
+                        err,
+                        "list OpenAI Curated remote plugin catalog",
+                    ));
+                }
                 Err(
                     RemotePluginCatalogError::AuthRequired
                     | RemotePluginCatalogError::UnsupportedAuthMode,
