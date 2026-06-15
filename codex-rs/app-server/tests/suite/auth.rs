@@ -14,6 +14,7 @@ use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use codex_protocol::auth::RefreshTokenFailedReason;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -211,6 +212,7 @@ async fn get_auth_status_with_personal_access_token_omits_token() -> Result<()> 
         GetAuthStatusResponse {
             auth_method: Some(AuthMode::PersonalAccessToken),
             auth_token: None,
+            refresh_failure_reason: None,
             requires_openai_auth: Some(true),
         }
     );
@@ -308,6 +310,7 @@ async fn get_auth_status_with_api_key_refresh_requested() -> Result<()> {
         GetAuthStatusResponse {
             auth_method: Some(AuthMode::ApiKey),
             auth_token: Some("sk-test-key".to_string()),
+            refresh_failure_reason: None,
             requires_openai_auth: Some(true),
         }
     );
@@ -372,6 +375,7 @@ async fn get_auth_status_omits_token_after_permanent_refresh_failure() -> Result
         GetAuthStatusResponse {
             auth_method: Some(AuthMode::Chatgpt),
             auth_token: None,
+            refresh_failure_reason: Some(RefreshTokenFailedReason::Exhausted),
             requires_openai_auth: Some(true),
         }
     );
@@ -454,6 +458,7 @@ async fn get_auth_status_omits_token_after_proactive_refresh_failure() -> Result
         GetAuthStatusResponse {
             auth_method: Some(AuthMode::Chatgpt),
             auth_token: None,
+            refresh_failure_reason: Some(RefreshTokenFailedReason::Exhausted),
             requires_openai_auth: Some(true),
         }
     );
@@ -521,6 +526,7 @@ async fn get_auth_status_returns_token_after_proactive_refresh_recovery() -> Res
         GetAuthStatusResponse {
             auth_method: Some(AuthMode::Chatgpt),
             auth_token: None,
+            refresh_failure_reason: Some(RefreshTokenFailedReason::Exhausted),
             requires_openai_auth: Some(true),
         }
     );
@@ -554,6 +560,7 @@ async fn get_auth_status_returns_token_after_proactive_refresh_recovery() -> Res
         GetAuthStatusResponse {
             auth_method: Some(AuthMode::Chatgpt),
             auth_token: Some("recovered-access-token".to_string()),
+            refresh_failure_reason: None,
             requires_openai_auth: Some(true),
         }
     );

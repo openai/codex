@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
+use codex_protocol::auth::RefreshTokenFailedReason;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -193,6 +194,7 @@ pub struct ExecOneOffCommandParams {
 pub struct GetAuthStatusResponse {
     pub auth_method: Option<AuthMode>,
     pub auth_token: Option<String>,
+    pub refresh_failure_reason: Option<RefreshTokenFailedReason>,
     pub requires_openai_auth: Option<bool>,
 }
 
