@@ -5574,14 +5574,8 @@ async fn queued_rollback_syncs_overlay_and_clears_deferred_history() {
 }
 
 #[tokio::test]
-async fn late_usage_result_can_follow_finalized_plan_without_resize_reflow() {
+async fn late_usage_result_can_follow_finalized_plan() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    app.config
-        .features
-        .set_enabled(Feature::TerminalResizeReflow, /*enabled*/ false)
-        .expect("feature should be configurable");
-    assert!(!app.terminal_resize_reflow_enabled());
-
     app.chat_widget
         .add_token_activity_output(crate::chatwidget::TokenActivityView::Daily);
     let request_id = match app_event_rx.try_recv() {
