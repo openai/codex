@@ -74,6 +74,7 @@ pub use config_requirements::RemoteSandboxConfigToml;
 pub use config_requirements::RequirementSource;
 pub use config_requirements::ResidencyRequirement;
 pub use config_requirements::SandboxModeRequirement;
+pub use config_requirements::ShellEnvironmentPolicyRequirementsToml;
 pub use config_requirements::Sourced;
 pub use config_requirements::WebSearchModeRequirement;
 pub use config_requirements::WindowsRequirementsToml;

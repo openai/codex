@@ -1,10 +1,14 @@
 use codex_config::ConfigRequirements;
 use codex_config::RequirementSource;
+use codex_config::ShellEnvironmentPolicyRequirementsToml;
 use codex_config::Sourced;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::FeedbackConfigToml;
+use codex_config::types::ShellEnvironmentPolicyToml;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::ShellEnvironmentPolicyRule;
+use std::collections::BTreeMap;
 
 use super::otel;
 
@@ -42,6 +46,11 @@ pub(super) fn apply_to_config(
     apply_exact!(model_catalog_json);
     apply_exact!(check_for_update_on_startup);
     apply_exact!(allow_login_shell);
+    apply_shell_environment_policy_requirement(
+        &mut config.shell_environment_policy,
+        requirements.shell_environment_policy.as_ref(),
+        startup_warnings,
+    );
     if let Some(requirement) = requirements.otel.as_ref() {
         otel::apply_requirement(&mut config.otel, requirement, startup_warnings)?;
     }
@@ -119,6 +128,97 @@ pub(super) fn replace_required_leaf<T: Clone + PartialEq>(
         .as_ref()
         .is_some_and(|configured| configured != required);
     *configured = Some(required.clone());
+    conflict
+}
+
+fn apply_shell_environment_policy_requirement(
+    configured: &mut ShellEnvironmentPolicyToml,
+    requirement: Option<&Sourced<ShellEnvironmentPolicyRequirementsToml>>,
+    startup_warnings: &mut Vec<String>,
+) {
+    let Some(Sourced { value, source }) = requirement else {
+        return;
+    };
+    let ShellEnvironmentPolicyRequirementsToml {
+        inherit,
+        ignore_default_excludes,
+        r#set: required_set,
+        rules,
+        experimental_use_profile,
+    } = value;
+    let mut conflict = false;
+
+    conflict |= replace_required_leaf(&mut configured.inherit, inherit);
+    conflict |= replace_required_leaf(
+        &mut configured.ignore_default_excludes,
+        ignore_default_excludes,
+    );
+    conflict |= apply_required_pattern_rules(configured, rules);
+    conflict |= replace_required_leaf(
+        &mut configured.experimental_use_profile,
+        experimental_use_profile,
+    );
+
+    if let Some(required) = required_set.as_ref() {
+        let configured_set = configured.r#set.get_or_insert_default();
+        conflict |= required.iter().any(|(key, value)| {
+            configured_set
+                .get(key)
+                .is_some_and(|current| current != value)
+        });
+        configured_set.extend(required.clone());
+    }
+
+    push_structured_requirement_override_warning(
+        "shell_environment_policy",
+        conflict,
+        source,
+        startup_warnings,
+    );
+}
+
+fn apply_required_pattern_rules(
+    configured: &mut ShellEnvironmentPolicyToml,
+    required: &Option<BTreeMap<String, ShellEnvironmentPolicyRule>>,
+) -> bool {
+    let Some(required) = required else {
+        return false;
+    };
+    let conflict = required.iter().any(|(pattern, required_action)| {
+        let configured_action = configured
+            .rules
+            .as_ref()
+            .and_then(|rules| rules.get(pattern).copied())
+            .or_else(|| {
+                configured
+                    .exclude
+                    .as_ref()
+                    .is_some_and(|patterns| patterns.contains(pattern))
+                    .then_some(ShellEnvironmentPolicyRule::Exclude)
+            })
+            .or_else(|| {
+                configured
+                    .include_only
+                    .as_ref()
+                    .is_some_and(|patterns| patterns.contains(pattern))
+                    .then_some(ShellEnvironmentPolicyRule::Include)
+            });
+        configured_action.is_some_and(|action| action != *required_action)
+    });
+
+    for pattern in required.keys() {
+        if let Some(exclude) = configured.exclude.as_mut() {
+            exclude.retain(|candidate| candidate != pattern);
+        }
+        if let Some(include_only) = configured.include_only.as_mut() {
+            include_only.retain(|candidate| candidate != pattern);
+        }
+    }
+    configured
+        .rules
+        .get_or_insert_default()
+        .extend(required.clone());
+
     conflict
 }
 

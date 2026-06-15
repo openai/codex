@@ -2716,6 +2716,7 @@ impl Config {
             check_for_update_on_startup: _,
             otel: _,
             allow_login_shell: _,
+            shell_environment_policy: _,
             feedback: _,
             approval_policy: mut constrained_approval_policy,
             approvals_reviewer: mut constrained_approvals_reviewer,

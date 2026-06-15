@@ -6,7 +6,9 @@ use super::compose_requirements_for_hostname_and_hook_directory;
 use crate::ConfigRequirementsToml;
 use crate::ConfigRequirementsWithSources;
 use crate::RequirementSource;
+use crate::ShellEnvironmentPolicyRequirementsToml;
 use crate::Sourced;
+use codex_protocol::config_types::ShellEnvironmentPolicyRule;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -1070,6 +1072,56 @@ shared = "high"
             )
             .otel
             .expect("expected OTEL requirements"),
+            RequirementSource::composite([high_source, low_source]),
+        ))
+    );
+}
+
+#[test]
+fn shell_environment_rules_compose_by_pattern() {
+    let high_source = RequirementSource::EnterpriseManaged {
+        id: "req_high".to_string(),
+        name: "High".to_string(),
+    };
+    let low_source = RequirementSource::EnterpriseManaged {
+        id: "req_low".to_string(),
+        name: "Low".to_string(),
+    };
+    let composed = compose_requirements_for_hostname(
+        vec![
+            RequirementsLayerEntry::from_toml(
+                low_source.clone(),
+                r#"
+[shell_environment_policy.rules]
+"FLIP_*" = "exclude"
+"KEEP_*" = "include"
+"#,
+            ),
+            RequirementsLayerEntry::from_toml(
+                high_source.clone(),
+                r#"
+[shell_environment_policy.rules]
+"ADD_*" = "exclude"
+"FLIP_*" = "include"
+"#,
+            ),
+        ],
+        /*hostname*/ None,
+    )
+    .expect("compose requirements")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed.shell_environment_policy,
+        Some(Sourced::new(
+            ShellEnvironmentPolicyRequirementsToml {
+                rules: Some(BTreeMap::from([
+                    ("ADD_*".to_string(), ShellEnvironmentPolicyRule::Exclude,),
+                    ("FLIP_*".to_string(), ShellEnvironmentPolicyRule::Include,),
+                    ("KEEP_*".to_string(), ShellEnvironmentPolicyRule::Include,),
+                ])),
+                ..Default::default()
+            },
             RequirementSource::composite([high_source, low_source]),
         ))
     );

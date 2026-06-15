@@ -184,6 +184,7 @@ fn populate_merged_regular_fields_with_sources(
         check_for_update_on_startup,
         otel: _,
         allow_login_shell,
+        shell_environment_policy,
         feedback,
         allowed_approval_policies,
         allowed_approvals_reviewers,
@@ -221,6 +222,7 @@ fn populate_merged_regular_fields_with_sources(
         &["check_for_update_on_startup"]
     );
     set_sourced!(allow_login_shell, &["allow_login_shell"]);
+    set_sourced!(shell_environment_policy, &["shell_environment_policy"]);
     set_sourced!(feedback, &["feedback"]);
     set_sourced!(allowed_approval_policies, &["allowed_approval_policies"]);
     set_sourced!(
