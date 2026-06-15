@@ -2474,7 +2474,7 @@ plugins = true
         .unwrap(),
     };
 
-    let chatgpt_outcome = PluginsManager::new_with_restriction_product(
+    let chatgpt_outcome = PluginsManager::new_with_options(
         tmp.path().to_path_buf(),
         Some(Product::Codex),
         Some(AuthMode::Chatgpt),
@@ -2487,7 +2487,7 @@ plugins = true
         vec!["other-mcp".to_string()]
     );
 
-    let api_key_outcome = PluginsManager::new_with_restriction_product(
+    let api_key_outcome = PluginsManager::new_with_options(
         tmp.path().to_path_buf(),
         Some(Product::Codex),
         Some(AuthMode::ApiKey),
