@@ -121,7 +121,7 @@ async fn returns_microsoft_fallback_plugins() {
 }
 
 #[tokio::test]
-async fn omits_openai_curated_when_remote_enabled() {
+async fn includes_openai_curated_when_remote_enabled() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());
     write_openai_curated_marketplace(&curated_root, &["slack"]);
@@ -171,7 +171,10 @@ source = "/tmp/{bundled_marketplace_name}"
             .into_iter()
             .map(|plugin| plugin.id)
             .collect::<Vec<_>>(),
-        vec!["chrome@openai-bundled".to_string()]
+        vec![
+            "chrome@openai-bundled".to_string(),
+            "slack@openai-curated".to_string(),
+        ]
     );
 }
 

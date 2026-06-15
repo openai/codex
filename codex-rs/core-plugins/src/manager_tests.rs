@@ -2187,7 +2187,7 @@ enabled = false
         .list_marketplaces_for_config(
             &config,
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
-            true,
+            /*include_openai_curated*/ true,
         )
         .unwrap()
         .marketplaces;
@@ -2293,7 +2293,7 @@ enabled = true
         .list_marketplaces_for_config(
             &config,
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
-            true,
+            /*include_openai_curated*/ true,
         )
         .unwrap()
         .marketplaces;
@@ -2345,7 +2345,7 @@ plugins = true
         .list_marketplaces_for_config(
             &config,
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
-            true,
+            /*include_openai_curated*/ true,
         )
         .unwrap()
         .marketplaces;
@@ -2880,7 +2880,7 @@ enabled = true
         .list_marketplaces_for_config(
             &config,
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
-            true,
+            /*include_openai_curated*/ true,
         )
         .unwrap()
         .marketplaces;
@@ -3426,7 +3426,7 @@ enabled = false
                 AbsolutePathBuf::try_from(repo_a_root).unwrap(),
                 AbsolutePathBuf::try_from(repo_b_root).unwrap(),
             ],
-            true,
+            /*include_openai_curated*/ true,
         )
         .unwrap()
         .marketplaces;
@@ -3540,7 +3540,7 @@ enabled = true
         .list_marketplaces_for_config(
             &config,
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
-            true,
+            /*include_openai_curated*/ true,
         )
         .unwrap()
         .marketplaces;

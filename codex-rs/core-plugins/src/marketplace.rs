@@ -9,7 +9,6 @@ use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
-use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::Component;
