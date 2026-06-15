@@ -40,6 +40,32 @@ fn sorted_mcp_server_names(capabilities: &PluginCapabilities<i32>) -> Vec<String
     names
 }
 
+fn has_usable_capabilities(
+    apps: Vec<AppDeclaration>,
+    mcp_servers: impl IntoIterator<Item = (&'static str, i32)>,
+    has_skills: bool,
+    auth_mode: Option<AuthMode>,
+) -> bool {
+    plugin_has_usable_capabilities(
+        capabilities(apps, mcp_servers),
+        has_skills,
+        PluginCapabilityContext::new(auth_mode, /*plugin_active*/ true),
+    )
+}
+
+fn visible_in_marketplace(
+    apps: Vec<AppDeclaration>,
+    mcp_servers: impl IntoIterator<Item = (&'static str, i32)>,
+    has_skills: bool,
+    auth_mode: Option<AuthMode>,
+) -> bool {
+    plugin_is_visible_in_marketplace(
+        capabilities(apps, mcp_servers),
+        has_skills,
+        PluginCapabilityContext::new(auth_mode, /*plugin_active*/ true),
+    )
+}
+
 #[test]
 fn apps_route_available_tracks_auth_mode_capabilities() {
     assert!(
@@ -103,4 +129,88 @@ fn resolver_preserves_mcp_conflicts_when_plugin_is_inactive() {
         sorted_mcp_server_names(&resolved),
         vec!["docs".to_string(), "linear".to_string()]
     );
+}
+
+#[test]
+fn usability_requires_apps_to_be_covered_by_mcp_when_apps_route_is_unavailable() {
+    assert!(!has_usable_capabilities(
+        vec![app("linear")],
+        [],
+        /*has_skills*/ false,
+        Some(AuthMode::ApiKey)
+    ));
+    assert!(!has_usable_capabilities(
+        vec![app("linear")],
+        [],
+        /*has_skills*/ true,
+        Some(AuthMode::ApiKey)
+    ));
+    assert!(!has_usable_capabilities(
+        vec![app("linear")],
+        [("other", 1)],
+        /*has_skills*/ false,
+        Some(AuthMode::ApiKey)
+    ));
+    assert!(has_usable_capabilities(
+        vec![app("linear")],
+        [("linear", 1)],
+        /*has_skills*/ false,
+        Some(AuthMode::ApiKey)
+    ));
+    assert!(has_usable_capabilities(
+        vec![],
+        [("other", 1)],
+        /*has_skills*/ false,
+        Some(AuthMode::ApiKey)
+    ));
+    assert!(has_usable_capabilities(
+        vec![],
+        [],
+        /*has_skills*/ true,
+        Some(AuthMode::ApiKey)
+    ));
+}
+
+#[test]
+fn usability_keeps_apps_when_apps_route_is_available() {
+    assert!(has_usable_capabilities(
+        vec![app("linear")],
+        [],
+        /*has_skills*/ false,
+        Some(AuthMode::Chatgpt)
+    ));
+    assert!(has_usable_capabilities(
+        vec![app("linear")],
+        [("linear", 1)],
+        /*has_skills*/ false,
+        Some(AuthMode::Chatgpt)
+    ));
+}
+
+#[test]
+fn marketplace_visibility_filters_only_direct_auth_modes() {
+    assert!(visible_in_marketplace(
+        vec![app("linear")],
+        [],
+        /*has_skills*/ false,
+        /*auth_mode*/ None
+    ));
+    assert!(visible_in_marketplace(
+        vec![app("linear")],
+        [],
+        /*has_skills*/ false,
+        Some(AuthMode::Chatgpt)
+    ));
+    assert!(!visible_in_marketplace(
+        vec![app("linear")],
+        [],
+        /*has_skills*/ false,
+        Some(AuthMode::ApiKey)
+    ));
+    assert!(visible_in_marketplace(
+        vec![app("linear")],
+        [("linear", 1)],
+        /*has_skills*/ false,
+        Some(AuthMode::ApiKey)
+    ));
 }

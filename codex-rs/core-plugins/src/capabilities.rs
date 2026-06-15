@@ -20,6 +20,11 @@ impl PluginCapabilityContext {
     pub(crate) fn apps_route_available(self) -> bool {
         self.auth_mode.is_some_and(AuthMode::uses_codex_backend)
     }
+
+    pub(crate) fn filters_marketplace_plugins(self) -> bool {
+        self.auth_mode
+            .is_some_and(|auth_mode| !auth_mode.uses_codex_backend())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -37,17 +42,24 @@ impl<M> PluginCapabilities<M> {
     }
 }
 
+fn app_declaration_names(apps: &[AppDeclaration]) -> HashSet<&str> {
+    apps.iter().map(|app| app.name.as_str()).collect()
+}
+
+fn app_declarations_are_covered_by_mcp<M>(capabilities: &PluginCapabilities<M>) -> bool {
+    capabilities
+        .apps
+        .iter()
+        .all(|app| capabilities.mcp_servers.contains_key(app.name.as_str()))
+}
+
 pub(crate) fn resolve_plugin_capabilities<M>(
     mut capabilities: PluginCapabilities<M>,
     context: PluginCapabilityContext,
 ) -> PluginCapabilities<M> {
     if context.apps_route_available() {
         if context.plugin_active && !capabilities.apps.is_empty() {
-            let app_declaration_names = capabilities
-                .apps
-                .iter()
-                .map(|app| app.name.as_str())
-                .collect::<HashSet<_>>();
+            let app_declaration_names = app_declaration_names(&capabilities.apps);
             capabilities
                 .mcp_servers
                 .retain(|name, _| !app_declaration_names.contains(name.as_str()));
@@ -57,6 +69,31 @@ pub(crate) fn resolve_plugin_capabilities<M>(
     }
 
     capabilities
+}
+
+fn plugin_has_usable_capabilities<M>(
+    capabilities: PluginCapabilities<M>,
+    has_skills: bool,
+    context: PluginCapabilityContext,
+) -> bool {
+    if !context.apps_route_available() && !app_declarations_are_covered_by_mcp(&capabilities) {
+        return false;
+    }
+
+    let capabilities = resolve_plugin_capabilities(capabilities, context);
+    has_skills || !capabilities.apps.is_empty() || !capabilities.mcp_servers.is_empty()
+}
+
+pub(crate) fn plugin_is_visible_in_marketplace<M>(
+    capabilities: PluginCapabilities<M>,
+    has_skills: bool,
+    context: PluginCapabilityContext,
+) -> bool {
+    if !context.filters_marketplace_plugins() {
+        return true;
+    }
+
+    plugin_has_usable_capabilities(capabilities, has_skills, context)
 }
 
 #[cfg(test)]
