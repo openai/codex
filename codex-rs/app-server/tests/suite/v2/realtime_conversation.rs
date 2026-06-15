@@ -15,8 +15,6 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioResponse;
-use codex_app_server_protocol::ThreadRealtimeAppendSilentContextParams;
-use codex_app_server_protocol::ThreadRealtimeAppendSilentContextResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendSpeechParams;
 use codex_app_server_protocol::ThreadRealtimeAppendSpeechResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
@@ -84,9 +82,7 @@ const DELEGATED_SHELL_TOOL_TIMEOUT_MS: u64 = 30_000;
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 const V2_STEERING_ACKNOWLEDGEMENT: &str =
     "This was sent to steer the previous background agent task.";
-const V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT: &str =
-    "Background agent finished. Use the preceding [BACKEND] messages as the result.";
-const SILENT_CONTEXT_PREFIX: &str =
+const RESPONSE_ITEM_PREFIX: &str =
     "Use the following context to inform future responses, but do not speak it to the user.";
 
 #[derive(Debug, Clone, Copy)]
@@ -315,27 +311,27 @@ impl RealtimeE2eHarness {
     }
 
     async fn start_webrtc_realtime(&mut self, offer_sdp: &str) -> Result<StartedWebrtcRealtime> {
-        self.start_webrtc_realtime_with_codex_responses_as_silent_context(
-            offer_sdp, /*codex_responses_as_silent_context*/ None,
+        self.start_webrtc_realtime_with_codex_responses_as_items(
+            offer_sdp, /*codex_responses_as_items*/ None,
         )
         .await
     }
 
-    async fn start_webrtc_realtime_with_context_output(
+    async fn start_webrtc_realtime_with_codex_response_items(
         &mut self,
         offer_sdp: &str,
     ) -> Result<StartedWebrtcRealtime> {
-        self.start_webrtc_realtime_with_codex_responses_as_silent_context(
+        self.start_webrtc_realtime_with_codex_responses_as_items(
             offer_sdp,
-            /*codex_responses_as_silent_context*/ Some(true),
+            /*codex_responses_as_items*/ Some(true),
         )
         .await
     }
 
-    async fn start_webrtc_realtime_with_codex_responses_as_silent_context(
+    async fn start_webrtc_realtime_with_codex_responses_as_items(
         &mut self,
         offer_sdp: &str,
-        codex_responses_as_silent_context: Option<bool>,
+        codex_responses_as_items: Option<bool>,
     ) -> Result<StartedWebrtcRealtime> {
         // Starts realtime through the public JSON-RPC method, then waits for the same client-visible
         // notifications a desktop app needs: started first, SDP answer second.
@@ -344,7 +340,10 @@ impl RealtimeE2eHarness {
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
                 architecture: None,
                 thread_id: self.thread_id.clone(),
-                codex_responses_as_silent_context,
+                codex_response_item_prefix: codex_responses_as_items
+                    .unwrap_or(false)
+                    .then(|| RESPONSE_ITEM_PREFIX.to_string()),
+                codex_responses_as_items,
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(Some("backend prompt".to_string())),
@@ -433,26 +432,6 @@ impl RealtimeE2eHarness {
         )
         .await??;
         let _: ThreadRealtimeAppendTextResponse = to_response(response)?;
-        Ok(())
-    }
-
-    async fn append_silent_context(&mut self, thread_id: String, text: &str) -> Result<()> {
-        let request_id = self
-            .mcp
-            .send_thread_realtime_append_silent_context_request(
-                ThreadRealtimeAppendSilentContextParams {
-                    thread_id,
-                    text: text.to_string(),
-                },
-            )
-            .await?;
-        let response: JSONRPCResponse = timeout(
-            DEFAULT_TIMEOUT,
-            self.mcp
-                .read_stream_until_response_message(RequestId::Integer(request_id)),
-        )
-        .await??;
-        let _: ThreadRealtimeAppendSilentContextResponse = to_response(response)?;
         Ok(())
     }
 
@@ -631,7 +610,8 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             architecture: None,
-            codex_responses_as_silent_context: None,
+            codex_responses_as_items: None,
+            codex_response_item_prefix: None,
             thread_id: thread_start.thread.id.clone(),
             model: Some("realtime-treatment-model".to_string()),
             output_modality: RealtimeOutputModality::Audio,
@@ -908,7 +888,8 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             architecture: None,
-            codex_responses_as_silent_context: None,
+            codex_responses_as_items: None,
+            codex_response_item_prefix: None,
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Text,
@@ -1086,7 +1067,8 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             architecture: None,
-            codex_responses_as_silent_context: None,
+            codex_responses_as_items: None,
+            codex_response_item_prefix: None,
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -1187,7 +1169,8 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             architecture: None,
-            codex_responses_as_silent_context: None,
+            codex_responses_as_items: None,
+            codex_response_item_prefix: None,
             thread_id: thread_id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -1457,7 +1440,7 @@ async fn webrtc_v1_handoff_request_delegates_context_and_manual_append_speaks() 
     .await?;
 
     let started = harness
-        .start_webrtc_realtime_with_context_output("v=offer\r\n")
+        .start_webrtc_realtime_with_codex_response_items("v=offer\r\n")
         .await?;
     assert_eq!(started.started.version, RealtimeConversationVersion::V1);
     assert_call_create_multipart(
@@ -1478,7 +1461,7 @@ async fn webrtc_v1_handoff_request_delegates_context_and_manual_append_speaks() 
     assert_eq!(turn_completed.thread_id, harness.thread_id);
 
     // Phase 3: assert the delegated prompt went to Responses, then the automatic v1 output went
-    // back over the existing sideband connection as silent context.
+    // back over the existing sideband connection as a conversation item.
     let requests = harness.main_loop_responses_requests().await?;
     assert_eq!(requests.len(), 1);
     assert!(
@@ -1499,7 +1482,7 @@ async fn webrtc_v1_handoff_request_delegates_context_and_manual_append_speaks() 
                 "role": "developer",
                 "content": [{
                     "type": "input_text",
-                    "text": format!("{SILENT_CONTEXT_PREFIX}\n\ndelegated from v1")
+                    "text": format!("{RESPONSE_ITEM_PREFIX}\n\ndelegated from v1")
                 }]
             }
         })
@@ -1523,7 +1506,7 @@ async fn webrtc_v1_handoff_request_delegates_context_and_manual_append_speaks() 
 }
 
 #[tokio::test]
-async fn realtime_automatic_standalone_output_is_context_and_append_speaks() -> Result<()> {
+async fn realtime_automatic_standalone_output_is_item_and_append_speaks() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let mut harness = RealtimeE2eHarness::new(
@@ -1541,7 +1524,7 @@ async fn realtime_automatic_standalone_output_is_context_and_append_speaks() -> 
     .await?;
 
     let started = harness
-        .start_webrtc_realtime_with_context_output("v=offer\r\n")
+        .start_webrtc_realtime_with_codex_response_items("v=offer\r\n")
         .await?;
     assert_eq!(started.started.version, RealtimeConversationVersion::V2);
     assert_eq!(
@@ -1572,7 +1555,7 @@ async fn realtime_automatic_standalone_output_is_context_and_append_speaks() -> 
         .read_notification::<TurnCompletedNotification>("turn/completed")
         .await?;
 
-    assert_v2_backend_context_update(
+    assert_v2_backend_item_update(
         &harness.sideband_outbound_request(/*request_index*/ 1).await,
         "automatic output",
     );
@@ -1585,7 +1568,7 @@ async fn realtime_automatic_standalone_output_is_context_and_append_speaks() -> 
     .await;
     assert!(
         automatic_response_create.is_err(),
-        "automatic context should not request a realtime response"
+        "automatic item should not request a realtime response"
     );
 
     harness
@@ -1595,59 +1578,13 @@ async fn realtime_automatic_standalone_output_is_context_and_append_speaks() -> 
         &harness.sideband_outbound_request(/*request_index*/ 2).await,
         "manual voice update",
     );
-    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 3).await);
 
     harness.shutdown().await;
     Ok(())
 }
 
 #[tokio::test]
-async fn realtime_append_silent_context_does_not_speak() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let mut harness = RealtimeE2eHarness::new(
-        RealtimeTestVersion::V2,
-        no_main_loop_responses(),
-        realtime_sideband(vec![realtime_sideband_connection(vec![
-            vec![session_updated("sess_append_silent_context")],
-            vec![],
-            vec![],
-        ])]),
-    )
-    .await?;
-
-    let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
-    assert_eq!(started.started.version, RealtimeConversationVersion::V2);
-    assert_eq!(
-        harness.sideband_outbound_request(/*request_index*/ 0).await["type"].as_str(),
-        Some("session.update")
-    );
-
-    harness
-        .append_silent_context(harness.thread_id.clone(), "client-provided context")
-        .await?;
-    assert_v2_silent_context_update(
-        &harness.sideband_outbound_request(/*request_index*/ 1).await,
-        "client-provided context",
-    );
-    let response_create = timeout(
-        Duration::from_millis(200),
-        harness
-            .realtime_server
-            .wait_for_request(/*connection_index*/ 0, /*request_index*/ 2),
-    )
-    .await;
-    assert!(
-        response_create.is_err(),
-        "explicit silent context should not request a realtime response"
-    );
-
-    harness.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn realtime_automatic_handoff_output_is_context_and_append_speaks() -> Result<()> {
+async fn realtime_automatic_handoff_output_is_item_and_append_speaks() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let mut harness = RealtimeE2eHarness::new(
@@ -1669,7 +1606,7 @@ async fn realtime_automatic_handoff_output_is_context_and_append_speaks() -> Res
     .await?;
 
     let started = harness
-        .start_webrtc_realtime_with_context_output("v=offer\r\n")
+        .start_webrtc_realtime_with_codex_response_items("v=offer\r\n")
         .await?;
     assert_eq!(started.started.version, RealtimeConversationVersion::V2);
     assert_eq!(
@@ -1686,7 +1623,7 @@ async fn realtime_automatic_handoff_output_is_context_and_append_speaks() -> Res
         .await?;
     assert_eq!(turn_completed.thread_id, harness.thread_id);
 
-    assert_v2_backend_context_update(
+    assert_v2_backend_item_update(
         &harness.sideband_outbound_request(/*request_index*/ 1).await,
         "automatic final response",
     );
@@ -1704,7 +1641,7 @@ async fn realtime_automatic_handoff_output_is_context_and_append_speaks() -> Res
     .await;
     assert!(
         automatic_response_create.is_err(),
-        "automatic handoff context should not request a realtime response"
+        "automatic handoff item should not request a realtime response"
     );
 
     harness
@@ -1714,7 +1651,6 @@ async fn realtime_automatic_handoff_output_is_context_and_append_speaks() -> Res
         &harness.sideband_outbound_request(/*request_index*/ 3).await,
         "manual spoken update",
     );
-    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 4).await);
 
     harness.shutdown().await;
     Ok(())
@@ -1752,7 +1688,7 @@ async fn webrtc_v2_assistant_output_without_handoff_reaches_realtime_context() -
     .await?;
 
     let started = harness
-        .start_webrtc_realtime_with_context_output("v=offer\r\n")
+        .start_webrtc_realtime_with_codex_response_items("v=offer\r\n")
         .await?;
     assert_eq!(started.started.version, RealtimeConversationVersion::V2);
 
@@ -1779,7 +1715,7 @@ async fn webrtc_v2_assistant_output_without_handoff_reaches_realtime_context() -
         .read_notification::<TurnCompletedNotification>("turn/completed")
         .await?;
 
-    assert_v2_backend_context_update(
+    assert_v2_backend_item_update(
         &harness.sideband_outbound_request(/*request_index*/ 1).await,
         preamble,
     );
@@ -1791,7 +1727,7 @@ async fn webrtc_v2_assistant_output_without_handoff_reaches_realtime_context() -
     let output_text = final_request["item"]["content"][0]["text"]
         .as_str()
         .expect("output text");
-    assert!(output_text.starts_with(&format!("{SILENT_CONTEXT_PREFIX}\n\n[BACKEND] ")));
+    assert!(output_text.starts_with(&format!("{RESPONSE_ITEM_PREFIX}\n\n[BACKEND] ")));
     assert!(output_text.contains("tokens truncated"));
     assert!(output_text.len() <= 4_000);
 
@@ -2103,16 +2039,8 @@ async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_out
     let progress = harness.sideband_outbound_request(/*request_index*/ 1).await;
     assert_v2_progress_update(&progress, "delegated from v2");
 
-    let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_function_call_output(&tool_output, "call_v2", V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT);
-    assert_eq!(
-        function_call_output_sideband_requests(&harness.realtime_server).len(),
-        1
-    );
-
-    // Phase 4: after the final function-call output, realtime needs an explicit
-    // `response.create` to produce the next user-visible response.
-    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 3).await);
+    let final_update = harness.sideband_outbound_request(/*request_index*/ 2).await;
+    assert_v2_progress_update(&final_update, "delegated from v2");
 
     harness.shutdown().await;
     Ok(())
@@ -2238,12 +2166,8 @@ async fn webrtc_v2_background_agent_progress_is_sent_before_function_output() ->
     let progress = harness.sideband_outbound_request(/*request_index*/ 1).await;
     assert_v2_progress_update(&progress, "progress before final");
 
-    let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_function_call_output(
-        &tool_output,
-        "call_progress_order",
-        V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT,
-    );
+    let final_update = harness.sideband_outbound_request(/*request_index*/ 2).await;
+    assert_v2_progress_update(&final_update, "progress before final");
 
     harness.shutdown().await;
     Ok(())
@@ -2328,16 +2252,8 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
     let progress = harness.sideband_outbound_request(/*request_index*/ 1).await;
     assert_v2_progress_update(&progress, "shell tool finished");
 
-    let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_function_call_output(
-        &tool_output,
-        "call_shell",
-        V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT,
-    );
-    assert_eq!(
-        function_call_output_sideband_requests(&harness.realtime_server).len(),
-        1
-    );
+    let final_update = harness.sideband_outbound_request(/*request_index*/ 2).await;
+    assert_v2_progress_update(&final_update, "shell tool finished");
 
     harness.shutdown().await;
     Ok(())
@@ -2412,12 +2328,8 @@ async fn webrtc_v2_tool_call_does_not_block_sideband_audio() -> Result<()> {
     let progress = harness.sideband_outbound_request(/*request_index*/ 1).await;
     assert_v2_progress_update(&progress, "late delegated result");
 
-    let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_function_call_output(
-        &tool_output,
-        "call_audio",
-        V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT,
-    );
+    let final_update = harness.sideband_outbound_request(/*request_index*/ 2).await;
+    assert_v2_progress_update(&final_update, "late delegated result");
 
     harness.shutdown().await;
     Ok(())
@@ -2463,7 +2375,8 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             architecture: None,
-            codex_responses_as_silent_context: None,
+            codex_responses_as_items: None,
+            codex_response_item_prefix: None,
             thread_id: thread_start.thread.id,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -2526,7 +2439,8 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             architecture: None,
-            codex_responses_as_silent_context: None,
+            codex_responses_as_items: None,
+            codex_response_item_prefix: None,
             thread_id: thread_start.thread.id.clone(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -2650,18 +2564,6 @@ fn realtime_tool_ok_command() -> Vec<String> {
     }
 }
 
-fn function_call_output_sideband_requests(server: &WebSocketTestServer) -> Vec<Value> {
-    server
-        .single_connection()
-        .iter()
-        .map(WebSocketRequest::body_json)
-        .filter(|request| {
-            request["type"] == "conversation.item.create"
-                && request["item"]["type"] == "function_call_output"
-        })
-        .collect()
-}
-
 fn assert_v2_function_call_output(request: &Value, call_id: &str, expected_output: &str) {
     assert_eq!(
         request,
@@ -2677,27 +2579,22 @@ fn assert_v2_function_call_output(request: &Value, call_id: &str, expected_outpu
 }
 
 fn assert_v2_progress_update(request: &Value, expected_text: &str) {
+    let expected_output_text = format!("[BACKEND] {expected_text}");
     assert_eq!(
-        request,
-        &json!({
-            "type": "conversation.item.create",
-            "item": {
-                "type": "message",
-                "role": "user",
-                "content": [{
-                    "type": "input_text",
-                    "text": format!("[BACKEND] {expected_text}")
-                }]
-            }
-        })
+        request["type"].as_str(),
+        Some("conversation.handoff.append")
+    );
+    assert_eq!(
+        request["output_text"].as_str(),
+        Some(expected_output_text.as_str())
     );
 }
 
-fn assert_v2_backend_context_update(request: &Value, expected_text: &str) {
-    assert_v2_silent_context_update(request, &format!("[BACKEND] {expected_text}"));
+fn assert_v2_backend_item_update(request: &Value, expected_text: &str) {
+    assert_v2_items_update(request, &format!("[BACKEND] {expected_text}"));
 }
 
-fn assert_v2_silent_context_update(request: &Value, expected_text: &str) {
+fn assert_v2_items_update(request: &Value, expected_text: &str) {
     assert_eq!(
         request,
         &json!({
@@ -2707,7 +2604,7 @@ fn assert_v2_silent_context_update(request: &Value, expected_text: &str) {
                 "role": "developer",
                 "content": [{
                     "type": "input_text",
-                    "text": format!("{SILENT_CONTEXT_PREFIX}\n\n{expected_text}")
+                    "text": format!("{RESPONSE_ITEM_PREFIX}\n\n{expected_text}")
                 }]
             }
         })
