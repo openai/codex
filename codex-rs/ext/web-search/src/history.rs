@@ -1,9 +1,9 @@
 use codex_api::SearchInput;
 use codex_core::parse_turn_item;
 use codex_protocol::items::TurnItem;
-use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::plaintext_agent_message_content;
 use codex_tools::retain_tail_from_last_n_user_messages;
 use codex_tools::truncate_assistant_output_text_to_token_budget;
 
@@ -34,15 +34,7 @@ fn push_visible_message(messages: &mut Vec<ResponseItem>, item: &ResponseItem) {
         ResponseItem::AgentMessage {
             author, content, ..
         } => {
-            let text = content
-                .iter()
-                .filter_map(|content| match content {
-                    AgentMessageInputContent::InputText { text } => Some(text.as_str()),
-                    AgentMessageInputContent::EncryptedContent { .. } => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            if !text.trim().is_empty() {
+            if let Some(text) = plaintext_agent_message_content(content) {
                 messages.push(ResponseItem::Message {
                     id: None,
                     role: ASSISTANT_ROLE.to_string(),

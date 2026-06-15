@@ -210,6 +210,7 @@ You can decide how much context you want to propagate to your sub-agents with th
 You will receive messages in the analysis channel in the form:
 ```
 Message Type: MESSAGE | FINAL_ANSWER
+Task name: <recipient>
 Sender: <author>
 Payload:
 <payload text>
@@ -228,7 +229,7 @@ When you provide a response in the final channel, that content is immediately de
 You will receive messages in the analysis channel in the form:
 ```
 Message Type: NEW_TASK | MESSAGE | FINAL_ANSWER
-Task name: <recipient>   # only for NEW_TASK -- this determines your identity
+Task name: <recipient>
 Sender: <author>
 Payload:
 <payload text>

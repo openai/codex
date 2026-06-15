@@ -1092,10 +1092,16 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
             "type": "agent_message",
             "author": "/root",
             "recipient": "/root/worker",
-            "content": [{
-                "type": "encrypted_content",
-                "encrypted_content": encrypted_message,
-            }],
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n",
+                },
+                {
+                    "type": "encrypted_content",
+                    "encrypted_content": encrypted_message,
+                },
+            ],
         })]
     );
 
@@ -1133,7 +1139,7 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message() -> Result<()>
     mount_sse_once_match(
         &server,
         |req: &wiremock::Request| {
-            body_contains(req, SPAWN_CALL_ID) && !body_contains(req, "<subagent_notification>")
+            body_contains(req, SPAWN_CALL_ID) && !body_contains(req, "Message Type: FINAL_ANSWER")
         },
         sse(vec![
             ev_response_created("resp-parent-2"),
@@ -1142,14 +1148,15 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message() -> Result<()>
         ]),
     )
     .await;
-    let notification = "<subagent_notification>\n{\"agent_path\":\"/root/worker\",\"status\":{\"completed\":\"child done\"}}\n</subagent_notification>";
+    let notification =
+        "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\nchild done";
     // If the child is still running when the parent turn starts, wait_agent blocks
     // until mailbox delivery. The follow-up request must then contain that delivery.
     mount_sse_once_match(
         &server,
         |req: &wiremock::Request| {
             body_contains(req, TURN_2_NO_WAIT_PROMPT)
-                && !body_contains(req, "<subagent_notification>")
+                && !body_contains(req, "Message Type: FINAL_ANSWER")
         },
         sse(vec![
             ev_response_created("resp-parent-3"),
@@ -1162,7 +1169,7 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message() -> Result<()>
         &server,
         |req: &wiremock::Request| {
             body_contains(req, TURN_2_NO_WAIT_PROMPT)
-                && body_contains(req, "<subagent_notification>")
+                && body_contains(req, "Message Type: FINAL_ANSWER")
         },
         sse(vec![
             ev_response_created("resp-parent-4"),
