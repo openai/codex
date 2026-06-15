@@ -148,7 +148,7 @@ where
                 send_disconnected(
                     &incoming_tx,
                     &disconnected_tx,
-                    "Noise relay websocket closed during handshake".to_string(),
+                    "Noise relay websocket ended during handshake".to_string(),
                 )
                 .await;
                 return;
@@ -159,7 +159,7 @@ where
                     send_disconnected(
                         &incoming_tx,
                         &disconnected_tx,
-                        "Noise relay websocket closed during handshake".to_string(),
+                        "Noise relay websocket received close frame during handshake".to_string(),
                     )
                     .await;
                     return;
@@ -199,6 +199,7 @@ where
                 }
             };
             if frame.stream_id != stream_id {
+                debug!("Noise relay ignored frame for unrelated stream during handshake");
                 continue;
             }
             match frame.validate() {
@@ -206,8 +207,12 @@ where
                     let response = match frame.into_handshake_payload() {
                         Ok(response) => response,
                         Err(error) => {
-                            send_disconnected(&incoming_tx, &disconnected_tx, error.to_string())
-                                .await;
+                            send_disconnected(
+                                &incoming_tx,
+                                &disconnected_tx,
+                                format!("invalid Noise relay handshake response: {error}"),
+                            )
+                            .await;
                             return;
                         }
                     };
