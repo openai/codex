@@ -16,6 +16,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
@@ -26,6 +27,10 @@ use url::Url;
 mod catalog_cache;
 mod remote_installed_plugin_sync;
 mod share;
+
+#[cfg(test)]
+#[path = "remote_tests.rs"]
+mod tests;
 
 pub use remote_installed_plugin_sync::RemoteInstalledPluginBundleSyncError;
 pub use remote_installed_plugin_sync::RemoteInstalledPluginBundleSyncOutcome;
@@ -782,6 +787,11 @@ fn build_remote_marketplace(
     installed_plugins: Vec<RemotePluginInstalledItem>,
     include_installed_only: bool,
 ) -> Result<Option<RemoteMarketplace>, RemotePluginCatalogError> {
+    let directory_plugin_order = directory_plugins
+        .iter()
+        .enumerate()
+        .map(|(index, plugin)| (plugin.id.clone(), index))
+        .collect::<HashMap<_, _>>();
     let directory_plugins = directory_plugins
         .into_iter()
         .map(|plugin| (plugin.id.clone(), plugin))
@@ -815,7 +825,12 @@ fn build_remote_marketplace(
         })
         .map(|(plugin, installed_plugin)| build_remote_plugin_summary(plugin, installed_plugin))
         .collect::<Result<Vec<_>, _>>()?;
-    sort_remote_plugin_summaries_by_display_name(&mut plugins);
+    plugins.sort_by_key(|plugin| {
+        directory_plugin_order
+            .get(&plugin.remote_plugin_id)
+            .copied()
+            .map_or((true, 0), |index| (false, index))
+    });
     Ok(Some(RemoteMarketplace {
         name: name.to_string(),
         display_name: display_name.to_string(),
