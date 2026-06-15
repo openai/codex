@@ -155,6 +155,9 @@ pub(super) fn server_notification_thread_target(
                 None => return ServerNotificationThreadTarget::AppScoped,
             }
         }
+        ServerNotification::ThreadQueueChanged(notification) => {
+            Some(notification.thread_id.as_str())
+        }
         ServerNotification::SkillsChanged(_)
         | ServerNotification::McpServerOauthLoginCompleted(_)
         | ServerNotification::AccountUpdated(_)
@@ -194,6 +197,7 @@ mod tests {
     use codex_app_server_protocol::McpServerStartupState;
     use codex_app_server_protocol::McpServerStatusUpdatedNotification;
     use codex_app_server_protocol::ServerNotification;
+    use codex_app_server_protocol::ThreadQueueChangedNotification;
     use codex_app_server_protocol::ThreadSettings;
     use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
     use codex_app_server_protocol::WarningNotification;
@@ -297,6 +301,18 @@ mod tests {
         let target = server_notification_thread_target(&notification);
 
         assert_eq!(target, ServerNotificationThreadTarget::AppScoped);
+    }
+
+    #[test]
+    fn queue_notifications_route_to_threads() {
+        let thread_id = ThreadId::new();
+        let notification = ServerNotification::ThreadQueueChanged(ThreadQueueChangedNotification {
+            thread_id: thread_id.to_string(),
+        });
+
+        let target = server_notification_thread_target(&notification);
+
+        assert_eq!(target, ServerNotificationThreadTarget::Thread(thread_id));
     }
 
     #[test]

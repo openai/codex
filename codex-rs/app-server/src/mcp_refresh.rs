@@ -111,6 +111,7 @@ mod tests {
     use codex_core::init_state_db;
     use codex_core::thread_store_from_config;
     use codex_exec_server::EnvironmentManager;
+    use codex_extension_api::ExtensionEventSink;
     use codex_extension_api::NoopExtensionEventSink;
     use codex_home::CodexHomeUserInstructionsProvider;
     use codex_login::AuthManager;
@@ -223,6 +224,12 @@ mod tests {
             ),
         );
         let thread_manager = Arc::new_cyclic(|thread_manager| {
+            let event_sink: Arc<dyn ExtensionEventSink> = Arc::new(NoopExtensionEventSink);
+            let queue_service = Arc::new(codex_queue_extension::QueuedItemService::new(
+                Arc::clone(&state_db),
+                thread_manager.clone(),
+                Arc::clone(&event_sink),
+            ));
             ThreadManager::new(
                 &good_config,
                 auth_manager.clone(),
@@ -231,9 +238,10 @@ mod tests {
                 thread_extensions(
                     guardian_agent_spawner(thread_manager.clone()),
                     ThreadExtensionDependencies {
-                        event_sink: Arc::new(NoopExtensionEventSink),
+                        event_sink,
                         auth_manager: auth_manager.clone(),
                         state_db: Some(state_db.clone()),
+                        queue_service: Some(queue_service),
                         analytics_events_client: codex_analytics::AnalyticsEventsClient::disabled(),
                         thread_manager: thread_manager.clone(),
                         goal_service: Arc::new(codex_goal_extension::GoalService::new()),

@@ -1,6 +1,5 @@
 use super::*;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
-use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -32,20 +31,7 @@ fn map_additional_context(
     additional_context
         .unwrap_or_default()
         .into_iter()
-        .map(|(key, entry)| {
-            (
-                key,
-                CoreAdditionalContextEntry {
-                    value: entry.value,
-                    kind: match entry.kind {
-                        AdditionalContextKind::Untrusted => CoreAdditionalContextKind::Untrusted,
-                        AdditionalContextKind::Application => {
-                            CoreAdditionalContextKind::Application
-                        }
-                    },
-                },
-            )
-        })
+        .map(|(key, entry)| (key, entry.into()))
         .collect()
 }
 
@@ -260,15 +246,26 @@ impl TurnRequestProcessor {
         request_id: &ConnectionRequestId,
         thread: &CodexThread,
     ) -> Result<(), JSONRPCErrorError> {
+        if let Err(error) = Self::validate_direct_input_allowed(thread).await {
+            self.track_error_response(request_id, &error, /*error_type*/ None);
+            return Err(error);
+        }
+
+        Ok(())
+    }
+
+    pub(crate) async fn validate_direct_input_allowed(
+        thread: &CodexThread,
+    ) -> Result<(), JSONRPCErrorError> {
         if thread.multi_agent_version() == Some(MultiAgentVersion::V2)
             && matches!(
                 thread.config_snapshot().await.session_source,
                 SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
             )
         {
-            let error = invalid_request(DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR);
-            self.track_error_response(request_id, &error, /*error_type*/ None);
-            return Err(error);
+            return Err(invalid_request(
+                DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR,
+            ));
         }
 
         Ok(())
@@ -393,7 +390,7 @@ impl TurnRequestProcessor {
         error
     }
 
-    fn validate_v2_input_limit(items: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
+    pub(crate) fn validate_v2_input_limit(items: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
         let actual_chars: usize = items.iter().map(V2UserInput::text_char_count).sum();
         if actual_chars > MAX_USER_INPUT_TEXT_CHARS {
             return Err(Self::input_too_large_error(actual_chars));

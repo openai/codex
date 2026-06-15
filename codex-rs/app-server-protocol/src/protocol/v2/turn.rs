@@ -10,6 +10,9 @@ use codex_protocol::models::ImageDetail;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
+use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
+use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
+use codex_protocol::protocol::UserSubmission as CoreUserSubmission;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
 use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_protocol::user_input::UserInput as CoreUserInput;
@@ -56,6 +59,90 @@ pub enum AdditionalContextKind {
 pub struct AdditionalContextEntry {
     pub value: String,
     pub kind: AdditionalContextKind,
+}
+
+impl From<CoreAdditionalContextEntry> for AdditionalContextEntry {
+    fn from(value: CoreAdditionalContextEntry) -> Self {
+        Self {
+            value: value.value,
+            kind: match value.kind {
+                CoreAdditionalContextKind::Untrusted => AdditionalContextKind::Untrusted,
+                CoreAdditionalContextKind::Application => AdditionalContextKind::Application,
+            },
+        }
+    }
+}
+
+impl From<AdditionalContextEntry> for CoreAdditionalContextEntry {
+    fn from(value: AdditionalContextEntry) -> Self {
+        Self {
+            value: value.value,
+            kind: match value.kind {
+                AdditionalContextKind::Untrusted => CoreAdditionalContextKind::Untrusted,
+                AdditionalContextKind::Application => CoreAdditionalContextKind::Application,
+            },
+        }
+    }
+}
+
+#[derive(
+    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnSubmission {
+    pub input: Vec<UserInput>,
+    pub responsesapi_client_metadata: Option<HashMap<String, String>>,
+    pub additional_context: Option<HashMap<String, AdditionalContextEntry>>,
+    pub output_schema: Option<JsonValue>,
+}
+
+#[derive(
+    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnSubmissionParams {
+    pub input: Vec<UserInput>,
+    #[ts(optional = nullable)]
+    pub responsesapi_client_metadata: Option<HashMap<String, String>>,
+    #[ts(optional = nullable)]
+    pub additional_context: Option<HashMap<String, AdditionalContextEntry>>,
+    #[ts(optional = nullable)]
+    pub output_schema: Option<JsonValue>,
+}
+
+impl From<TurnSubmissionParams> for CoreUserSubmission {
+    fn from(value: TurnSubmissionParams) -> Self {
+        Self {
+            items: value.input.into_iter().map(UserInput::into_core).collect(),
+            final_output_json_schema: value.output_schema,
+            responsesapi_client_metadata: value.responsesapi_client_metadata,
+            additional_context: value
+                .additional_context
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(key, entry)| (key, entry.into()))
+                .collect(),
+        }
+    }
+}
+
+impl From<CoreUserSubmission> for TurnSubmission {
+    fn from(value: CoreUserSubmission) -> Self {
+        Self {
+            input: value.items.into_iter().map(UserInput::from).collect(),
+            responsesapi_client_metadata: value.responsesapi_client_metadata,
+            additional_context: (!value.additional_context.is_empty()).then(|| {
+                value
+                    .additional_context
+                    .into_iter()
+                    .map(|(key, entry)| (key, entry.into()))
+                    .collect()
+            }),
+            output_schema: value.final_output_json_schema,
+        }
+    }
 }
 
 #[derive(

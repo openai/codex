@@ -11,6 +11,7 @@ pub(crate) struct CatalogRequestProcessor {
     pub(super) config: Arc<Config>,
     pub(super) config_manager: ConfigManager,
     pub(super) workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+    user_message_queue_available: bool,
 }
 
 const SKILLS_LIST_CWD_CONCURRENCY: usize = 5;
@@ -97,6 +98,10 @@ fn errors_to_info(
 }
 
 impl CatalogRequestProcessor {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the catalog combines existing processor dependencies with one host capability"
+    )]
     pub(crate) fn new(
         outgoing: Arc<OutgoingMessageSender>,
         skills_watcher: Arc<SkillsWatcher>,
@@ -105,6 +110,7 @@ impl CatalogRequestProcessor {
         config: Arc<Config>,
         config_manager: ConfigManager,
         workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+        user_message_queue_available: bool,
     ) -> Self {
         Self {
             outgoing,
@@ -114,6 +120,7 @@ impl CatalogRequestProcessor {
             config,
             config_manager,
             workspace_settings_cache,
+            user_message_queue_available,
         }
     }
 
@@ -371,6 +378,8 @@ impl CatalogRequestProcessor {
                     description,
                     announcement,
                     enabled: config.features.enabled(spec.id)
+                        && (spec.id != Feature::UserMessageQueue
+                            || self.user_message_queue_available)
                         && (workspace_codex_plugins_enabled
                             || !matches!(spec.id, Feature::Apps | Feature::Plugins)),
                     default_enabled: spec.default_enabled,

@@ -148,6 +148,11 @@ Example with notification opt-out:
 - `thread/goal/clear` — clear the current persisted goal for a materialized thread; returns whether a goal was removed and emits `thread/goal/cleared` when state changes.
 - `thread/goal/updated` — notification emitted whenever a thread goal changes; includes the full current goal.
 - `thread/goal/cleared` — notification emitted whenever a thread goal is removed.
+- `thread/queue/add` — experimental; persist a user submission for the thread's next idle turn. Accepts `user` provenance or `externalEvent` provenance with a `source` and arbitrary `metadata`.
+- `thread/queue/list` — experimental; page through pending and failed queued items.
+- `thread/queue/delete` — experimental; delete one pending or failed queued item.
+- `thread/queue/reorder` — experimental; replace the order of all pending and failed queued items for a thread.
+- `thread/queue/changed` — experimental invalidation sent to subscribed clients after queue state changes; clients should call `thread/queue/list` to refresh.
 - `thread/settings/updated` — experimental notification emitted to subscribed clients when a loaded thread’s effective next-turn settings change; includes `threadId` and the full `threadSettings`.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory and attempt to move any spawned descendant thread rollout files; returns `{}` on success and emits `thread/archived` for each archived thread.
@@ -627,6 +632,42 @@ Use `thread/goal/clear` to remove the current goal.
 { "id": 30, "result": { "cleared": true } }
 { "method": "thread/goal/cleared", "params": { "threadId": "thr_123" } }
 ```
+
+### Example: Queue a user submission
+
+When `experimentalFeature/list` reports `user_message_queue` as enabled, experimental clients can persist user input for the thread's next idle turn. Queue notifications are bounded invalidations and do not include submission data.
+
+```json
+{ "method": "thread/queue/add", "id": 31, "params": {
+    "threadId": "thr_123",
+    "submission": {
+        "input": [{ "type": "text", "text": "Check the latest CI results." }]
+    },
+    "provenance": {
+        "type": "externalEvent",
+        "source": "ci-webhook",
+        "metadata": { "runId": 4815 }
+    }
+} }
+{ "id": 31, "result": { "queuedItem": {
+    "id": "q_123",
+    "submission": {
+        "input": [{ "type": "text", "text": "Check the latest CI results." }],
+        "responsesapiClientMetadata": null,
+        "additionalContext": null,
+        "outputSchema": null
+    },
+    "provenance": {
+        "type": "externalEvent",
+        "source": "ci-webhook",
+        "metadata": { "runId": 4815 }
+    },
+    "status": { "type": "pending" }
+} } }
+{ "method": "thread/queue/changed", "params": { "threadId": "thr_123" } }
+```
+
+Use `thread/queue/list` with `cursor` and `limit` to refresh. `thread/queue/reorder` requires the ids of every currently visible item exactly once. Once core accepts a queued submission, the item is removed from the queue.
 
 ### Example: Archive a thread
 
