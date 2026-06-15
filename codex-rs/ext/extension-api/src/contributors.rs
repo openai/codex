@@ -49,8 +49,8 @@ pub type ExtensionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Thread-scoped resolution exposes the host-seeded thread inputs; global
 /// resolution exposes none and must not imply a local fallback. Thread inputs
 /// are frozen for the runtime and do not include lifecycle-contributor state.
-/// Plugin-owned servers and their provenance continue to be resolved by the
-/// plugin manager until that ownership moves into an extension explicitly.
+/// Auto-discovered plugin servers are resolved by the plugin manager. A
+/// thread-selected plugin contribution must carry its own package provenance.
 pub trait McpServerContributor<C: Sync>: Send + Sync {
     /// Stable identity used for registration provenance and conflict diagnostics.
     fn id(&self) -> &'static str;

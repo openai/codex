@@ -58,6 +58,14 @@ pub enum McpServerContribution {
         name: String,
         config: Box<McpServerConfig>,
     },
+    /// Registers a server declared by a plugin selected for this thread.
+    SelectedPlugin {
+        name: String,
+        plugin_id: String,
+        plugin_display_name: String,
+        selection_order: usize,
+        config: Box<McpServerConfig>,
+    },
     /// Removes a named MCP server.
     Remove { name: String },
 }
