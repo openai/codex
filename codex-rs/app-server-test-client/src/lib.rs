@@ -70,6 +70,7 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::config::Config;
 use codex_otel::OtelProvider;
 use codex_otel::current_span_w3c_trace_context;
+use codex_protocol::dynamic_tools::normalize_dynamic_tool_specs;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_utils_cli::CliConfigOverrides;
@@ -135,7 +136,7 @@ struct Cli {
     /// Prefix a filename with '@' to read from a file.
     ///
     /// Example:
-    ///   --dynamic-tools '[{"name":"demo","description":"Demo","inputSchema":{"type":"object"}}]'
+    ///   --dynamic-tools '[{"type":"function","name":"demo","description":"Demo","inputSchema":{"type":"object"}}]'
     ///   --dynamic-tools @/path/to/tools.json
     #[arg(long, value_name = "json-or-@file", global = true)]
     dynamic_tools: Option<String>,
@@ -1373,11 +1374,12 @@ fn parse_dynamic_tools_arg(dynamic_tools: &Option<String>) -> Result<Option<Vec<
     };
 
     let value: Value = serde_json::from_str(&raw_json).context("parse dynamic tools JSON")?;
-    let tools = match value {
-        Value::Array(_) => serde_json::from_value(value).context("decode dynamic tools array")?,
-        Value::Object(_) => vec![serde_json::from_value(value).context("decode dynamic tool")?],
+    let values = match value {
+        Value::Array(values) => values,
+        Value::Object(_) => vec![value],
         _ => bail!("dynamic tools JSON must be an object or array"),
     };
+    let tools = normalize_dynamic_tool_specs(values).context("decode dynamic tools")?;
 
     Ok(Some(tools))
 }

@@ -12,6 +12,7 @@ pub use auth::should_retry_without_scopes;
 pub(crate) mod auth;
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -141,7 +142,8 @@ pub struct McpConfig {
     pub client_elicitation_capability: ElicitationCapability,
     /// Resolved MCP registrations keyed by logical server name.
     pub mcp_server_catalog: ResolvedMcpCatalog,
-    /// Plugin metadata used to attribute MCP tools/connectors to plugin display names.
+    /// Plugin metadata used to attribute connector tools to plugin display names.
+    /// MCP registrations retain their own package attribution in the catalog.
     pub plugin_capability_summaries: Vec<PluginCapabilitySummary>,
 }
 
@@ -150,6 +152,7 @@ pub struct ToolPluginProvenance {
     plugin_display_names_by_connector_id: HashMap<String, Vec<String>>,
     plugin_display_names_by_mcp_server_name: HashMap<String, Vec<String>>,
     plugin_ids_by_mcp_server_name: HashMap<String, String>,
+    selected_plugin_mcp_server_names: HashSet<String>,
 }
 
 impl ToolPluginProvenance {
@@ -173,9 +176,12 @@ impl ToolPluginProvenance {
             .map(String::as_str)
     }
 
+    pub(crate) fn is_selected_plugin_mcp_server(&self, server_name: &str) -> bool {
+        self.selected_plugin_mcp_server_names.contains(server_name)
+    }
+
     fn from_config(config: &McpConfig) -> Self {
         let mut tool_plugin_provenance = Self::default();
-        let plugin_ids_by_mcp_server_name = config.mcp_server_catalog.plugin_ids_by_server_name();
         for plugin in &config.plugin_capability_summaries {
             for connector_id in &plugin.app_connector_ids {
                 tool_plugin_provenance
@@ -184,17 +190,30 @@ impl ToolPluginProvenance {
                     .or_default()
                     .push(plugin.display_name.clone());
             }
-
-            for server_name in plugin.mcp_server_names.iter().filter(|server_name| {
-                plugin_ids_by_mcp_server_name.get(*server_name) == Some(&plugin.config_name)
-            }) {
-                tool_plugin_provenance
-                    .plugin_display_names_by_mcp_server_name
-                    .entry(server_name.clone())
-                    .or_default()
-                    .push(plugin.display_name.clone());
-            }
         }
+
+        for (server_name, attribution) in config
+            .mcp_server_catalog
+            .plugin_attributions_by_server_name()
+        {
+            tool_plugin_provenance
+                .plugin_display_names_by_mcp_server_name
+                .insert(
+                    server_name.clone(),
+                    vec![attribution.display_name().to_string()],
+                );
+            tool_plugin_provenance
+                .plugin_ids_by_mcp_server_name
+                .insert(server_name, attribution.plugin_id().to_string());
+        }
+        tool_plugin_provenance
+            .selected_plugin_mcp_server_names
+            .extend(
+                config
+                    .mcp_server_catalog
+                    .selected_plugin_server_names()
+                    .map(str::to_string),
+            );
 
         for plugin_names in tool_plugin_provenance
             .plugin_display_names_by_connector_id
@@ -208,8 +227,6 @@ impl ToolPluginProvenance {
             plugin_names.sort_unstable();
             plugin_names.dedup();
         }
-        tool_plugin_provenance.plugin_ids_by_mcp_server_name = plugin_ids_by_mcp_server_name;
-
         tool_plugin_provenance
     }
 }

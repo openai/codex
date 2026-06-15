@@ -31,7 +31,7 @@ use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
-use crate::environment_selection::ResolvedTurnEnvironments;
+use crate::environment_selection::ThreadEnvironments;
 use crate::exec_policy::ExecPolicyManager;
 use crate::image_preparation::prepare_response_items;
 use crate::parse_turn_item;
@@ -181,6 +181,7 @@ use uuid::Uuid;
 
 use crate::client::ModelClient;
 use crate::codex_thread::ThreadConfigSnapshot;
+#[cfg(test)]
 use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::Constrained;
@@ -220,6 +221,7 @@ use self::config_lock::validate_config_lock_if_configured;
 #[cfg(test)]
 use self::handlers::submission_dispatch_span;
 use self::handlers::submission_loop;
+pub(crate) use self::input_queue::InputQueueActivity;
 pub(crate) use self::input_queue::TurnInput;
 pub(crate) use self::input_queue::TurnInputQueue;
 use self::review::spawn_review_thread;
@@ -429,7 +431,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) parent_rollout_thread_trace: ThreadTraceContext,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
-    pub(crate) environment_selections: ResolvedTurnEnvironments,
+    pub(crate) environment_selections: Vec<TurnEnvironmentSelection>,
     pub(crate) thread_extension_init: ExtensionDataInit,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
@@ -518,6 +520,9 @@ impl Codex {
             attestation_provider,
             inherited_multi_agent_version,
         } = args;
+        let turn_environments = Arc::new(ThreadEnvironments::new(environment_manager));
+        turn_environments.update_selections(&environment_selections);
+        let resolved_environments = turn_environments.snapshot().await;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
@@ -530,8 +535,7 @@ impl Codex {
             .startup_warnings
             .extend(user_instruction_provider_warnings);
         let loaded_agents_md =
-            load_project_instructions(&mut config, user_instructions, &environment_selections)
-                .await;
+            load_project_instructions(&mut config, user_instructions, &resolved_environments).await;
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -621,7 +625,7 @@ impl Codex {
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             environments: TurnEnvironmentSelections::new(
                 config.cwd.clone(),
-                environment_selections.to_selections(),
+                resolved_environments.to_selections(),
             ),
             workspace_roots: config.workspace_roots.clone(),
             codex_home: config.codex_home.clone(),
@@ -660,7 +664,7 @@ impl Codex {
             extensions,
             thread_extension_init,
             agent_control,
-            environment_manager,
+            turn_environments,
             analytics_events_client,
             thread_store,
             parent_rollout_thread_trace,
@@ -1407,10 +1411,6 @@ impl Session {
             return;
         }
 
-        if !self.features.enabled(Feature::ShellSnapshot) {
-            return;
-        }
-
         if matches!(
             session_source,
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
@@ -1418,15 +1418,16 @@ impl Session {
             return;
         }
 
-        ShellSnapshot::refresh_snapshot(
-            codex_home.clone(),
-            self.thread_id,
-            next_cwd.clone(),
-            self.services.user_shell.as_ref().clone(),
-            self.services.shell_snapshot_tx.clone(),
-            self.services.session_telemetry.clone(),
-            self.services.state_db.clone(),
-        );
+        if self.services.shell_snapshot.load().is_some() {
+            self.services.shell_snapshot.store(Some(ShellSnapshot::new(
+                codex_home.clone(),
+                self.thread_id,
+                next_cwd.clone(),
+                self.services.user_shell.as_ref(),
+                self.services.session_telemetry.clone(),
+                self.services.state_db.clone(),
+            )));
+        }
     }
 
     pub(crate) async fn update_settings(
@@ -1464,6 +1465,11 @@ impl Session {
             let next_cwd = updated.cwd().clone();
             let codex_home = updated.codex_home.clone();
             let session_source = updated.session_source.clone();
+            if updates.environments.is_some() {
+                self.services
+                    .turn_environments
+                    .update_selections(updated.environment_selections());
+            }
             state.session_configuration = updated;
             (
                 previous_config,
@@ -1475,7 +1481,6 @@ impl Session {
                 session_source,
             )
         };
-
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         self.maybe_refresh_shell_snapshot_for_cwd(
             &previous_cwd,

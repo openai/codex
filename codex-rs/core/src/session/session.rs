@@ -2,6 +2,7 @@ use super::input_queue::InputQueue;
 use super::*;
 use crate::agents_md::LoadedAgentsMd;
 use crate::config::ConstraintError;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
 use codex_extension_api::ExtensionDataInit;
@@ -435,18 +436,11 @@ pub(crate) struct AppServerClientMetadata {
 
 async fn warm_plugins_and_skills_for_session_init(
     config: Arc<Config>,
-    environment_manager: Arc<EnvironmentManager>,
     plugins_manager: Arc<PluginsManager>,
     skills_manager: Arc<SkillsManager>,
-    environments: Vec<TurnEnvironmentSelection>,
+    turn_environments: TurnEnvironmentSnapshot,
 ) -> Vec<SkillError> {
-    let fs = crate::environment_selection::resolve_environment_selections(
-        environment_manager.as_ref(),
-        &environments,
-    )
-    .await
-    .ok()
-    .and_then(|resolved| resolved.primary_filesystem());
+    let fs = turn_environments.primary_filesystem();
     let plugins_input = config.plugins_config_input();
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
@@ -487,7 +481,7 @@ impl Session {
         extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
         thread_extension_init: ExtensionDataInit,
         agent_control: AgentControl,
-        environment_manager: Arc<EnvironmentManager>,
+        turn_environments: Arc<ThreadEnvironments>,
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
@@ -627,10 +621,9 @@ impl Session {
 
         let plugin_and_skill_warmup_fut = warm_plugins_and_skills_for_session_init(
             Arc::clone(&config),
-            Arc::clone(&environment_manager),
             Arc::clone(&plugins_manager),
             Arc::clone(&skills_manager),
-            session_configuration.environment_selections().to_vec(),
+            turn_environments.snapshot().await,
         )
         .instrument(info_span!(
             "session_init.plugin_skill_warmup",
@@ -810,7 +803,7 @@ impl Session {
             );
 
             let use_zsh_fork_shell = config.features.enabled(Feature::ShellZshFork);
-            let mut default_shell = if let Some(user_shell_override) =
+            let default_shell = if let Some(user_shell_override) =
                 session_configuration.user_shell_override.clone()
             {
                 user_shell_override
@@ -830,27 +823,21 @@ impl Session {
             } else {
                 shell::default_user_shell()
             };
-            // Create the mutable state for the Session.
-            let shell_snapshot_tx = if config.features.enabled(Feature::ShellSnapshot) {
-                if let Some(snapshot) = session_configuration.inherited_shell_snapshot.clone() {
-                    let (tx, rx) = watch::channel(Some(snapshot));
-                    default_shell.shell_snapshot = rx;
-                    tx
-                } else {
-                    ShellSnapshot::start_snapshotting(
-                        config.codex_home.clone(),
-                        thread_id,
-                        session_configuration.cwd().clone(),
-                        &mut default_shell,
-                        session_telemetry.clone(),
-                        state_db_ctx.clone(),
-                    )
-                }
-            } else {
-                let (tx, rx) = watch::channel(None);
-                default_shell.shell_snapshot = rx;
-                tx
-            };
+            let shell_snapshot = config.features.enabled(Feature::ShellSnapshot).then(|| {
+                session_configuration
+                    .inherited_shell_snapshot
+                    .clone()
+                    .unwrap_or_else(|| {
+                        ShellSnapshot::new(
+                            config.codex_home.clone(),
+                            thread_id,
+                            session_configuration.cwd().clone(),
+                            &default_shell,
+                            session_telemetry.clone(),
+                            state_db_ctx.clone(),
+                        )
+                    })
+            });
             let thread_name =
                 thread_title_from_thread_store(live_thread_init.as_ref(), &thread_store, thread_id)
                     .instrument(info_span!(
@@ -969,6 +956,7 @@ impl Session {
                     config: config.as_ref(),
                     session_source: &session_configuration.session_source,
                     persistent_thread_state_available: state_db_ctx.is_some(),
+                    environments: session_configuration.environment_selections(),
                     session_store: &session_extension_data,
                     thread_store: &thread_extension_data,
                 }).await;
@@ -993,7 +981,7 @@ impl Session {
                 hooks: arc_swap::ArcSwap::from_pointee(hooks),
                 rollout_thread_trace,
                 user_shell: Arc::new(default_shell),
-                shell_snapshot_tx,
+                shell_snapshot: arc_swap::ArcSwapOption::from(shell_snapshot),
                 show_raw_agent_reasoning: config.show_raw_agent_reasoning,
                 exec_policy,
                 auth_manager: Arc::clone(&auth_manager),
@@ -1038,7 +1026,8 @@ impl Session {
                     ),
                 ),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
-                environment_manager,
+                tool_search_handler_cache: Default::default(),
+                turn_environments: Arc::clone(&turn_environments),
             };
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
                 watch::channel(false);
@@ -1120,28 +1109,16 @@ impl Session {
                 *cancel_guard = cancel_token.clone();
                 cancel_token
             };
-            let turn_environment = crate::environment_selection::resolve_environment_selections(
-                sess.services.environment_manager.as_ref(),
-                session_configuration.environment_selections(),
-            )
-            .await
-            .map_err(|err| {
-                CodexErr::InvalidRequest(err.to_string().replace(
-                    "unknown turn environment id",
-                    "unknown stored MCP environment id",
-                ))
-            })?
-            .primary()
-            .cloned();
-            let mcp_runtime_context = match turn_environment {
-                Some(turn_environment) => McpRuntimeContext::new(
-                    Arc::clone(&sess.services.environment_manager),
-                    turn_environment.cwd().to_path_buf(),
-                ),
-                None => McpRuntimeContext::new(
-                    Arc::clone(&sess.services.environment_manager),
-                    session_configuration.cwd().to_path_buf(),
-                ),
+            let mcp_runtime_context = {
+                let turn_environments = sess.services.turn_environments.snapshot().await;
+                let cwd = turn_environments
+                    .primary()
+                    .map(|turn_environment| turn_environment.cwd().to_path_buf())
+                    .unwrap_or_else(|| session_configuration.cwd().to_path_buf());
+                McpRuntimeContext::new(
+                    sess.services.turn_environments.environment_manager(),
+                    cwd,
+                )
             };
             let mcp_connection_manager = McpConnectionManager::new(
                 &mcp_servers,

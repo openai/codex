@@ -2426,6 +2426,82 @@ enabled = true
 }
 
 #[tokio::test]
+async fn read_plugin_for_config_filters_mcp_servers_for_codex_backend_auth() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    write_file(
+        &repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample-plugin",
+      "source": {
+        "source": "local",
+        "path": "./sample-plugin"
+      }
+    }
+  ]
+}"#,
+    );
+    write_file(
+        &repo_root.join("sample-plugin/.codex-plugin/plugin.json"),
+        r#"{"name":"sample-plugin"}"#,
+    );
+    write_file(
+        &repo_root.join("sample-plugin/.app.json"),
+        r#"{"apps":{"sample-mcp":{"id":"connector_sample"}}}"#,
+    );
+    write_file(
+        &repo_root.join("sample-plugin/.mcp.json"),
+        r#"{"mcpServers":{"other-mcp":{"command":"other-mcp"},"sample-mcp":{"command":"sample-mcp"}}}"#,
+    );
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
+
+    let config = load_config(tmp.path(), &repo_root).await;
+    let request = PluginReadRequest {
+        plugin_name: "sample-plugin".to_string(),
+        marketplace_path: AbsolutePathBuf::try_from(
+            repo_root.join(".agents/plugins/marketplace.json"),
+        )
+        .unwrap(),
+    };
+
+    let chatgpt_outcome = PluginsManager::new_with_options(
+        tmp.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::Chatgpt),
+    )
+    .read_plugin_for_config(&config, &request)
+    .await
+    .unwrap();
+    assert_eq!(
+        chatgpt_outcome.plugin.mcp_server_names,
+        vec!["other-mcp".to_string()]
+    );
+
+    let api_key_outcome = PluginsManager::new_with_options(
+        tmp.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::ApiKey),
+    )
+    .read_plugin_for_config(&config, &request)
+    .await
+    .unwrap();
+    assert_eq!(
+        api_key_outcome.plugin.mcp_server_names,
+        vec!["other-mcp".to_string(), "sample-mcp".to_string()]
+    );
+}
+
+#[tokio::test]
 async fn read_plugin_for_config_uses_user_layer_skill_settings_only() {
     let tmp = tempfile::tempdir().unwrap();
     let repo_root = tmp.path().join("repo");

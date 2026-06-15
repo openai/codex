@@ -249,14 +249,6 @@ impl App {
                 self.insert_completed_token_activity_output_after_stream_shutdown(tui);
             }
             AppEvent::ConsolidateProposedPlan(source) => {
-                if !self.terminal_resize_reflow_enabled() {
-                    if !self.transcript_reflow.history_cell_refresh_requested() {
-                        self.transcript_reflow.clear();
-                    }
-                    self.chat_widget.note_stream_consolidation_completed();
-                    self.insert_completed_token_activity_output_after_stream_shutdown(tui);
-                    return Ok(AppRunControl::Continue);
-                }
                 let end = self.transcript_cells.len();
                 let start = trailing_run_start::<history_cell::ProposedPlanStreamCell>(
                     &self.transcript_cells,
@@ -514,6 +506,17 @@ impl App {
             }
             AppEvent::PluginsLoaded { cwd, result } => {
                 self.chat_widget.on_plugins_loaded(cwd, result);
+            }
+            AppEvent::PluginRemoteSectionsLoaded {
+                cwd,
+                marketplaces,
+                section_errors,
+            } => {
+                self.chat_widget.on_plugin_remote_sections_loaded(
+                    cwd,
+                    marketplaces,
+                    section_errors,
+                );
             }
             AppEvent::HooksLoaded { cwd, result } => {
                 self.chat_widget.on_hooks_loaded(cwd, result);

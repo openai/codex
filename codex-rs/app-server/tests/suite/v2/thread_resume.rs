@@ -2449,6 +2449,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
                     text: "history override".to_string(),
                 }],
                 phase: None,
+                metadata: None,
             }]),
             ..Default::default()
         })
@@ -3456,6 +3457,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
             text: history_text.to_string(),
         }],
         phase: None,
+        metadata: None,
     }];
 
     // Resume with explicit history and override the model.

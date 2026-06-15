@@ -15,6 +15,7 @@ fn user_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        metadata: None,
     }
 }
 
@@ -26,6 +27,7 @@ fn assistant_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        metadata: None,
     }
 }
 
@@ -37,6 +39,7 @@ fn developer_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        metadata: None,
     }
 }
 
@@ -76,6 +79,7 @@ fn truncates_rollout_from_start_before_nth_user_only() {
             }],
             content: None,
             encrypted_content: None,
+            metadata: None,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -83,6 +87,7 @@ fn truncates_rollout_from_start_before_nth_user_only() {
             name: "tool".to_string(),
             namespace: None,
             arguments: "{}".to_string(),
+            metadata: None,
         },
         assistant_msg("a4"),
     ];

@@ -329,7 +329,7 @@ impl MessageProcessor {
         let restriction_product = session_source.restriction_product();
         let executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider> = Arc::new(
             codex_skills_extension::ExecutorSkillProvider::new_with_restriction_product(
-                environment_manager_for_extensions,
+                Arc::clone(&environment_manager_for_extensions),
                 restriction_product,
             ),
         );
@@ -352,6 +352,7 @@ impl MessageProcessor {
                         analytics_events_client: analytics_events_client.clone(),
                         thread_manager: thread_manager.clone(),
                         goal_service: Arc::clone(&goal_service),
+                        environment_manager: Arc::clone(&environment_manager_for_extensions),
                         executor_skill_provider: Arc::clone(&executor_skill_provider),
                         thread_store: Arc::clone(&thread_store),
                     },
@@ -1316,6 +1317,11 @@ impl MessageProcessor {
                     .thread_realtime_append_text(&request_id, params)
                     .await
             }
+            ClientRequest::ThreadRealtimeAppendSpeech { params, .. } => {
+                self.turn_processor
+                    .thread_realtime_append_speech(&request_id, params)
+                    .await
+            }
             ClientRequest::ThreadRealtimeStop { params, .. } => {
                 self.turn_processor
                     .thread_realtime_stop(&request_id, params)
@@ -1374,6 +1380,11 @@ impl MessageProcessor {
             }
             ClientRequest::GetAccountRateLimits { .. } => {
                 self.account_processor.get_account_rate_limits().await
+            }
+            ClientRequest::ConsumeAccountRateLimitResetCredit { params, .. } => {
+                self.account_processor
+                    .consume_account_rate_limit_reset_credit(params)
+                    .await
             }
             ClientRequest::GetAccountTokenUsage { .. } => {
                 self.account_processor.get_account_token_usage().await

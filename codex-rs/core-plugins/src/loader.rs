@@ -10,6 +10,7 @@ use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RemoteInstalledPlugin;
 use crate::store::PluginStore;
 use crate::store::plugin_version_for_source;
+use codex_app_server_protocol::AuthMode;
 use codex_config::ConfigLayerStack;
 use codex_config::HooksFile;
 use codex_config::types::McpServerConfig;
@@ -662,14 +663,7 @@ async fn load_plugin(
             restriction_product,
             skill_config_rules,
         } => {
-            loaded_plugin.manifest_name = manifest
-                .interface
-                .as_ref()
-                .and_then(|interface| interface.display_name.as_deref())
-                .map(str::trim)
-                .filter(|display_name| !display_name.is_empty())
-                .map(str::to_string)
-                .or_else(|| Some(manifest.name.clone()));
+            loaded_plugin.manifest_name = Some(manifest.display_name().to_string());
             loaded_plugin.manifest_description = manifest.description.clone();
             loaded_plugin.skill_roots = plugin_skill_roots(&plugin_root, manifest_paths);
             let resolved_skills = load_plugin_skills(
@@ -1086,7 +1080,29 @@ pub async fn plugin_telemetry_metadata_from_root(
     }
 }
 
-pub async fn load_plugin_mcp_servers(plugin_root: &Path) -> HashMap<String, McpServerConfig> {
+pub async fn load_plugin_mcp_servers(
+    plugin_root: &Path,
+    auth_mode: Option<AuthMode>,
+) -> HashMap<String, McpServerConfig> {
+    let mut mcp_servers = load_declared_plugin_mcp_servers(plugin_root).await;
+    if !auth_mode.is_some_and(AuthMode::uses_codex_backend) || mcp_servers.is_empty() {
+        return mcp_servers;
+    }
+
+    let app_declarations = load_plugin_apps(plugin_root).await;
+    if app_declarations.is_empty() {
+        return mcp_servers;
+    }
+
+    let app_declaration_names = app_declarations
+        .iter()
+        .map(|app| app.name.as_str())
+        .collect::<HashSet<_>>();
+    mcp_servers.retain(|name, _| !app_declaration_names.contains(name.as_str()));
+    mcp_servers
+}
+
+async fn load_declared_plugin_mcp_servers(plugin_root: &Path) -> HashMap<String, McpServerConfig> {
     let Some(manifest) = load_plugin_manifest(plugin_root) else {
         return HashMap::new();
     };

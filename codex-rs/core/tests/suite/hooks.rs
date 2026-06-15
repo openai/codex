@@ -77,6 +77,23 @@ fn network_workspace_write_profile() -> PermissionProfile {
     )
 }
 
+fn code_mode_custom_tool_output_text(output_item: &Value) -> String {
+    match output_item.get("output") {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| item.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Some(Value::Object(output)) => output
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        output => panic!("unexpected code mode custom tool output: {output:?}"),
+    }
+}
+
 fn non_openai_model_provider(server: &wiremock::MockServer) -> ModelProviderInfo {
     let mut provider =
         built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone();
@@ -2738,10 +2755,17 @@ async fn pre_tool_use_rewrites_code_mode_nested_exec_command_before_execution() 
 
     let server = start_mock_server().await;
     let call_id = "pretooluse-code-mode-rewrite";
-    let original_marker = std::env::temp_dir().join("pretooluse-code-mode-original-marker");
-    let rewritten_marker = std::env::temp_dir().join("pretooluse-code-mode-rewritten-marker");
-    let original_command = format!("printf original > {}", original_marker.display());
-    let rewritten_command = format!("printf rewritten > {}", rewritten_marker.display());
+    let marker_dir = TempDir::new().context("create pre tool rewrite marker directory")?;
+    let original_marker = marker_dir.path().join("original");
+    let rewritten_marker = marker_dir.path().join("rewritten");
+    let original_command = format!(
+        "printf original > {}; printf original-result",
+        original_marker.display()
+    );
+    let rewritten_command = format!(
+        "printf rewritten > {}; printf rewritten-result",
+        rewritten_marker.display()
+    );
     let original_command_json =
         serde_json::to_string(&original_command).context("serialize original command")?;
     let code = format!(
@@ -2781,13 +2805,6 @@ text(output.output);
         });
     let test = builder.build(&server).await?;
 
-    if original_marker.exists() {
-        fs::remove_file(&original_marker).context("remove stale original pre tool marker")?;
-    }
-    if rewritten_marker.exists() {
-        fs::remove_file(&rewritten_marker).context("remove stale rewritten pre tool marker")?;
-    }
-
     test.submit_turn_with_permission_profile(
         "run the rewritten shell command from code mode",
         PermissionProfile::Disabled,
@@ -2796,7 +2813,16 @@ text(output.output);
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
-    requests[1].custom_tool_call_output(call_id);
+    let output_item = requests[1].custom_tool_call_output(call_id);
+    let output = code_mode_custom_tool_output_text(&output_item);
+    assert!(
+        output.contains("rewritten-result"),
+        "code mode should receive the rewritten command result"
+    );
+    assert!(
+        !output.contains("original-result"),
+        "code mode should not receive the original command result"
+    );
     assert!(
         !original_marker.exists(),
         "original nested shell command should not execute after rewrite"
@@ -2812,6 +2838,186 @@ text(output.output);
     assert_eq!(hook_inputs[0]["tool_input"]["command"], original_command);
 
     Ok(())
+}
+
+#[tokio::test]
+async fn pre_tool_use_block_rejects_code_mode_tool_promise_before_execution() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "pretooluse-code-mode-block";
+    let marker_dir = TempDir::new().context("create pre tool block marker directory")?;
+    let marker = marker_dir.path().join("blocked");
+    let command = format!("printf blocked > {}", marker.display());
+    let command_json = serde_json::to_string(&command).context("serialize blocked command")?;
+    let code = format!(
+        r#"
+try {{
+  const result = await tools.exec_command({{ cmd: {command_json} }});
+  text(JSON.stringify({{ kind: "unexpected-success", result }}));
+}} catch (error) {{
+  text(JSON.stringify({{ kind: "caught", error: String(error) }}));
+}}
+"#
+    );
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_custom_tool_call(call_id, "exec", &code),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "pre hook block observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let reason = "blocked nested command";
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_pre_build_hook(move |home| {
+            if let Err(error) = write_pre_tool_use_hook(home, Some("^Bash$"), "json_deny", reason) {
+                panic!("failed to write blocking pre tool use hook fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::CodeMode);
+            trust_discovered_hooks(config);
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_permission_profile(
+        "run the blocked shell command from code mode",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].custom_tool_call_output(call_id);
+    let output = code_mode_custom_tool_output_text(&output_item);
+    assert!(output.contains(r#""kind":"caught""#));
+    assert!(output.contains(reason));
+    assert!(!output.contains("unexpected-success"));
+    assert!(
+        !marker.exists(),
+        "PreToolUse-blocked nested command should not execute"
+    );
+
+    let hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+
+    Ok(())
+}
+
+async fn assert_post_tool_use_blocks_code_mode_tool_result(
+    hook_mode: &'static str,
+    reason: &'static str,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = format!("posttooluse-code-mode-{hook_mode}");
+    let marker_dir = TempDir::new().context("create post tool block marker directory")?;
+    let marker = marker_dir.path().join(hook_mode);
+    let command = format!(
+        "printf executed > {}; printf original-post-tool-result",
+        marker.display()
+    );
+    let command_json = serde_json::to_string(&command).context("serialize post hook command")?;
+    let code = format!(
+        r#"
+try {{
+  const result = await tools.exec_command({{ cmd: {command_json} }});
+  text(JSON.stringify({{ kind: "unexpected-success", result }}));
+}} catch (error) {{
+  text(JSON.stringify({{ kind: "caught", error: String(error) }}));
+}}
+"#
+    );
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_custom_tool_call(&call_id, "exec", &code),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "post hook block observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_pre_build_hook(move |home| {
+            if let Err(error) = write_post_tool_use_hook(home, Some("^Bash$"), hook_mode, reason) {
+                panic!("failed to write blocking post tool use hook fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::CodeMode);
+            trust_discovered_hooks(config);
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_permission_profile(
+        "run the shell command blocked after execution from code mode",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].custom_tool_call_output(&call_id);
+    let output = code_mode_custom_tool_output_text(&output_item);
+    assert!(output.contains(r#""kind":"caught""#));
+    assert!(output.contains(reason));
+    assert!(!output.contains("unexpected-success"));
+    assert!(
+        !output.contains("original-post-tool-result"),
+        "blocked post tool result should not reach code mode"
+    );
+    assert_eq!(
+        fs::read_to_string(&marker).context("read blocking post tool marker")?,
+        "executed",
+        "PostToolUse should run after the nested command executes"
+    );
+
+    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(
+        hook_inputs[0]["tool_response"],
+        Value::String("original-post-tool-result".to_string())
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn post_tool_use_block_decision_rejects_code_mode_tool_promise() -> Result<()> {
+    assert_post_tool_use_blocks_code_mode_tool_result(
+        "decision_block",
+        "blocked nested result by decision",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn post_tool_use_exit_two_rejects_code_mode_tool_promise() -> Result<()> {
+    assert_post_tool_use_blocks_code_mode_tool_result("exit_2", "blocked nested result by exit two")
+        .await
 }
 
 #[tokio::test]

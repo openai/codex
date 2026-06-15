@@ -8,6 +8,9 @@ use codex_core::compact::SUMMARY_PREFIX;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -158,6 +161,7 @@ fn format_labeled_requests_snapshot(
 fn compacted_summary_only_output(summary: &str) -> Vec<ResponseItem> {
     vec![ResponseItem::Compaction {
         encrypted_content: summary_with_prefix(summary),
+        metadata: None,
     }]
 }
 
@@ -202,6 +206,8 @@ async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
     codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             architecture: None,
+            codex_responses_as_items: false,
+            codex_response_item_prefix: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
             include_startup_context: true,
@@ -327,6 +333,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
 
     let compacted_history = vec![ResponseItem::Compaction {
         encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        metadata: None,
     }];
     let compact_mock = responses::mount_compact_json_once(
         harness.server(),
@@ -1148,22 +1155,24 @@ async fn remote_compact_filters_deferred_dynamic_tools() -> Result<()> {
         "properties": {},
         "additionalProperties": false,
     });
-    let dynamic_tools = vec![
-        DynamicToolSpec {
-            namespace: Some("codex_app".to_string()),
-            name: hidden_tool.to_string(),
-            description: "Hidden until discovered.".to_string(),
-            input_schema: input_schema.clone(),
-            defer_loading: true,
-        },
-        DynamicToolSpec {
-            namespace: Some("codex_app".to_string()),
-            name: visible_tool.to_string(),
-            description: "Visible immediately.".to_string(),
-            input_schema,
-            defer_loading: false,
-        },
-    ];
+    let dynamic_tools = vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+        name: "codex_app".to_string(),
+        description: "Codex app tools.".to_string(),
+        tools: vec![
+            DynamicToolNamespaceTool::Function(DynamicToolFunctionSpec {
+                name: hidden_tool.to_string(),
+                description: "Hidden until discovered.".to_string(),
+                input_schema: input_schema.clone(),
+                defer_loading: true,
+            }),
+            DynamicToolNamespaceTool::Function(DynamicToolFunctionSpec {
+                name: visible_tool.to_string(),
+                description: "Visible immediately.".to_string(),
+                input_schema,
+                defer_loading: false,
+            }),
+        ],
+    })];
     let new_thread = test
         .thread_manager
         .start_thread_with_tools(test.config.clone(), dynamic_tools)
@@ -1785,13 +1794,18 @@ async fn remote_compact_trims_tool_search_output_to_empty_tools_array() -> Resul
         "required": ["mode"],
         "additionalProperties": false,
     });
-    let dynamic_tool = DynamicToolSpec {
-        namespace: Some("codex_app".to_string()),
-        name: tool_name.to_string(),
-        description: tool_description,
-        input_schema,
-        defer_loading: true,
-    };
+    let dynamic_tool = DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+        name: "codex_app".to_string(),
+        description: "Codex app tools.".to_string(),
+        tools: vec![DynamicToolNamespaceTool::Function(
+            DynamicToolFunctionSpec {
+                name: tool_name.to_string(),
+                description: tool_description,
+                input_schema,
+                defer_loading: true,
+            },
+        )],
+    });
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
@@ -2346,6 +2360,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
     let compacted_history = vec![
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+            metadata: None,
         },
         ResponseItem::Message {
             id: None,
@@ -2354,6 +2369,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
                 text: "COMPACTED_ASSISTANT_NOTE".to_string(),
             }],
             phase: None,
+            metadata: None,
         },
     ];
     let compact_mock = responses::mount_compact_json_once(
@@ -2402,7 +2418,9 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
             let has_compaction_item = replacement_history.iter().any(|item| {
                 matches!(
                     item,
-                    ResponseItem::Compaction { encrypted_content }
+                    ResponseItem::Compaction {
+                        encrypted_content, ..
+                    }
                         if encrypted_content == "ENCRYPTED_COMPACTION_SUMMARY"
                 )
             });
@@ -2493,9 +2511,11 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
                 text: stale_developer_message.to_string(),
             }],
             phase: None,
+            metadata: None,
         },
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+            metadata: None,
         },
     ];
     let compact_mock = responses::mount_compact_json_once(
@@ -2633,9 +2653,11 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
                 text: stale_developer_message.to_string(),
             }],
             phase: None,
+            metadata: None,
         },
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+            metadata: None,
         },
     ];
     let compact_mock = responses::mount_compact_json_once(
@@ -4041,6 +4063,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_summary_only_reinject
 
     let compacted_history = vec![ResponseItem::Compaction {
         encrypted_content: summary_with_prefix("REMOTE_SUMMARY_ONLY"),
+        metadata: None,
     }];
     let compact_mock = responses::mount_compact_json_once(
         harness.server(),
