@@ -565,6 +565,116 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn stdio_server_adapts_inline_mcp_file_input() -> anyhow::Result<()> {
+    let model_server = responses::start_mock_server().await;
+    let files = tempdir()?;
+    let upload_path = files.path().join("upload.txt");
+    fs::write(&upload_path, b"upload me")?;
+    let call_id = "file-call-1";
+    let server_name = "rmcp_files";
+    let namespace = format!("mcp__{server_name}");
+    let arguments = serde_json::to_string(&json!({"file": upload_path}))?;
+    let response_mock = responses::mount_sse_sequence(
+        &model_server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_function_call_with_namespace(
+                    call_id,
+                    &namespace,
+                    "file_round_trip",
+                    &arguments,
+                ),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-1", "MCP file transfer completed."),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let fixture = test_codex()
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::McpFileTransfer)
+                .expect("test feature should enable");
+            insert_mcp_server(
+                config,
+                server_name,
+                stdio_transport(
+                    rmcp_test_server_bin,
+                    Some(HashMap::from([(
+                        "MCP_TEST_FILE_INLINE".to_string(),
+                        "1".to_string(),
+                    )])),
+                    Vec::new(),
+                ),
+                TestMcpServerOptions::default(),
+            );
+        })
+        .build(&model_server)
+        .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
+    fixture
+        .codex
+        .submit(auto_approved_user_turn(&fixture, "send the local file"))
+        .await?;
+
+    let begin_event = wait_for_event(&fixture.codex, |event| {
+        matches!(event, EventMsg::McpToolCallBegin(_))
+    })
+    .await;
+    let EventMsg::McpToolCallBegin(begin) = begin_event else {
+        unreachable!("event guard guarantees McpToolCallBegin");
+    };
+    assert_eq!(
+        begin.invocation.arguments,
+        Some(json!({"file": upload_path}))
+    );
+
+    let end_event = wait_for_event(&fixture.codex, |event| {
+        matches!(event, EventMsg::McpToolCallEnd(_))
+    })
+    .await;
+    let EventMsg::McpToolCallEnd(end) = end_event else {
+        unreachable!("event guard guarantees McpToolCallEnd");
+    };
+    let structured = end
+        .result
+        .as_ref()
+        .expect("file tool should succeed")
+        .structured_content
+        .as_ref()
+        .expect("file tool should return structured content");
+    assert_eq!(structured, &json!({"received_inline": true}));
+
+    wait_for_event(&fixture.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let requests = response_mock.requests();
+    let output = requests[1].function_call_output(call_id);
+    let output_text = output["output"].as_str().expect("function output text");
+    assert!(!output_text.contains("data:"));
+    assert!(!output_text.contains("mcp-file://"));
+    let tool = requests[0]
+        .tool_by_name(&namespace, "file_round_trip")
+        .expect("file tool should be model visible");
+    assert_eq!(tool["parameters"]["properties"]["file"]["type"], "string");
+    assert!(
+        tool["parameters"]["properties"]["file"]
+            .get("x-mcp-file")
+            .is_none()
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shutdown_cancels_startup_prewarm_waiting_for_mcp_startup() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));

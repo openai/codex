@@ -508,6 +508,16 @@ impl McpConnectionManager {
         normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
     }
 
+    /// Returns an unshaped tool definition for execution-time metadata lookup.
+    pub async fn tool_info_for_execution(&self, server: &str, tool_name: &str) -> Option<ToolInfo> {
+        self.clients
+            .get(server)?
+            .listed_tools()
+            .await?
+            .into_iter()
+            .find(|tool| tool.server_name == server && tool.tool.name == tool_name)
+    }
+
     /// Force-refresh codex apps tools by bypassing the in-process cache.
     ///
     /// On success, the refreshed tools replace the cache contents and the

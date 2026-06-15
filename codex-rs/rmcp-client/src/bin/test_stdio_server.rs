@@ -44,6 +44,7 @@ const MEMO_URI: &str = "memo://codex/example-note";
 const MEMO_CONTENT: &str = "This is a sample MCP resource served by the rmcp test server.";
 const SANDBOX_STATE_META_CAPABILITY: &str = "codex/sandbox-state-meta";
 const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+const FILE_INLINE_ENV: &str = "MCP_TEST_FILE_INLINE";
 
 pub fn stdio() -> (tokio::io::Stdin, tokio::io::Stdout) {
     (tokio::io::stdin(), tokio::io::stdout())
@@ -65,7 +66,7 @@ impl TestToolServer {
         );
         sandbox_meta_tool.annotations = Some(ToolAnnotations::new().read_only(true));
 
-        let tools = vec![
+        let mut tools = vec![
             Self::echo_tool(),
             Self::echo_dash_tool(),
             Self::cwd_tool(),
@@ -75,6 +76,9 @@ impl TestToolServer {
             Self::image_scenario_tool(),
             sandbox_meta_tool,
         ];
+        if std::env::var_os(FILE_INLINE_ENV).is_some() {
+            tools.push(Self::file_round_trip_tool());
+        }
         let resources = vec![Self::memo_resource()];
         let resource_templates = vec![Self::memo_template()];
         Self {
@@ -164,6 +168,32 @@ impl TestToolServer {
         tool.output_schema = Some(Arc::new(output_schema));
         tool.annotations = Some(ToolAnnotations::new().read_only(true));
         tool
+    }
+
+    fn file_round_trip_tool() -> Tool {
+        #[expect(clippy::expect_used)]
+        let schema: JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "string",
+                    "format": "uri",
+                    "x-mcp-file": {
+                        "accept": ["text/plain"],
+                        "maxSize": 1024,
+                        "transferModes": ["inline"]
+                    }
+                }
+            },
+            "required": ["file"],
+            "additionalProperties": false
+        }))
+        .expect("file round-trip tool schema should deserialize");
+        Tool::new(
+            Cow::Borrowed("file_round_trip"),
+            Cow::Borrowed("Accept an uploaded file and return a downloadable file."),
+            Arc::new(schema),
+        )
     }
 
     fn sync_tool() -> Tool {
@@ -395,6 +425,11 @@ struct ImageScenarioArgs {
     data_url: Option<String>,
 }
 
+#[derive(Deserialize, Debug)]
+struct FileRoundTripArgs {
+    file: String,
+}
+
 impl ServerHandler for TestToolServer {
     fn get_info(&self) -> ServerInfo {
         let mut capabilities = ServerCapabilities::builder()
@@ -481,6 +516,16 @@ impl ServerHandler for TestToolServer {
         context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         match request.name.as_ref() {
+            "file_round_trip" => {
+                let args = Self::parse_call_args::<FileRoundTripArgs>(&request, "file_round_trip")?;
+                if args.file != "data:text/plain;base64,dXBsb2FkIG1l" {
+                    return Err(McpError::invalid_params(
+                        format!("expected inline file data, got {}", args.file),
+                        None,
+                    ));
+                }
+                Ok(Self::structured_result(json!({"received_inline": true})))
+            }
             "sandbox_meta" => Ok(Self::structured_result(serde_json::Value::Object(
                 context.meta.0,
             ))),
