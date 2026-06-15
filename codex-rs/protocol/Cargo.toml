@@ -19,7 +19,6 @@ codex-async-utils = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
-codex-utils-path-uri = { workspace = true }
 codex-utils-image = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-string = { workspace = true }
