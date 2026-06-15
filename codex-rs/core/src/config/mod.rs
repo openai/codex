@@ -206,7 +206,6 @@ All agents in the team, including the agents that you can assign tasks to, are e
 You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent without triggering a turn.
 Child agents can also spawn their own sub-agents.
 You can decide how much context you want to propagate to your sub-agents with the `fork_turns` parameter.
-Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work.
 
 You will receive messages in the analysis channel in the form:
 ```
@@ -223,7 +222,6 @@ You can spawn sub-agents to handle subtasks, and those sub-agents can spawn thei
 
 You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent.
 Child agents can also spawn their own sub-agents.
-Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work.
 
 When you provide a response in the final channel, that content is immediately delivered back to your parent agent.
 
@@ -237,10 +235,20 @@ Payload:
 ```
 You may also see them addressed as to=/root/..., which indicates your identity is /root/...
 "#;
+const DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT: &str = r#"Note that collaboration tools cannot be called from inside `functions.exec`. Call `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `interrupt_agent`, and `list_agents` only as direct tool calls using the recipient shown in their tool definitions, such as `to=functions.spawn_agent` without a configured namespace or `to=functions.agents.spawn_agent` with `tool_namespace = "agents"`, since they are intentionally absent from the `functions.exec` `tools.*` namespace. Available tools in `functions.exec` are explicitly described with a `tools` namespace in the developer message.
+
+The goal is to correctly solve the problem in as little time as possible. Therefore, if at any point you can parallelize work by delegating tasks to another agent, you should do so to save time.
+
+All agents share the same directory. In detail:
+- All agents have access to the same container and filesystem as you.
+- All agents use the same current working directory.
+- As a result, edits made by one agent are immediately visible to all other agents.
+"#;
+const DEFAULT_MULTI_AGENT_V2_NO_SPAWN_HINT_TEXT: &str = "Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work.";
 
 fn default_multi_agent_v2_usage_hint_text(usage_hint_text: &str, max_concurrency: usize) -> String {
     format!(
-        "{usage_hint_text}\nThere are {max_concurrency} available concurrency slots, meaning that up to {max_concurrency} agents can be active at once, including you."
+        "{usage_hint_text}\n{DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT}\nThere are {max_concurrency} available concurrency slots, meaning that up to {max_concurrency} agents can be active at once, including you.\n\n{DEFAULT_MULTI_AGENT_V2_NO_SPAWN_HINT_TEXT}"
     )
 }
 
