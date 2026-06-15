@@ -1,4 +1,5 @@
 use super::SandboxCommand;
+#[cfg(target_os = "windows")]
 use super::SandboxDirectSpawnTransformRequest;
 use super::SandboxManager;
 use super::SandboxTransformRequest;
@@ -488,7 +489,7 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
     let configured_helper = helper_dir.path().join("configured-codex-helper.exe");
     std::fs::write(&configured_helper, b"helper").expect("write configured helper");
     let cwd = AbsolutePathBuf::from_absolute_path(helper_dir.path()).expect("absolute cwd");
-    let cwd_uri = PathUri::from_abs_path(&cwd).expect("cwd URI");
+    let cwd_uri = PathUri::from_abs_path(&cwd);
     let other_workspace = tempfile::TempDir::new().expect("other workspace");
     let other_workspace_root = AbsolutePathBuf::from_absolute_path(other_workspace.path())
         .expect("absolute other workspace");

@@ -362,11 +362,13 @@ impl SandboxManager {
         &self,
         request: SandboxDirectSpawnTransformRequest<'_>,
     ) -> Result<SandboxExecRequest, SandboxTransformError> {
-        let SandboxDirectSpawnTransformRequest {
-            transform,
-            workspace_roots,
-        } = request;
+        let transform = request.transform;
+        #[cfg(target_os = "windows")]
+        let workspace_roots = request.workspace_roots;
+        #[cfg(target_os = "windows")]
         let mut request = self.transform(transform)?;
+        #[cfg(not(target_os = "windows"))]
+        let request = self.transform(transform)?;
         #[cfg(target_os = "windows")]
         if request.sandbox == SandboxType::WindowsRestrictedToken {
             wrap_windows_sandbox_exec_request_for_direct_spawn(&mut request, workspace_roots)?;
