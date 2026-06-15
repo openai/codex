@@ -113,10 +113,15 @@ impl FileSystemSandboxRunner {
             env: self.helper_env.clone(),
             additional_permissions: None,
         };
-        let workspace_roots = if sandbox_context.workspace_roots.is_empty() {
+        let native_workspace_roots = sandbox_context
+            .workspace_roots
+            .iter()
+            .map(native_workspace_root)
+            .collect::<Result<Vec<_>, _>>()?;
+        let workspace_roots = if native_workspace_roots.is_empty() {
             std::slice::from_ref(&cwd.native)
         } else {
-            sandbox_context.workspace_roots.as_slice()
+            native_workspace_roots.as_slice()
         };
         sandbox_manager
             .transform_for_direct_spawn(SandboxDirectSpawnTransformRequest {
@@ -163,6 +168,14 @@ fn native_sandbox_cwd(cwd: &PathUri) -> Result<AbsolutePathBuf, JSONRPCErrorErro
     cwd.to_abs_path().map_err(|err| {
         invalid_request(format!(
             "file system sandbox cwd is not native to this exec-server host: {err}"
+        ))
+    })
+}
+
+fn native_workspace_root(root: &PathUri) -> Result<AbsolutePathBuf, JSONRPCErrorError> {
+    root.to_abs_path().map_err(|err| {
+        invalid_request(format!(
+            "file system sandbox workspace root is not native to this exec-server host: {err}"
         ))
     })
 }

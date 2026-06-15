@@ -33,6 +33,7 @@ use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -99,7 +100,11 @@ impl ApplyPatchRuntime {
         Some(FileSystemSandboxContext {
             permissions,
             cwd: Some(attempt.sandbox_cwd.clone()),
-            workspace_roots: attempt.workspace_roots.to_vec(),
+            workspace_roots: attempt
+                .workspace_roots
+                .iter()
+                .map(PathUri::from_abs_path)
+                .collect(),
             windows_sandbox_level: attempt.windows_sandbox_level,
             windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
             use_legacy_landlock: attempt.use_legacy_landlock,

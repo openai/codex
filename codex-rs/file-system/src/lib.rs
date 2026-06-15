@@ -7,7 +7,6 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::future::Future;
 use std::io;
@@ -55,7 +54,7 @@ pub struct FileSystemSandboxContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathUri>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub workspace_roots: Vec<AbsolutePathBuf>,
+    pub workspace_roots: Vec<PathUri>,
     pub windows_sandbox_level: WindowsSandboxLevel,
     #[serde(default)]
     pub windows_sandbox_private_desktop: bool,
