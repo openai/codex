@@ -1047,11 +1047,13 @@ async fn pending_steer_interrupt_uses_remapped_binding() {
 }
 
 #[tokio::test]
-async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
+async fn restore_thread_input_state_preserves_active_runtime_state() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::PreventIdleSleep, /*enabled*/ true);
+    chat.input_queue.user_message_queue.refresh_in_flight = true;
 
     chat.restore_thread_input_state(Some(ThreadInputState {
+        user_message_queue: Default::default(),
         composer: None,
         pending_steers: VecDeque::new(),
         pending_steer_history_records: VecDeque::new(),
@@ -1070,12 +1072,14 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
     assert!(chat.turn_lifecycle.agent_turn_running);
     assert!(chat.turn_lifecycle.sleep_inhibitor.is_turn_running());
     assert!(chat.bottom_pane.is_task_running());
+    assert!(chat.input_queue.user_message_queue.refresh_in_flight);
 
     chat.restore_thread_input_state(/*input_state*/ None);
 
     assert!(!chat.turn_lifecycle.agent_turn_running);
     assert!(!chat.turn_lifecycle.sleep_inhibitor.is_turn_running());
     assert!(!chat.bottom_pane.is_task_running());
+    assert!(!chat.input_queue.user_message_queue.refresh_in_flight);
 }
 
 #[tokio::test]

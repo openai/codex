@@ -5,6 +5,7 @@
 //! follow-ups, and restoring draft state across interrupts or thread switches.
 
 use super::*;
+use codex_app_server_protocol::ThreadQueueListResponse;
 
 impl ChatWidget {
     pub(super) fn handle_composer_input_result(
@@ -29,6 +30,12 @@ impl ChatWidget {
                 if should_submit_now {
                     if self.only_user_shell_commands_running()
                         && !user_message.text.starts_with('!')
+                    {
+                        self.queue_user_message(user_message);
+                        return;
+                    }
+                    if !self.is_user_turn_pending_or_running()
+                        && self.input_queue.blocks_local_queue_autosend()
                     {
                         self.queue_user_message(user_message);
                         return;
@@ -84,7 +91,12 @@ impl ChatWidget {
         action: QueuedInputAction,
         pending_pastes: Vec<(String, String)>,
     ) {
-        if !self.is_session_configured() || self.is_user_turn_pending_or_running() {
+        if self.should_use_server_queue(&user_message, action) {
+            self.submit_user_message_to_queue(user_message);
+        } else if !self.is_session_configured()
+            || self.is_user_turn_pending_or_running()
+            || self.input_queue.blocks_local_queue_autosend()
+        {
             self.input_queue
                 .queued_user_messages
                 .push_back(QueuedUserMessage {
@@ -101,9 +113,32 @@ impl ChatWidget {
         }
     }
 
+    fn should_use_server_queue(
+        &self,
+        user_message: &UserMessage,
+        action: QueuedInputAction,
+    ) -> bool {
+        self.is_session_configured()
+            && (self.input_queue.user_turn_pending_start
+                || self.turn_lifecycle.agent_turn_running
+                || self.input_queue.blocks_local_queue_autosend())
+            && action == QueuedInputAction::Plain
+            && !user_message.text.starts_with('!')
+            && self.config.features.enabled(Feature::UserMessageQueue)
+            && !self.config.ephemeral
+            && !self.active_side_conversation
+            && !self.ide_context.is_enabled()
+            && !self.only_user_shell_commands_running()
+            && !self.input_queue.has_local_follow_up_messages()
+            && self.input_queue.pending_steers.is_empty()
+    }
+
     /// If idle and there are queued inputs, submit exactly one to start the next turn.
     pub(crate) fn maybe_send_next_queued_input(&mut self) -> bool {
         if self.input_queue.suppress_queue_autosend {
+            return false;
+        }
+        if self.input_queue.blocks_local_queue_autosend() {
             return false;
         }
         if self.is_user_turn_pending_or_running() {
@@ -147,6 +182,43 @@ impl ChatWidget {
         self.input_queue.user_turn_pending_start || self.bottom_pane.is_task_running()
     }
 
+    pub(crate) fn start_server_queue_refresh(&mut self, thread_id: ThreadId) -> bool {
+        if self.thread_id != Some(thread_id)
+            || self.input_queue.user_message_queue.refresh_in_flight
+        {
+            return false;
+        }
+        self.input_queue.user_message_queue.refresh_in_flight = true;
+        self.refresh_pending_input_preview();
+        true
+    }
+
+    pub(crate) fn finish_server_queue_refresh(&mut self) {
+        self.input_queue.user_message_queue.refresh_in_flight = false;
+        self.refresh_pending_input_preview();
+        self.maybe_send_next_queued_input();
+    }
+
+    pub(crate) fn requeue_failed_server_submission(&mut self, fallback: UserMessage) {
+        self.input_queue
+            .queued_user_messages
+            .push_front(QueuedUserMessage {
+                user_message: fallback,
+                action: QueuedInputAction::Plain,
+                pending_pastes: Vec::new(),
+            });
+        self.input_queue
+            .queued_user_message_history_records
+            .push_front(UserMessageHistoryRecord::UserMessageText);
+        self.refresh_pending_input_preview();
+    }
+
+    pub(crate) fn set_server_queue_snapshot(&mut self, response: ThreadQueueListResponse) {
+        self.input_queue.user_message_queue.set_snapshot(response);
+        self.refresh_pending_input_preview();
+        self.maybe_send_next_queued_input();
+    }
+
     pub(super) fn only_user_shell_commands_running(&self) -> bool {
         self.turn_lifecycle.agent_turn_running
             && !self.running_commands.is_empty()
@@ -163,6 +235,7 @@ impl ChatWidget {
             preview.queued_messages,
             preview.pending_steers,
             preview.rejected_steers,
+            preview.has_editable_queued_message,
         );
     }
 

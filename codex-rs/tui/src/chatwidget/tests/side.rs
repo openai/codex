@@ -4,6 +4,30 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
 #[tokio::test]
+async fn side_conversation_keeps_follow_ups_out_of_the_durable_queue() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.set_feature_enabled(Feature::UserMessageQueue, /*enabled*/ true);
+    chat.set_side_conversation_active(/*active*/ true);
+    chat.handle_server_notification(
+        ServerNotification::ThreadQueueChanged(
+            codex_app_server_protocol::ThreadQueueChangedNotification {
+                thread_id: thread_id.to_string(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    chat.input_queue.user_turn_pending_start = true;
+
+    chat.queue_user_message(UserMessage::from("side follow-up"));
+
+    assert!(rx.try_recv().is_err());
+    assert!(op_rx.try_recv().is_err());
+    assert_eq!(chat.queued_user_message_texts(), vec!["side follow-up"]);
+}
+
+#[tokio::test]
 async fn forked_thread_history_line_without_name_shows_id_once_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

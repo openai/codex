@@ -5,7 +5,9 @@
 //! when the visible thread changes.
 
 use super::*;
+use crate::chatwidget::UserMessage;
 use crate::session_resume::read_session_model;
+use codex_app_server_protocol::ThreadQueueListResponse;
 
 impl App {
     pub(super) async fn shutdown_current_thread(&mut self, app_server: &mut AppServerSession) {
@@ -451,6 +453,45 @@ impl App {
         Ok(())
     }
 
+    async fn apply_failed_server_queue_submission(
+        &mut self,
+        thread_id: ThreadId,
+        fallback: UserMessage,
+    ) {
+        if self.chat_widget.thread_id() == Some(thread_id) {
+            self.chat_widget.requeue_failed_server_submission(fallback);
+            self.chat_widget.maybe_send_next_queued_input();
+        } else if let Some(channel) = self.thread_event_channels.get(&thread_id)
+            && let Some(input_state) = channel.store.lock().await.input_state.as_mut()
+        {
+            input_state.requeue_failed_server_submission(fallback);
+        }
+    }
+
+    pub(super) async fn apply_server_queue_snapshot(
+        &mut self,
+        thread_id: ThreadId,
+        response: ThreadQueueListResponse,
+    ) {
+        if self.chat_widget.thread_id() == Some(thread_id) {
+            self.chat_widget.set_server_queue_snapshot(response);
+        } else if let Some(channel) = self.thread_event_channels.get(&thread_id)
+            && let Some(input_state) = channel.store.lock().await.input_state.as_mut()
+        {
+            input_state.user_message_queue.set_snapshot(response);
+        }
+    }
+
+    async fn finish_server_queue_refresh(&mut self, thread_id: ThreadId) {
+        if self.chat_widget.thread_id() == Some(thread_id) {
+            self.chat_widget.finish_server_queue_refresh();
+        } else if let Some(channel) = self.thread_event_channels.get(&thread_id)
+            && let Some(input_state) = channel.store.lock().await.input_state.as_mut()
+        {
+            input_state.user_message_queue.refresh_in_flight = false;
+        }
+    }
+
     /// Persist prompt text in the local cross-session message history.
     pub(super) fn append_message_history_entry(&self, thread_id: ThreadId, text: String) {
         let history_config = codex_message_history::HistoryConfig::new(
@@ -657,6 +698,51 @@ impl App {
                             final_output_json_schema.clone(),
                         )
                         .await?;
+                }
+                Ok(true)
+            }
+            AppCommand::QueueUserMessage {
+                submission,
+                fallback_user_message,
+            } => {
+                if !app_server.thread_queue_supported(thread_id).await {
+                    self.apply_failed_server_queue_submission(
+                        thread_id,
+                        fallback_user_message.clone(),
+                    )
+                    .await;
+                    return Ok(true);
+                }
+                match app_server
+                    .thread_queue_add(thread_id, submission.clone())
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err) => {
+                        tracing::warn!(%err, "failed to durably queue follow-up; using local queue");
+                        self.apply_failed_server_queue_submission(
+                            thread_id,
+                            fallback_user_message.clone(),
+                        )
+                        .await;
+                    }
+                }
+                Ok(true)
+            }
+            AppCommand::RefreshUserMessageQueue => {
+                if !self.config.features.enabled(Feature::UserMessageQueue)
+                    || self.config.ephemeral
+                    || !app_server.thread_queue_supported(thread_id).await
+                {
+                    self.finish_server_queue_refresh(thread_id).await;
+                    return Ok(true);
+                }
+                match app_server.thread_queue_list(thread_id).await {
+                    Ok(response) => self.apply_server_queue_snapshot(thread_id, response).await,
+                    Err(err) => {
+                        tracing::warn!(%err, "failed to refresh durable user message queue");
+                        self.finish_server_queue_refresh(thread_id).await;
+                    }
                 }
                 Ok(true)
             }

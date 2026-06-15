@@ -25,6 +25,8 @@ use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
+use codex_app_server_protocol::ExperimentalFeatureListParams;
+use codex_app_server_protocol::ExperimentalFeatureListResponse;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
@@ -39,6 +41,7 @@ use codex_app_server_protocol::MemoryResetResponse;
 use codex_app_server_protocol::Model as ApiModel;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
+use codex_app_server_protocol::QueuedItemProvenance;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery;
@@ -79,6 +82,10 @@ use codex_app_server_protocol::ThreadMemoryModeSetResponse;
 use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateResponse;
+use codex_app_server_protocol::ThreadQueueAddParams;
+use codex_app_server_protocol::ThreadQueueAddResponse;
+use codex_app_server_protocol::ThreadQueueListParams;
+use codex_app_server_protocol::ThreadQueueListResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -106,6 +113,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_app_server_protocol::UserInput;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -240,6 +248,71 @@ impl AppServerSession {
 
     pub(crate) fn uses_embedded_app_server(&self) -> bool {
         matches!(&self.client, AppServerClient::InProcess(_))
+    }
+
+    pub(crate) async fn thread_queue_supported(&mut self, thread_id: ThreadId) -> bool {
+        let request_id = self.next_request_id();
+        match self
+            .client
+            .request_typed::<ExperimentalFeatureListResponse>(
+                ClientRequest::ExperimentalFeatureList {
+                    request_id,
+                    params: ExperimentalFeatureListParams {
+                        cursor: None,
+                        limit: None,
+                        thread_id: Some(thread_id.to_string()),
+                    },
+                },
+            )
+            .await
+        {
+            Ok(response) => response
+                .data
+                .iter()
+                .any(|feature| feature.name == "user_message_queue" && feature.enabled),
+            Err(err) => {
+                tracing::debug!(%err, "app-server queue capability unavailable");
+                false
+            }
+        }
+    }
+
+    pub(crate) async fn thread_queue_add(
+        &mut self,
+        thread_id: ThreadId,
+        submission: TurnSubmissionParams,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed::<ThreadQueueAddResponse>(ClientRequest::ThreadQueueAdd {
+                request_id,
+                params: ThreadQueueAddParams {
+                    thread_id: thread_id.to_string(),
+                    submission,
+                    provenance: QueuedItemProvenance::User,
+                },
+            })
+            .await
+            .map(|_| ())
+            .wrap_err("thread/queue/add failed in TUI")
+    }
+
+    pub(crate) async fn thread_queue_list(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<ThreadQueueListResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadQueueList {
+                request_id,
+                params: ThreadQueueListParams {
+                    thread_id: thread_id.to_string(),
+                    cursor: None,
+                    limit: None,
+                },
+            })
+            .await
+            .wrap_err("thread/queue/list failed in TUI")
     }
 
     pub(crate) fn codex_home_path(

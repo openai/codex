@@ -24,6 +24,7 @@ pub(crate) struct PendingInputPreview {
     pub pending_steers: Vec<String>,
     pub rejected_steers: Vec<String>,
     pub queued_messages: Vec<String>,
+    pub has_editable_queued_message: bool,
     /// Key combination rendered in the hint line.  Defaults to Alt+Up but may
     /// be overridden for terminals where that chord is unavailable.
     edit_binding: Option<key_hint::KeyBinding>,
@@ -39,6 +40,7 @@ impl PendingInputPreview {
             pending_steers: Vec::new(),
             rejected_steers: Vec::new(),
             queued_messages: Vec::new(),
+            has_editable_queued_message: true,
             edit_binding: Some(key_hint::alt(KeyCode::Up)),
             interrupt_binding: Some(key_hint::plain(KeyCode::Esc)),
         }
@@ -152,6 +154,7 @@ impl PendingInputPreview {
         }
 
         if !self.queued_messages.is_empty()
+            && self.has_editable_queued_message
             && let Some(edit_binding) = self.edit_binding
         {
             lines.push(
@@ -210,6 +213,23 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
         queue.render(Rect::new(0, 0, width, height), &mut buf);
         assert_snapshot!("render_one_message", format!("{buf:?}"));
+    }
+
+    #[test]
+    fn render_durable_message_without_edit_hint() {
+        let mut queue = PendingInputPreview::new();
+        queue
+            .queued_messages
+            .push("[deploy-hook] run the release check".to_string());
+        queue.has_editable_queued_message = false;
+        let width = 48;
+        let height = queue.desired_height(width);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        queue.render(Rect::new(0, 0, width, height), &mut buf);
+        assert_snapshot!(
+            "render_durable_message_without_edit_hint",
+            format!("{buf:?}")
+        );
     }
 
     #[test]

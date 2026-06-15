@@ -57,6 +57,28 @@ impl ChatWidget {
             ServerNotification::ThreadSettingsUpdated(notification) => {
                 self.on_thread_settings_updated(notification);
             }
+            ServerNotification::ThreadQueueChanged(notification) => {
+                if self.config.features.enabled(Feature::UserMessageQueue)
+                    && !self.config.ephemeral
+                    && !self.active_side_conversation
+                {
+                    match ThreadId::from_string(&notification.thread_id) {
+                        Ok(thread_id) => {
+                            if self.start_server_queue_refresh(thread_id) {
+                                self.app_event_tx.send(AppEvent::SubmitThreadOp {
+                                    thread_id,
+                                    op: AppCommand::RefreshUserMessageQueue,
+                                });
+                            }
+                        }
+                        Err(err) => tracing::warn!(
+                            thread_id = notification.thread_id,
+                            error = %err,
+                            "ignoring queue invalidation with invalid thread id"
+                        ),
+                    }
+                }
+            }
             ServerNotification::TurnStarted(notification) => {
                 self.turn_lifecycle.last_turn_id = Some(notification.turn.id);
                 self.last_non_retry_error = None;
@@ -191,7 +213,6 @@ impl ChatWidget {
             ServerNotification::ServerRequestResolved(_)
             | ServerNotification::AccountUpdated(_)
             | ServerNotification::AccountRateLimitsUpdated(_)
-            | ServerNotification::ThreadQueueChanged(_)
             | ServerNotification::ThreadStarted(_)
             | ServerNotification::ThreadStatusChanged(_)
             | ServerNotification::ThreadArchived(_)

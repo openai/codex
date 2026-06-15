@@ -51,7 +51,11 @@ impl ChatWidget {
             return;
         }
         if let Some(user_message) = self.initial_user_message.take() {
-            self.submit_user_message(user_message);
+            if self.input_queue.blocks_local_queue_autosend() {
+                self.queue_user_message(user_message);
+            } else {
+                self.submit_user_message(user_message);
+            }
         }
     }
 
@@ -351,6 +355,7 @@ impl ChatWidget {
         };
         Some(ThreadInputState {
             composer: composer.has_content().then_some(composer),
+            user_message_queue: self.input_queue.user_message_queue.clone(),
             pending_steers: self
                 .input_queue
                 .pending_steers
@@ -387,11 +392,14 @@ impl ChatWidget {
     pub(crate) fn restore_thread_input_state(&mut self, input_state: Option<ThreadInputState>) {
         let restored_task_running = input_state.as_ref().is_some_and(|state| state.task_running);
         if let Some(input_state) = input_state {
+            let refresh_in_flight = self.input_queue.user_message_queue.refresh_in_flight;
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
             self.turn_lifecycle
                 .restore_running(input_state.agent_turn_running, Instant::now());
             self.input_queue.user_turn_pending_start = input_state.user_turn_pending_start;
+            self.input_queue.user_message_queue = input_state.user_message_queue;
+            self.input_queue.user_message_queue.refresh_in_flight |= refresh_in_flight;
             self.update_collaboration_mode_indicator();
             self.refresh_model_dependent_surfaces();
             self.restore_composer_state(input_state.composer.unwrap_or_default());

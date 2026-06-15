@@ -148,6 +148,20 @@ impl ChatWidget {
             self.request_redraw();
             return;
         }
+        if !self.turn_lifecycle.agent_turn_running
+            && self.input_queue.blocks_local_queue_autosend()
+            && matches!(
+                cmd,
+                SlashCommand::Init | SlashCommand::Compact | SlashCommand::Review
+            )
+        {
+            self.queue_user_message_with_options(
+                UserMessage::from(format!("/{}", cmd.command())),
+                QueuedInputAction::ParseSlash,
+                Vec::new(),
+            );
+            return;
+        }
 
         match cmd {
             SlashCommand::Feedback => {
@@ -582,6 +596,37 @@ impl ChatWidget {
         else {
             return;
         };
+        if !self.turn_lifecycle.agent_turn_running
+            && self.input_queue.blocks_local_queue_autosend()
+            && matches!(cmd, SlashCommand::Plan | SlashCommand::Review)
+        {
+            let prefix = format!("/{} ", cmd.command());
+            let mut user_message = self.prepared_inline_user_message(
+                prepared_args,
+                prepared_elements,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                SlashCommandDispatchSource::Live,
+            );
+            user_message.text.insert_str(0, &prefix);
+            user_message.text_elements = user_message
+                .text_elements
+                .into_iter()
+                .map(|element| {
+                    element.map_range(|range| ByteRange {
+                        start: range.start + prefix.len(),
+                        end: range.end + prefix.len(),
+                    })
+                })
+                .collect();
+            self.queue_user_message_with_options(
+                user_message,
+                QueuedInputAction::ParseSlash,
+                Vec::new(),
+            );
+            return;
+        }
         self.dispatch_prepared_command_with_args(
             cmd,
             PreparedSlashCommandArgs {

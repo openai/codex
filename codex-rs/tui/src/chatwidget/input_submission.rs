@@ -1,6 +1,13 @@
 //! User-message and shell-prompt submission behavior for `ChatWidget`.
 
 use super::*;
+use codex_app_server_protocol::TurnSubmissionParams;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SubmissionTarget {
+    Turn,
+    Queue,
+}
 
 impl ChatWidget {
     pub(super) fn user_message_from_submission(
@@ -69,6 +76,15 @@ impl ChatWidget {
         );
     }
 
+    pub(super) fn submit_user_message_to_queue(&mut self, user_message: UserMessage) {
+        let _ = self.submit_user_message_with_history_and_shell_escape_policy(
+            user_message,
+            UserMessageHistoryRecord::UserMessageText,
+            ShellEscapePolicy::Disallow,
+            SubmissionTarget::Queue,
+        );
+    }
+
     pub(super) fn submit_user_message_with_history_record(
         &mut self,
         user_message: UserMessage,
@@ -78,6 +94,7 @@ impl ChatWidget {
             user_message,
             history_record,
             ShellEscapePolicy::Allow,
+            SubmissionTarget::Turn,
         )
         .0
     }
@@ -91,6 +108,7 @@ impl ChatWidget {
             user_message,
             UserMessageHistoryRecord::UserMessageText,
             shell_escape_policy,
+            SubmissionTarget::Turn,
         )
         .1
     }
@@ -100,6 +118,7 @@ impl ChatWidget {
         user_message: UserMessage,
         history_record: UserMessageHistoryRecord,
         shell_escape_policy: ShellEscapePolicy,
+        submission_target: SubmissionTarget,
     ) -> (bool, Option<AppCommand>) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
@@ -137,6 +156,7 @@ impl ChatWidget {
             );
             return (false, None);
         }
+        let fallback_user_message = user_message.clone();
         let UserMessage {
             text,
             local_images,
@@ -145,7 +165,6 @@ impl ChatWidget {
             mention_bindings,
         } = user_message;
 
-        let render_in_history = !self.turn_lifecycle.agent_turn_running;
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
@@ -292,6 +311,20 @@ impl ChatWidget {
             }
         }
 
+        if submission_target == SubmissionTarget::Queue {
+            let op = AppCommand::QueueUserMessage {
+                submission: TurnSubmissionParams {
+                    input: items,
+                    ..Default::default()
+                },
+                fallback_user_message,
+            };
+            if !self.submit_op(op.clone()) {
+                return (false, None);
+            }
+            return (true, Some(op));
+        }
+
         let effective_mode = self.effective_collaboration_mode();
         if effective_mode.model().trim().is_empty() {
             self.add_error_message(
@@ -319,6 +352,7 @@ impl ChatWidget {
         } else {
             None
         };
+        let render_in_history = !self.turn_lifecycle.agent_turn_running;
         let pending_steer = (!render_in_history).then(|| PendingSteer {
             user_message: UserMessage {
                 text: text.clone(),
@@ -358,8 +392,8 @@ impl ChatWidget {
             self.input_queue.user_turn_pending_start = true;
         }
 
-        // Persist the submitted text to cross-session message history. Mentions are encoded into
-        // placeholder syntax so recall can reconstruct the mention bindings in a future session.
+        // Persist the submitted text to cross-session message history. Mentions are encoded
+        // so recall can reconstruct their bindings in a future session.
         let encoded_mentions = mention_bindings
             .iter()
             .map(|binding| LinkedMention {

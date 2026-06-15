@@ -130,3 +130,7 @@ impl ChatWidget {
             .set_ide_context_active(self.ide_context.is_enabled());
     }
 }
+
+#[cfg(test)]
+#[path = "ide_context_tests.rs"]
+mod tests;

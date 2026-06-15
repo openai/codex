@@ -40,6 +40,20 @@ impl App {
                 );
                 self.refresh_mcp_startup_expected_servers_from_config();
                 self.chat_widget.finish_mcp_startup_after_lag();
+                if self
+                    .config
+                    .features
+                    .enabled(codex_features::Feature::UserMessageQueue)
+                    && !self.config.ephemeral
+                    && !self.chat_widget.side_conversation_active()
+                    && let Some(thread_id) = self.chat_widget.thread_id()
+                    && self.chat_widget.start_server_queue_refresh(thread_id)
+                {
+                    self.app_event_tx.send(AppEvent::SubmitThreadOp {
+                        thread_id,
+                        op: AppCommand::RefreshUserMessageQueue,
+                    });
+                }
             }
             AppServerEvent::ServerNotification(notification) => {
                 self.handle_server_notification_event(app_server_client, notification)

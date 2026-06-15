@@ -374,6 +374,7 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
     queued_user_messages.push_back(UserMessage::from("queued draft").into());
 
     chat.restore_thread_input_state(Some(ThreadInputState {
+        user_message_queue: Default::default(),
         composer: None,
         pending_steers,
         pending_steer_history_records: VecDeque::new(),

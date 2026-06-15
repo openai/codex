@@ -3,6 +3,7 @@
 mod model_catalog;
 mod session_summary;
 mod startup;
+mod user_message_queue;
 
 use super::*;
 use crate::app_backtrack::BacktrackSelection;

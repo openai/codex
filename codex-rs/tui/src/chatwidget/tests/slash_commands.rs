@@ -1,5 +1,6 @@
 use super::*;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
+use codex_app_server_protocol::QueuedItem;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
 
@@ -215,6 +216,46 @@ async fn queued_slash_review_with_args_dispatches_after_active_turn() {
         ),
         other => panic!("expected queued /review to submit review op, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn turn_starting_slash_commands_wait_behind_durable_queue() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_server_queue_snapshot(codex_app_server_protocol::ThreadQueueListResponse {
+        data: vec![QueuedItem {
+            id: "queued-1".to_string(),
+            submission: codex_app_server_protocol::TurnSubmission::default(),
+            provenance: codex_app_server_protocol::QueuedItemProvenance::User,
+            status: codex_app_server_protocol::QueuedItemStatus::Pending,
+        }],
+        next_cursor: None,
+    });
+
+    chat.bottom_pane
+        .set_composer_text("/init".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.bottom_pane.set_composer_text(
+        "/review check ordering".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.bottom_pane
+        .set_composer_text("/status".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(op_rx.try_recv().is_err());
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["/init", "/review check ordering"]
+    );
+    assert!(
+        chat.input_queue
+            .queued_user_messages
+            .iter()
+            .all(|message| message.action == QueuedInputAction::ParseSlash)
+    );
 }
 
 #[tokio::test]

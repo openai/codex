@@ -23,6 +23,7 @@ use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 
 use super::ChatWidget;
+use super::input_queue::UserMessageQueueState;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct UserMessage {
@@ -121,6 +122,7 @@ impl ThreadComposerState {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ThreadInputState {
     pub(super) composer: Option<ThreadComposerState>,
+    pub(crate) user_message_queue: UserMessageQueueState,
     pub(super) pending_steers: VecDeque<UserMessage>,
     pub(super) pending_steer_history_records: VecDeque<UserMessageHistoryRecord>,
     pub(super) pending_steer_compare_keys: VecDeque<PendingSteerCompareKey>,
@@ -133,6 +135,14 @@ pub(crate) struct ThreadInputState {
     pub(super) active_collaboration_mask: Option<CollaborationModeMask>,
     pub(super) task_running: bool,
     pub(super) agent_turn_running: bool,
+}
+
+impl ThreadInputState {
+    pub(crate) fn requeue_failed_server_submission(&mut self, fallback: UserMessage) {
+        self.queued_user_messages.push_front(fallback.into());
+        self.queued_user_message_history_records
+            .push_front(UserMessageHistoryRecord::UserMessageText);
+    }
 }
 
 impl From<String> for UserMessage {

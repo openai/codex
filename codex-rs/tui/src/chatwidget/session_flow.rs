@@ -154,6 +154,7 @@ impl ChatWidget {
             SessionConfiguredDisplay::Normal,
             fork_parent_title,
         );
+        self.refresh_user_message_queue_after_session_configured();
     }
 
     pub(crate) fn handle_thread_session_quiet(&mut self, session: ThreadSessionState) {
@@ -163,6 +164,18 @@ impl ChatWidget {
             SessionConfiguredDisplay::Quiet,
             /*fork_parent_title*/ None,
         );
+        self.refresh_user_message_queue_after_session_configured();
+    }
+
+    fn refresh_user_message_queue_after_session_configured(&mut self) {
+        if self.config.features.enabled(Feature::UserMessageQueue)
+            && !self.config.ephemeral
+            && let Some(thread_id) = self.thread_id
+            && self.start_server_queue_refresh(thread_id)
+            && !self.submit_op(AppCommand::RefreshUserMessageQueue)
+        {
+            self.finish_server_queue_refresh();
+        }
     }
 
     pub(crate) fn handle_side_thread_session(&mut self, session: ThreadSessionState) {
