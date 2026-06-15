@@ -150,10 +150,11 @@ where
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
     ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
+        let Some(thread_state) = thread_store.get::<SkillsThreadState>() else {
+            return Vec::new();
+        };
         if !self.providers.has_orchestrator_provider()
-            || !thread_store
-                .get::<SkillsThreadState>()
-                .is_some_and(|state| state.orchestrator_skills_enabled())
+            || !thread_state.orchestrator_skills_enabled()
         {
             return Vec::new();
         }
@@ -161,6 +162,7 @@ where
         skill_tools(
             self.providers.clone(),
             session_store.get::<McpResourceClient>(),
+            thread_state,
         )
     }
 }
@@ -215,7 +217,12 @@ where
             let mut injected_host_skill_prompts = InjectedHostSkillPrompts::default();
             for entry in &selected_entries {
                 match self
-                    .read_main_prompt(entry, host_loaded_skills.clone(), session_store)
+                    .read_main_prompt(
+                        entry,
+                        host_loaded_skills.clone(),
+                        session_store,
+                        &thread_state,
+                    )
                     .await
                 {
                     Ok(read_result) => {
@@ -292,12 +299,14 @@ impl<C> SkillsExtension<C> {
     ) -> SkillCatalog {
         let include_orchestrator_skills = query.include_orchestrator_skills;
         let orchestrator_query = query.clone();
+        let mcp_resources = orchestrator_query.mcp_resources.clone();
         query.include_orchestrator_skills = false;
 
         let mut catalog = self.providers.list_for_turn(query).await;
         if include_orchestrator_skills {
             let orchestrator_catalog = thread_state
                 .orchestrator_catalog_snapshot(
+                    mcp_resources.as_deref(),
                     self.providers
                         .list_orchestrator_for_turn(orchestrator_query),
                 )
@@ -312,15 +321,19 @@ impl<C> SkillsExtension<C> {
         entry: &SkillCatalogEntry,
         host_loaded_skills: Option<Arc<HostLoadedSkills>>,
         session_store: &ExtensionData,
+        thread_state: &SkillsThreadState,
     ) -> Result<SkillReadResult, String> {
-        self.providers
-            .read(SkillReadRequest {
-                authority: entry.authority.clone(),
-                package: entry.id.clone(),
-                resource: entry.main_prompt.clone(),
-                host: host_loaded_skills,
-                mcp_resources: session_store.get::<McpResourceClient>(),
-            })
+        thread_state
+            .read_skill(
+                &self.providers,
+                SkillReadRequest {
+                    authority: entry.authority.clone(),
+                    package: entry.id.clone(),
+                    resource: entry.main_prompt.clone(),
+                    host: host_loaded_skills,
+                    mcp_resources: session_store.get::<McpResourceClient>(),
+                },
+            )
             .await
             .map_err(|err| err.message)
     }
