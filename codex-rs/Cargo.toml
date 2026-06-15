@@ -21,6 +21,8 @@ members = [
     "install-context",
     "codex-backend-openapi-models",
     "code-mode",
+    "code-mode-host",
+    "code-mode-protocol",
     "codex-home",
     "cloud-config",
     "cloud-tasks",
@@ -158,6 +160,7 @@ codex-cloud-config = { path = "cloud-config" }
 codex-cloud-tasks-client = { path = "cloud-tasks-client" }
 codex-cloud-tasks-mock-client = { path = "cloud-tasks-mock-client" }
 codex-code-mode = { path = "code-mode" }
+codex-code-mode-protocol = { path = "code-mode-protocol" }
 codex-home = { path = "codex-home" }
 codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
@@ -205,7 +208,6 @@ codex-plugin = { path = "plugin" }
 codex-model-provider = { path = "model-provider" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
-codex-realtime-webrtc = { path = "realtime-webrtc" }
 codex-prompts = { path = "prompts" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-response-debug-context = { path = "response-debug-context" }
@@ -265,7 +267,6 @@ assert_matches = "1.5.0"
 async-channel = "2.3.1"
 async-io = "2.6.0"
 async-stream = "0.3.6"
-async-trait = "0.1.89"
 aws-config = "1"
 aws-credential-types = "1"
 aws-sigv4 = "1"
@@ -322,6 +323,9 @@ keyring = { version = "3.6", default-features = false }
 landlock = "0.4.4"
 lazy_static = "1"
 libc = "0.2.182"
+# Keep SQLx's bundled SQLite on a version containing the WAL-reset corruption fix:
+# https://www.sqlite.org/wal.html#the_wal_reset_bug
+libsqlite3-sys = { version = "0.37", default-features = false }
 log = "0.4"
 lru = "0.16.3"
 maplit = "1.0.2"
@@ -514,8 +518,8 @@ split-debuginfo = "off"
 # sidecar symbols and stripped the binaries.
 strip = false
 
-# See https://github.com/openai/codex/issues/1411 for details.
-codegen-units = 1
+# Balance parallel release code generation against binary size.
+codegen-units = 4
 
 [profile.profiling]
 inherits = "release"

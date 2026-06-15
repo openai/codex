@@ -1,9 +1,11 @@
 use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use pretty_assertions::assert_eq;
+use serial_test::serial;
 use tempfile::tempdir;
 
 use super::*;
+use crate::auth::AuthKeyringBackendKind;
 use crate::auth::AuthManager;
 use crate::auth::CodexAuth;
 use crate::auth::storage::AuthStorageBackend;
@@ -41,6 +43,7 @@ fn bedrock_auth() -> BedrockApiKeyAuth {
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn login_with_bedrock_api_key_replaces_openai_auth() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
@@ -50,6 +53,7 @@ async fn login_with_bedrock_api_key_replaces_openai_auth() -> anyhow::Result<()>
         "bedrock-api-key-test",
         "us-east-1",
         AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
     )?;
 
     let auth_manager = AuthManager::new(
@@ -57,6 +61,7 @@ async fn login_with_bedrock_api_key_replaces_openai_auth() -> anyhow::Result<()>
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
     )
     .await;
 
@@ -87,6 +92,7 @@ async fn login_with_bedrock_api_key_replaces_openai_auth() -> anyhow::Result<()>
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn logout_removes_bedrock_auth() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
@@ -95,12 +101,14 @@ async fn logout_removes_bedrock_auth() -> anyhow::Result<()> {
         "bedrock-api-key-test",
         "us-east-1",
         AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
     )?;
     let auth_manager = AuthManager::new(
         codex_home.path().to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
     )
     .await;
 
@@ -112,6 +120,7 @@ async fn logout_removes_bedrock_auth() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn bedrock_only_auth_storage_creates_primary_auth() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
@@ -122,6 +131,7 @@ async fn bedrock_only_auth_storage_creates_primary_auth() -> anyhow::Result<()> 
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
     )
     .await;
 
@@ -149,12 +159,14 @@ async fn login_with_api_key_clears_bedrock_api_key() -> anyhow::Result<()> {
         "bedrock-api-key-test",
         "us-east-1",
         AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
     )?;
 
     crate::auth::login_with_api_key(
         codex_home.path(),
         "sk-test-key",
         AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
     )?;
 
     assert_eq!(storage.load()?, Some(api_key_auth()));

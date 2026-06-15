@@ -851,8 +851,11 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
         .get("description")
         .and_then(Value::as_str)
         .expect("spawn_agent description should be present");
-    assert!(description.contains("Only use `spawn_agent` if and only if"));
+    assert!(description.contains(
+        "Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work."
+    ));
     assert!(description.contains("### Designing delegated subtasks"));
+    assert!(!description.contains("### When to delegate vs. do the subtask yourself"));
 
     Ok(())
 }

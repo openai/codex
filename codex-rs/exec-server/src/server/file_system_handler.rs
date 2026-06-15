@@ -3,7 +3,6 @@ use std::io;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_utils_path_uri::PathUri;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
@@ -20,10 +19,6 @@ use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
-use crate::protocol::FsJoinParams;
-use crate::protocol::FsJoinResponse;
-use crate::protocol::FsParentParams;
-use crate::protocol::FsParentResponse;
 use crate::protocol::FsReadDirectoryEntry;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
@@ -108,6 +103,7 @@ impl FileSystemHandler {
             is_directory: metadata.is_directory,
             is_file: metadata.is_file,
             is_symlink: metadata.is_symlink,
+            size: metadata.size,
             created_at_ms: metadata.created_at_ms,
             modified_at_ms: metadata.modified_at_ms,
         })
@@ -123,33 +119,6 @@ impl FileSystemHandler {
             .await
             .map_err(map_fs_error)?;
         Ok(FsCanonicalizeResponse { path })
-    }
-
-    pub(crate) async fn join(
-        &self,
-        params: FsJoinParams,
-    ) -> Result<FsJoinResponse, JSONRPCErrorError> {
-        // TODO(anp): remove and migrate callers to PathUri.
-        let base_path = params.base_path.to_abs_path().map_err(map_fs_error)?;
-        let path = base_path.join(params.path);
-        let path = PathUri::from_abs_path(&path).map_err(map_fs_error)?;
-        Ok(FsJoinResponse { path })
-    }
-
-    pub(crate) async fn parent(
-        &self,
-        params: FsParentParams,
-    ) -> Result<FsParentResponse, JSONRPCErrorError> {
-        // TODO(anp): remove and migrate callers to PathUri.
-        let path = params
-            .path
-            .to_abs_path()
-            .map_err(map_fs_error)?
-            .parent()
-            .map(|path| PathUri::from_abs_path(&path))
-            .transpose()
-            .map_err(map_fs_error)?;
-        Ok(FsParentResponse { path })
     }
 
     pub(crate) async fn read_directory(
@@ -221,7 +190,6 @@ fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
 mod tests {
     use codex_protocol::protocol::NetworkAccess;
     use codex_protocol::protocol::SandboxPolicy;
-    use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
 
@@ -239,8 +207,14 @@ mod tests {
         )
         .expect("runtime paths");
         let handler = FileSystemHandler::new(runtime_paths);
-        let sandbox_cwd =
-            AbsolutePathBuf::from_absolute_path(temp_dir.path()).expect("absolute tempdir");
+        let sandbox_cwd = PathUri::from_path(temp_dir.path()).expect("tempdir URI");
+        let sandbox_context = |sandbox_policy| {
+            FileSystemSandboxContext::from_legacy_sandbox_policy(
+                sandbox_policy,
+                sandbox_cwd.clone(),
+            )
+            .expect("sandbox context")
+        };
 
         for (file_name, sandbox_policy) in [
             ("danger.txt", SandboxPolicy::DangerFullAccess),
@@ -257,10 +231,7 @@ mod tests {
                 .write_file(FsWriteFileParams {
                     path: path.clone(),
                     data_base64: STANDARD.encode("ok"),
-                    sandbox: Some(FileSystemSandboxContext::from_legacy_sandbox_policy(
-                        sandbox_policy.clone(),
-                        sandbox_cwd.clone(),
-                    )),
+                    sandbox: Some(sandbox_context(sandbox_policy.clone())),
                 })
                 .await
                 .expect("write file");
@@ -268,10 +239,7 @@ mod tests {
             let canonicalized = handler
                 .canonicalize(FsCanonicalizeParams {
                     path: path.clone(),
-                    sandbox: Some(FileSystemSandboxContext::from_legacy_sandbox_policy(
-                        sandbox_policy.clone(),
-                        sandbox_cwd.clone(),
-                    )),
+                    sandbox: Some(sandbox_context(sandbox_policy.clone())),
                 })
                 .await
                 .expect("canonicalize file");
@@ -286,79 +254,12 @@ mod tests {
             let response = handler
                 .read_file(FsReadFileParams {
                     path,
-                    sandbox: Some(FileSystemSandboxContext::from_legacy_sandbox_policy(
-                        sandbox_policy,
-                        sandbox_cwd.clone(),
-                    )),
+                    sandbox: Some(sandbox_context(sandbox_policy)),
                 })
                 .await
                 .expect("read file");
 
             assert_eq!(response.data_base64, STANDARD.encode("ok"));
         }
-    }
-
-    #[tokio::test]
-    async fn protocol_join_and_parent_preserve_native_path_operations() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let runtime_paths = ExecServerRuntimePaths::new(
-            std::env::current_exe().expect("current exe"),
-            /*codex_linux_sandbox_exe*/ None,
-        )
-        .expect("runtime paths");
-        let handler = FileSystemHandler::new(runtime_paths);
-        let native_base =
-            AbsolutePathBuf::from_absolute_path(temp_dir.path()).expect("absolute tempdir");
-        let base_path = PathUri::from_abs_path(&native_base).expect("path URI");
-
-        let joined = handler
-            .join(FsJoinParams {
-                base_path: base_path.clone(),
-                path: "nested/file.txt".into(),
-            })
-            .await
-            .expect("join path");
-        assert_eq!(
-            joined.path,
-            PathUri::from_abs_path(&native_base.join("nested/file.txt")).expect("joined path URI")
-        );
-
-        let parent = handler
-            .parent(FsParentParams {
-                path: joined.path.clone(),
-            })
-            .await
-            .expect("parent path");
-        assert_eq!(
-            parent.path,
-            native_base
-                .join("nested/file.txt")
-                .parent()
-                .map(|path| PathUri::from_abs_path(&path).expect("parent path URI"))
-        );
-
-        let absolute_path = native_base.join("absolute.txt");
-        let joined = handler
-            .join(FsJoinParams {
-                base_path,
-                path: absolute_path.as_path().to_path_buf(),
-            })
-            .await
-            .expect("join absolute path");
-        assert_eq!(
-            joined.path,
-            PathUri::from_abs_path(&absolute_path).expect("absolute path URI")
-        );
-
-        let native_root = native_base
-            .ancestors()
-            .last()
-            .expect("absolute path should have a root");
-        let root = PathUri::from_abs_path(&native_root).expect("root path URI");
-        let parent = handler
-            .parent(FsParentParams { path: root })
-            .await
-            .expect("root parent");
-        assert_eq!(parent, FsParentResponse { path: None });
     }
 }

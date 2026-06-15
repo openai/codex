@@ -312,5 +312,5 @@ fn single_local_environment_cwd(turn: &TurnContext) -> Result<&AbsolutePathBuf, 
         ));
     }
 
-    Ok(&turn_environment.cwd)
+    Ok(turn_environment.cwd())
 }

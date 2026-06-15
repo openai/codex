@@ -1,5 +1,5 @@
-load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@llvm//toolchain/runtimes:cc_runtime_library.bzl", "cc_runtime_stage0_library")
+load("@rules_cc//cc:defs.bzl", "cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -42,11 +42,6 @@ cc_runtime_stage0_library(
         ":is_linux": ["src/cxa_thread_atexit.cpp"],
         "//conditions:default": [],
     }),
-    textual_hdrs = glob([
-        "src/**/*.def",
-        "src/**/*.h",
-        "src/**/*.inc",
-    ]),
     copts = [
         "-fexceptions",
         "-frtti",
@@ -76,12 +71,11 @@ cc_runtime_stage0_library(
         ],
         "//conditions:default": [],
     }),
-    includes = ["src"],
     implementation_deps = [
         ":headers",
+        "@//third_party/v8/libcxx_config:headers",
         "@rusty_v8_libcxx//:headers",
         "@rusty_v8_libcxx//:internal_headers",
-        "@//third_party/v8/libcxx_config:headers",
     ] + select({
         ":is_linux": [
             "@@llvm++kernel_headers+kernel_headers//:kernel_headers",
@@ -96,4 +90,10 @@ cc_runtime_stage0_library(
         ],
         "//conditions:default": [],
     }),
+    includes = ["src"],
+    textual_hdrs = glob([
+        "src/**/*.def",
+        "src/**/*.h",
+        "src/**/*.inc",
+    ]),
 )

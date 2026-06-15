@@ -52,6 +52,7 @@ use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -105,11 +106,14 @@ pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
 pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
 pub const REALTIME_CONVERSATION_CLOSE_TAG: &str = "</realtime_conversation>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
+const LOCAL_ENVIRONMENT_ID: &str = "local";
 
+// TODO(anp): Replace `TurnEnvironmentSelection` with `PathUri` once path URIs carry environment
+// identifiers.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TurnEnvironmentSelection {
     pub environment_id: String,
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -132,10 +136,13 @@ impl TurnEnvironmentSelections {
     }
 
     fn sync_primary_environment_cwd(&mut self) {
+        let legacy_fallback_cwd = PathUri::from_abs_path(&self.legacy_fallback_cwd);
+        // Keep remote environments' native cwd instead of replacing it with the local fallback.
         if let Some(turn_environment) = self.environments.first_mut()
-            && turn_environment.cwd != self.legacy_fallback_cwd
+            && turn_environment.environment_id == LOCAL_ENVIRONMENT_ID
+            && turn_environment.cwd != legacy_fallback_cwd
         {
-            turn_environment.cwd = self.legacy_fallback_cwd.clone();
+            turn_environment.cwd = legacy_fallback_cwd;
         }
     }
 }
@@ -177,12 +184,17 @@ pub struct W3cTraceContext {
 /// Config payload for refreshing MCP servers.
 #[derive(Debug, Clone, PartialEq)]
 pub struct McpServerRefreshConfig {
+    /// Complete runtime server map after source and thread-scoped resolution.
     pub mcp_servers: Value,
+    /// OAuth credential store mode to use with this server snapshot.
     pub mcp_oauth_credentials_store_mode: Value,
+    pub auth_keyring_backend_kind: Value,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConversationStartParams {
+    /// Overrides the configured realtime architecture for this session only.
+    pub architecture: Option<RealtimeConversationArchitecture>,
     /// Overrides the configured realtime model for this session only.
     pub model: Option<String>,
     /// Selects whether the realtime session should produce text or audio output.
@@ -396,6 +408,16 @@ pub struct ConversationAudioParams {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConversationTextParams {
     pub text: String,
+    pub role: ConversationTextRole,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum ConversationTextRole {
+    #[default]
+    User,
+    Developer,
 }
 
 /// Persistent thread-settings overrides that can be applied before user input or
@@ -524,7 +546,7 @@ pub enum Op {
         thread_settings: ThreadSettingsOverrides,
     },
 
-    /// Inter-agent communication that should be recorded as assistant history
+    /// Inter-agent communication that should be recorded as agent-message history
     /// while still using the normal thread submission lifecycle.
     InterAgentCommunication {
         communication: InterAgentCommunication,
@@ -710,15 +732,18 @@ impl InterAgentCommunication {
     }
 
     pub fn to_model_input_item(&self) -> ResponseItem {
-        match &self.encrypted_content {
-            Some(encrypted_content) => ResponseItem::AgentMessage {
-                author: self.author.to_string(),
-                recipient: self.recipient.to_string(),
-                content: vec![AgentMessageInputContent::EncryptedContent {
-                    encrypted_content: encrypted_content.clone(),
-                }],
+        let content = match &self.encrypted_content {
+            Some(encrypted_content) => AgentMessageInputContent::EncryptedContent {
+                encrypted_content: encrypted_content.clone(),
             },
-            None => self.to_response_input_item().into(),
+            None => AgentMessageInputContent::InputText {
+                text: self.content.clone(),
+            },
+        };
+        ResponseItem::AgentMessage {
+            author: self.author.to_string(),
+            recipient: self.recipient.to_string(),
+            content: vec![content],
         }
     }
 
@@ -1491,6 +1516,15 @@ pub enum RealtimeConversationVersion {
     V1,
     #[default]
     V2,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RealtimeConversationArchitecture {
+    #[default]
+    #[serde(rename = "realtimeapi")]
+    RealtimeApi,
+    Avas,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -2787,6 +2821,7 @@ fn multi_agent_version_from_items(
             RolloutItem::TurnContext(turn_context) => turn_context.multi_agent_version,
             RolloutItem::SessionMeta(_)
             | RolloutItem::ResponseItem(_)
+            | RolloutItem::InterAgentCommunication(_)
             | RolloutItem::Compacted(_)
             | RolloutItem::EventMsg(_) => None,
         })
@@ -2882,6 +2917,8 @@ pub struct SessionMetaLine {
 pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
     ResponseItem(ResponseItem),
+    /// Durable delivery metadata reconstructed as a model-visible `agent_message`.
+    InterAgentCommunication(InterAgentCommunication),
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),
     EventMsg(EventMsg),

@@ -5626,6 +5626,15 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "EXPERIMENTAL. Params sent with a request_user_input event.",
       "properties": {
+        "autoResolutionMs": {
+          "default": null,
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "itemId": {
           "type": "string"
         },
@@ -6045,6 +6054,26 @@
       },
       "AgentMessageInputContent": {
         "oneOf": [
+          {
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "input_text"
+                ],
+                "title": "InputTextAgentMessageInputContentType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "type"
+            ],
+            "title": "InputTextAgentMessageInputContent",
+            "type": "object"
+          },
           {
             "properties": {
               "encrypted_content": {
@@ -6575,6 +6604,16 @@
       },
       "AppsDefaultConfig": {
         "properties": {
+          "approvals_reviewer": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ApprovalsReviewer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "destructive_enabled": {
             "default": true,
             "type": "boolean"
@@ -8100,6 +8139,12 @@
               "null"
             ]
           },
+          "allowRemoteControl": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "allowedApprovalPolicies": {
             "items": {
               "$ref": "#/definitions/v2/AskForApproval"
@@ -8499,6 +8544,13 @@
         ],
         "title": "ContextCompactedNotification",
         "type": "object"
+      },
+      "ConversationTextRole": {
+        "enum": [
+          "user",
+          "developer"
+        ],
+        "type": "string"
       },
       "CreditsSnapshot": {
         "properties": {
@@ -12527,6 +12579,12 @@
             },
             "type": "array"
           },
+          "shareUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "skills": {
             "items": {
               "$ref": "#/definitions/v2/SkillSummary"
@@ -13780,6 +13838,13 @@
         "title": "RawResponseItemCompletedNotification",
         "type": "object"
       },
+      "RealtimeConversationArchitecture": {
+        "enum": [
+          "realtimeapi",
+          "avas"
+        ],
+        "type": "string"
+      },
       "RealtimeConversationVersion": {
         "enum": [
           "v1",
@@ -14049,6 +14114,22 @@
           "errored"
         ],
         "type": "string"
+      },
+      "RemoteControlDisableParams": {
+        "properties": {
+          "ephemeral": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "RemoteControlEnableParams": {
+        "properties": {
+          "ephemeral": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
       },
       "RemoteControlStatusChangedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",

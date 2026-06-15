@@ -502,6 +502,7 @@ async fn code_mode_only_restricts_prompt_tools() -> Result<()> {
         vec![
             "exec".to_string(),
             "wait".to_string(),
+            "request_user_input".to_string(),
             "web_search".to_string()
         ]
     );
@@ -588,6 +589,7 @@ if (!tool) {
         vec![
             "exec".to_string(),
             "wait".to_string(),
+            "request_user_input".to_string(),
             "web_search".to_string(),
             "image_generation".to_string()
         ]
@@ -2549,7 +2551,6 @@ async fn code_mode_can_output_images_via_global_helper() -> Result<()> {
         &server,
         "use exec to return images",
         r#"
-image("https://example.com/image.jpg");
 image("data:image/png;base64,AAA");
 "#,
     )
@@ -2563,7 +2564,7 @@ image("data:image/png;base64,AAA");
         Some(false),
         "code_mode image output failed unexpectedly"
     );
-    assert_eq!(items.len(), 3);
+    assert_eq!(items.len(), 2);
     assert_regex_match(
         concat!(
             r"(?s)\A",
@@ -2575,14 +2576,6 @@ image("data:image/png;base64,AAA");
         items[1],
         serde_json::json!({
             "type": "input_image",
-            "image_url": "https://example.com/image.jpg",
-            "detail": "high"
-        }),
-    );
-    assert_eq!(
-        items[2],
-        serde_json::json!({
-            "type": "input_image",
             "image_url": "data:image/png;base64,AAA",
             "detail": "high"
         }),
@@ -2592,17 +2585,14 @@ image("data:image/png;base64,AAA");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resize_all_images_replaces_malformed_code_mode_image_only() -> Result<()> {
+async fn resize_all_images_replaces_malformed_code_mode_image() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let (_test, second_mock) = run_code_mode_turn_with_config(
         &server,
-        "use exec to return images",
-        r#"
-image("https://example.com/image.jpg");
-image("data:image/png;base64,AAA");
-"#,
+        "use exec to return an image",
+        r#"image("data:image/png;base64,AAA");"#,
         |config| {
             let _ = config.features.enable(Feature::ResizeAllImages);
         },
@@ -2613,17 +2603,9 @@ image("data:image/png;base64,AAA");
     let items = custom_tool_output_items(&req, "call-1");
     let (_, success) = custom_tool_output_body_and_success(&req, "call-1");
     assert_ne!(success, Some(false));
-    assert_eq!(items.len(), 3);
+    assert_eq!(items.len(), 2);
     assert_eq!(
         items[1],
-        serde_json::json!({
-            "type": "input_image",
-            "image_url": "https://example.com/image.jpg",
-            "detail": "high"
-        })
-    );
-    assert_eq!(
-        items[2],
         serde_json::json!({
             "type": "input_text",
             "text": "image content omitted because it could not be processed"
@@ -2684,6 +2666,46 @@ async fn resize_all_images_resizes_explicit_original_code_mode_image() -> Result
     let resized = image::load_from_memory(&resized_bytes)?;
     let resized_dimensions = resized.dimensions();
     assert_eq!(resized_dimensions, (6000, 94));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_image_helper_rejects_remote_url() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec to return a remote image",
+        r#"image("https://example.com/image.jpg");"#,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let items = custom_tool_output_items(&req, "call-1");
+    let (_, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(true),
+        "code_mode remote image URL unexpectedly succeeded"
+    );
+    assert_eq!(items.len(), 2);
+    assert_regex_match(
+        concat!(
+            r"(?s)\A",
+            r"Script failed\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
+        text_item(&items, /*index*/ 0),
+    );
+    assert_eq!(
+        text_item(&items, /*index*/ 1),
+        concat!(
+            "Script error:\n",
+            "Tool call failed: remote image URLs are not supported in tool outputs. ",
+            "Pass a base64 data URI instead"
+        )
+    );
 
     Ok(())
 }

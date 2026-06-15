@@ -4,14 +4,14 @@ expression: rendered
 ---
 
   > Choose what to import
-  Choose the items to import.
+  Choose the Claude Code items to import.
   Codex may add files to your current project folder.
-  Your existing agent setup will not be changed.
+  Your existing Claude Code setup will not be changed.
   Home
     [x] Settings (settings.json -> config.toml)
         Import /Users/alex/.claude/settings.json into /Users/alex/.codex/conf…
     [x] Recent chat sessions
-        Import recent chat sessions
+        Import recent Claude Code sessions
         1 chat session: Investigate migration UX
 
   Current project: C:\workspace\project

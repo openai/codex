@@ -157,7 +157,7 @@ Request params:
 {
   "processId": "proc-1",
   "argv": ["bash", "-lc", "printf 'hello\\n'"],
-  "cwd": "/absolute/working/directory",
+  "cwd": "file:///absolute/working/directory",
   "env": {
     "PATH": "/usr/bin:/bin"
   },
@@ -171,7 +171,7 @@ Field definitions:
 
 - `processId`: caller-chosen stable id for this process within the connection.
 - `argv`: command vector. It must be non-empty.
-- `cwd`: absolute working directory used for the child process.
+- `cwd`: `file:` URI for the child process working directory.
 - `env`: environment variables passed to the child process.
 - `tty`: when `true`, spawn a PTY-backed interactive process.
 - `pipeStdin`: when `true`, keep non-PTY stdin writable via `process/write`.
@@ -409,7 +409,7 @@ Initialize:
 Start a process:
 
 ```json
-{"id":2,"method":"process/start","params":{"processId":"proc-1","argv":["bash","-lc","printf 'ready\\n'; while IFS= read -r line; do printf 'echo:%s\\n' \"$line\"; done"],"cwd":"/tmp","env":{"PATH":"/usr/bin:/bin"},"tty":true,"pipeStdin":false,"arg0":null}}
+{"id":2,"method":"process/start","params":{"processId":"proc-1","argv":["bash","-lc","printf 'ready\\n'; while IFS= read -r line; do printf 'echo:%s\\n' \"$line\"; done"],"cwd":"file:///tmp","env":{"PATH":"/usr/bin:/bin"},"tty":true,"pipeStdin":false,"arg0":null}}
 {"id":2,"result":{"processId":"proc-1"}}
 {"method":"process/output","params":{"processId":"proc-1","seq":1,"stream":"stdout","chunk":"cmVhZHkK"}}
 ```

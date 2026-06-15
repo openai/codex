@@ -74,6 +74,20 @@ impl ElicitationReviewer for GuardianMcpElicitationReviewer {
 }
 
 impl Session {
+    pub(crate) async fn runtime_mcp_config(&self, config: &Config) -> McpConfig {
+        self.services
+            .mcp_manager
+            .runtime_config_for_thread(config, &self.services.mcp_thread_init)
+            .await
+    }
+
+    pub(crate) async fn runtime_mcp_servers(
+        &self,
+        config: &Config,
+    ) -> HashMap<String, McpServerConfig> {
+        codex_mcp::configured_mcp_servers(&self.runtime_mcp_config(config).await)
+    }
+
     pub(crate) fn mcp_elicitation_reviewer(self: &Arc<Self>) -> ElicitationReviewerHandle {
         Arc::new(GuardianMcpElicitationReviewer::new(self))
     }
@@ -285,26 +299,28 @@ impl Session {
         turn_context: &TurnContext,
         mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
         let auth = self.services.auth_manager.auth().await;
         let config = self.get_config().await;
-        let mcp_config = self
-            .services
-            .mcp_manager
-            .runtime_config(config.as_ref())
-            .await;
+        let mcp_config = self.runtime_mcp_config(config.as_ref()).await;
         let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
         let mcp_servers =
             effective_mcp_servers_from_configured(mcp_servers, &mcp_config, auth.as_ref());
         let host_owned_codex_apps_enabled =
             host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
-        let auth_statuses =
-            compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
+        let auth_statuses = compute_auth_statuses(
+            mcp_servers.iter(),
+            store_mode,
+            keyring_backend_kind,
+            auth.as_ref(),
+        )
+        .await;
         let mcp_runtime_context = match turn_context.environments.primary() {
             Some(turn_environment) => McpRuntimeContext::new(
                 Arc::clone(&self.services.environment_manager),
-                turn_environment.cwd.to_path_buf(),
+                turn_environment.cwd().to_path_buf(),
             ),
             None => McpRuntimeContext::new(
                 Arc::clone(&self.services.environment_manager),
@@ -322,6 +338,7 @@ impl Session {
         let refreshed_manager = McpConnectionManager::new(
             &mcp_servers,
             store_mode,
+            keyring_backend_kind,
             auth_statuses,
             &turn_context.approval_policy,
             turn_context.sub_id.clone(),
@@ -361,6 +378,7 @@ impl Session {
         let McpServerRefreshConfig {
             mcp_servers,
             mcp_oauth_credentials_store_mode,
+            auth_keyring_backend_kind,
         } = refresh_config;
 
         let mcp_servers =
@@ -380,9 +398,23 @@ impl Session {
                 return;
             }
         };
+        let keyring_backend_kind =
+            match serde_json::from_value::<AuthKeyringBackendKind>(auth_keyring_backend_kind) {
+                Ok(kind) => kind,
+                Err(err) => {
+                    warn!("failed to parse MCP auth keyring backend refresh config: {err}");
+                    return;
+                }
+            };
 
-        self.refresh_mcp_servers_inner(turn_context, mcp_servers, store_mode, elicitation_reviewer)
-            .await;
+        self.refresh_mcp_servers_inner(
+            turn_context,
+            mcp_servers,
+            store_mode,
+            keyring_backend_kind,
+            elicitation_reviewer,
+        )
+        .await;
     }
 
     pub(crate) async fn refresh_mcp_servers_now(
@@ -390,10 +422,17 @@ impl Session {
         turn_context: &TurnContext,
         mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
-        self.refresh_mcp_servers_inner(turn_context, mcp_servers, store_mode, elicitation_reviewer)
-            .await;
+        self.refresh_mcp_servers_inner(
+            turn_context,
+            mcp_servers,
+            store_mode,
+            keyring_backend_kind,
+            elicitation_reviewer,
+        )
+        .await;
     }
 
     #[cfg(test)]

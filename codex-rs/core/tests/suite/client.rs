@@ -9,6 +9,7 @@ use codex_core::resolve_installation_id;
 use codex_core::thread_store_from_config;
 use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
+use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::originator;
@@ -502,7 +503,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         .position(|(role, text)| {
             role == "user"
                 && text.contains("be nice")
-                && (text.starts_with("# AGENTS.md instructions for "))
+                && text.starts_with("# AGENTS.md instructions")
         })
         .expect("user instructions");
     let pos_environment = messages
@@ -1178,6 +1179,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         codex_home.path(),
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
     )
     .await
     {
@@ -1284,7 +1286,7 @@ async fn includes_user_instructions_message_in_request() {
     assert!(
         user_context_texts
             .iter()
-            .any(|text| text.starts_with("# AGENTS.md instructions for ")),
+            .any(|text| text.starts_with("# AGENTS.md instructions")),
         "expected AGENTS text in contextual user message, got {user_context_texts:?}"
     );
     let ui_text = user_context_texts
@@ -2370,7 +2372,7 @@ async fn includes_developer_instructions_message_in_request() {
     assert!(
         user_context_texts
             .iter()
-            .any(|text| text.starts_with("# AGENTS.md instructions for ")),
+            .any(|text| text.starts_with("# AGENTS.md instructions")),
         "expected AGENTS text in contextual user message, got {user_context_texts:?}"
     );
     let ui_text = user_context_texts
