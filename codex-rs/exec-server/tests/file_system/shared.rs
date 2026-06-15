@@ -198,7 +198,7 @@ async fn file_system_read_file_returns_bytes(
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_read_file_stream_returns_one_mib_chunks(
+async fn file_system_read_file_stream_returns_bounded_chunks(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
     let context = create_file_system_context(implementation).await?;
@@ -218,9 +218,10 @@ async fn file_system_read_file_stream_returns_one_mib_chunks(
         .try_collect::<Vec<_>>()
         .await?;
 
-    assert_eq!(
-        chunks.iter().map(bytes::Bytes::len).collect::<Vec<_>>(),
-        vec![FILE_READ_CHUNK_SIZE, FILE_READ_CHUNK_SIZE, 17]
+    assert!(
+        chunks
+            .iter()
+            .all(|chunk| !chunk.is_empty() && chunk.len() <= FILE_READ_CHUNK_SIZE)
     );
     assert_eq!(
         chunks

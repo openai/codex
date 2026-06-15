@@ -1,4 +1,3 @@
-use bytes::Bytes;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::path::Path;
@@ -8,7 +7,7 @@ use std::sync::LazyLock;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::io;
-use tokio::io::AsyncReadExt;
+use tokio_util::io::ReaderStream;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
@@ -530,24 +529,9 @@ impl DirectFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileSystemReadStream> {
         let file = self.open_file_for_read(path, sandbox).await?;
-        Ok(FileSystemReadStream::new(futures::stream::try_unfold(
+        Ok(FileSystemReadStream::new(ReaderStream::with_capacity(
             file,
-            |mut file| async move {
-                let mut bytes = vec![0; FILE_READ_CHUNK_SIZE];
-                let mut bytes_read = 0;
-                while bytes_read < bytes.len() {
-                    let read = file.read(&mut bytes[bytes_read..]).await?;
-                    if read == 0 {
-                        break;
-                    }
-                    bytes_read += read;
-                }
-                if bytes_read == 0 {
-                    return Ok(None);
-                }
-                bytes.truncate(bytes_read);
-                Ok(Some((Bytes::from(bytes), file)))
-            },
+            FILE_READ_CHUNK_SIZE,
         )))
     }
 
