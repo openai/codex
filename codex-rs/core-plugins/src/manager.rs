@@ -1313,27 +1313,27 @@ impl PluginsManager {
             })
             .collect();
         let auth_mode = self.auth_mode();
-        let app_declarations = load_plugin_apps(source_path.as_path()).await;
-        let mcp_servers = load_plugin_mcp_servers(source_path.as_path(), auth_mode).await;
-        let projected = if auth_mode.is_some() {
-            resolve_plugin_capabilities(
-                PluginCapabilities::new(app_declarations, mcp_servers),
-                PluginCapabilityContext::new(auth_mode, /*plugin_active*/ true),
-            )
-        } else {
-            PluginCapabilities::new(app_declarations, mcp_servers)
-        };
-        let apps = app_connector_ids_from_declarations(&projected.apps);
+        let mut app_declarations = load_plugin_apps(source_path.as_path()).await;
+        let mut mcp_servers = load_plugin_mcp_servers(source_path.as_path(), auth_mode).await;
+        if auth_mode.is_some() {
+            resolve_app_and_mcp_capabilities(
+                &mut app_declarations,
+                &mut mcp_servers,
+                auth_mode,
+                /*plugin_active*/ true,
+            );
+        }
+        let apps = app_connector_ids_from_declarations(&app_declarations);
         let mut seen_app_connector_ids = HashSet::new();
         let mut app_category_by_id = HashMap::new();
-        for app in &projected.apps {
+        for app in &app_declarations {
             if seen_app_connector_ids.insert(app.connector_id.0.as_str())
                 && let Some(category) = &app.category
             {
                 app_category_by_id.insert(app.connector_id.0.clone(), category.clone());
             }
         }
-        let mut mcp_server_names = projected.mcp_servers.into_keys().collect::<Vec<_>>();
+        let mut mcp_server_names = mcp_servers.into_keys().collect::<Vec<_>>();
         mcp_server_names.sort_unstable();
         mcp_server_names.dedup();
 

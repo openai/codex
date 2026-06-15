@@ -1,6 +1,4 @@
-use crate::capabilities::PluginCapabilities;
-use crate::capabilities::PluginCapabilityContext;
-use crate::capabilities::resolve_plugin_capabilities;
+use crate::capabilities::resolve_app_and_mcp_capabilities;
 use crate::loader::plugin_app_declarations_from_value;
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
@@ -1072,29 +1070,29 @@ async fn build_remote_plugin_detail(
             enabled: !disabled_skill_names.contains(&skill.name),
         })
         .collect();
-    let app_declarations = plugin
+    let mut app_declarations = plugin
         .release
         .app_manifest
         .as_ref()
         .map(plugin_app_declarations_from_value)
         .unwrap_or_else(|| app_declarations_from_remote_app_ids(&plugin.release.app_ids));
-    let mcp_servers = plugin
+    let mut mcp_servers = plugin
         .release
         .mcp_servers
         .iter()
         .map(|server| (server.key.clone(), ()))
         .collect::<HashMap<_, _>>();
-    let capability_context =
-        PluginCapabilityContext::new(Some(auth.api_auth_mode()), /*plugin_active*/ true);
-    let projected = resolve_plugin_capabilities(
-        PluginCapabilities::new(app_declarations, mcp_servers),
-        capability_context,
+    resolve_app_and_mcp_capabilities(
+        &mut app_declarations,
+        &mut mcp_servers,
+        Some(auth.api_auth_mode()),
+        /*plugin_active*/ true,
     );
-    let app_ids = app_connector_ids_from_declarations(&projected.apps)
+    let app_ids = app_connector_ids_from_declarations(&app_declarations)
         .into_iter()
         .map(|app_id| app_id.0)
         .collect();
-    let mut mcp_servers = projected.mcp_servers.into_keys().collect::<Vec<_>>();
+    let mut mcp_servers = mcp_servers.into_keys().collect::<Vec<_>>();
     mcp_servers.sort_unstable();
     mcp_servers.dedup();
 
