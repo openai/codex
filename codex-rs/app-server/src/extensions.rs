@@ -59,8 +59,14 @@ where
         executor_skill_provider,
         thread_store: _thread_store,
     } = dependencies;
-    let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(event_sink);
+    let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(Arc::clone(&event_sink));
     if let Some(state_db) = state_db {
+        let queue_service = Arc::new(codex_queue_extension::QueuedItemService::new(
+            Arc::clone(&state_db),
+            thread_manager.clone(),
+            Arc::clone(&event_sink),
+        ));
+        codex_queue_extension::install(&mut builder, queue_service);
         codex_goal_extension::install_with_backend(
             &mut builder,
             state_db,

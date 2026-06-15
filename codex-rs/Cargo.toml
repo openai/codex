@@ -49,6 +49,7 @@ members = [
     "execpolicy-legacy",
     "ext/extension-api",
     "ext/goal",
+    "ext/queue",
     "ext/guardian",
     "ext/image-generation",
     "ext/memories",
@@ -175,6 +176,7 @@ codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
 codex-extension-api = { path = "ext/extension-api" }
 codex-goal-extension = { path = "ext/goal" }
+codex-queue-extension = { path = "ext/queue" }
 codex-guardian = { path = "ext/guardian" }
 codex-image-generation-extension = { path = "ext/image-generation" }
 codex-external-agent-migration = { path = "external-agent-migration" }

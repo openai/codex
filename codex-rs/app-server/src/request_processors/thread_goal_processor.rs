@@ -63,18 +63,11 @@ impl ThreadGoalRequestProcessor {
             .map(|()| None)
     }
 
-    pub(crate) async fn emit_resume_goal_snapshot_and_continue(
-        &self,
-        thread_id: ThreadId,
-        thread: &CodexThread,
-    ) {
+    pub(crate) async fn emit_resume_goal_snapshot(&self, thread_id: ThreadId) {
         if !self.config.features.enabled(Feature::Goals) {
             return;
         }
         self.emit_thread_goal_snapshot(thread_id).await;
-        // App-server owns resume response and snapshot ordering, so wait until
-        // those are sent before letting extensions react to the idle thread.
-        thread.emit_thread_idle_lifecycle_if_idle().await;
     }
 
     pub(crate) async fn pending_resume_goal_state(
