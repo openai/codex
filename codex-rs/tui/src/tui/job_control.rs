@@ -72,6 +72,7 @@ impl SuspendContext {
         let y = self.suspend_cursor_y.load(Ordering::Relaxed);
         let _ = execute!(stdout(), MoveTo(0, y), Show);
         suspend_process()?;
+        super::reapply_raw_mode_after_resume()?;
 
         // The shell writes its job-control status and the resumed command after `fg`, so the
         // cursor may no longer be on the row cached before suspending. The event stream remains
@@ -87,7 +88,6 @@ impl SuspendContext {
             ),
         }
         super::flush_terminal_input_buffer();
-        super::reapply_raw_mode_after_resume()?;
         tracing::trace!(
             event = "tui_suspend_resumed",
             cursor_y = self.cursor_y(),
