@@ -11,8 +11,11 @@ use rmcp::model::Meta;
 use rmcp::model::Tool;
 
 use super::*;
+use crate::config::CONFIG_TOML_FILE;
+use crate::config::ConfigBuilder;
 use crate::config::test_config;
 use crate::connectors::AppInfo;
+use tempfile::tempdir;
 
 fn make_connector(id: &str, name: &str) -> AppInfo {
     AppInfo {
@@ -178,6 +181,57 @@ async fn excludes_tools_hidden_from_model_exposure() {
     assert_eq!(
         tool_names(&exposure.direct_tools),
         tool_names(&[visible_tool, visible_app_tool])
+    );
+    assert!(exposure.deferred_tools.is_none());
+}
+
+#[tokio::test]
+async fn applies_per_tool_app_policy_across_the_exposure_build() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[apps.calendar]
+default_tools_enabled = false
+
+[apps.calendar.tools."events/create"]
+enabled = true
+"#,
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should build");
+    let enabled_tool = make_mcp_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "events/create",
+        "mcp__codex_apps__calendar",
+        "create",
+        Some("calendar"),
+        Some("Calendar"),
+    );
+    let disabled_tool = make_mcp_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "events/list",
+        "mcp__codex_apps__calendar",
+        "list",
+        Some("calendar"),
+        Some("Calendar"),
+    );
+    let connectors = vec![make_connector("calendar", "Calendar")];
+
+    let exposure = build_mcp_tool_exposure(
+        &[enabled_tool.clone(), disabled_tool],
+        Some(connectors.as_slice()),
+        &config,
+        /*search_tool_enabled*/ false,
+    );
+
+    assert_eq!(
+        tool_names(&exposure.direct_tools),
+        tool_names(&[enabled_tool])
     );
     assert!(exposure.deferred_tools.is_none());
 }
