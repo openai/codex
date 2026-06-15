@@ -3577,24 +3577,29 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
     let (api_server, completions) =
         start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
 
-    let realtime_server = start_websocket_server(vec![vec![
-        vec![json!({
-            "type": "session.updated",
-            "session": { "id": "sess_steer", "instructions": "backend prompt" }
-        })],
-        vec![
-            json!({
-                "type": "conversation.input_transcript.delta",
-                "delta": "steer via realtime"
-            }),
-            json!({
-                "type": "conversation.handoff.requested",
-                "handoff_id": "handoff_steer",
-                "item_id": "item_steer",
-                "input_transcript": "steer via realtime"
-            }),
+    let realtime_server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![
+            vec![json!({
+                "type": "session.updated",
+                "session": { "id": "sess_steer", "instructions": "backend prompt" }
+            })],
+            vec![
+                json!({
+                    "type": "conversation.input_transcript.delta",
+                    "delta": "steer via realtime"
+                }),
+                json!({
+                    "type": "conversation.handoff.requested",
+                    "handoff_id": "handoff_steer",
+                    "item_id": "item_steer",
+                    "input_transcript": "steer via realtime"
+                }),
+            ],
         ],
-    ]])
+        response_headers: Vec::new(),
+        accept_delay: None,
+        close_after_requests: false,
+    }])
     .await;
 
     let mut builder = test_codex().with_model("gpt-5.4").with_config({
