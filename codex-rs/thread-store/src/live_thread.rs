@@ -135,18 +135,15 @@ impl LiveThread {
 
     pub async fn append_items(&self, items: &[RolloutItem]) -> ThreadStoreResult<()> {
         let canonical_items = persisted_rollout_items(items);
-        if items.is_empty() {
+        if canonical_items.is_empty() {
             return Ok(());
         }
         self.thread_store
             .append_items(AppendThreadItemsParams {
                 thread_id: self.thread_id,
-                items: items.to_vec(),
+                items: canonical_items.clone(),
             })
             .await?;
-        if canonical_items.is_empty() {
-            return Ok(());
-        }
         let update = self
             .metadata_sync
             .lock()

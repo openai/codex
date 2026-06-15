@@ -133,6 +133,7 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
+use codex_rollout::should_persist_event_msg;
 use codex_rollout::state_db;
 use codex_rollout_trace::AgentResultTracePayload;
 use codex_rollout_trace::ThreadStartedTraceMetadata;
@@ -1855,9 +1856,10 @@ impl Session {
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
-        // Persist the event into rollout storage (the store filters as needed).
-        let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
-        self.persist_rollout_items(&rollout_items).await;
+        if should_persist_event_msg(&event.msg) {
+            let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
+            self.persist_rollout_items(&rollout_items).await;
+        }
         self.services
             .rollout_thread_trace
             .record_protocol_event(&event.msg);
