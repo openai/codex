@@ -1959,9 +1959,9 @@ Field notes:
 
 - `idempotencyKey` must be non-empty. A UUID is recommended for each logical redemption attempt; reuse the same value when retrying that attempt.
 - `reset` means a credit was consumed.
-- `already_redeemed` means the same redemption completed previously. Treat it as an idempotent success and refresh account limits.
-- `nothing_to_reset` means there is no eligible rate-limit window to reset.
-- `no_credit` means the account has no earned reset credits available.
+- `alreadyRedeemed` means the same redemption completed previously. Treat it as an idempotent success and refresh account limits.
+- `nothingToReset` means there is no eligible rate-limit window to reset.
+- `noCredit` means the account has no earned reset credits available.
 - Refetch `account/rateLimits/read` after consuming a reset instead of inferring updated windows from this response.
 
 ### 9) Notify a workspace owner about a limit

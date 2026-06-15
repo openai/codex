@@ -283,8 +283,8 @@ pub struct ConsumeAccountRateLimitResetCreditResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(export_to = "v2/", rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/", rename_all = "camelCase")]
 pub enum ConsumeAccountRateLimitResetCreditOutcome {
     /// A reset credit was consumed and the eligible rate-limit windows were reset.
     Reset,
