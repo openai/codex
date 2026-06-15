@@ -9,6 +9,7 @@ use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
@@ -76,6 +77,48 @@ async fn external_agent_config_import_sends_completion_notification_for_sync_onl
     let completed: ExternalAgentConfigImportCompletedNotification =
         serde_json::from_value(notification.params.expect("completed params"))?;
     assert_eq!(completed.import_id, import_id);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn external_agent_config_import_returns_error_for_failed_sync_import() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::create_dir_all(codex_home.path().join(".claude"))?;
+    std::fs::write(
+        codex_home.path().join(".claude").join("settings.json"),
+        r#"{"env":{"FOO":"bar"}}"#,
+    )?;
+    std::fs::write(codex_home.path().join("config.toml"), "invalid = [")?;
+    let home_dir = codex_home.path().display().to_string();
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
+            .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request(
+            "externalAgentConfig/import",
+            Some(serde_json::json!({
+                "migrationItems": [{
+                    "itemType": "CONFIG",
+                    "description": "Import config",
+                    "cwd": null
+                }]
+            })),
+        )
+        .await?;
+
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(error.error.code, -32603);
+    assert!(
+        error.error.message.contains("invalid existing config.toml"),
+        "unexpected error: {error:?}"
+    );
 
     Ok(())
 }

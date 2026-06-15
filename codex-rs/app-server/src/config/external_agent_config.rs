@@ -400,16 +400,11 @@ impl ExternalAgentConfigService {
                 ExternalAgentConfigMigrationItemType::Sessions => Ok(()),
             };
             if let Err(err) = import_result {
-                if item_type != ExternalAgentConfigMigrationItemType::Plugins {
-                    record_import_error(
-                        &mut item_result,
-                        "item_import",
-                        err.to_string(),
-                        /*source*/ None,
-                    );
+                if item_type == ExternalAgentConfigMigrationItemType::Plugins {
+                    outcome.item_results.push(item_result);
+                    continue;
                 }
-                outcome.item_results.push(item_result);
-                continue;
+                return Err(err);
             }
             outcome.item_results.push(item_result);
         }
