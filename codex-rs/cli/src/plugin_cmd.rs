@@ -17,6 +17,8 @@ use codex_core_plugins::marketplace::MarketplacePluginAuthPolicy;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
 use codex_core_plugins::marketplace::MarketplacePluginSource;
 use codex_core_plugins::marketplace::find_marketplace_manifest_path;
+use codex_login::CodexAuth;
+use codex_login::auth::read_codex_api_key_from_env;
 use codex_plugin::PluginId;
 use codex_plugin::validate_plugin_segment;
 use codex_utils_cli::CliConfigOverrides;
@@ -548,8 +550,22 @@ async fn load_plugin_command_context(
     let config = Config::load_with_cli_overrides(overrides)
         .await
         .context("failed to load configuration")?;
+    let auth = if let Some(api_key) = read_codex_api_key_from_env() {
+        Some(CodexAuth::from_api_key(&api_key))
+    } else {
+        CodexAuth::from_auth_storage(
+            &config.codex_home,
+            config.cli_auth_credentials_store_mode,
+            Some(&config.chatgpt_base_url),
+            config.auth_keyring_backend_kind(),
+        )
+        .await
+        .ok()
+        .flatten()
+    };
     let plugins_input = config.plugins_config_input();
     let manager = PluginsManager::new(codex_home.to_path_buf());
+    manager.set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
     Ok(PluginCommandContext {
         codex_home: codex_home.to_path_buf(),
         plugins_input,

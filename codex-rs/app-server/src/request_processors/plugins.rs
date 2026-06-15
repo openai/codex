@@ -8,6 +8,7 @@ use codex_app_server_protocol::PluginShareTargetRole;
 use codex_config::types::McpServerConfig;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginListBackgroundTaskOptions;
+use codex_core_plugins::is_openai_curated_marketplace_name;
 use codex_core_plugins::remote::REMOTE_CREATED_BY_ME_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_WORKSPACE_MARKETPLACE_NAME;
@@ -174,9 +175,9 @@ fn filter_openai_curated_installed_conflicts(
 ) {
     let local_installed_plugin_names = marketplaces
         .iter()
-        .find(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
-        .map(|marketplace| installed_plugin_names(&marketplace.plugins))
-        .unwrap_or_default();
+        .filter(|marketplace| is_openai_curated_marketplace_name(&marketplace.name))
+        .flat_map(|marketplace| installed_plugin_names(&marketplace.plugins))
+        .collect::<HashSet<_>>();
     let remote_installed_plugin_names = marketplaces
         .iter()
         .find(|marketplace| marketplace.name == REMOTE_GLOBAL_MARKETPLACE_NAME)
@@ -190,13 +191,12 @@ fn filter_openai_curated_installed_conflicts(
         return;
     }
 
-    let marketplace_to_filter = if prefer_remote_curated_conflicts {
-        OPENAI_CURATED_MARKETPLACE_NAME
-    } else {
-        REMOTE_GLOBAL_MARKETPLACE_NAME
-    };
     for marketplace in marketplaces.iter_mut() {
-        if marketplace.name != marketplace_to_filter {
+        if prefer_remote_curated_conflicts {
+            if !is_openai_curated_marketplace_name(&marketplace.name) {
+                continue;
+            }
+        } else if marketplace.name != REMOTE_GLOBAL_MARKETPLACE_NAME {
             continue;
         }
         marketplace
@@ -741,9 +741,10 @@ impl PluginRequestProcessor {
             );
         }
 
-        let featured_plugin_ids = if data
-            .iter()
-            .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
+        let featured_plugin_ids = if !plugins_input.remote_plugin_enabled
+            && data
+                .iter()
+                .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
         {
             match plugins_manager
                 .featured_plugin_ids_for_config(&plugins_input, auth.as_ref())

@@ -74,11 +74,7 @@ impl PluginsManager {
         }
 
         let marketplaces = self
-            .list_marketplaces_for_config(
-                &input.plugins,
-                &[],
-                /*include_openai_curated*/ !input.plugins.remote_plugin_enabled,
-            )
+            .list_marketplaces_for_config(&input.plugins, &[], /*include_openai_curated*/ true)
             .context("failed to list plugin marketplaces for tool suggestions")?
             .marketplaces;
         let remote_installed_marketplaces = if input.plugins.remote_plugin_enabled {
