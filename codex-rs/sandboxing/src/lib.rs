@@ -5,6 +5,7 @@ mod manager;
 pub mod policy_transforms;
 #[cfg(target_os = "macos")]
 pub mod seatbelt;
+mod windows;
 
 #[cfg(target_os = "linux")]
 pub use bwrap::find_system_bwrap_in_path;
@@ -21,6 +22,12 @@ pub use manager::SandboxablePreference;
 pub use manager::compatibility_sandbox_policy_for_permission_profile;
 pub use manager::get_platform_sandbox;
 pub use manager::with_managed_mitm_ca_readable_root;
+pub use windows::WindowsSandboxFilesystemOverrides;
+pub use windows::permission_profile_supports_windows_restricted_token_sandbox;
+pub use windows::resolve_windows_elevated_filesystem_overrides;
+pub use windows::resolve_windows_restricted_token_filesystem_overrides;
+pub use windows::unsupported_windows_restricted_token_sandbox_reason;
+pub use windows::windows_sandbox_uses_elevated_backend;
 
 use codex_protocol::error::CodexErr;
 

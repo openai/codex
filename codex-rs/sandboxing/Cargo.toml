@@ -17,6 +17,7 @@ codex-network-proxy = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
+codex-windows-sandbox = { workspace = true }
 dunce = { workspace = true }
 libc = { workspace = true }
 serde_json = { workspace = true }
@@ -27,7 +28,6 @@ which = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 codex-utils-home-dir = { workspace = true }
-codex-windows-sandbox = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }

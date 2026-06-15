@@ -7,6 +7,9 @@ use crate::landlock::allow_network_for_proxy;
 use crate::landlock::create_linux_sandbox_command_args_for_permission_profile;
 use crate::policy_transforms::effective_permission_profile;
 use crate::policy_transforms::should_require_platform_sandbox;
+use crate::resolve_windows_elevated_filesystem_overrides;
+use crate::resolve_windows_restricted_token_filesystem_overrides;
+use crate::windows_sandbox_uses_elevated_backend;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -395,6 +398,41 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
     *program = helper.to_string_lossy().into_owned();
 
     let inner_command = std::mem::take(&mut request.command);
+    let proxy_enforced = request.network.is_some();
+    let use_elevated =
+        windows_sandbox_uses_elevated_backend(request.windows_sandbox_level, proxy_enforced);
+    let overrides = if use_elevated {
+        resolve_windows_elevated_filesystem_overrides(
+            request.sandbox,
+            &request.permission_profile,
+            &request.sandbox_policy_cwd,
+            use_elevated,
+        )
+    } else {
+        resolve_windows_restricted_token_filesystem_overrides(
+            request.sandbox,
+            &request.permission_profile,
+            &request.sandbox_policy_cwd,
+            request.windows_sandbox_level,
+        )
+    }
+    .map_err(SandboxTransformError::WindowsSandboxPreparation)?;
+    let empty_paths: &[AbsolutePathBuf] = &[];
+    let read_roots_override = overrides
+        .as_ref()
+        .and_then(|overrides| overrides.read_roots_override.as_deref());
+    let read_roots_include_platform_defaults = overrides
+        .as_ref()
+        .is_some_and(|overrides| overrides.read_roots_include_platform_defaults);
+    let write_roots_override = overrides
+        .as_ref()
+        .and_then(|overrides| overrides.write_roots_override.as_deref());
+    let deny_read_paths_override = overrides.as_ref().map_or(empty_paths, |overrides| {
+        overrides.additional_deny_read_paths.as_slice()
+    });
+    let deny_write_paths_override = overrides.as_ref().map_or(empty_paths, |overrides| {
+        overrides.additional_deny_write_paths.as_slice()
+    });
     let mut wrapper_args =
         codex_windows_sandbox::create_windows_sandbox_command_args_for_permission_profile(
             inner_command,
@@ -404,6 +442,12 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
             &request.permission_profile,
             request.windows_sandbox_level,
             request.windows_sandbox_private_desktop,
+            proxy_enforced,
+            read_roots_override,
+            read_roots_include_platform_defaults,
+            write_roots_override,
+            deny_read_paths_override,
+            deny_write_paths_override,
             codex_home.as_path(),
         );
 

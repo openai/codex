@@ -490,6 +490,29 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
     std::fs::write(&configured_helper, b"helper").expect("write configured helper");
     let cwd = AbsolutePathBuf::from_absolute_path(helper_dir.path()).expect("absolute cwd");
     let cwd_uri = PathUri::from_abs_path(&cwd);
+    let blocked = cwd.join("blocked");
+    std::fs::create_dir_all(blocked.as_path()).expect("create blocked path");
+    let permissions = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: blocked },
+                access: FileSystemAccessMode::Deny,
+            },
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
     let other_workspace = tempfile::TempDir::new().expect("other workspace");
     let other_workspace_root = AbsolutePathBuf::from_absolute_path(other_workspace.path())
         .expect("absolute other workspace");
@@ -506,14 +529,14 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
                     env: HashMap::from([("Path".to_string(), r"C:\Windows\System32".to_string())]),
                     additional_permissions: None,
                 },
-                permissions: &PermissionProfile::read_only(),
+                permissions: &permissions,
                 sandbox: SandboxType::WindowsRestrictedToken,
                 enforce_managed_network: false,
                 network: None,
                 sandbox_policy_cwd: &cwd_uri,
                 codex_linux_sandbox_exe: None,
                 use_legacy_landlock: false,
-                windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+                windows_sandbox_level: WindowsSandboxLevel::Elevated,
                 windows_sandbox_private_desktop: false,
             },
         })
@@ -535,6 +558,12 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
             .command
             .iter()
             .any(|arg| arg == "--run-as-windows-sandbox")
+    );
+    assert!(
+        exec_request
+            .command
+            .iter()
+            .any(|arg| arg == "--deny-read-paths-json")
     );
     assert_eq!(
         exec_request.command[separator_index + 2],
