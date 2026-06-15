@@ -162,6 +162,10 @@ impl McpHandler {
 }
 
 impl CoreToolRuntime for McpHandler {
+    fn hook_tool_name(&self, _invocation: &ToolInvocation) -> Option<HookToolName> {
+        Some(self.hook_tool_name())
+    }
+
     fn telemetry_tags<'a>(
         &'a self,
         _invocation: &'a ToolInvocation,

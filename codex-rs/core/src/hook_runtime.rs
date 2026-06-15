@@ -162,6 +162,7 @@ pub(crate) async fn run_pending_session_start_hooks(
 pub(crate) async fn run_pre_tool_use_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    hooks: &codex_hooks::Hooks,
     tool_use_id: String,
     tool_name: &HookToolName,
     tool_input: &Value,
@@ -180,7 +181,6 @@ pub(crate) async fn run_pre_tool_use_hooks(
         tool_use_id,
         tool_input: tool_input.clone(),
     };
-    let hooks = sess.hooks();
     let preview_runs = hooks.preview_pre_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
@@ -263,6 +263,7 @@ pub(crate) async fn run_permission_request_hooks(
 pub(crate) async fn run_post_tool_use_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    hooks: &codex_hooks::Hooks,
     tool_use_id: String,
     tool_name: String,
     matcher_aliases: Vec<String>,
@@ -284,7 +285,6 @@ pub(crate) async fn run_post_tool_use_hooks(
         tool_input,
         tool_response,
     };
-    let hooks = sess.hooks();
     let preview_runs = hooks.preview_post_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 

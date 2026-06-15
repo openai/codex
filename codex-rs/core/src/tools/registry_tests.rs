@@ -28,6 +28,56 @@ impl ToolExecutor<ToolInvocation> for TestHandler {
 
 impl CoreToolRuntime for TestHandler {}
 
+struct HookPayloadCountingHandler {
+    tool_name: codex_tools::ToolName,
+    payloads_built: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl ToolExecutor<ToolInvocation> for HookPayloadCountingHandler {
+    fn tool_name(&self) -> codex_tools::ToolName {
+        self.tool_name.clone()
+    }
+
+    fn spec(&self) -> codex_tools::ToolSpec {
+        test_spec(&self.tool_name)
+    }
+
+    fn handle(&self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(async {
+            Ok(Box::new(FunctionToolOutput::from_text(
+                "ok".to_string(),
+                /*success*/ Some(true),
+            )) as Box<dyn ToolOutput>)
+        })
+    }
+}
+
+impl CoreToolRuntime for HookPayloadCountingHandler {
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        self.payloads_built
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Some(PreToolUsePayload {
+            tool_name: self.hook_tool_name(invocation)?,
+            tool_input: serde_json::json!({}),
+        })
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        invocation: &ToolInvocation,
+        _result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload> {
+        self.payloads_built
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Some(PostToolUsePayload {
+            tool_name: self.hook_tool_name(invocation)?,
+            tool_use_id: invocation.call_id.clone(),
+            tool_input: serde_json::json!({}),
+            tool_response: serde_json::json!({}),
+        })
+    }
+}
+
 #[derive(Clone)]
 enum LifecycleTestResult {
     Ok { success: bool },
@@ -83,6 +133,30 @@ fn test_spec(tool_name: &codex_tools::ToolName) -> codex_tools::ToolSpec {
         parameters: codex_tools::JsonSchema::default(),
         output_schema: None,
     })
+}
+
+#[tokio::test]
+async fn dispatch_skips_hook_payloads_without_matching_handlers() -> anyhow::Result<()> {
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
+    let tool_name = codex_tools::ToolName::plain("count_payloads");
+    let payloads_built = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let handler = Arc::new(HookPayloadCountingHandler {
+        tool_name: tool_name.clone(),
+        payloads_built: Arc::clone(&payloads_built),
+    }) as Arc<dyn CoreToolRuntime>;
+    let registry = ToolRegistry::new(HashMap::from([(tool_name.clone(), handler)]));
+
+    registry
+        .dispatch_any(test_invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "call-1",
+            tool_name,
+        ))
+        .await?;
+
+    assert_eq!(payloads_built.load(std::sync::atomic::Ordering::Relaxed), 0);
+    Ok(())
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -334,7 +408,6 @@ fn post_tool_use_feedback_output_keeps_code_mode_result_typed() {
                 /*success*/ None,
             ),
         }),
-        post_tool_use_payload: None,
     };
 
     assert_eq!(
@@ -361,7 +434,6 @@ fn post_tool_use_feedback_output_keeps_code_mode_result_typed() {
                 /*success*/ None,
             ),
         }),
-        post_tool_use_payload: None,
     };
 
     assert_eq!(

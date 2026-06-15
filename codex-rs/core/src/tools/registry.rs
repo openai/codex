@@ -65,6 +65,12 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         Box::pin(async { Vec::new() })
     }
 
+    /// Returns the stable hook identity without constructing the hook payload.
+    fn hook_tool_name(&self, invocation: &ToolInvocation) -> Option<HookToolName> {
+        matches!(&invocation.payload, ToolPayload::Function { .. })
+            .then(|| function_hook_tool_name(invocation))
+    }
+
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
@@ -75,7 +81,7 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         };
 
         Some(PostToolUsePayload {
-            tool_name: function_hook_tool_name(invocation),
+            tool_name: self.hook_tool_name(invocation)?,
             tool_use_id: result.post_tool_use_id(&invocation.call_id),
             tool_input: result
                 .post_tool_use_input(&invocation.payload)
@@ -105,7 +111,7 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         };
 
         Some(PreToolUsePayload {
-            tool_name: function_hook_tool_name(invocation),
+            tool_name: self.hook_tool_name(invocation)?,
             tool_input: function_hook_tool_input(arguments),
         })
     }
@@ -160,7 +166,6 @@ pub(crate) struct AnyToolResult {
     pub(crate) call_id: String,
     pub(crate) payload: ToolPayload,
     pub(crate) result: Box<dyn ToolOutput>,
-    pub(crate) post_tool_use_payload: Option<PostToolUsePayload>,
 }
 
 impl AnyToolResult {
@@ -283,6 +288,10 @@ impl CoreToolRuntime for ExposureOverride {
 
     fn waits_for_runtime_cancellation(&self) -> bool {
         self.handler.waits_for_runtime_cancellation()
+    }
+
+    fn hook_tool_name(&self, invocation: &ToolInvocation) -> Option<HookToolName> {
+        self.handler.hook_tool_name(invocation)
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
@@ -490,10 +499,18 @@ impl ToolRegistry {
 
         notify_tool_start(&invocation).await;
 
-        if let Some(pre_tool_use_payload) = tool.pre_tool_use_payload(&invocation) {
+        let pre_tool_use_hooks = invocation.session.hooks();
+        let has_matching_pre_tool_use = tool.hook_tool_name(&invocation).is_some_and(|tool_name| {
+            pre_tool_use_hooks
+                .has_matching_pre_tool_use(tool_name.name(), tool_name.matcher_aliases())
+        });
+        if has_matching_pre_tool_use
+            && let Some(pre_tool_use_payload) = tool.pre_tool_use_payload(&invocation)
+        {
             match run_pre_tool_use_hooks(
                 &invocation.session,
                 &invocation.turn,
+                pre_tool_use_hooks.as_ref(),
                 invocation.call_id.clone(),
                 &pre_tool_use_payload.tool_name,
                 &pre_tool_use_payload.tool_input,
@@ -570,11 +587,17 @@ impl ToolRegistry {
             Err(_) => false,
         };
         emit_metric_for_tool_read(&invocation, success).await;
-        let post_tool_use_payload = if success {
+        let post_tool_use_hooks = invocation.session.hooks();
+        let has_matching_post_tool_use =
+            tool.hook_tool_name(&invocation).is_some_and(|tool_name| {
+                post_tool_use_hooks
+                    .has_matching_post_tool_use(tool_name.name(), tool_name.matcher_aliases())
+            });
+        let post_tool_use_payload = if success && has_matching_post_tool_use {
             let guard = response_cell.lock().await;
             guard
                 .as_ref()
-                .and_then(|result| result.post_tool_use_payload.clone())
+                .and_then(|result| tool.post_tool_use_payload(&invocation, result.result.as_ref()))
         } else {
             None
         };
@@ -583,6 +606,7 @@ impl ToolRegistry {
                 run_post_tool_use_hooks(
                     &invocation.session,
                     &invocation.turn,
+                    post_tool_use_hooks.as_ref(),
                     post_tool_use_payload.tool_use_id,
                     post_tool_use_payload.tool_name.name().to_string(),
                     post_tool_use_payload.tool_name.matcher_aliases().to_vec(),
@@ -703,13 +727,10 @@ async fn handle_any_tool(
         )
         .await;
     }
-    let post_tool_use_payload =
-        CoreToolRuntime::post_tool_use_payload(tool, &invocation, output.as_ref());
     Ok(AnyToolResult {
         call_id,
         payload,
         result: output,
-        post_tool_use_payload,
     })
 }
 

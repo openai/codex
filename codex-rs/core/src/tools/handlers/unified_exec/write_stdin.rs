@@ -3,6 +3,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
@@ -103,6 +104,10 @@ impl WriteStdinHandler {
 }
 
 impl CoreToolRuntime for WriteStdinHandler {
+    fn hook_tool_name(&self, invocation: &ToolInvocation) -> Option<HookToolName> {
+        matches!(&invocation.payload, ToolPayload::Function { .. }).then(HookToolName::bash)
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }

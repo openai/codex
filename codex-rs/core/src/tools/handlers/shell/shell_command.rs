@@ -208,6 +208,10 @@ impl ShellCommandHandler {
 }
 
 impl CoreToolRuntime for ShellCommandHandler {
+    fn hook_tool_name(&self, invocation: &ToolInvocation) -> Option<HookToolName> {
+        matches!(&invocation.payload, ToolPayload::Function { .. }).then(HookToolName::bash)
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }

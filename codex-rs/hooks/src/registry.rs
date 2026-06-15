@@ -120,6 +120,12 @@ impl Hooks {
         self.engine.preview_pre_tool_use(request)
     }
 
+    /// Returns whether a `PreToolUse` handler matches this tool identity.
+    pub fn has_matching_pre_tool_use(&self, tool_name: &str, matcher_aliases: &[String]) -> bool {
+        self.engine
+            .has_matching_pre_tool_use(tool_name, matcher_aliases)
+    }
+
     pub fn preview_permission_request(
         &self,
         request: &PermissionRequestRequest,
@@ -132,6 +138,12 @@ impl Hooks {
         request: &PostToolUseRequest,
     ) -> Vec<codex_protocol::protocol::HookRunSummary> {
         self.engine.preview_post_tool_use(request)
+    }
+
+    /// Returns whether a `PostToolUse` handler matches this tool identity.
+    pub fn has_matching_post_tool_use(&self, tool_name: &str, matcher_aliases: &[String]) -> bool {
+        self.engine
+            .has_matching_post_tool_use(tool_name, matcher_aliases)
     }
 
     pub async fn run_session_start(

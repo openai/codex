@@ -466,6 +466,10 @@ impl ApplyPatchHandler {
 }
 
 impl CoreToolRuntime for ApplyPatchHandler {
+    fn hook_tool_name(&self, invocation: &ToolInvocation) -> Option<HookToolName> {
+        matches!(&invocation.payload, ToolPayload::Custom { .. }).then(HookToolName::apply_patch)
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Custom { .. })
     }

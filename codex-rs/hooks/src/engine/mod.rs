@@ -152,6 +152,15 @@ impl ClaudeHooksEngine {
         crate::events::pre_tool_use::preview(&self.handlers, request)
     }
 
+    pub(crate) fn has_matching_pre_tool_use(
+        &self,
+        tool_name: &str,
+        matcher_aliases: &[String],
+    ) -> bool {
+        let matcher_inputs = crate::events::common::matcher_inputs(tool_name, matcher_aliases);
+        dispatcher::has_matching_handler(&self.handlers, HookEventName::PreToolUse, &matcher_inputs)
+    }
+
     pub(crate) fn preview_permission_request(
         &self,
         request: &PermissionRequestRequest,
@@ -164,6 +173,19 @@ impl ClaudeHooksEngine {
         request: &PostToolUseRequest,
     ) -> Vec<HookRunSummary> {
         crate::events::post_tool_use::preview(&self.handlers, request)
+    }
+
+    pub(crate) fn has_matching_post_tool_use(
+        &self,
+        tool_name: &str,
+        matcher_aliases: &[String],
+    ) -> bool {
+        let matcher_inputs = crate::events::common::matcher_inputs(tool_name, matcher_aliases);
+        dispatcher::has_matching_handler(
+            &self.handlers,
+            HookEventName::PostToolUse,
+            &matcher_inputs,
+        )
     }
 
     pub(crate) async fn run_session_start(

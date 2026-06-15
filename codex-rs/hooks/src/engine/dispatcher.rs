@@ -43,8 +43,28 @@ pub(crate) fn select_handlers_for_matcher_inputs(
     // single time for one tool call, not once per matching alias.
     handlers
         .iter()
-        .filter(|handler| handler.event_name == event_name)
-        .filter(|handler| match event_name {
+        .filter(|handler| handler_matches(handler, event_name, matcher_inputs))
+        .cloned()
+        .collect()
+}
+
+pub(crate) fn has_matching_handler(
+    handlers: &[ConfiguredHandler],
+    event_name: HookEventName,
+    matcher_inputs: &[&str],
+) -> bool {
+    handlers
+        .iter()
+        .any(|handler| handler_matches(handler, event_name, matcher_inputs))
+}
+
+fn handler_matches(
+    handler: &ConfiguredHandler,
+    event_name: HookEventName,
+    matcher_inputs: &[&str],
+) -> bool {
+    handler.event_name == event_name
+        && match event_name {
             HookEventName::PreToolUse
             | HookEventName::PermissionRequest
             | HookEventName::PostToolUse
@@ -62,9 +82,7 @@ pub(crate) fn select_handlers_for_matcher_inputs(
                 }
             }
             HookEventName::UserPromptSubmit | HookEventName::Stop => true,
-        })
-        .cloned()
-        .collect()
+        }
 }
 
 pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
