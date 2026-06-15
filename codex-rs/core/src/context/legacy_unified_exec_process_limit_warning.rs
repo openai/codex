@@ -5,9 +5,17 @@ use super::ContextualUserFragment;
 pub(crate) struct LegacyUnifiedExecProcessLimitWarning;
 
 impl ContextualUserFragment for LegacyUnifiedExecProcessLimitWarning {
-    const ROLE: &'static str = "user";
-    const START_MARKER: &'static str = "";
-    const END_MARKER: &'static str = "";
+    fn role(&self) -> &'static str {
+        "user"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("", "")
+    }
 
     fn matches_text(text: &str) -> bool {
         text.trim().starts_with(

@@ -5,7 +5,11 @@ use codex_protocol::models::ResponseItem;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 
+use super::AdditionalContextStore;
+use super::auto_compact_window::AutoCompactWindow;
+use super::auto_compact_window::AutoCompactWindowSnapshot;
 use crate::context_manager::ContextManager;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::SessionConfiguration;
@@ -22,17 +26,19 @@ pub(crate) struct SessionState {
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) server_reasoning_included: bool,
-    pub(crate) dependency_env: HashMap<String, String>,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
+    pub(crate) additional_context: AdditionalContextStore,
     /// Settings used by the latest regular user turn, used for turn-to-turn
     /// model/realtime handling on subsequent regular turns (including full-context
     /// reinjection after resume or `/compact`).
     previous_turn_settings: Option<PreviousTurnSettings>,
+    /// Runtime accounting state for the active auto-compaction window.
+    auto_compact_window: AutoCompactWindow,
     /// Startup prewarmed session prepared during session initialization.
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
     pub(crate) active_connector_selection: HashSet<String>,
-    pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
-    granted_permissions: Option<AdditionalPermissionProfile>,
+    pub(crate) pending_session_start_sources: VecDeque<codex_hooks::SessionStartSource>,
+    granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile>,
     next_turn_is_first: bool,
 }
 
@@ -45,13 +51,14 @@ impl SessionState {
             history,
             latest_rate_limits: None,
             server_reasoning_included: false,
-            dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
+            additional_context: AdditionalContextStore::default(),
             previous_turn_settings: None,
+            auto_compact_window: AutoCompactWindow::new(),
             startup_prewarm: None,
             active_connector_selection: HashSet::new(),
-            pending_session_start_source: None,
-            granted_permissions: None,
+            pending_session_start_sources: VecDeque::new(),
+            granted_permissions_by_environment_id: HashMap::new(),
             next_turn_is_first: true,
         }
     }
@@ -97,6 +104,7 @@ impl SessionState {
         self.history.replace(items);
         self.history
             .set_reference_context_item(reference_context_item);
+        self.auto_compact_window.clear_prefill();
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -118,6 +126,48 @@ impl SessionState {
         model_context_window: Option<i64>,
     ) {
         self.history.update_token_info(usage, model_context_window);
+    }
+
+    pub(crate) fn ensure_auto_compact_window_server_prefill_from_usage(
+        &mut self,
+        usage: &TokenUsage,
+    ) {
+        self.auto_compact_window
+            .ensure_server_observed_prefill_from_usage(usage);
+    }
+
+    pub(crate) fn set_auto_compact_window_estimated_prefill(&mut self, tokens: i64) {
+        self.auto_compact_window.set_estimated_prefill(tokens);
+    }
+
+    pub(crate) fn auto_compact_window_snapshot(&self) -> AutoCompactWindowSnapshot {
+        self.auto_compact_window.snapshot()
+    }
+
+    pub(crate) fn auto_compact_window_id(&self) -> u64 {
+        self.auto_compact_window.window_id()
+    }
+
+    pub(crate) fn set_auto_compact_window_id(&mut self, window_id: u64) {
+        self.auto_compact_window.set_window_id(window_id);
+    }
+
+    pub(crate) fn advance_auto_compact_window_id(&mut self) -> u64 {
+        self.auto_compact_window.advance_window_id()
+    }
+
+    pub(crate) fn request_new_context_window(&mut self) {
+        self.auto_compact_window.request_new_context_window();
+    }
+
+    pub(crate) fn start_new_context_window_if_requested(&mut self) -> Option<u64> {
+        if !self.auto_compact_window.take_new_context_window_request() {
+            return None;
+        }
+
+        let window_id = self.auto_compact_window.advance_window_id();
+        self.auto_compact_window.clear_prefill();
+        Some(window_id)
     }
 
     pub(crate) fn token_info(&self) -> Option<TokenUsageInfo> {
@@ -165,16 +215,6 @@ impl SessionState {
         self.mcp_dependency_prompted.clone()
     }
 
-    pub(crate) fn set_dependency_env(&mut self, values: HashMap<String, String>) {
-        for (key, value) in values {
-            self.dependency_env.insert(key, value);
-        }
-    }
-
-    pub(crate) fn dependency_env(&self) -> HashMap<String, String> {
-        self.dependency_env.clone()
-    }
-
     pub(crate) fn set_session_startup_prewarm(
         &mut self,
         startup_prewarm: SessionStartupPrewarmHandle,
@@ -205,26 +245,42 @@ impl SessionState {
         self.active_connector_selection.clear();
     }
 
-    pub(crate) fn set_pending_session_start_source(
+    pub(crate) fn queue_pending_session_start_source(
         &mut self,
-        value: Option<codex_hooks::SessionStartSource>,
+        value: codex_hooks::SessionStartSource,
     ) {
-        self.pending_session_start_source = value;
+        self.pending_session_start_sources.push_back(value);
     }
 
     pub(crate) fn take_pending_session_start_source(
         &mut self,
     ) -> Option<codex_hooks::SessionStartSource> {
-        self.pending_session_start_source.take()
+        self.pending_session_start_sources.pop_front()
     }
 
-    pub(crate) fn record_granted_permissions(&mut self, permissions: AdditionalPermissionProfile) {
-        self.granted_permissions =
-            merge_permission_profiles(self.granted_permissions.as_ref(), Some(&permissions));
+    pub(crate) fn record_granted_permissions(
+        &mut self,
+        environment_id: &str,
+        permissions: AdditionalPermissionProfile,
+    ) {
+        let granted_permissions = merge_permission_profiles(
+            self.granted_permissions_by_environment_id
+                .get(environment_id),
+            Some(&permissions),
+        );
+        if let Some(granted_permissions) = granted_permissions {
+            self.granted_permissions_by_environment_id
+                .insert(environment_id.to_string(), granted_permissions);
+        }
     }
 
-    pub(crate) fn granted_permissions(&self) -> Option<AdditionalPermissionProfile> {
-        self.granted_permissions.clone()
+    pub(crate) fn granted_permissions(
+        &self,
+        environment_id: &str,
+    ) -> Option<AdditionalPermissionProfile> {
+        self.granted_permissions_by_environment_id
+            .get(environment_id)
+            .cloned()
     }
 }
 
@@ -240,6 +296,9 @@ fn merge_rate_limit_fields(
     }
     if snapshot.credits.is_none() {
         snapshot.credits = previous.and_then(|prior| prior.credits.clone());
+    }
+    if snapshot.individual_limit.is_none() {
+        snapshot.individual_limit = previous.and_then(|prior| prior.individual_limit.clone());
     }
     if snapshot.plan_type.is_none() {
         snapshot.plan_type = previous.and_then(|prior| prior.plan_type);

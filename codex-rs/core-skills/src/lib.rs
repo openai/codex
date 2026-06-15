@@ -1,5 +1,4 @@
 pub mod config_rules;
-mod env_var_dependencies;
 pub mod injection;
 pub(crate) mod invocation_utils;
 pub mod loader;
@@ -8,15 +7,15 @@ mod mention_counts;
 pub mod model;
 pub mod remote;
 pub mod render;
+mod skill_instructions;
 pub mod system;
 
-pub use env_var_dependencies::SkillDependencyInfo;
-pub use env_var_dependencies::collect_env_var_dependencies;
 pub(crate) use invocation_utils::build_implicit_skill_path_indexes;
 pub use invocation_utils::detect_implicit_skill_invocation_for_command;
 pub use manager::SkillsLoadInput;
 pub use manager::SkillsManager;
 pub use mention_counts::build_skill_name_counts;
+pub use model::HostLoadedSkills;
 pub use model::SkillError;
 pub use model::SkillLoadOutcome;
 pub use model::SkillMetadata;
@@ -32,3 +31,4 @@ pub use render::SkillRenderReport;
 pub use render::build_available_skills;
 pub use render::default_skill_metadata_budget;
 pub use render::render_available_skills_body;
+pub use skill_instructions::SkillInstructions;

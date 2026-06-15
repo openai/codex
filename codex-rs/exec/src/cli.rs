@@ -50,7 +50,7 @@ pub struct Cli {
     pub removed_full_auto: bool,
 
     /// Path to a JSON Schema file describing the model's final response shape.
-    #[arg(long = "output-schema", value_name = "FILE")]
+    #[arg(long = "output-schema", value_name = "FILE", global = true)]
     pub output_schema: Option<PathBuf>,
 
     #[clap(skip)]

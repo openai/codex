@@ -2,9 +2,10 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::agent_jobs_spec::create_report_agent_job_result_tool;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::registry::ToolHandler;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 
@@ -12,19 +13,25 @@ use super::*;
 
 pub struct ReportAgentJobResultHandler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ReportAgentJobResultHandler {
-    type Output = FunctionToolOutput;
-
     fn tool_name(&self) -> ToolName {
         ToolName::plain("report_agent_job_result")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_report_agent_job_result_tool())
+    fn spec(&self) -> ToolSpec {
+        create_report_agent_job_result_tool()
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl ReportAgentJobResultHandler {
+    async fn handle_call(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session, payload, ..
         } = invocation;
@@ -38,11 +45,11 @@ impl ToolExecutor<ToolInvocation> for ReportAgentJobResultHandler {
             }
         };
 
-        handle(session, arguments).await
+        handle(session, arguments).await.map(boxed_tool_output)
     }
 }
 
-impl ToolHandler for ReportAgentJobResultHandler {
+impl CoreToolRuntime for ReportAgentJobResultHandler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
@@ -59,7 +66,7 @@ pub async fn handle(
         ));
     }
     let db = required_state_db(&session)?;
-    let reporting_thread_id = session.conversation_id.to_string();
+    let reporting_thread_id = session.thread_id.to_string();
     let accepted = db
         .report_agent_job_item_result(
             args.job_id.as_str(),

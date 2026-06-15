@@ -3,10 +3,15 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
+use codex_app_server_transport::REMOTE_CONTROL_DISABLED_ENV_VAR;
+
 use super::PidBackend;
 use super::PidCommandKind;
 use super::PidFileState;
+use super::PidLogTail;
 use super::PidRecord;
+use super::read_stderr_log_tail;
+use super::stderr_log_file_for_pid_file;
 use super::try_lock_file;
 
 #[tokio::test]
@@ -168,5 +173,44 @@ fn app_server_remote_control_uses_runtime_flag() {
     assert_eq!(
         backend.command_args(),
         vec!["app-server", "--remote-control", "--listen", "unix://"]
+    );
+}
+
+#[test]
+fn app_server_disabled_remote_control_uses_compatible_args_and_runtime_env() {
+    let backend = PidBackend::new(
+        "codex".into(),
+        "app-server.pid".into(),
+        /*remote_control_enabled*/ false,
+    );
+
+    assert_eq!(
+        backend.command_args(),
+        vec!["app-server", "--listen", "unix://"]
+    );
+    assert_eq!(
+        backend.command_env(),
+        Some((REMOTE_CONTROL_DISABLED_ENV_VAR, "1"))
+    );
+}
+
+#[tokio::test]
+async fn read_stderr_log_tail_returns_recent_complete_lines() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let pid_file = temp_dir.path().join("app-server.pid");
+    let log_file = stderr_log_file_for_pid_file(&pid_file);
+    let contents = format!("{}\nrecent error\nusage", "x".repeat(4100));
+    tokio::fs::write(&log_file, contents)
+        .await
+        .expect("write stderr log");
+
+    assert_eq!(
+        read_stderr_log_tail(&pid_file)
+            .await
+            .expect("read stderr log"),
+        Some(PidLogTail {
+            path: log_file,
+            contents: "recent error\nusage".to_string(),
+        })
     );
 }

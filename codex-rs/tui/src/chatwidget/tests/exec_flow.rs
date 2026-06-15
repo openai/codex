@@ -720,6 +720,22 @@ async fn unified_exec_wait_status_header_updates_on_late_command_display() {
 }
 
 #[tokio::test]
+async fn unified_exec_empty_poll_for_finished_process_does_not_show_waiting_status() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_task_started();
+
+    terminal_interaction(&mut chat, "call-finished", "proc-finished", "");
+
+    assert_eq!(chat.status_state.current_status.header, "Working");
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("task status indicator should remain visible");
+    assert_eq!(status.header(), "Working");
+    assert!(chat.unified_exec_wait_streak.is_none());
+}
+
+#[tokio::test]
 async fn unified_exec_waiting_multiple_empty_snapshots() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_task_started();
@@ -848,6 +864,7 @@ async fn image_generation_call_adds_history_cell() {
     handle_image_generation_end(
         &mut chat,
         "call-image-generation",
+        "completed",
         Some("A tiny blue square".into()),
         Some(test_path_buf("/tmp/ig-1.png").abs()),
     );
@@ -860,6 +877,21 @@ async fn image_generation_call_adds_history_cell() {
     let combined =
         lines_to_single_string(&cells[0]).replace(&platform_file_url, "file:///tmp/ig-1.png");
     assert_chatwidget_snapshot!("image_generation_call_history_snapshot", combined);
+
+    handle_image_generation_end(
+        &mut chat,
+        "call-image-generation-failed",
+        "failed",
+        Some("A tiny blue square".into()),
+        /*saved_path*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected a single failure history cell");
+    assert_chatwidget_snapshot!(
+        "failed_image_generation_call_history_snapshot",
+        lines_to_single_string(&cells[0])
+    );
 }
 
 #[tokio::test]
@@ -957,8 +989,11 @@ async fn bang_shell_enter_while_task_running_submits_run_user_shell_command() {
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
+        collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),

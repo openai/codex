@@ -2,10 +2,10 @@ load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
     name = "login",
-    crate_name = "codex_login",
     compile_data = [
         "src/assets/error.html",
         "src/assets/success.html",
         "src/assets/success_legacy.html",
     ],
+    crate_name = "codex_login",
 )

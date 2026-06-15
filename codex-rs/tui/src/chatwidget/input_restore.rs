@@ -1,13 +1,55 @@
 //! Input queue restore and thread-input snapshot behavior for `ChatWidget`.
 
+use std::collections::HashSet;
+
+use super::user_messages::remap_colliding_paste_placeholders;
 use super::*;
 
 impl ChatWidget {
+    pub(super) fn record_cancel_edit_candidate(&mut self, prompt: UserMessage) {
+        self.cancel_edit.prompt = Some(prompt);
+        self.cancel_edit.eligible = true;
+        self.cancel_edit.armed = false;
+    }
+
+    pub(super) fn record_visible_turn_activity(&mut self) {
+        self.cancel_edit.eligible = false;
+        self.cancel_edit.armed = false;
+    }
+
+    pub(super) fn arm_cancel_edit(&mut self) {
+        self.cancel_edit.armed = self.cancel_edit.eligible
+            && self.cancel_edit.prompt.is_some()
+            && self.bottom_pane.composer_is_empty()
+            && self.input_queue.pending_steers.is_empty()
+            && !self.has_queued_follow_up_messages()
+            && !self.active_side_conversation;
+    }
+
+    fn take_armed_cancel_edit_prompt(&mut self, reason: TurnAbortReason) -> Option<UserMessage> {
+        (reason == TurnAbortReason::Interrupted
+            && self.cancel_edit.armed
+            && self.cancel_edit.eligible)
+            .then(|| self.cancel_edit.prompt.take())
+            .flatten()
+    }
+
+    pub(super) fn clear_cancel_edit(&mut self) {
+        self.cancel_edit = CancelEditState::default();
+    }
+
     pub(crate) fn set_initial_user_message_submit_suppressed(&mut self, suppressed: bool) {
         self.suppress_initial_user_message_submit = suppressed;
     }
 
     pub(crate) fn submit_initial_user_message_if_pending(&mut self) {
+        if self.suppress_initial_user_message_submit {
+            return;
+        }
+        #[cfg(any(target_os = "windows", test))]
+        if self.elevated_windows_sandbox_setup_required() {
+            return;
+        }
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
@@ -53,16 +95,21 @@ impl ChatWidget {
         }
     }
 
-    pub(super) fn pop_latest_queued_user_message(&mut self) -> Option<UserMessage> {
+    pub(super) fn pop_latest_queued_composer_state(&mut self) -> Option<ThreadComposerState> {
         if let Some(user_message) = self.input_queue.queued_user_messages.pop_back() {
             let history_record = self
                 .input_queue
                 .queued_user_message_history_records
                 .pop_back()
                 .unwrap_or(UserMessageHistoryRecord::UserMessageText);
-            Some(user_message_for_restore(
-                user_message.into_user_message(),
-                &history_record,
+            let QueuedUserMessage {
+                user_message,
+                pending_pastes,
+                ..
+            } = user_message;
+            Some(Self::composer_state_from_user_message(
+                user_message_for_restore(user_message, &history_record),
+                pending_pastes,
             ))
         } else {
             let user_message = self.input_queue.rejected_steers_queue.pop_back()?;
@@ -71,7 +118,10 @@ impl ChatWidget {
                 .rejected_steer_history_records
                 .pop_back()
                 .unwrap_or(UserMessageHistoryRecord::UserMessageText);
-            Some(user_message_for_restore(user_message, &history_record))
+            Some(Self::composer_state_from_user_message(
+                user_message_for_restore(user_message, &history_record),
+                Vec::new(),
+            ))
         }
     }
 
@@ -97,12 +147,15 @@ impl ChatWidget {
     /// When there are queued user messages, restore them into the composer
     /// separated by newlines rather than auto-submitting the next one.
     pub(super) fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
+        let cancelled_prompt = self.take_armed_cancel_edit_prompt(reason);
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
         let send_pending_steers_immediately =
             self.input_queue.submit_pending_steers_after_interrupt;
         self.input_queue.submit_pending_steers_after_interrupt = false;
-        if self.interrupted_turn_notice_mode != InterruptedTurnNoticeMode::Suppress {
+        if cancelled_prompt.is_none()
+            && self.interrupted_turn_notice_mode != InterruptedTurnNoticeMode::Suppress
+        {
             if send_pending_steers_immediately {
                 self.add_to_history(history_cell::new_info_event(
                     "Model interrupted to submit steer instructions.".to_owned(),
@@ -130,12 +183,16 @@ impl ChatWidget {
                     merge_user_messages_with_history_record(pending_steers);
                 self.submit_user_message_with_history_record(user_message, history_record);
             } else if let Some(combined) = self.drain_pending_messages_for_restore() {
-                self.restore_user_message_to_composer(combined);
+                self.restore_composer_state(combined);
             }
         } else if let Some(combined) = self.drain_pending_messages_for_restore() {
-            self.restore_user_message_to_composer(combined);
+            self.restore_composer_state(combined);
         }
         self.refresh_pending_input_preview();
+        if let Some(prompt) = cancelled_prompt {
+            self.app_event_tx
+                .send(AppEvent::RestoreCancelledTurn(prompt));
+        }
 
         self.request_redraw();
     }
@@ -147,17 +204,19 @@ impl ChatWidget {
     /// placeholders in a stable order and rebase text element byte ranges so the restored composer
     /// state stays aligned with the merged attachment list. Returns `None` when there is nothing to
     /// restore.
-    fn drain_pending_messages_for_restore(&mut self) -> Option<UserMessage> {
+    fn drain_pending_messages_for_restore(&mut self) -> Option<ThreadComposerState> {
         if self.input_queue.pending_steers.is_empty() && !self.has_queued_follow_up_messages() {
             return None;
         }
 
+        let composer = self.bottom_pane.composer_draft_snapshot();
+        let composer_pending_pastes = composer.pending_pastes;
         let existing_message = UserMessage {
-            text: self.bottom_pane.composer_text(),
-            text_elements: self.bottom_pane.composer_text_elements(),
-            local_images: self.bottom_pane.composer_local_images(),
-            remote_image_urls: self.bottom_pane.remote_image_urls(),
-            mention_bindings: self.bottom_pane.composer_mention_bindings(),
+            text: composer.text,
+            text_elements: composer.text_elements,
+            local_images: composer.local_images,
+            remote_image_urls: composer.remote_image_urls,
+            mention_bindings: composer.mention_bindings,
         };
 
         let rejected_messages = self
@@ -199,32 +258,55 @@ impl ChatWidget {
             queued_messages.len(),
             UserMessageHistoryRecord::UserMessageText,
         );
-        to_merge.extend(
-            queued_messages
-                .into_iter()
-                .zip(queued_history_records.iter())
-                .map(|(message, history_record)| {
-                    user_message_for_restore(message.into_user_message(), history_record)
-                }),
-        );
-        if !existing_message.text.is_empty()
-            || !existing_message.local_images.is_empty()
-            || !existing_message.remote_image_urls.is_empty()
+        let mut pending_pastes = Vec::new();
+        let mut used_paste_placeholders = HashSet::new();
+        for (message, history_record) in queued_messages
+            .into_iter()
+            .zip(queued_history_records.iter())
         {
+            let (message, message_pastes) = remap_colliding_paste_placeholders(
+                user_message_for_restore(message.user_message, history_record),
+                message.pending_pastes,
+                &mut used_paste_placeholders,
+            );
+            pending_pastes.extend(message_pastes);
+            to_merge.push(message);
+        }
+        let has_existing_message = !existing_message.text.is_empty()
+            || !existing_message.local_images.is_empty()
+            || !existing_message.remote_image_urls.is_empty();
+        if has_existing_message {
+            let (existing_message, composer_pending_pastes) = remap_colliding_paste_placeholders(
+                existing_message,
+                composer_pending_pastes,
+                &mut used_paste_placeholders,
+            );
             to_merge.push(existing_message);
+            pending_pastes.extend(composer_pending_pastes);
         }
 
-        Some(merge_user_messages(to_merge))
+        Some(Self::composer_state_from_user_message(
+            merge_user_messages(to_merge),
+            pending_pastes,
+        ))
     }
 
     pub(crate) fn restore_user_message_to_composer(&mut self, user_message: UserMessage) {
-        let UserMessage {
+        self.restore_composer_state(Self::composer_state_from_user_message(
+            user_message,
+            Vec::new(),
+        ));
+    }
+
+    pub(super) fn restore_composer_state(&mut self, composer: ThreadComposerState) {
+        let ThreadComposerState {
             text,
             local_images,
             remote_image_urls,
             text_elements,
             mention_bindings,
-        } = user_message;
+            pending_pastes,
+        } = composer;
         let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
         self.set_remote_image_urls(remote_image_urls);
         self.bottom_pane.set_composer_text_with_mention_bindings(
@@ -233,16 +315,39 @@ impl ChatWidget {
             local_image_paths,
             mention_bindings,
         );
+        self.bottom_pane.set_composer_pending_pastes(pending_pastes);
+    }
+
+    fn composer_state_from_user_message(
+        user_message: UserMessage,
+        pending_pastes: Vec<(String, String)>,
+    ) -> ThreadComposerState {
+        let UserMessage {
+            text,
+            local_images,
+            remote_image_urls,
+            text_elements,
+            mention_bindings,
+        } = user_message;
+        ThreadComposerState {
+            text,
+            local_images,
+            remote_image_urls,
+            text_elements,
+            mention_bindings,
+            pending_pastes,
+        }
     }
 
     pub(crate) fn capture_thread_input_state(&self) -> Option<ThreadInputState> {
+        let draft = self.bottom_pane.composer_draft_snapshot();
         let composer = ThreadComposerState {
-            text: self.bottom_pane.composer_text(),
-            text_elements: self.bottom_pane.composer_text_elements(),
-            local_images: self.bottom_pane.composer_local_images(),
-            remote_image_urls: self.bottom_pane.remote_image_urls(),
-            mention_bindings: self.bottom_pane.composer_mention_bindings(),
-            pending_pastes: self.bottom_pane.composer_pending_pastes(),
+            text: draft.text,
+            text_elements: draft.text_elements,
+            local_images: draft.local_images,
+            remote_image_urls: draft.remote_image_urls,
+            mention_bindings: draft.mention_bindings,
+            pending_pastes: draft.pending_pastes,
         };
         Some(ThreadInputState {
             composer: composer.has_content().then_some(composer),
@@ -289,31 +394,7 @@ impl ChatWidget {
             self.input_queue.user_turn_pending_start = input_state.user_turn_pending_start;
             self.update_collaboration_mode_indicator();
             self.refresh_model_dependent_surfaces();
-            if let Some(composer) = input_state.composer {
-                let local_image_paths = composer
-                    .local_images
-                    .into_iter()
-                    .map(|img| img.path)
-                    .collect();
-                self.set_remote_image_urls(composer.remote_image_urls);
-                self.bottom_pane.set_composer_text_with_mention_bindings(
-                    composer.text,
-                    composer.text_elements,
-                    local_image_paths,
-                    composer.mention_bindings,
-                );
-                self.bottom_pane
-                    .set_composer_pending_pastes(composer.pending_pastes);
-            } else {
-                self.set_remote_image_urls(Vec::new());
-                self.bottom_pane.set_composer_text_with_mention_bindings(
-                    String::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                );
-                self.bottom_pane.set_composer_pending_pastes(Vec::new());
-            }
+            self.restore_composer_state(input_state.composer.unwrap_or_default());
             let mut pending_steer_history_records = input_state.pending_steer_history_records;
             pending_steer_history_records.resize(
                 input_state.pending_steers.len(),
@@ -354,14 +435,7 @@ impl ChatWidget {
             self.turn_lifecycle
                 .restore_running(/*running*/ false, Instant::now());
             self.input_queue.clear();
-            self.set_remote_image_urls(Vec::new());
-            self.bottom_pane.set_composer_text_with_mention_bindings(
-                String::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            );
-            self.bottom_pane.set_composer_pending_pastes(Vec::new());
+            self.restore_composer_state(Default::default());
         }
         self.turn_lifecycle
             .restore_running(self.turn_lifecycle.agent_turn_running, Instant::now());

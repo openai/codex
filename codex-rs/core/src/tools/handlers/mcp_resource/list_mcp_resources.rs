@@ -1,12 +1,12 @@
 use std::time::Instant;
 
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::mcp_resource_spec::create_list_mcp_resources_tool;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::registry::ToolHandler;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::protocol::McpInvocation;
 use codex_tools::ToolName;
@@ -26,27 +26,29 @@ use super::serialize_function_output;
 
 pub struct ListMcpResourcesHandler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
-    type Output = FunctionToolOutput;
-
     fn tool_name(&self) -> ToolName {
         ToolName::plain("list_mcp_resources")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_list_mcp_resources_tool())
+    fn spec(&self) -> ToolSpec {
+        create_list_mcp_resources_tool()
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
         true
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP resource listing reads through the session-owned manager guard"
-    )]
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl ListMcpResourcesHandler {
+    async fn handle_call(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -81,10 +83,9 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
 
         let payload_result: Result<ListResourcesPayload, FunctionCallError> = async {
             if let Some(server_name) = server.clone() {
-                let params = cursor.clone().map(|value| PaginatedRequestParams {
-                    meta: None,
-                    cursor: Some(value),
-                });
+                let params = cursor
+                    .clone()
+                    .map(|value| PaginatedRequestParams::default().with_cursor(Some(value)));
                 let result = session
                     .list_resources(&server_name, params)
                     .await
@@ -105,8 +106,7 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
                 let resources = session
                     .services
                     .mcp_connection_manager
-                    .read()
-                    .await
+                    .load_full()
                     .list_all_resources()
                     .await;
                 Ok(ListResourcesPayload::from_all_servers(resources))
@@ -115,7 +115,7 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
         .await;
 
         match payload_result {
-            Ok(payload) => match serialize_function_output(payload) {
+            Ok(payload) => match serialize_function_output(payload, turn.truncation_policy) {
                 Ok(output) => {
                     let content = function_call_output_content_items_to_text(&output.body)
                         .unwrap_or_default();
@@ -129,7 +129,7 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
                         Ok(call_tool_result_from_content(&content, output.success)),
                     )
                     .await;
-                    Ok(output)
+                    Ok(boxed_tool_output(output))
                 }
                 Err(err) => {
                     let duration = start.elapsed();
@@ -164,4 +164,4 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
     }
 }
 
-impl ToolHandler for ListMcpResourcesHandler {}
+impl CoreToolRuntime for ListMcpResourcesHandler {}

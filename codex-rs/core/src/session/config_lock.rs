@@ -2,7 +2,6 @@ use anyhow::Context;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::MemoriesToml;
-use codex_features::AppsMcpPathOverrideConfigToml;
 use codex_features::Feature;
 use codex_features::FeatureToml;
 use codex_features::FeaturesToml;
@@ -129,7 +128,7 @@ fn save_config_resolved_fields(
 ) -> anyhow::Result<()> {
     lock_config.web_search = Some(config.web_search_mode.value());
     lock_config.model_provider = Some(config.model_provider_id.clone());
-    lock_config.plan_mode_reasoning_effort = config.plan_mode_reasoning_effort;
+    lock_config.plan_mode_reasoning_effort = config.plan_mode_reasoning_effort.clone();
     lock_config.model_verbosity = config.model_verbosity;
     lock_config.include_permissions_instructions = Some(config.include_permissions_instructions);
     lock_config.include_apps_instructions = Some(config.include_apps_instructions);
@@ -149,10 +148,6 @@ fn save_config_resolved_fields(
         resolved_config_to_toml(&config.multi_agent_v2, "features.multi_agent_v2")?;
     multi_agent_v2.enabled = Some(config.features.enabled(Feature::MultiAgentV2));
     features.multi_agent_v2 = Some(FeatureToml::Config(multi_agent_v2));
-    features.apps_mcp_path_override = Some(FeatureToml::Config(AppsMcpPathOverrideConfigToml {
-        enabled: Some(config.features.enabled(Feature::AppsMcpPathOverride)),
-        path: config.apps_mcp_path_override.clone(),
-    }));
     lock_config.memories = Some(resolved_config_to_toml::<MemoriesToml>(
         &config.memories,
         "memories",
@@ -186,7 +181,6 @@ fn drop_lockfile_inputs(lock_config: &mut ConfigToml) {
     lock_config.profiles.clear();
     clear_config_lock_debug_controls(lock_config);
     lock_config.model_instructions_file = None;
-    lock_config.experimental_instructions_file = None;
     lock_config.experimental_compact_prompt_file = None;
     lock_config.model_catalog_json = None;
     lock_config.sandbox_mode = None;
@@ -252,6 +246,14 @@ mod tests {
                 spec.key
             );
         }
+        assert_eq!(
+            features.code_mode,
+            Some(FeatureToml::Enabled(
+                sc.original_config_do_not_use
+                    .features
+                    .enabled(Feature::CodeMode)
+            ))
+        );
 
         let multi_agent_v2 = features
             .multi_agent_v2
@@ -316,6 +318,32 @@ mod tests {
             "{message}"
         );
         assert!(message.contains("model = "), "{message}");
+    }
+
+    #[tokio::test]
+    async fn lock_validation_ignores_removed_apps_mcp_path_override() {
+        let sc = crate::session::tests::make_session_configuration_for_tests().await;
+        let actual = sc.to_config_lockfile_toml().expect("lock should serialize");
+        let mut expected_value = toml::Value::try_from(&actual).expect("lock should become TOML");
+        expected_value["config"]["features"]
+            .as_table_mut()
+            .expect("features should be a table")
+            .insert(
+                "apps_mcp_path_override".to_string(),
+                toml::Value::Table(toml::Table::from_iter([
+                    ("enabled".to_string(), toml::Value::Boolean(true)),
+                    (
+                        "path".to_string(),
+                        toml::Value::String("/custom/mcp".to_string()),
+                    ),
+                ])),
+            );
+        let expected: ConfigLockfileToml = expected_value
+            .try_into()
+            .expect("lock with removed input should deserialize");
+
+        validate_config_lock_replay(&expected, &actual, ConfigLockReplayOptions::default())
+            .expect("removed compatibility input should not cause lock drift");
     }
 
     #[tokio::test]

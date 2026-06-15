@@ -1,8 +1,7 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
-use app_test_support::create_request_user_input_sse_response;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -18,21 +17,52 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ReasoningEffort;
+use core_test_support::responses;
+use serde_json::json;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn create_request_user_input_sse_response_with_auto_resolution(
+    call_id: &str,
+    auto_resolution_ms: u64,
+) -> anyhow::Result<String> {
+    let tool_call_arguments = serde_json::to_string(&json!({
+        "questions": [{
+            "id": "confirm_path",
+            "header": "Confirm",
+            "question": "Proceed with the plan?",
+            "options": [{
+                "label": "Yes (Recommended)",
+                "description": "Continue the current plan."
+            }, {
+                "label": "No",
+                "description": "Stop and revisit the approach."
+            }]
+        }],
+        "autoResolutionMs": auto_resolution_ms
+    }))?;
+
+    Ok(responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_function_call(call_id, "request_user_input", &tool_call_arguments),
+        responses::ev_completed("resp-1"),
+    ]))
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn request_user_input_round_trip() -> Result<()> {
     let codex_home = tempfile::TempDir::new()?;
     let responses = vec![
-        create_request_user_input_sse_response("call1")?,
+        create_request_user_input_sse_response_with_auto_resolution(
+            "call1", /*auto_resolution_ms*/ 60_000,
+        )?,
         create_final_assistant_message_sse_response("done")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_id = mcp
@@ -51,6 +81,7 @@ async fn request_user_input_round_trip() -> Result<()> {
     let turn_start_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "ask something".to_string(),
                 text_elements: Vec::new(),
@@ -88,6 +119,7 @@ async fn request_user_input_round_trip() -> Result<()> {
     assert_eq!(params.turn_id, turn.id);
     assert_eq!(params.item_id, "call1");
     assert_eq!(params.questions.len(), 1);
+    assert_eq!(params.auto_resolution_ms, Some(60_000));
     let resolved_request_id = request_id.clone();
 
     mcp.send_response(
@@ -127,7 +159,6 @@ async fn request_user_input_round_trip() -> Result<()> {
 
     Ok(())
 }
-
 fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
     std::fs::write(

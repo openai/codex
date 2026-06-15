@@ -7,7 +7,7 @@
     "args": {
       "TZ": "${localEnv:TZ:UTC}",
       "NODE_MAJOR": "22",
-      "RUST_TOOLCHAIN": "1.92.0",
+      "RUST_TOOLCHAIN": "1.95.0",
       "CODEX_NPM_VERSION": "0.121.0"
     }
   },
@@ -23,6 +23,9 @@
     "--cap-add=NET_RAW"
   ],
   "init": true,
+  "features": {
+    "ghcr.io/facebook/devcontainers/features/dotslash:latest": {}
+  },
   "updateRemoteUserUID": true,
   "remoteUser": "vscode",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",

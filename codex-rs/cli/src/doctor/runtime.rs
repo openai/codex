@@ -3,12 +3,13 @@
 //! Runtime diagnostics answer provenance questions that are hard to infer from
 //! user reports: which binary is running, which install channel it resembles,
 //! which platform it targets, and whether the search command comes from bundled
-//! standalone resources or from PATH.
+//! package files or from PATH.
 
 use std::env;
 use std::process::Command;
 
 use codex_install_context::InstallContext;
+use codex_install_context::InstallMethod;
 
 use super::CheckStatus;
 use super::DoctorCheck;
@@ -49,9 +50,10 @@ pub(super) fn runtime_check() -> DoctorCheck {
 
 /// Verifies that the search command selected by the install context is usable.
 ///
-/// Standalone installs should point at a bundled ripgrep binary, while local or
-/// package-managed installs usually resolve rg from PATH. A warning here means
-/// features that depend on file search may degrade even when the CLI launches.
+/// Package-layout installs should point at a bundled ripgrep binary, while local
+/// installs without that layout usually resolve rg from PATH. A warning here
+/// means features that depend on file search may degrade even when the CLI
+/// launches.
 pub(super) fn search_check() -> DoctorCheck {
     let current_exe = env::current_exe().ok();
     let install_context = doctor_install_context(current_exe.as_deref());
@@ -109,28 +111,40 @@ pub(super) fn search_check() -> DoctorCheck {
     };
     let mut check = DoctorCheck::new("runtime.search", "search", status, summary).details(details);
     if status != CheckStatus::Ok {
-        check = check.remediation("Install ripgrep or repair the bundled standalone resources.");
+        check = check.remediation("Install ripgrep or repair the bundled Codex package.");
     }
     check
 }
 
 fn install_method_name(context: &InstallContext) -> &'static str {
-    match context {
-        InstallContext::Standalone { .. } => "standalone",
-        InstallContext::Npm => "npm",
-        InstallContext::Bun => "bun",
-        InstallContext::Brew => "brew",
-        InstallContext::Other => "local build",
+    match &context.method {
+        InstallMethod::Standalone { .. } => "standalone",
+        InstallMethod::Npm => "npm",
+        InstallMethod::Bun => "bun",
+        InstallMethod::Brew => "brew",
+        InstallMethod::Other => "local build",
     }
 }
 
 fn search_provider(context: &InstallContext) -> &'static str {
-    match context {
-        InstallContext::Standalone {
+    let rg_command = context.rg_command();
+    let from_package_layout = context
+        .package_layout
+        .as_ref()
+        .and_then(|package_layout| package_layout.path_dir.as_ref())
+        .is_some_and(|path_dir| rg_command.starts_with(path_dir));
+    let from_legacy_standalone = matches!(
+        &context.method,
+        InstallMethod::Standalone {
             resources_dir: Some(resources_dir),
             ..
-        } if context.rg_command().starts_with(resources_dir) => "bundled",
-        _ => "system",
+        } if rg_command.starts_with(resources_dir)
+    );
+
+    if from_package_layout || from_legacy_standalone {
+        "bundled"
+    } else {
+        "system"
     }
 }
 

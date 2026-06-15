@@ -35,6 +35,7 @@ fn rate_limit_snapshot() -> RateLimitSnapshot {
             resets_at: Some(secondary_reset_at),
         }),
         credits: None,
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     }
@@ -56,11 +57,50 @@ fn usage_limit_reached_error_formats_plus_plan() {
         resets_at: None,
         rate_limits: Some(Box::new(rate_limit_snapshot())),
         promo_message: None,
+        rate_limit_reached_type: None,
     };
     assert_eq!(
         err.to_string(),
         "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later."
     );
+}
+
+#[test]
+fn usage_limit_reached_error_formats_rate_limit_reached_types() {
+    let cases = [
+        (
+            RateLimitReachedType::RateLimitReached,
+            "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later.",
+        ),
+        (
+            RateLimitReachedType::WorkspaceOwnerCreditsDepleted,
+            "Your workspace is out of credits. Add credits to continue.",
+        ),
+        (
+            RateLimitReachedType::WorkspaceMemberCreditsDepleted,
+            "Your workspace is out of credits. Ask your workspace owner to refill in order to continue.",
+        ),
+        (
+            RateLimitReachedType::WorkspaceOwnerUsageLimitReached,
+            "You hit your spend cap set in your workspace. Increase your spend cap to continue.",
+        ),
+        (
+            RateLimitReachedType::WorkspaceMemberUsageLimitReached,
+            "You hit your spend cap set by the owner of your workspace. Ask an owner to increase your spend cap to continue.",
+        ),
+    ];
+
+    for (rate_limit_reached_type, expected) in cases {
+        let err = UsageLimitReachedError {
+            plan_type: Some(PlanType::Known(KnownPlan::Plus)),
+            resets_at: None,
+            rate_limits: Some(Box::new(rate_limit_snapshot())),
+            promo_message: None,
+            rate_limit_reached_type: Some(rate_limit_reached_type),
+        };
+
+        assert_eq!(err.to_string(), expected);
+    }
 }
 
 #[test]
@@ -177,6 +217,7 @@ fn usage_limit_reached_error_formats_free_plan() {
         resets_at: None,
         rate_limits: Some(Box::new(rate_limit_snapshot())),
         promo_message: None,
+        rate_limit_reached_type: None,
     };
     assert_eq!(
         err.to_string(),
@@ -191,6 +232,7 @@ fn usage_limit_reached_error_formats_go_plan() {
         resets_at: None,
         rate_limits: Some(Box::new(rate_limit_snapshot())),
         promo_message: None,
+        rate_limit_reached_type: None,
     };
     assert_eq!(
         err.to_string(),
@@ -205,6 +247,7 @@ fn usage_limit_reached_error_formats_default_when_none() {
         resets_at: None,
         rate_limits: Some(Box::new(rate_limit_snapshot())),
         promo_message: None,
+        rate_limit_reached_type: None,
     };
     assert_eq!(
         err.to_string(),
@@ -223,6 +266,7 @@ fn usage_limit_reached_error_formats_team_plan() {
             resets_at: Some(resets_at),
             rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
+            rate_limit_reached_type: None,
         };
         let expected = format!(
             "You've hit your usage limit. To get more access now, send a request to your admin or try again at {expected_time}."
@@ -238,6 +282,7 @@ fn usage_limit_reached_error_formats_business_plan_without_reset() {
         resets_at: None,
         rate_limits: Some(Box::new(rate_limit_snapshot())),
         promo_message: None,
+        rate_limit_reached_type: None,
     };
     assert_eq!(
         err.to_string(),
@@ -252,6 +297,7 @@ fn usage_limit_reached_error_formats_self_serve_business_usage_based_plan() {
         resets_at: None,
         rate_limits: Some(Box::new(rate_limit_snapshot())),
         promo_message: None,
+        rate_limit_reached_type: None,
     };
     assert_eq!(
         err.to_string(),
@@ -266,6 +312,7 @@ fn usage_limit_reached_error_formats_enterprise_cbp_usage_based_plan() {
         resets_at: None,
         rate_limits: Some(Box::new(rate_limit_snapshot())),
         promo_message: None,
+        rate_limit_reached_type: None,
     };
     assert_eq!(
         err.to_string(),
@@ -280,6 +327,7 @@ fn usage_limit_reached_error_formats_default_for_other_plans() {
         resets_at: None,
         rate_limits: Some(Box::new(rate_limit_snapshot())),
         promo_message: None,
+        rate_limit_reached_type: None,
     };
     assert_eq!(
         err.to_string(),
@@ -298,6 +346,7 @@ fn usage_limit_reached_error_formats_pro_plan_with_reset() {
             resets_at: Some(resets_at),
             rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
+            rate_limit_reached_type: None,
         };
         let expected = format!(
             "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {expected_time}."
@@ -324,6 +373,7 @@ fn usage_limit_reached_error_hides_upsell_for_non_codex_limit_name() {
                 "Visit https://chatgpt.com/codex/settings/usage to purchase more credits"
                     .to_string(),
             ),
+            rate_limit_reached_type: None,
         };
         let expected = format!(
             "You've hit your usage limit for codex_other. Switch to another model now, or try again at {expected_time}."
@@ -343,6 +393,7 @@ fn usage_limit_reached_includes_minutes_when_available() {
             resets_at: Some(resets_at),
             rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
+            rate_limit_reached_type: None,
         };
         let expected = format!("You've hit your usage limit. Try again at {expected_time}.");
         assert_eq!(err.to_string(), expected);
@@ -482,6 +533,7 @@ fn usage_limit_reached_includes_hours_and_minutes() {
             resets_at: Some(resets_at),
             rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
+            rate_limit_reached_type: None,
         };
         let expected = format!(
             "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {expected_time}."
@@ -502,6 +554,7 @@ fn usage_limit_reached_includes_days_hours_minutes() {
             resets_at: Some(resets_at),
             rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
+            rate_limit_reached_type: None,
         };
         let expected = format!("You've hit your usage limit. Try again at {expected_time}.");
         assert_eq!(err.to_string(), expected);
@@ -519,6 +572,7 @@ fn usage_limit_reached_less_than_minute() {
             resets_at: Some(resets_at),
             rate_limits: Some(Box::new(rate_limit_snapshot())),
             promo_message: None,
+            rate_limit_reached_type: None,
         };
         let expected = format!("You've hit your usage limit. Try again at {expected_time}.");
         assert_eq!(err.to_string(), expected);
@@ -538,6 +592,7 @@ fn usage_limit_reached_with_promo_message() {
             promo_message: Some(
                 "To continue using Codex, start a free trial of <PLAN> today".to_string(),
             ),
+            rate_limit_reached_type: None,
         };
         let expected = format!(
             "You've hit your usage limit. To continue using Codex, start a free trial of <PLAN> today, or try again at {expected_time}."

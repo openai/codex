@@ -1,0 +1,75 @@
+{
+  "source": "standard/slack/tools",
+  "tools": [
+    {
+      "name": "slack_schedule_message",
+      "description": "Schedule a Slack message.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "channel_id": {
+            "type": "string",
+            "description": "Slack channel ID."
+          },
+          "message": {
+            "type": "string",
+            "description": "Message text."
+          },
+          "post_at": {
+            "type": "integer",
+            "description": "Unix timestamp for delivery."
+          },
+          "thread_ts": {
+            "description": "Optional parent thread timestamp.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SlackTs"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "channel_id",
+          "message",
+          "post_at"
+        ],
+        "additionalProperties": false,
+        "$defs": {
+          "SlackTs": {
+            "type": "string",
+            "description": "Slack timestamp string.",
+            "pattern": "^[0-9]+[.][0-9]+$"
+          },
+          "UnusedPayload": {
+            "type": "object",
+            "description": "Large unreachable Slack payload.",
+            "properties": {
+              "debug": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "expected_preserved": [
+        {
+          "pointer": "/properties/thread_ts/anyOf/0/$ref",
+          "value": "#/$defs/SlackTs"
+        },
+        {
+          "pointer": "/$defs/SlackTs/description",
+          "value": "Slack timestamp string."
+        }
+      ],
+      "expected_pruned": [
+        "/$defs/UnusedPayload"
+      ],
+      "expected_dropped_fields": [
+        "/$defs/SlackTs/pattern"
+      ]
+    }
+  ]
+}

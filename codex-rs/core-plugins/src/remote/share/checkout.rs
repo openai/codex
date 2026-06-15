@@ -85,6 +85,7 @@ pub async fn checkout_remote_plugin_share(
             &plugin_name,
             detail.release_version.as_deref(),
             detail.bundle_download_url.as_deref(),
+            /*app_manifest*/ None,
         )
         .map_err(|err| {
             RemotePluginCatalogError::UnexpectedResponse(format!(

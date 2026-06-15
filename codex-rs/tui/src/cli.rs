@@ -5,7 +5,7 @@ use codex_utils_cli::ApprovalModeCliArg;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::SharedCliOptions;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Clone, Debug)]
 #[command(version)]
 pub struct Cli {
     /// Optional user prompt to start the session.
@@ -89,7 +89,7 @@ impl std::ops::DerefMut for Cli {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct TuiSharedCliOptions(SharedCliOptions);
 
 impl TuiSharedCliOptions {

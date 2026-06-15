@@ -9,6 +9,7 @@ use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::Component;
@@ -324,6 +325,16 @@ pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Marketpla
         interface: resolve_marketplace_interface(marketplace.interface),
         plugins,
     })
+}
+
+pub(crate) fn load_raw_marketplace_plugin_names(
+    path: &AbsolutePathBuf,
+) -> Result<HashSet<String>, MarketplaceError> {
+    Ok(load_raw_marketplace_manifest(path)?
+        .plugins
+        .into_iter()
+        .map(|plugin| plugin.name)
+        .collect())
 }
 
 #[doc(hidden)]
@@ -698,7 +709,8 @@ pub fn plugin_interface_with_marketplace_category(
     interface
 }
 
-fn marketplace_root_dir(
+#[doc(hidden)]
+pub fn marketplace_root_dir(
     marketplace_path: &AbsolutePathBuf,
 ) -> Result<AbsolutePathBuf, MarketplaceError> {
     for relative_path in MARKETPLACE_MANIFEST_RELATIVE_PATHS {

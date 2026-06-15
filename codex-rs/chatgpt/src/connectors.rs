@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::time::Duration;
 
@@ -13,11 +14,11 @@ use codex_connectors::merge::merge_plugin_connectors;
 use codex_core::config::Config;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager;
+pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status;
 pub use codex_core::connectors::list_cached_accessible_connectors_from_mcp_tools;
 pub use codex_core::connectors::with_app_enabled_state;
-use codex_core_plugins::PluginsManager;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::originator;
@@ -67,10 +68,13 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
 }
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
-    list_all_connectors_with_options(config, /*force_refetch*/ false).await
+    list_all_connectors_with_options(config, /*force_refetch*/ false, &[]).await
 }
 
-pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>> {
+pub async fn list_cached_all_connectors(
+    config: &Config,
+    plugin_apps: &[AppConnectorId],
+) -> Option<Vec<AppInfo>> {
     if !apps_enabled(config).await {
         return Some(Vec::new());
     }
@@ -78,22 +82,13 @@ pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>>
     let auth = connector_auth(config).await.ok()?;
     let cache_context = connector_directory_cache_context(config, &auth);
     let connectors = codex_connectors::cached_directory_connectors(&cache_context)?;
-    let connectors = merge_plugin_connectors(
-        connectors,
-        plugin_apps_for_config(config)
-            .await
-            .into_iter()
-            .map(|connector_id| connector_id.0),
-    );
-    Some(filter_disallowed_connectors(
-        connectors,
-        originator().value.as_str(),
-    ))
+    Some(merge_and_filter_plugin_connectors(connectors, plugin_apps))
 }
 
 pub async fn list_all_connectors_with_options(
     config: &Config,
     force_refetch: bool,
+    plugin_apps: &[AppConnectorId],
 ) -> anyhow::Result<Vec<AppInfo>> {
     if !apps_enabled(config).await {
         return Ok(Vec::new());
@@ -114,17 +109,7 @@ pub async fn list_all_connectors_with_options(
         },
     )
     .await?;
-    let connectors = merge_plugin_connectors(
-        connectors,
-        plugin_apps_for_config(config)
-            .await
-            .into_iter()
-            .map(|connector_id| connector_id.0),
-    );
-    Ok(filter_disallowed_connectors(
-        connectors,
-        originator().value.as_str(),
-    ))
+    Ok(merge_and_filter_plugin_connectors(connectors, plugin_apps))
 }
 
 fn connector_directory_cache_context(
@@ -142,23 +127,10 @@ fn connector_directory_cache_context(
     )
 }
 
-async fn plugin_apps_for_config(config: &Config) -> Vec<AppConnectorId> {
-    let plugins_input = config.plugins_config_input();
-    PluginsManager::new(config.codex_home.to_path_buf())
-        .plugins_for_config(&plugins_input)
-        .await
-        .effective_apps()
-}
-
-pub fn connectors_for_plugin_apps(
+fn merge_and_filter_plugin_connectors(
     connectors: Vec<AppInfo>,
     plugin_apps: &[AppConnectorId],
 ) -> Vec<AppInfo> {
-    let plugin_app_ids = plugin_apps
-        .iter()
-        .map(|connector_id| connector_id.0.as_str())
-        .collect::<HashSet<_>>();
-
     let connectors = merge_plugin_connectors(
         connectors,
         plugin_apps
@@ -166,8 +138,27 @@ pub fn connectors_for_plugin_apps(
             .map(|connector_id| connector_id.0.clone()),
     );
     filter_disallowed_connectors(connectors, originator().value.as_str())
-        .into_iter()
-        .filter(|connector| plugin_app_ids.contains(connector.id.as_str()))
+}
+
+pub fn connectors_for_plugin_apps(
+    connectors: Vec<AppInfo>,
+    plugin_apps: &[AppConnectorId],
+) -> Vec<AppInfo> {
+    let connectors = merge_plugin_connectors(
+        connectors,
+        plugin_apps
+            .iter()
+            .map(|connector_id| connector_id.0.clone()),
+    );
+    let mut connectors_by_id =
+        filter_disallowed_connectors(connectors, originator().value.as_str())
+            .into_iter()
+            .map(|connector| (connector.id.clone(), connector))
+            .collect::<HashMap<_, _>>();
+
+    plugin_apps
+        .iter()
+        .filter_map(|connector_id| connectors_by_id.remove(connector_id.0.as_str()))
         .collect()
 }
 
@@ -266,13 +257,14 @@ mod tests {
         let connectors = connectors_for_plugin_apps(
             vec![app("alpha"), app("beta")],
             &[
+                AppConnectorId("gmail".to_string()),
                 AppConnectorId("alpha".to_string()),
                 AppConnectorId("gmail".to_string()),
             ],
         );
         assert_eq!(
             connectors,
-            vec![app("alpha"), merged_app("gmail", /*is_accessible*/ false)]
+            vec![merged_app("gmail", /*is_accessible*/ false), app("alpha")]
         );
     }
 

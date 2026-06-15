@@ -1,60 +1,39 @@
 [build-system]
-requires = ["hatchling>=1.24.0"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.11.19,<0.12"]
+build-backend = "uv_build"
 
 [project]
 name = "openai-codex"
-version = "0.131.0a4"
-description = "Python SDK for Codex app-server v2"
+version = "0.0.0-dev"
+description = "Python SDK for Codex"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
 authors = [{ name = "OpenAI" }]
-keywords = ["codex", "json-rpc", "sdk", "llm", "app-server"]
+keywords = ["codex", "sdk", "llm", "ai", "agents"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: Apache Software License",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13",
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-dependencies = ["pydantic>=2.12", "openai-codex-cli-bin==0.131.0a4"]
+dependencies = ["pydantic>=2.12", "openai-codex-cli-bin==0.137.0a4"]
 
 [project.urls]
 Homepage = "https://github.com/openai/codex"
 Repository = "https://github.com/openai/codex"
 Issues = "https://github.com/openai/codex/issues"
+Documentation = "https://github.com/openai/codex/tree/main/sdk/python/docs"
 
-[project.optional-dependencies]
-dev = ["pytest>=8.0", "datamodel-code-generator==0.31.2", "ruff>=0.15.8"]
-
-[tool.hatch.build]
-exclude = [
-  ".venv/**",
-  ".venv2/**",
-  ".pytest_cache/**",
-  "dist/**",
-  "build/**",
+[dependency-groups]
+format = ["ruff>=0.15.8"]
+test = [
+  "pytest>=8.0",
+  "datamodel-code-generator==0.31.2",
+  { include-group = "format" },
 ]
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/openai_codex"]
-include = [
-  "src/openai_codex/py.typed",
-]
-
-[tool.hatch.build.targets.sdist]
-include = [
-  "src/openai_codex/**",
-  "README.md",
-  "CHANGELOG.md",
-  "CONTRIBUTING.md",
-  "RELEASE_CHECKLIST.md",
-  "pyproject.toml",
+dev = [
+  { include-group = "test" },
+  { include-group = "format" },
 ]
 
 [tool.pytest.ini_options]
@@ -86,10 +65,10 @@ combine-as-imports = true
 
 [tool.uv]
 exclude-newer = "7 days"
-exclude-newer-package = { openai-codex-cli-bin = "2026-05-10T00:00:00Z" }
+exclude-newer-package = { openai-codex-cli-bin = "2026-06-03T19:00:00Z" }
 index-strategy = "first-index"
 
 [tool.uv.pip]
 exclude-newer = "7 days"
-exclude-newer-package = { openai-codex-cli-bin = "2026-05-10T00:00:00Z" }
+exclude-newer-package = { openai-codex-cli-bin = "2026-06-03T19:00:00Z" }
 index-strategy = "first-index"

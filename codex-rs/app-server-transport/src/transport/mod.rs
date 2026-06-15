@@ -30,11 +30,20 @@ mod unix_socket;
 mod unix_socket_tests;
 mod websocket;
 
+pub use remote_control::REMOTE_CONTROL_DISABLED_ENV_VAR;
+pub use remote_control::RemoteControlDisabledByRequirements;
+pub use remote_control::RemoteControlEnableError;
 pub use remote_control::RemoteControlHandle;
+pub use remote_control::RemoteControlPolicy;
 pub use remote_control::RemoteControlStartConfig;
+pub use remote_control::RemoteControlStartupMode;
 pub use remote_control::RemoteControlUnavailable;
 pub use remote_control::start_remote_control;
+pub use remote_control::take_remote_control_disabled_env;
 pub use stdio::start_stdio_connection;
+pub use unix_socket::AppServerStartupLock;
+pub use unix_socket::acquire_app_server_startup_lock;
+pub use unix_socket::prepare_control_socket_path;
 pub use unix_socket::start_control_socket_acceptor;
 pub use websocket::start_websocket_acceptor;
 
@@ -42,12 +51,21 @@ const OVERLOADED_ERROR_CODE: i64 = -32001;
 
 const APP_SERVER_CONTROL_SOCKET_DIR_NAME: &str = "app-server-control";
 const APP_SERVER_CONTROL_SOCKET_FILE_NAME: &str = "app-server-control.sock";
+const APP_SERVER_STARTUP_LOCK_FILE_NAME: &str = "app-server-startup.lock";
 
 pub fn app_server_control_socket_path(codex_home: &Path) -> std::io::Result<AbsolutePathBuf> {
     AbsolutePathBuf::from_absolute_path(
         codex_home
             .join(APP_SERVER_CONTROL_SOCKET_DIR_NAME)
             .join(APP_SERVER_CONTROL_SOCKET_FILE_NAME),
+    )
+}
+
+pub fn app_server_startup_lock_path(codex_home: &Path) -> std::io::Result<AbsolutePathBuf> {
+    AbsolutePathBuf::from_absolute_path(
+        codex_home
+            .join(APP_SERVER_CONTROL_SOCKET_DIR_NAME)
+            .join(APP_SERVER_STARTUP_LOCK_FILE_NAME),
     )
 }
 

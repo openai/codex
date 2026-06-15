@@ -1,0 +1,9 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+expression: terminal.backend()
+---
+"                                        "
+"› Shutting down...                      "
+"                                        "
+"                                        "
+"                                        "

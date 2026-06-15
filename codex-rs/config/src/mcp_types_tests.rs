@@ -52,6 +52,62 @@ fn deserialize_stdio_command_server_config_with_args() {
 }
 
 #[test]
+fn deserialize_remote_stdio_server_requires_absolute_cwd() {
+    let missing_cwd = toml::from_str::<McpServerConfig>(
+        r#"
+            command = "echo"
+            environment_id = "remote"
+        "#,
+    )
+    .expect_err("remote stdio MCP should require cwd");
+    assert!(
+        missing_cwd
+            .to_string()
+            .contains("remote stdio MCP servers require an absolute cwd"),
+        "unexpected error: {missing_cwd}"
+    );
+
+    let relative_cwd = toml::from_str::<McpServerConfig>(
+        r#"
+            command = "echo"
+            environment_id = "remote"
+            cwd = "relative"
+        "#,
+    )
+    .expect_err("remote stdio MCP should require absolute cwd");
+    assert!(
+        relative_cwd.to_string().contains("got `relative`"),
+        "unexpected error: {relative_cwd}"
+    );
+}
+
+#[test]
+fn deserialize_remote_stdio_server_accepts_absolute_cwd() {
+    let cwd = std::env::temp_dir();
+    let cfg: McpServerConfig = match toml::from_str(&format!(
+        r#"
+            command = "echo"
+            environment_id = "remote"
+            cwd = {cwd:?}
+        "#
+    )) {
+        Ok(cfg) => cfg,
+        Err(error) => panic!("remote stdio MCP should accept absolute cwd: {error}"),
+    };
+
+    assert_eq!(
+        cfg.transport,
+        McpServerTransportConfig::Stdio {
+            command: "echo".to_string(),
+            args: vec![],
+            env: None,
+            env_vars: Vec::new(),
+            cwd: Some(cwd),
+        }
+    );
+}
+
+#[test]
 fn deserialize_stdio_command_server_config_with_arg_with_args_and_env() {
     let cfg: McpServerConfig = toml::from_str(
         r#"
@@ -284,6 +340,26 @@ fn deserialize_streamable_http_server_config_with_oauth_resource() {
 }
 
 #[test]
+fn deserialize_streamable_http_server_config_with_oauth_client_id() {
+    let cfg: McpServerConfig = toml::from_str(
+        r#"
+            url = "https://example.com/mcp"
+
+            [oauth]
+            client_id = "eci-prd-pub-codex-123"
+        "#,
+    )
+    .expect("should deserialize http config with oauth client id");
+
+    assert_eq!(
+        cfg.oauth,
+        Some(McpServerOAuthConfig {
+            client_id: Some("eci-prd-pub-codex-123".to_string()),
+        })
+    );
+}
+
+#[test]
 fn deserialize_server_config_with_tool_filters() {
     let cfg: McpServerConfig = toml::from_str(
         r#"
@@ -382,7 +458,7 @@ fn deserialize_ignores_unknown_server_fields() {
                 env_vars: Vec::new(),
                 cwd: None,
             },
-            experimental_environment: None,
+            environment_id: crate::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
@@ -393,6 +469,7 @@ fn deserialize_ignores_unknown_server_fields() {
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth: None,
             oauth_resource: None,
             tools: HashMap::new(),
         }
@@ -438,6 +515,19 @@ fn deserialize_rejects_headers_for_stdio() {
         "#,
     )
     .expect_err("should reject env_http_headers for stdio transport");
+
+    let err = toml::from_str::<McpServerConfig>(
+        r#"
+            command = "echo"
+            oauth = { client_id = "eci-prd-pub-codex-123" }
+        "#,
+    )
+    .expect_err("should reject oauth for stdio transport");
+
+    assert!(
+        err.to_string().contains("oauth is not supported for stdio"),
+        "unexpected error: {err}"
+    );
 
     let err = toml::from_str::<McpServerConfig>(
         r#"

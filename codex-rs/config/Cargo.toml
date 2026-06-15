@@ -13,7 +13,6 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-async-trait = { workspace = true }
 base64 = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-execpolicy = { workspace = true }
@@ -25,9 +24,11 @@ codex-network-proxy = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path = { workspace = true }
+codex-utils-path-uri = { workspace = true }
 dunce = { workspace = true }
 futures = { workspace = true, features = ["alloc", "std"] }
 gethostname = { workspace = true }
+indexmap = { workspace = true, features = ["serde"] }
 multimap = { workspace = true }
 prost = "0.14.3"
 schemars = { workspace = true }
@@ -38,7 +39,7 @@ serde_path_to_error = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
-toml = { workspace = true }
+toml = { workspace = true, features = ["preserve_order"] }
 toml_edit = { workspace = true }
 tonic = { workspace = true }
 tonic-prost = { workspace = true }

@@ -19,6 +19,7 @@ pub(crate) fn initial_history_has_prior_user_turns(conversation_history: &Initia
 fn rollout_item_is_user_turn_boundary(item: &RolloutItem) -> bool {
     match item {
         RolloutItem::ResponseItem(item) => is_user_turn_boundary(item),
+        RolloutItem::InterAgentCommunication(_) => true,
         _ => false,
     }
 }
@@ -58,7 +59,8 @@ pub(crate) fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<us
 ///
 /// A fork-turn boundary is either:
 /// - a real user message boundary, or
-/// - an assistant inter-agent envelope whose parsed `trigger_turn` is `true`.
+/// - an inter-agent communication whose `trigger_turn` is `true`, or
+/// - a legacy assistant inter-agent envelope with the same flag.
 ///
 /// Like `user_message_positions_in_rollout`, this applies `ThreadRolledBack` markers so indexing
 /// reflects the effective post-rollback history. Rollback counts instruction turns, so a rollback
@@ -74,6 +76,12 @@ pub(crate) fn fork_turn_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize
                     rollback_turn_positions.push(idx);
                 }
                 if is_real_user_message_boundary(item) || is_trigger_turn_boundary(item) {
+                    fork_turn_positions.push(idx);
+                }
+            }
+            RolloutItem::InterAgentCommunication(communication) => {
+                rollback_turn_positions.push(idx);
+                if communication.trigger_turn {
                     fork_turn_positions.push(idx);
                 }
             }
@@ -130,7 +138,8 @@ pub(crate) fn truncate_rollout_before_nth_user_message_from_start(
 
 /// Return a suffix of `items` that keeps the last `n_from_end` fork turns.
 ///
-/// If fewer than or equal to `n_from_end` fork turns exist, this returns the full rollout.
+/// If fewer than or equal to `n_from_end` fork turns exist, this keeps from the first fork-turn
+/// boundary and still drops pre-turn startup context.
 pub(crate) fn truncate_rollout_to_last_n_fork_turns(
     items: &[RolloutItem],
     n_from_end: usize,
@@ -140,11 +149,14 @@ pub(crate) fn truncate_rollout_to_last_n_fork_turns(
     }
 
     let fork_turn_positions = fork_turn_positions_in_rollout(items);
-    if fork_turn_positions.len() <= n_from_end {
-        return items.to_vec();
-    }
-
-    let keep_idx = fork_turn_positions[fork_turn_positions.len() - n_from_end];
+    let Some(keep_idx) = fork_turn_positions
+        .len()
+        .checked_sub(n_from_end)
+        .map(|position| fork_turn_positions[position])
+        .or_else(|| fork_turn_positions.first().copied())
+    else {
+        return Vec::new();
+    };
     items[keep_idx..].to_vec()
 }
 

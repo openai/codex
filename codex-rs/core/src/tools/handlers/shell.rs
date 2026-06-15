@@ -2,6 +2,7 @@ use codex_features::Feature;
 use codex_protocol::models::ShellCommandToolCallParams;
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 use crate::exec::ExecParams;
 use crate::exec_policy::ExecApprovalRequest;
@@ -44,6 +45,7 @@ fn shell_command_payload_command(payload: &ToolPayload) -> Option<String> {
 struct RunExecLikeArgs {
     tool_name: ToolName,
     exec_params: ExecParams,
+    cancellation_token: CancellationToken,
     hook_command: String,
     shell_type: Option<ShellType>,
     additional_permissions: Option<AdditionalPermissionProfile>,
@@ -52,7 +54,6 @@ struct RunExecLikeArgs {
     turn: Arc<TurnContext>,
     tracker: crate::tools::context::SharedTurnDiffTracker,
     call_id: String,
-    freeform: bool,
     shell_runtime_backend: ShellRuntimeBackend,
 }
 
@@ -60,6 +61,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     let RunExecLikeArgs {
         tool_name,
         exec_params,
+        cancellation_token,
         hook_command,
         shell_type,
         additional_permissions,
@@ -68,11 +70,9 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         turn,
         tracker,
         call_id,
-        freeform,
         shell_runtime_backend,
     } = args;
 
-    let mut exec_params = exec_params;
     let Some(turn_environment) = turn.environments.primary() else {
         return Err(FunctionCallError::RespondToModel(
             "shell is unavailable in this session".to_string(),
@@ -80,25 +80,14 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     };
     let fs = turn_environment.environment.get_filesystem();
 
-    let dependency_env = session.dependency_env().await;
-    if !dependency_env.is_empty() {
-        exec_params.env.extend(dependency_env.clone());
-    }
-
-    let mut explicit_env_overrides = turn.shell_environment_policy.r#set.clone();
-    for key in dependency_env.keys() {
-        if let Some(value) = exec_params.env.get(key) {
-            explicit_env_overrides.insert(key.clone(), value.clone());
-        }
-    }
-
+    let explicit_env_overrides = turn.shell_environment_policy.r#set.clone();
     let exec_permission_approvals_enabled =
         session.features().enabled(Feature::ExecPermissionApprovals);
     let requested_additional_permissions = additional_permissions.clone();
-    #[allow(deprecated)]
     let effective_additional_permissions = apply_granted_turn_permissions(
         session.as_ref(),
-        turn.cwd.as_path(),
+        &turn_environment.environment_id,
+        exec_params.cwd.as_path(),
         exec_params.sandbox_permissions,
         additional_permissions,
     )
@@ -162,12 +151,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     }
 
     let source = ExecCommandSource::Agent;
-    let emitter = ToolEmitter::shell(
-        exec_params.command.clone(),
-        exec_params.cwd.clone(),
-        source,
-        freeform,
-    );
+    let emitter = ToolEmitter::shell(exec_params.command.clone(), exec_params.cwd.clone(), source);
     let event_ctx = ToolEventCtx::new(
         session.as_ref(),
         turn.as_ref(),
@@ -176,7 +160,6 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     );
     emitter.begin(event_ctx).await;
 
-    let file_system_sandbox_policy = turn.file_system_sandbox_policy();
     let exec_approval_requirement = session
         .services
         .exec_policy
@@ -184,9 +167,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
             command: &exec_params.command,
             approval_policy: turn.approval_policy.value(),
             permission_profile: turn.permission_profile(),
-            file_system_sandbox_policy: &file_system_sandbox_policy,
-            #[allow(deprecated)]
-            sandbox_cwd: turn.cwd.as_path(),
+            windows_sandbox_level: turn.windows_sandbox_level,
             sandbox_permissions: if effective_additional_permissions.permissions_preapproved {
                 codex_protocol::models::SandboxPermissions::UseDefault
             } else {
@@ -202,6 +183,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         hook_command,
         cwd: exec_params.cwd.clone(),
         timeout_ms: exec_params.expiration.timeout_ms(),
+        cancellation_token,
         env: exec_params.env.clone(),
         explicit_env_overrides,
         network: exec_params.network.clone(),

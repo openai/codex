@@ -13,13 +13,13 @@ impl ChatWidget {
     ) -> Self {
         let ChatWidgetInit {
             config,
-            environment_manager,
             frame_requester,
             app_event_tx,
             workspace_command_runner,
             initial_user_message,
             enhanced_keys_supported,
             has_chatgpt_account,
+            has_codex_backend_auth,
             model_catalog,
             feedback,
             is_first_run,
@@ -65,7 +65,11 @@ impl ChatWidget {
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
 
         let current_cwd = Some(config.cwd.to_path_buf());
-        let effective_service_tier = config.service_tier.clone();
+        let effective_service_tier = crate::service_tier_resolution::effective_service_tier(
+            &config,
+            &header_model,
+            &model_catalog.try_list_models().unwrap_or_default(),
+        );
         let current_terminal_info = terminal_info();
         let runtime_keymap = RuntimeKeymap::from_config(&config.tui_keymap).ok();
         let default_keymap = RuntimeKeymap::defaults();
@@ -104,23 +108,27 @@ impl ChatWidget {
             transcript: TranscriptState::new(active_cell),
             raw_output_mode: config.tui_raw_output_mode,
             config,
-            environment_manager,
             effective_service_tier,
             skills_all: Vec::new(),
             skills_initial_state: None,
             current_collaboration_mode,
             active_collaboration_mask,
             has_chatgpt_account,
+            has_codex_backend_auth,
             model_catalog,
             session_telemetry,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             status_account_display,
             runtime_model_provider_base_url,
+            remote_connection: None,
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             refreshing_status_outputs: Vec::new(),
             next_status_refresh_request_id: 0,
+            refreshing_token_activity_output: None,
+            completed_token_activity_output: None,
+            next_token_activity_request_id: 0,
             plan_type: initial_plan_type,
             codex_rate_limit_reached_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
@@ -130,6 +138,7 @@ impl ChatWidget {
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
+            pending_stream_consolidations: 0,
             clipboard_lease: None,
             copy_last_response_binding,
             running_commands: HashMap::new(),
@@ -151,6 +160,9 @@ impl ChatWidget {
             ide_context: IdeContextState::default(),
             plugins_cache: PluginsCacheState::default(),
             plugins_fetch_state: PluginListFetchState::default(),
+            plugin_remote_sections_loading: false,
+            plugin_remote_sections_loaded: false,
+            plugin_remote_section_errors: Vec::new(),
             plugin_install_apps_needing_auth: Vec::new(),
             plugin_install_auth_flow: None,
             plugins_active_tab_id: None,
@@ -179,6 +191,7 @@ impl ChatWidget {
             forked_from: None,
             interrupted_turn_notice_mode: InterruptedTurnNoticeMode::Default,
             input_queue: InputQueueState::default(),
+            cancel_edit: CancelEditState::default(),
             chat_keymap,
             queued_message_edit_hint_binding,
             show_welcome_banner: is_first_run,
@@ -214,7 +227,6 @@ impl ChatWidget {
             current_goal_status_indicator: None,
             current_goal_status: None,
             external_editor_state: ExternalEditorState::Closed,
-            realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_display: None,
             last_non_retry_error: None,
         };
@@ -226,12 +238,6 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_vim_enabled(widget.config.tui_vim_mode_default);
-        widget
-            .bottom_pane
-            .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
-        widget
-            .bottom_pane
-            .set_audio_device_selection_enabled(widget.realtime_audio_device_selection_enabled());
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -247,18 +253,20 @@ impl ChatWidget {
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_hint_binding);
         #[cfg(target_os = "windows")]
-        widget.bottom_pane.set_windows_degraded_sandbox_active(
-            crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                && matches!(
-                    WindowsSandboxLevel::from_config(&widget.config),
-                    WindowsSandboxLevel::RestrictedToken
-                ),
-        );
+        widget
+            .bottom_pane
+            .set_windows_degraded_sandbox_active(matches!(
+                crate::windows_sandbox::level_from_config(&widget.config),
+                WindowsSandboxLevel::RestrictedToken
+            ));
         widget.update_collaboration_mode_indicator();
 
         widget
             .bottom_pane
             .set_connectors_enabled(widget.connectors_enabled());
+        widget
+            .bottom_pane
+            .set_token_activity_command_enabled(widget.has_codex_backend_auth);
         widget.refresh_status_surfaces();
 
         widget

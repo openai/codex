@@ -19,7 +19,6 @@ pub(super) async fn test_config() -> Config {
     config.cwd = PathBuf::from(test_path_display("/tmp/project")).abs();
     config.config_layer_stack = ConfigLayerStack::default();
     config.startup_warnings.clear();
-    config.user_instructions = None;
     config
 }
 
@@ -112,13 +111,15 @@ pub(super) fn snapshot(percent: f64) -> RateLimitSnapshot {
         }),
         secondary: None,
         credits: None,
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     }
 }
 
 pub(super) fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
-    let model_info = crate::legacy_core::test_support::construct_model_info_offline(model, config);
+    let model_info =
+        construct_model_info_offline_for_tests(model, &config.to_models_manager_config());
     SessionTelemetry::new(
         ThreadId::new(),
         model,
@@ -135,7 +136,7 @@ pub(super) fn test_session_telemetry(config: &Config, model: &str) -> SessionTel
 
 pub(super) fn test_model_catalog(_config: &Config) -> Arc<ModelCatalog> {
     Arc::new(ModelCatalog::new(
-        crate::legacy_core::test_support::all_model_presets().clone(),
+        crate::test_support::TEST_MODEL_PRESETS.clone(),
     ))
 }
 
@@ -147,13 +148,30 @@ pub(super) async fn make_chatwidget_manual(
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     tokio::sync::mpsc::UnboundedReceiver<Op>,
 ) {
+    make_chatwidget_manual_with_auth(
+        model_override,
+        /*has_chatgpt_account*/ false,
+        /*has_codex_backend_auth*/ false,
+    )
+    .await
+}
+
+pub(super) async fn make_chatwidget_manual_with_auth(
+    model_override: Option<&str>,
+    has_chatgpt_account: bool,
+    has_codex_backend_auth: bool,
+) -> (
+    ChatWidget,
+    tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    tokio::sync::mpsc::UnboundedReceiver<Op>,
+) {
     let (tx_raw, rx) = unbounded_channel::<AppEvent>();
     let app_event_tx = AppEventSender::new(tx_raw);
     let (op_tx, op_rx) = unbounded_channel::<Op>();
     let mut cfg = test_config().await;
-    let resolved_model = model_override.map(str::to_owned).unwrap_or_else(|| {
-        crate::legacy_core::test_support::get_model_offline(cfg.model.as_deref())
-    });
+    let resolved_model = model_override
+        .map(str::to_owned)
+        .unwrap_or_else(|| get_model_offline_for_tests(cfg.model.as_deref()));
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());
     }
@@ -161,13 +179,13 @@ pub(super) async fn make_chatwidget_manual(
     let model_catalog = test_model_catalog(&cfg);
     let common = ChatWidgetInit {
         config: cfg,
-        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx,
         workspace_command_runner: None,
         initial_user_message: None,
         enhanced_keys_supported: false,
-        has_chatgpt_account: false,
+        has_chatgpt_account,
+        has_codex_backend_auth,
         model_catalog,
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
@@ -209,25 +227,10 @@ pub(super) fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op
 pub(super) fn next_interrupt_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
     loop {
         match op_rx.try_recv() {
-            Ok(Op::Interrupt) => return,
+            Ok(Op::Interrupt { .. }) => return,
             Ok(_) => continue,
             Err(TryRecvError::Empty) => panic!("expected interrupt op but queue was empty"),
             Err(TryRecvError::Disconnected) => panic!("expected interrupt op but channel closed"),
-        }
-    }
-}
-
-pub(super) fn next_realtime_close_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
-    loop {
-        match op_rx.try_recv() {
-            Ok(Op::RealtimeConversationClose) => return,
-            Ok(_) => continue,
-            Err(TryRecvError::Empty) => {
-                panic!("expected realtime close op but queue was empty")
-            }
-            Err(TryRecvError::Disconnected) => {
-                panic!("expected realtime close op but channel closed")
-            }
         }
     }
 }
@@ -243,19 +246,19 @@ pub(super) fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiv
 
 pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.has_chatgpt_account = true;
+    chat.has_codex_backend_auth = true;
     chat.model_catalog = test_model_catalog(&chat.config);
 }
 
 fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> ModelInfo {
-    let service_tiers = if supports_fast_mode {
-        vec![json!({
+    let mut service_tiers = Vec::new();
+    if supports_fast_mode {
+        service_tiers.push(json!({
             "id": ServiceTier::Fast.request_value(),
             "name": "fast",
             "description": "Fastest inference with increased plan usage"
-        })]
-    } else {
-        Vec::new()
-    };
+        }));
+    }
     serde_json::from_value(json!({
         "slug": slug,
         "display_name": slug,
@@ -268,6 +271,7 @@ fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> Model
         "priority": priority,
         "additional_speed_tiers": [],
         "service_tiers": service_tiers,
+        "default_service_tier": null,
         "availability_nux": null,
         "upgrade": null,
         "base_instructions": "base instructions",
@@ -694,6 +698,7 @@ pub(super) fn handle_view_image_tool_call(
 pub(super) fn handle_image_generation_end(
     chat: &mut ChatWidget,
     call_id: impl Into<String>,
+    status: impl Into<String>,
     revised_prompt: Option<String>,
     saved_path: Option<AbsolutePathBuf>,
 ) {
@@ -704,7 +709,7 @@ pub(super) fn handle_image_generation_end(
             completed_at_ms: 0,
             item: AppServerThreadItem::ImageGeneration {
                 id: call_id.into(),
-                status: "completed".to_string(),
+                status: status.into(),
                 revised_prompt,
                 result: String::new(),
                 saved_path,
@@ -723,6 +728,7 @@ pub(super) fn replay_user_message_inputs(
     chat.replay_thread_item(
         AppServerThreadItem::UserMessage {
             id: item_id.to_string(),
+            client_id: None,
             content,
         },
         "turn-1".to_string(),
@@ -947,6 +953,7 @@ pub(super) fn complete_user_message_for_inputs(
             completed_at_ms: 0,
             item: AppServerThreadItem::UserMessage {
                 id: item_id.to_string(),
+                client_id: None,
                 content,
             },
         }),
@@ -1205,7 +1212,7 @@ pub(super) fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
     String::new()
 }
 
-pub(super) fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
+pub(crate) fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     let height = chat.desired_height(width);
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
@@ -1335,6 +1342,34 @@ pub(super) fn plugins_test_summary(
     }
 }
 
+pub(super) fn plugins_test_remote_summary(
+    remote_plugin_id: &str,
+    name: &str,
+    display_name: Option<&str>,
+    description: Option<&str>,
+    installed: bool,
+) -> PluginSummary {
+    PluginSummary {
+        id: remote_plugin_id.to_string(),
+        remote_plugin_id: Some(remote_plugin_id.to_string()),
+        local_version: None,
+        name: name.to_string(),
+        share_context: None,
+        source: PluginSource::Remote,
+        installed,
+        enabled: true,
+        install_policy: PluginInstallPolicy::Available,
+        auth_policy: PluginAuthPolicy::OnInstall,
+        availability: PluginAvailability::Available,
+        interface: Some(plugins_test_interface(
+            display_name,
+            description,
+            /*long_description*/ None,
+        )),
+        keywords: Vec::new(),
+    }
+}
+
 pub(super) fn plugins_test_curated_marketplace(
     plugins: Vec<PluginSummary>,
 ) -> PluginMarketplaceEntry {
@@ -1384,13 +1419,14 @@ pub(super) fn plugins_test_detail(
     description: Option<&str>,
     skills: &[&str],
     hooks: &[(codex_app_server_protocol::HookEventName, usize)],
-    apps: &[(&str, bool)],
+    apps: &[&str],
     mcp_servers: &[&str],
 ) -> PluginDetail {
     PluginDetail {
         marketplace_name: "ChatGPT Marketplace".to_string(),
         marketplace_path: Some(plugins_test_absolute_path("marketplaces/chatgpt")),
         summary,
+        share_url: None,
         description: description.map(str::to_string),
         skills: skills
             .iter()
@@ -1419,14 +1455,15 @@ pub(super) fn plugins_test_detail(
             .collect(),
         apps: apps
             .iter()
-            .map(|(name, needs_auth)| AppSummary {
+            .map(|name| AppSummary {
                 id: format!("{name}-id"),
                 name: (*name).to_string(),
                 description: Some(format!("{name} app")),
                 install_url: Some(format!("https://example.test/{name}")),
-                needs_auth: *needs_auth,
+                category: None,
             })
             .collect(),
+        app_templates: Vec::new(),
         mcp_servers: mcp_servers.iter().map(|name| (*name).to_string()).collect(),
     }
 }
@@ -1572,6 +1609,8 @@ fn hook_event_label(event_name: codex_app_server_protocol::HookEventName) -> &'s
         codex_app_server_protocol::HookEventName::PostCompact => "PostCompact",
         codex_app_server_protocol::HookEventName::SessionStart => "SessionStart",
         codex_app_server_protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        codex_app_server_protocol::HookEventName::SubagentStart => "SubagentStart",
+        codex_app_server_protocol::HookEventName::SubagentStop => "SubagentStop",
         codex_app_server_protocol::HookEventName::Stop => "Stop",
     }
 }

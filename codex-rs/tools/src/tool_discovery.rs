@@ -5,6 +5,7 @@ use serde::Serialize;
 const TUI_CLIENT_NAME: &str = "codex-tui";
 pub const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
 pub const TOOL_SEARCH_DEFAULT_LIMIT: usize = 8;
+pub const LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME: &str = "list_available_plugins_to_install";
 pub const REQUEST_PLUGIN_INSTALL_TOOL_NAME: &str = "request_plugin_install";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -92,6 +93,7 @@ pub fn filter_request_plugin_install_discoverable_tools_for_client(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiscoverablePluginInfo {
     pub id: String,
+    pub remote_plugin_id: Option<String>,
     pub name: String,
     pub description: Option<String>,
     pub has_skills: bool,
@@ -99,7 +101,7 @@ pub struct DiscoverablePluginInfo {
     pub app_connector_ids: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct RequestPluginInstallEntry {
     pub id: String,
     pub name: String,
@@ -108,6 +110,11 @@ pub struct RequestPluginInstallEntry {
     pub has_skills: bool,
     pub mcp_server_names: Vec<String>,
     pub app_connector_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct ListAvailablePluginsToInstallResult {
+    pub tools: Vec<RequestPluginInstallEntry>,
 }
 
 pub fn collect_request_plugin_install_entries(

@@ -2,8 +2,9 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::registry::ToolHandler;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 
@@ -37,15 +38,22 @@ impl CodeModeExecuteHandler {
         let exec = ExecContext { session, turn };
         let enabled_tools =
             codex_tools::collect_code_mode_tool_definitions(&self.nested_tool_specs);
-        let stored_values = exec
+        let started_at = std::time::Instant::now();
+        let started_cell = exec
             .session
             .services
             .code_mode_service
-            .stored_values()
-            .await;
-        // Allocate before starting V8 so the trace can create the parent
-        // CodeCell before model-authored JavaScript issues nested tool calls.
-        let runtime_cell_id = exec.session.services.code_mode_service.allocate_cell_id();
+            .execute(codex_code_mode::ExecuteRequest {
+                tool_call_id: call_id.clone(),
+                enabled_tools,
+                source: args.code.clone(),
+                yield_time_ms: args.yield_time_ms,
+                max_output_tokens: args.max_output_tokens,
+            })
+            .await
+            .map_err(FunctionCallError::RespondToModel)?;
+        let cell_id = started_cell.cell_id.clone();
+        let runtime_cell_id = cell_id.to_string();
         let code_cell_trace = exec
             .session
             .services
@@ -56,20 +64,12 @@ impl CodeModeExecuteHandler {
                 call_id.as_str(),
                 args.code.as_str(),
             );
-        let started_at = std::time::Instant::now();
-        let response = exec
-            .session
+        exec.session
             .services
             .code_mode_service
-            .execute(codex_code_mode::ExecuteRequest {
-                cell_id: runtime_cell_id,
-                tool_call_id: call_id,
-                enabled_tools,
-                source: args.code,
-                stored_values,
-                yield_time_ms: args.yield_time_ms,
-                max_output_tokens: args.max_output_tokens,
-            })
+            .mark_cell_ready_for_dispatch(&cell_id);
+        let response = started_cell
+            .initial_response()
             .await
             .map_err(FunctionCallError::RespondToModel)?;
         // Record the raw runtime boundary. The model-visible custom-tool output
@@ -80,6 +80,10 @@ impl CodeModeExecuteHandler {
         // here when the first response also ended the runtime.
         if !matches!(response, codex_code_mode::RuntimeResponse::Yielded { .. }) {
             code_cell_trace.record_ended(&response);
+            exec.session
+                .services
+                .code_mode_service
+                .finish_cell_dispatch(&cell_id);
         }
         handle_runtime_response(&exec, response, args.max_output_tokens, started_at)
             .await
@@ -87,19 +91,25 @@ impl CodeModeExecuteHandler {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for CodeModeExecuteHandler {
-    type Output = FunctionToolOutput;
-
     fn tool_name(&self) -> ToolName {
         ToolName::plain(PUBLIC_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(self.spec.clone())
+    fn spec(&self) -> ToolSpec {
+        self.spec.clone()
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl CodeModeExecuteHandler {
+    async fn handle_call(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -110,9 +120,10 @@ impl ToolExecutor<ToolInvocation> for CodeModeExecuteHandler {
         } = invocation;
 
         match payload {
-            ToolPayload::Custom { input } if is_exec_tool_name(&tool_name) => {
-                self.execute(session, turn, call_id, input).await
-            }
+            ToolPayload::Custom { input } if is_exec_tool_name(&tool_name) => self
+                .execute(session, turn, call_id, input)
+                .await
+                .map(boxed_tool_output),
             _ => Err(FunctionCallError::RespondToModel(format!(
                 "{PUBLIC_TOOL_NAME} expects raw JavaScript source text"
             ))),
@@ -120,7 +131,7 @@ impl ToolExecutor<ToolInvocation> for CodeModeExecuteHandler {
     }
 }
 
-impl ToolHandler for CodeModeExecuteHandler {
+impl CoreToolRuntime for CodeModeExecuteHandler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Custom { .. })
     }

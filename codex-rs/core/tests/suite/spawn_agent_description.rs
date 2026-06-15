@@ -20,6 +20,7 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
@@ -28,22 +29,14 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::time::sleep;
 
+const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
 const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
 
 fn spawn_agent_description(body: &Value) -> Option<String> {
-    body.get("tools")
-        .and_then(Value::as_array)
-        .and_then(|tools| {
-            tools.iter().find_map(|tool| {
-                if tool.get("name").and_then(Value::as_str) == Some(SPAWN_AGENT_TOOL_NAME) {
-                    tool.get("description")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                } else {
-                    None
-                }
-            })
-        })
+    namespace_child_tool(body, MULTI_AGENT_V1_NAMESPACE, SPAWN_AGENT_TOOL_NAME)
+        .and_then(|tool| tool.get("description"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 fn test_model_info(
@@ -67,9 +60,14 @@ fn test_model_info(
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        use_responses_lite: false,
+        auto_review_model_override: None,
+        tool_mode: None,
+        multi_agent_version: None,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         service_tiers,
+        default_service_tier: None,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
@@ -86,6 +84,7 @@ fn test_model_info(
         context_window: Some(272_000),
         max_context_window: None,
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     }
@@ -122,6 +121,10 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
                         ReasoningEffortPreset {
                             effort: ReasoningEffort::Low,
                             description: "Quick scan".to_string(),
+                        },
+                        ReasoningEffortPreset {
+                            effort: ReasoningEffort::Medium,
+                            description: "Balanced".to_string(),
                         },
                         ReasoningEffortPreset {
                             effort: ReasoningEffort::High,
@@ -164,6 +167,7 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
                 .features
                 .enable(Feature::Collab)
                 .expect("test config should allow feature update");
+            config.multi_agent_v2.hide_spawn_agent_metadata = false;
         });
     let test = builder.build(&server).await?;
     wait_for_model_available(&test.thread_manager.get_models_manager(), "visible-model").await;
@@ -175,7 +179,7 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
         spawn_agent_description(&body).expect("spawn_agent description should be present");
 
     assert!(
-        description.contains("- Visible Model (`visible-model`): Fast and capable"),
+        description.contains("- `visible-model`: Fast and capable"),
         "expected visible model summary in spawn_agent description: {description:?}"
     );
     assert!(
@@ -196,33 +200,26 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
         "expected model override usage guidance in spawn_agent description: {description:?}"
     );
     assert!(
-        description.contains("Default reasoning effort: medium."),
+        description.contains("Reasoning efforts: low, medium (default), high."),
         "expected default reasoning effort in spawn_agent description: {description:?}"
     );
     assert!(
-        description.contains("low (Quick scan), high (Deep dive)."),
-        "expected reasoning efforts in spawn_agent description: {description:?}"
-    );
-    assert!(
-        description
-            .contains("Supported service tiers: priority (Fast: 1.5x speed, increased usage)."),
+        description.contains("Service tiers: priority."),
         "expected service tier guidance in spawn_agent description: {description:?}"
     );
     assert!(
-        !description.contains("Hidden Model"),
+        !description.contains("hidden-model"),
         "hidden picker model should be omitted from spawn_agent description: {description:?}"
     );
     assert!(
         description.contains(
-            "Only use `spawn_agent` if and only if the user explicitly asks for sub-agents, delegation, or parallel agent work."
+            "Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work."
         ),
         "expected explicit authorization rule in spawn_agent description: {description:?}"
     );
     assert!(
-        description.contains(
-            "Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not count as permission to spawn."
-        ),
-        "expected non-authorization clarification in spawn_agent description: {description:?}"
+        !description.contains("### When to delegate vs. do the subtask yourself"),
+        "spawn_agent description should not include extra when-to-use delegation guidance: {description:?}"
     );
     assert!(
         description.contains(

@@ -10,6 +10,7 @@ use crate::CreateDirectoryOptions;
 use crate::ExecutorFileSystem;
 use crate::RemoveOptions;
 use crate::local_file_system::DirectFileSystem;
+use crate::protocol::FS_CANONICALIZE_METHOD;
 use crate::protocol::FS_COPY_METHOD;
 use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
@@ -17,6 +18,8 @@ use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
+use crate::protocol::FsCanonicalizeParams;
+use crate::protocol::FsCanonicalizeResponse;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
@@ -49,6 +52,8 @@ pub(crate) enum FsHelperRequest {
     CreateDirectory(FsCreateDirectoryParams),
     #[serde(rename = "fs/getMetadata")]
     GetMetadata(FsGetMetadataParams),
+    #[serde(rename = "fs/canonicalize")]
+    Canonicalize(FsCanonicalizeParams),
     #[serde(rename = "fs/readDirectory")]
     ReadDirectory(FsReadDirectoryParams),
     #[serde(rename = "fs/remove")]
@@ -75,6 +80,8 @@ pub(crate) enum FsHelperPayload {
     CreateDirectory(FsCreateDirectoryResponse),
     #[serde(rename = "fs/getMetadata")]
     GetMetadata(FsGetMetadataResponse),
+    #[serde(rename = "fs/canonicalize")]
+    Canonicalize(FsCanonicalizeResponse),
     #[serde(rename = "fs/readDirectory")]
     ReadDirectory(FsReadDirectoryResponse),
     #[serde(rename = "fs/remove")]
@@ -90,6 +97,7 @@ impl FsHelperPayload {
             Self::WriteFile(_) => FS_WRITE_FILE_METHOD,
             Self::CreateDirectory(_) => FS_CREATE_DIRECTORY_METHOD,
             Self::GetMetadata(_) => FS_GET_METADATA_METHOD,
+            Self::Canonicalize(_) => FS_CANONICALIZE_METHOD,
             Self::ReadDirectory(_) => FS_READ_DIRECTORY_METHOD,
             Self::Remove(_) => FS_REMOVE_METHOD,
             Self::Copy(_) => FS_COPY_METHOD,
@@ -127,6 +135,16 @@ impl FsHelperPayload {
             Self::GetMetadata(response) => Ok(response),
             other => Err(unexpected_response(
                 FS_GET_METADATA_METHOD,
+                other.operation(),
+            )),
+        }
+    }
+
+    pub(crate) fn expect_canonicalize(self) -> Result<FsCanonicalizeResponse, JSONRPCErrorError> {
+        match self {
+            Self::Canonicalize(response) => Ok(response),
+            other => Err(unexpected_response(
+                FS_CANONICALIZE_METHOD,
                 other.operation(),
             )),
         }
@@ -215,8 +233,18 @@ pub(crate) async fn run_direct_request(
                 is_directory: metadata.is_directory,
                 is_file: metadata.is_file,
                 is_symlink: metadata.is_symlink,
+                size: metadata.size,
                 created_at_ms: metadata.created_at_ms,
                 modified_at_ms: metadata.modified_at_ms,
+            }))
+        }
+        FsHelperRequest::Canonicalize(params) => {
+            let path = file_system
+                .canonicalize(&params.path, /*sandbox*/ None)
+                .await
+                .map_err(map_fs_error)?;
+            Ok(FsHelperPayload::Canonicalize(FsCanonicalizeResponse {
+                path,
             }))
         }
         FsHelperRequest::ReadDirectory(params) => {
@@ -278,23 +306,68 @@ fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
 
 #[cfg(test)]
 mod tests {
+    use codex_utils_path_uri::PathUri;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
     use super::*;
 
     #[test]
-    fn helper_requests_use_fs_method_names() -> serde_json::Result<()> {
-        assert_eq!(
-            serde_json::to_value(FsHelperRequest::WriteFile(FsWriteFileParams {
-                path: std::env::current_dir()
-                    .expect("cwd")
-                    .join("file")
-                    .as_path()
-                    .try_into()
-                    .expect("absolute path"),
+    fn helper_protocol_uses_path_uris() -> serde_json::Result<()> {
+        let local_path = PathUri::from_path(std::env::current_dir().expect("cwd").join("file"))
+            .expect("path URI");
+        let paths = [
+            local_path,
+            PathUri::parse("file://server/share/file").expect("path URI"),
+        ];
+
+        for path in paths {
+            let expected_path = path.to_string();
+
+            let request = serde_json::to_value(FsHelperRequest::WriteFile(FsWriteFileParams {
+                path: path.clone(),
                 data_base64: String::new(),
                 sandbox: None,
-            }))?["operation"],
-            FS_WRITE_FILE_METHOD,
-        );
+            }))?;
+            assert_eq!(
+                request,
+                json!({
+                    "operation": FS_WRITE_FILE_METHOD,
+                    "params": {
+                        "path": expected_path.as_str(),
+                        "dataBase64": "",
+                        "sandbox": null,
+                    },
+                }),
+            );
+            let request_path = request["params"]["path"]
+                .as_str()
+                .expect("request path should be a string");
+            assert_eq!(request_path, expected_path);
+            assert!(request_path.starts_with("file:"));
+
+            let response = serde_json::to_value(FsHelperResponse::Ok(
+                FsHelperPayload::Canonicalize(FsCanonicalizeResponse { path }),
+            ))?;
+            assert_eq!(
+                response,
+                json!({
+                    "status": "ok",
+                    "payload": {
+                        "operation": FS_CANONICALIZE_METHOD,
+                        "response": {
+                            "path": expected_path.as_str(),
+                        },
+                    },
+                }),
+            );
+            let response_path = response["payload"]["response"]["path"]
+                .as_str()
+                .expect("canonicalize response path should be a string");
+            assert_eq!(response_path, expected_path);
+            assert!(response_path.starts_with("file:"));
+        }
+
         Ok(())
     }
 }

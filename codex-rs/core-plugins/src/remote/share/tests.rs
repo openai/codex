@@ -326,6 +326,34 @@ fn archive_plugin_for_upload_places_manifest_at_archive_root() {
     );
 }
 
+#[test]
+fn archive_plugin_for_upload_round_trips_through_plugin_bundle_archive_with_long_paths() {
+    let temp_dir = TempDir::new().unwrap();
+    let plugin_path = write_test_plugin(temp_dir.path(), "demo-plugin");
+    let long_skill_path = Path::new("skills")
+        .join(["segment"; 40].join("/"))
+        .join("SKILL.md");
+    write_file(&plugin_path.join(&long_skill_path), "# Long path skill\n");
+
+    let archive_bytes = archive_plugin_for_upload(&plugin_path).unwrap();
+    let destination = TempDir::new().unwrap();
+    crate::plugin_bundle_archive::unpack_plugin_bundle_tar_gz(
+        &archive_bytes,
+        destination.path(),
+        /*max_total_bytes*/ 1024 * 1024,
+    )
+    .expect("extract shared plugin archive");
+
+    assert_eq!(
+        fs::read_to_string(destination.path().join(".codex-plugin/plugin.json")).unwrap(),
+        r#"{"name":"demo-plugin"}"#
+    );
+    assert_eq!(
+        fs::read_to_string(destination.path().join(long_skill_path)).unwrap(),
+        "# Long path skill\n"
+    );
+}
+
 #[tokio::test]
 async fn save_remote_plugin_share_updates_existing_workspace_plugin() {
     let codex_home = TempDir::new().unwrap();

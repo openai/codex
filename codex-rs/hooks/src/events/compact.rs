@@ -17,11 +17,13 @@ use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::PostCompactCommandInput;
 use crate::schema::PreCompactCommandInput;
+use crate::schema::SubagentCommandInputFields;
 
 #[derive(Debug, Clone)]
 pub struct PreCompactRequest {
     pub session_id: ThreadId,
     pub turn_id: String,
+    pub subagent: Option<common::SubagentHookContext>,
     pub cwd: AbsolutePathBuf,
     pub transcript_path: Option<PathBuf>,
     pub model: String,
@@ -32,6 +34,7 @@ pub struct PreCompactRequest {
 pub struct PostCompactRequest {
     pub session_id: ThreadId,
     pub turn_id: String,
+    pub subagent: Option<common::SubagentHookContext>,
     pub cwd: AbsolutePathBuf,
     pub transcript_path: Option<PathBuf>,
     pub model: String,
@@ -120,9 +123,12 @@ pub(crate) async fn run_pre(
 }
 
 fn pre_command_input_json(request: &PreCompactRequest) -> Result<String, serde_json::Error> {
+    let subagent = SubagentCommandInputFields::from(request.subagent.as_ref());
     serde_json::to_string(&PreCompactCommandInput {
         session_id: request.session_id.to_string(),
         turn_id: request.turn_id.clone(),
+        agent_id: subagent.agent_id,
+        agent_type: subagent.agent_type,
         transcript_path: crate::schema::NullableString::from_path(request.transcript_path.clone()),
         cwd: request.cwd.display().to_string(),
         hook_event_name: "PreCompact".to_string(),
@@ -199,9 +205,12 @@ pub(crate) async fn run_post(
 }
 
 fn post_command_input_json(request: &PostCompactRequest) -> Result<String, serde_json::Error> {
+    let subagent = SubagentCommandInputFields::from(request.subagent.as_ref());
     serde_json::to_string(&PostCompactCommandInput {
         session_id: request.session_id.to_string(),
         turn_id: request.turn_id.clone(),
+        agent_id: subagent.agent_id,
+        agent_type: subagent.agent_type,
         transcript_path: crate::schema::NullableString::from_path(request.transcript_path.clone()),
         cwd: request.cwd.display().to_string(),
         hook_event_name: "PostCompact".to_string(),
@@ -563,6 +572,7 @@ mod tests {
             session_id: ThreadId::from_string("00000000-0000-4000-8000-000000000001")
                 .expect("valid thread id"),
             turn_id: "turn-1".to_string(),
+            subagent: None,
             cwd: test_path_buf("/tmp").abs(),
             transcript_path: None,
             model: "gpt-test".to_string(),
@@ -575,6 +585,7 @@ mod tests {
             session_id: ThreadId::from_string("00000000-0000-4000-8000-000000000002")
                 .expect("valid thread id"),
             turn_id: "turn-1".to_string(),
+            subagent: None,
             cwd: test_path_buf("/tmp").abs(),
             transcript_path: None,
             model: "gpt-test".to_string(),

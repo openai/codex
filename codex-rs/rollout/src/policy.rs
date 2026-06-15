@@ -1,23 +1,13 @@
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use codex_protocol::models::ResponseItem;
-use codex_utils_string::truncate_middle_chars;
 
-const PERSISTED_EXEC_AGGREGATED_OUTPUT_MAX_BYTES: usize = 10_000;
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum EventPersistenceMode {
-    #[default]
-    Limited,
-    Extended,
-}
-
-/// Whether a rollout `item` should be persisted in rollout files for the
-/// provided persistence `mode`.
-pub fn is_persisted_rollout_item(item: &RolloutItem, mode: EventPersistenceMode) -> bool {
+/// Whether a rollout `item` should be persisted in rollout files.
+pub fn is_persisted_rollout_item(item: &RolloutItem) -> bool {
     match item {
         RolloutItem::ResponseItem(item) => should_persist_response_item(item),
-        RolloutItem::EventMsg(ev) => should_persist_event_msg(ev, mode),
+        RolloutItem::InterAgentCommunication(_) => true,
+        RolloutItem::EventMsg(ev) => should_persist_event_msg(ev),
         // Persist Codex executive markers so we can analyze flows (e.g., compaction, API turns).
         RolloutItem::Compacted(_) | RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {
             true
@@ -26,40 +16,14 @@ pub fn is_persisted_rollout_item(item: &RolloutItem, mode: EventPersistenceMode)
 }
 
 /// Return the canonical rollout items that should be persisted for a live append.
-pub fn persisted_rollout_items(
-    items: &[RolloutItem],
-    mode: EventPersistenceMode,
-) -> Vec<RolloutItem> {
+pub fn persisted_rollout_items(items: &[RolloutItem]) -> Vec<RolloutItem> {
     let mut persisted = Vec::new();
     for item in items {
-        if is_persisted_rollout_item(item, mode) {
-            persisted.push(sanitize_rollout_item_for_persistence(item.clone(), mode));
+        if is_persisted_rollout_item(item) {
+            persisted.push(item.clone());
         }
     }
     persisted
-}
-
-fn sanitize_rollout_item_for_persistence(
-    item: RolloutItem,
-    mode: EventPersistenceMode,
-) -> RolloutItem {
-    if mode != EventPersistenceMode::Extended {
-        return item;
-    }
-
-    match item {
-        RolloutItem::EventMsg(EventMsg::ExecCommandEnd(mut event)) => {
-            event.aggregated_output = truncate_middle_chars(
-                &event.aggregated_output,
-                PERSISTED_EXEC_AGGREGATED_OUTPUT_MAX_BYTES,
-            );
-            event.stdout.clear();
-            event.stderr.clear();
-            event.formatted_output.clear();
-            RolloutItem::EventMsg(EventMsg::ExecCommandEnd(event))
-        }
-        _ => item,
-    }
 }
 
 /// Whether a `ResponseItem` should be persisted in rollout files.
@@ -67,6 +31,7 @@ fn sanitize_rollout_item_for_persistence(
 pub fn should_persist_response_item(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::Message { .. }
+        | ResponseItem::AgentMessage { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
@@ -79,6 +44,7 @@ pub fn should_persist_response_item(item: &ResponseItem) -> bool {
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Compaction { .. }
         | ResponseItem::ContextCompaction { .. } => true,
+        ResponseItem::CompactionTrigger => false,
         ResponseItem::Other => false,
     }
 }
@@ -96,41 +62,19 @@ pub fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::WebSearchCall { .. } => true,
-        ResponseItem::Reasoning { .. }
+        ResponseItem::AgentMessage { .. }
+        | ResponseItem::Reasoning { .. }
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Compaction { .. }
+        | ResponseItem::CompactionTrigger
         | ResponseItem::ContextCompaction { .. }
         | ResponseItem::Other => false,
     }
 }
 
-/// Whether an `EventMsg` should be persisted in rollout files for the
-/// provided persistence `mode`.
+/// Whether an `EventMsg` should be persisted in rollout files.
 #[inline]
-pub fn should_persist_event_msg(ev: &EventMsg, mode: EventPersistenceMode) -> bool {
-    match mode {
-        EventPersistenceMode::Limited => should_persist_event_msg_limited(ev),
-        EventPersistenceMode::Extended => should_persist_event_msg_extended(ev),
-    }
-}
-
-fn should_persist_event_msg_limited(ev: &EventMsg) -> bool {
-    matches!(
-        event_msg_persistence_mode(ev),
-        Some(EventPersistenceMode::Limited)
-    )
-}
-
-fn should_persist_event_msg_extended(ev: &EventMsg) -> bool {
-    matches!(
-        event_msg_persistence_mode(ev),
-        Some(EventPersistenceMode::Limited) | Some(EventPersistenceMode::Extended)
-    )
-}
-
-/// Returns the minimum persistence mode that includes this event.
-/// `None` means the event should never be persisted.
-fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
+pub fn should_persist_event_msg(ev: &EventMsg) -> bool {
     match ev {
         EventMsg::UserMessage(_)
         | EventMsg::AgentMessage(_)
@@ -148,16 +92,13 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::TurnStarted(_)
         | EventMsg::TurnComplete(_)
         | EventMsg::WebSearchEnd(_)
-        | EventMsg::ImageGenerationEnd(_) => Some(EventPersistenceMode::Limited),
+        | EventMsg::ImageGenerationEnd(_)
+        | EventMsg::SubAgentActivity(_) => true,
         EventMsg::ItemCompleted(event) => {
             // Plan items are derived from streaming tags and are not part of the
             // raw ResponseItem history, so we persist their completion to replay
             // them on resume without bloating rollouts with every item lifecycle.
-            if matches!(event.item, codex_protocol::items::TurnItem::Plan(_)) {
-                Some(EventPersistenceMode::Limited)
-            } else {
-                None
-            }
+            matches!(event.item, codex_protocol::items::TurnItem::Plan(_))
         }
         EventMsg::Error(_)
         | EventMsg::GuardianAssessment(_)
@@ -169,8 +110,8 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::CollabCloseEnd(_)
         | EventMsg::CollabResumeEnd(_)
         | EventMsg::DynamicToolCallRequest(_)
-        | EventMsg::DynamicToolCallResponse(_) => Some(EventPersistenceMode::Extended),
-        EventMsg::Warning(_)
+        | EventMsg::DynamicToolCallResponse(_)
+        | EventMsg::Warning(_)
         | EventMsg::GuardianWarning(_)
         | EventMsg::RealtimeConversationStarted(_)
         | EventMsg::RealtimeConversationSdp(_)
@@ -178,9 +119,11 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::RealtimeConversationClosed(_)
         | EventMsg::ModelReroute(_)
         | EventMsg::ModelVerification(_)
+        | EventMsg::TurnModerationMetadata(_)
         | EventMsg::AgentReasoningSectionBreak(_)
         | EventMsg::RawResponseItem(_)
         | EventMsg::SessionConfigured(_)
+        | EventMsg::ThreadSettingsApplied(_)
         | EventMsg::McpToolCallBegin(_)
         | EventMsg::ExecCommandBegin(_)
         | EventMsg::TerminalInteraction(_)
@@ -213,6 +156,6 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::CollabAgentInteractionBegin(_)
         | EventMsg::CollabWaitingBegin(_)
         | EventMsg::CollabCloseBegin(_)
-        | EventMsg::CollabResumeBegin(_) => None,
+        | EventMsg::CollabResumeBegin(_) => false,
     }
 }

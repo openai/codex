@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+use crate::backend::AddAdHocMemoryNoteRequest;
+use crate::backend::AddAdHocMemoryNoteResponse;
 use crate::backend::ListMemoriesRequest;
 use crate::backend::ListMemoriesResponse;
 use crate::backend::MemoriesBackend;
@@ -13,6 +15,7 @@ use crate::backend::ReadMemoryResponse;
 use crate::backend::SearchMemoriesRequest;
 use crate::backend::SearchMemoriesResponse;
 
+mod ad_hoc_note;
 mod list;
 mod path;
 mod read;
@@ -96,6 +99,13 @@ impl LocalMemoriesBackend {
 }
 
 impl MemoriesBackend for LocalMemoriesBackend {
+    async fn add_ad_hoc_note(
+        &self,
+        request: AddAdHocMemoryNoteRequest,
+    ) -> Result<AddAdHocMemoryNoteResponse, MemoriesBackendError> {
+        ad_hoc_note::add_ad_hoc_note(self, request).await
+    }
+
     async fn list(
         &self,
         request: ListMemoriesRequest,

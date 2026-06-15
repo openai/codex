@@ -18,7 +18,23 @@ pub trait ToolOutput: Send {
 
     fn success_for_logging(&self) -> bool;
 
+    /// Whether this output contains external context that should disable memory generation when
+    /// `memories.disable_on_external_context` is enabled.
+    fn contains_external_context(&self) -> bool {
+        false
+    }
+
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
+
+    /// Returns the tool call id exposed to `PostToolUse` hooks for this output.
+    fn post_tool_use_id(&self, call_id: &str) -> String {
+        call_id.to_string()
+    }
+
+    /// Returns the tool input exposed to `PostToolUse` hooks for this output.
+    fn post_tool_use_input(&self, _payload: &ToolPayload) -> Option<JsonValue> {
+        None
+    }
 
     /// Returns the stable value exposed to `PostToolUse` hooks for this tool output.
     ///
@@ -48,8 +64,20 @@ where
         (**self).success_for_logging()
     }
 
+    fn contains_external_context(&self) -> bool {
+        (**self).contains_external_context()
+    }
+
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
         (**self).to_response_item(call_id, payload)
+    }
+
+    fn post_tool_use_id(&self, call_id: &str) -> String {
+        (**self).post_tool_use_id(call_id)
+    }
+
+    fn post_tool_use_input(&self, payload: &ToolPayload) -> Option<JsonValue> {
+        (**self).post_tool_use_input(payload)
     }
 
     fn post_tool_use_response(&self, call_id: &str, payload: &ToolPayload) -> Option<JsonValue> {
@@ -65,6 +93,7 @@ where
 pub struct JsonToolOutput {
     value: JsonValue,
     success: Option<bool>,
+    contains_external_context: bool,
 }
 
 impl JsonToolOutput {
@@ -72,11 +101,21 @@ impl JsonToolOutput {
         Self {
             value,
             success: Some(true),
+            contains_external_context: false,
         }
     }
 
     pub fn with_success(value: JsonValue, success: Option<bool>) -> Self {
-        Self { value, success }
+        Self {
+            value,
+            success,
+            contains_external_context: false,
+        }
+    }
+
+    pub fn with_external_context(mut self) -> Self {
+        self.contains_external_context = true;
+        self
     }
 }
 
@@ -87,6 +126,10 @@ impl ToolOutput for JsonToolOutput {
 
     fn success_for_logging(&self) -> bool {
         self.success.unwrap_or(true)
+    }
+
+    fn contains_external_context(&self) -> bool {
+        self.contains_external_context
     }
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
@@ -191,7 +234,8 @@ fn content_items_to_code_mode_result(items: &[FunctionCallOutputContentItem]) ->
                     Some(image_url.clone())
                 }
                 FunctionCallOutputContentItem::InputText { .. }
-                | FunctionCallOutputContentItem::InputImage { .. } => None,
+                | FunctionCallOutputContentItem::InputImage { .. }
+                | FunctionCallOutputContentItem::EncryptedContent { .. } => None,
             })
             .collect::<Vec<_>>()
             .join("\n"),

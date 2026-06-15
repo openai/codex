@@ -252,6 +252,60 @@ fn formatted_truncate_text_content_items_with_policy_merges_text_and_appends_ima
 }
 
 #[test]
+fn formatted_truncate_text_content_items_with_policy_preserves_encrypted_content() {
+    let items = vec![
+        FunctionCallOutputContentItem::InputText {
+            text: "abcdefgh".to_string(),
+        },
+        FunctionCallOutputContentItem::EncryptedContent {
+            encrypted_content: "enc_opaque".to_string(),
+        },
+    ];
+
+    let (output, original_token_count) =
+        formatted_truncate_text_content_items_with_policy(&items, TruncationPolicy::Bytes(2));
+
+    assert_eq!(
+        output,
+        vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "Total output lines: 1\n\na…6 chars truncated…h".to_string(),
+            },
+            FunctionCallOutputContentItem::EncryptedContent {
+                encrypted_content: "enc_opaque".to_string(),
+            },
+        ]
+    );
+    assert_eq!(original_token_count, Some(2));
+}
+
+#[test]
+fn truncate_function_output_items_with_policy_preserves_encrypted_content() {
+    let items = vec![
+        FunctionCallOutputContentItem::InputText {
+            text: "abcdefgh".to_string(),
+        },
+        FunctionCallOutputContentItem::EncryptedContent {
+            encrypted_content: "enc_opaque".to_string(),
+        },
+    ];
+
+    let output = truncate_function_output_items_with_policy(&items, TruncationPolicy::Bytes(2));
+
+    assert_eq!(
+        output,
+        vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "a…6 chars truncated…h".to_string(),
+            },
+            FunctionCallOutputContentItem::EncryptedContent {
+                encrypted_content: "enc_opaque".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
 fn formatted_truncate_text_content_items_with_policy_merges_all_text_for_token_budget() {
     let items = vec![
         FunctionCallOutputContentItem::InputText {

@@ -43,7 +43,8 @@ pub(super) fn parse_realtime_event_v1(payload: &str) -> Option<RealtimeEvent> {
         | "conversation.item.input_audio_transcription.delta" => {
             parse_transcript_delta_event(&parsed, "delta").map(RealtimeEvent::InputTranscriptDelta)
         }
-        "conversation.item.input_audio_transcription.completed" => {
+        "conversation.input_transcript.turn_marked"
+        | "conversation.item.input_audio_transcription.completed" => {
             parse_transcript_done_event(&parsed, "transcript")
                 .map(RealtimeEvent::InputTranscriptDone)
         }

@@ -133,6 +133,10 @@ impl ChatWidget {
                 ..
             } => {}
             item @ ThreadItem::FileChange { .. } => self.on_file_change_completed(item),
+            item @ ThreadItem::McpToolCall {
+                status: codex_app_server_protocol::McpToolCallStatus::InProgress,
+                ..
+            } => self.on_mcp_tool_call_started(item),
             item @ ThreadItem::McpToolCall { .. } => self.on_mcp_tool_call_completed(item),
             ThreadItem::WebSearch { id, query, action } => {
                 self.on_web_search_begin(id.clone());
@@ -147,11 +151,12 @@ impl ChatWidget {
             }
             ThreadItem::ImageGeneration {
                 id,
+                status,
                 revised_prompt,
                 saved_path,
                 ..
             } => {
-                self.on_image_generation_end(id, revised_prompt, saved_path);
+                self.on_image_generation_end(id, status, revised_prompt, saved_path);
             }
             ThreadItem::EnteredReviewMode { review, .. } => {
                 if from_replay {
@@ -186,6 +191,7 @@ impl ChatWidget {
                 reasoning_effort,
                 agents_states,
             }),
+            item @ ThreadItem::SubAgentActivity { .. } => self.on_sub_agent_activity(item),
             ThreadItem::DynamicToolCall { .. } => {}
         }
 

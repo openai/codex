@@ -2,11 +2,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use codex_protocol::ThreadId;
 use rand::Rng;
 use tracing::error;
-
-use codex_shell_command::parse_command::shlex_join;
 
 const INITIAL_DELAY_MS: u64 = 200;
 const BACKOFF_FACTOR: f64 = 2.0;
@@ -116,22 +113,6 @@ pub fn normalize_thread_name(name: &str) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
-}
-
-pub fn resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>) -> Option<String> {
-    let resume_target = thread_name
-        .filter(|name| !name.is_empty())
-        .map(str::to_string)
-        .or_else(|| thread_id.map(|thread_id| thread_id.to_string()));
-    resume_target.map(|target| {
-        let needs_double_dash = target.starts_with('-');
-        let escaped = shlex_join(&[target]);
-        if needs_double_dash {
-            format!("codex resume -- {escaped}")
-        } else {
-            format!("codex resume {escaped}")
-        }
-    })
 }
 
 #[cfg(test)]

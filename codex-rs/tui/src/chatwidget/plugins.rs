@@ -5,6 +5,8 @@ use std::time::Instant;
 
 use super::ChatWidget;
 use crate::app_event::AppEvent;
+use crate::app_event::PluginLocation;
+use crate::app_event::PluginRemoteSectionError;
 use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
@@ -25,17 +27,22 @@ use crate::tui::FrameRequester;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::MarketplaceUpgradeResponse;
+use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginDetail;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
+use codex_core_plugins::remote::REMOTE_WORKSPACE_MARKETPLACE_NAME;
+use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME;
+use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME;
+use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME;
 use codex_features::Feature;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -199,7 +206,9 @@ impl ChatWidget {
         cwd: PathBuf,
         result: Result<PluginListResponse, String>,
     ) {
-        if self.plugins_fetch_state.in_flight_cwd.as_deref() == Some(cwd.as_path()) {
+        let request_was_in_flight =
+            self.plugins_fetch_state.in_flight_cwd.as_deref() == Some(cwd.as_path());
+        if request_was_in_flight {
             self.plugins_fetch_state.in_flight_cwd = None;
         }
 
@@ -208,10 +217,28 @@ impl ChatWidget {
         }
 
         let auth_flow_active = self.plugin_install_auth_flow.is_some();
+        let should_refresh_plugins_popup = !auth_flow_active
+            && (self
+                .bottom_pane
+                .active_tab_id_for_active_view(PLUGINS_SELECTION_VIEW_ID)
+                .is_some()
+                || self
+                    .bottom_pane
+                    .selected_index_for_active_view(PLUGINS_SELECTION_VIEW_ID)
+                    .is_some()
+                || !matches!(
+                    self.plugins_cache_for_current_cwd(),
+                    PluginsCacheState::Ready(_)
+                ));
 
         match result {
             Ok(response) => {
                 self.plugins_fetch_state.cache_cwd = Some(cwd);
+                self.plugin_remote_sections_loading = request_was_in_flight;
+                if request_was_in_flight {
+                    self.plugin_remote_sections_loaded = false;
+                }
+                self.plugin_remote_section_errors.clear();
                 let active_tab_id = self
                     .plugins_active_tab_id
                     .as_deref()
@@ -227,13 +254,15 @@ impl ChatWidget {
                     });
                 self.plugins_active_tab_id = active_tab_id;
                 self.plugins_cache = PluginsCacheState::Ready(response.clone());
-                if !auth_flow_active {
+                if should_refresh_plugins_popup {
                     self.refresh_plugins_popup_if_open(&response);
                 }
                 self.newly_installed_marketplace_tab_id = None;
             }
             Err(err) => {
-                if !auth_flow_active {
+                self.plugin_remote_sections_loading = false;
+                self.plugin_remote_sections_loaded = false;
+                if should_refresh_plugins_popup {
                     self.plugins_fetch_state.cache_cwd = None;
                     self.plugins_cache = PluginsCacheState::Failed(err.clone());
                     let _ = self.bottom_pane.replace_selection_view_if_active(
@@ -245,9 +274,55 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn on_plugin_remote_sections_loaded(
+        &mut self,
+        cwd: PathBuf,
+        marketplaces: Vec<PluginMarketplaceEntry>,
+        section_errors: Vec<PluginRemoteSectionError>,
+    ) {
+        if self.config.cwd.as_path() != cwd.as_path() {
+            return;
+        }
+
+        let should_refresh_plugins_popup = self
+            .bottom_pane
+            .active_tab_id_for_active_view(PLUGINS_SELECTION_VIEW_ID)
+            .is_some();
+        self.plugin_remote_sections_loading = false;
+        self.plugin_remote_sections_loaded = true;
+        let refreshed_response = match &mut self.plugins_cache {
+            PluginsCacheState::Ready(response)
+                if self.plugins_fetch_state.cache_cwd.as_deref() == Some(cwd.as_path()) =>
+            {
+                merge_remote_marketplaces(response, marketplaces);
+                self.plugin_remote_section_errors = section_errors;
+                Some(response.clone())
+            }
+            _ => {
+                self.plugin_remote_section_errors = section_errors;
+                None
+            }
+        };
+
+        if let Some(response) = refreshed_response
+            && should_refresh_plugins_popup
+        {
+            self.refresh_plugins_popup_if_open(&response);
+        }
+    }
+
     fn prefetch_plugins(&mut self) {
         let cwd = self.config.cwd.to_path_buf();
         if self.plugins_fetch_state.in_flight_cwd.as_deref() == Some(cwd.as_path()) {
+            return;
+        }
+
+        self.on_plugins_list_fetch_started(cwd.clone());
+        self.app_event_tx.send(AppEvent::FetchPluginsList { cwd });
+    }
+
+    pub(crate) fn on_plugins_list_fetch_started(&mut self, cwd: PathBuf) {
+        if self.config.cwd.as_path() != cwd.as_path() {
             return;
         }
 
@@ -255,8 +330,6 @@ impl ChatWidget {
         if self.plugins_fetch_state.cache_cwd.as_deref() != Some(cwd.as_path()) {
             self.plugins_cache = PluginsCacheState::Loading;
         }
-
-        self.app_event_tx.send(AppEvent::FetchPluginsList { cwd });
     }
 
     fn plugins_cache_for_current_cwd(&self) -> PluginsCacheState {
@@ -453,7 +526,7 @@ impl ChatWidget {
     pub(crate) fn on_plugin_install_loaded(
         &mut self,
         cwd: PathBuf,
-        _marketplace_path: AbsolutePathBuf,
+        _location: PluginLocation,
         _plugin_name: String,
         plugin_display_name: String,
         result: Result<PluginInstallResponse, String>,
@@ -1625,19 +1698,22 @@ impl ChatWidget {
     ) -> SelectionViewParams {
         let marketplace_label = plugin.marketplace_name.clone();
         let display_name = plugin_display_name(&plugin.summary);
-        let detail_status_label = if plugin.summary.installed {
-            if plugin.summary.enabled {
-                "Installed"
+        let detail_status_label =
+            if plugin.summary.availability == PluginAvailability::DisabledByAdmin {
+                "Disabled by admin"
+            } else if plugin.summary.installed {
+                if plugin.summary.enabled {
+                    "Installed"
+                } else {
+                    "Disabled"
+                }
             } else {
-                "Disabled"
-            }
-        } else {
-            match plugin.summary.install_policy {
-                PluginInstallPolicy::NotAvailable => "Not installable",
-                PluginInstallPolicy::Available => "Can be installed",
-                PluginInstallPolicy::InstalledByDefault => "Available by default",
-            }
-        };
+                match plugin.summary.install_policy {
+                    PluginInstallPolicy::NotAvailable => "Not installable",
+                    PluginInstallPolicy::Available => "Can be installed",
+                    PluginInstallPolicy::InstalledByDefault => "Available by default",
+                }
+            };
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Plugins".bold()));
         header.push(Line::from(
@@ -1676,23 +1752,40 @@ impl ChatWidget {
         }];
 
         if plugin.summary.installed {
-            let uninstall_cwd = self.config.cwd.to_path_buf();
-            let plugin_id = plugin.summary.id.clone();
-            let plugin_display_name = display_name;
+            if let Some(plugin_id) = plugin_uninstall_id(&plugin.summary) {
+                let uninstall_cwd = self.config.cwd.to_path_buf();
+                let plugin_display_name = display_name;
+                items.push(SelectionItem {
+                    name: "Uninstall plugin".to_string(),
+                    description: Some("Remove this plugin now.".to_string()),
+                    selected_description: Some("Remove this plugin now.".to_string()),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::OpenPluginUninstallLoading {
+                            plugin_display_name: plugin_display_name.clone(),
+                        });
+                        tx.send(AppEvent::FetchPluginUninstall {
+                            cwd: uninstall_cwd.clone(),
+                            plugin_id: plugin_id.clone(),
+                            plugin_display_name: plugin_display_name.clone(),
+                        });
+                    })],
+                    ..Default::default()
+                });
+            } else {
+                items.push(SelectionItem {
+                    name: "Uninstall plugin".to_string(),
+                    description: Some(
+                        "This remote plugin did not provide an uninstall identity.".to_string(),
+                    ),
+                    is_disabled: true,
+                    ..Default::default()
+                });
+            }
+        } else if plugin.summary.availability == PluginAvailability::DisabledByAdmin {
             items.push(SelectionItem {
-                name: "Uninstall plugin".to_string(),
-                description: Some("Remove this plugin now.".to_string()),
-                selected_description: Some("Remove this plugin now.".to_string()),
-                actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::OpenPluginUninstallLoading {
-                        plugin_display_name: plugin_display_name.clone(),
-                    });
-                    tx.send(AppEvent::FetchPluginUninstall {
-                        cwd: uninstall_cwd.clone(),
-                        plugin_id: plugin_id.clone(),
-                        plugin_display_name: plugin_display_name.clone(),
-                    });
-                })],
+                name: "Install plugin".to_string(),
+                description: Some("This plugin is disabled by your workspace admin.".to_string()),
+                is_disabled: true,
                 ..Default::default()
             });
         } else if plugin.summary.install_policy == PluginInstallPolicy::NotAvailable {
@@ -1704,9 +1797,9 @@ impl ChatWidget {
                 is_disabled: true,
                 ..Default::default()
             });
-        } else if let Some(marketplace_path) = plugin.marketplace_path.clone() {
+        } else if let Some(location) = plugin_detail_location(plugin) {
             let install_cwd = self.config.cwd.to_path_buf();
-            let plugin_name = plugin.summary.name.clone();
+            let plugin_name = plugin_request_name(&plugin.summary);
             let plugin_display_name = display_name;
             items.push(SelectionItem {
                 name: "Install plugin".to_string(),
@@ -1718,7 +1811,7 @@ impl ChatWidget {
                     });
                     tx.send(AppEvent::FetchPluginInstall {
                         cwd: install_cwd.clone(),
-                        marketplace_path: marketplace_path.clone(),
+                        location: location.clone(),
                         plugin_name: plugin_name.clone(),
                         plugin_display_name: plugin_display_name.clone(),
                     });
@@ -1728,7 +1821,7 @@ impl ChatWidget {
         } else {
             items.push(SelectionItem {
                 name: "Install plugin".to_string(),
-                description: Some("Installing remote plugins is not supported yet.".to_string()),
+                description: Some("This plugin did not provide an install location.".to_string()),
                 is_disabled: true,
                 ..Default::default()
             });
@@ -1792,9 +1885,12 @@ impl ChatWidget {
             } else {
                 plugin_brief_description_without_marketplace(plugin, status_label_width)
             };
-            let can_view_details = marketplace.path.is_some();
+            let plugin_detail_request = plugin_detail_request_for_entry(marketplace, plugin);
+            let can_view_details = plugin_detail_request.is_some();
+            let disabled_by_admin = plugin.availability == PluginAvailability::DisabledByAdmin;
+            let can_toggle_plugin = plugin.installed && !disabled_by_admin;
             let selected_status_label = format!("{status_label:<status_label_width$}");
-            let selected_description = if plugin.installed {
+            let selected_description = if can_toggle_plugin {
                 let toggle_action = if plugin.enabled { "disable" } else { "enable" };
                 if can_view_details {
                     format!(
@@ -1803,6 +1899,12 @@ impl ChatWidget {
                 } else {
                     format!("{selected_status_label}   Space to {toggle_action}.")
                 }
+            } else if plugin.installed && can_view_details {
+                format!("{selected_status_label}   Press Enter to view plugin details.")
+            } else if plugin.installed {
+                format!("{selected_status_label}   Plugin details are unavailable.")
+            } else if disabled_by_admin && can_view_details {
+                format!("{selected_status_label}   Press Enter to view plugin details.")
             } else if can_view_details {
                 format!("{selected_status_label}   Press Enter to install or view plugin details.")
             } else {
@@ -1814,11 +1916,9 @@ impl ChatWidget {
             );
             let cwd = self.config.cwd.to_path_buf();
             let plugin_display_name = display_name.clone();
-            let marketplace_path = marketplace.path.clone();
-            let plugin_name = plugin.name.clone();
             let toggle_cwd = cwd.clone();
             let toggle_plugin_id = plugin.id.clone();
-            let toggle = plugin.installed.then(|| SelectionToggle {
+            let toggle = can_toggle_plugin.then(|| SelectionToggle {
                 is_on: plugin.enabled,
                 action: Box::new(move |enabled, tx| {
                     tx.send(AppEvent::SetPluginEnabled {
@@ -1828,31 +1928,33 @@ impl ChatWidget {
                     });
                 }),
             });
-            let actions: Vec<SelectionAction> = if let Some(marketplace_path) = marketplace_path {
-                vec![Box::new(move |tx| {
-                    tx.send(AppEvent::OpenPluginDetailLoading {
-                        plugin_display_name: plugin_display_name.clone(),
-                    });
-                    tx.send(AppEvent::FetchPluginDetail {
-                        cwd: cwd.clone(),
-                        params: codex_app_server_protocol::PluginReadParams {
-                            marketplace_path: Some(marketplace_path.clone()),
-                            remote_marketplace_name: None,
-                            plugin_name: plugin_name.clone(),
-                        },
-                    });
-                })]
-            } else {
-                Vec::new()
-            };
+            let actions: Vec<SelectionAction> =
+                if let Some((location, plugin_name)) = plugin_detail_request {
+                    vec![Box::new(move |tx| {
+                        tx.send(AppEvent::OpenPluginDetailLoading {
+                            plugin_display_name: plugin_display_name.clone(),
+                        });
+                        let (marketplace_path, remote_marketplace_name) =
+                            location.clone().into_request_params();
+                        tx.send(AppEvent::FetchPluginDetail {
+                            cwd: cwd.clone(),
+                            params: codex_app_server_protocol::PluginReadParams {
+                                marketplace_path,
+                                remote_marketplace_name,
+                                plugin_name: plugin_name.clone(),
+                            },
+                        });
+                    })]
+                } else {
+                    Vec::new()
+                };
             let is_disabled = !can_view_details && !plugin.installed;
-            let disabled_reason =
-                is_disabled.then(|| "remote plugin details are not available yet".to_string());
+            let disabled_reason = is_disabled.then(|| "plugin details are unavailable".to_string());
 
             items.push(SelectionItem {
                 name: display_name,
                 toggle,
-                toggle_placeholder: (!plugin.installed).then_some("[-] "),
+                toggle_placeholder: (!can_toggle_plugin).then_some("[-] "),
                 description: Some(description),
                 selected_description: Some(selected_description),
                 search_value: Some(search_value),
@@ -1974,6 +2076,32 @@ fn marketplace_tab_id_matching_saved_id(
     })
 }
 
+fn merge_remote_marketplaces(
+    response: &mut PluginListResponse,
+    remote_marketplaces: Vec<PluginMarketplaceEntry>,
+) {
+    let remote_names = remote_marketplaces
+        .iter()
+        .map(|marketplace| marketplace.name.clone())
+        .collect::<std::collections::HashSet<_>>();
+    response.marketplaces.retain(|marketplace| {
+        marketplace.path.is_some()
+            || !remote_marketplace_is_remote_section(marketplace)
+                && !remote_names.contains(marketplace.name.as_str())
+    });
+    response.marketplaces.extend(remote_marketplaces);
+}
+
+fn remote_marketplace_is_remote_section(marketplace: &PluginMarketplaceEntry) -> bool {
+    matches!(
+        marketplace.name.as_str(),
+        REMOTE_WORKSPACE_MARKETPLACE_NAME
+            | REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME
+            | REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME
+            | REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME
+    )
+}
+
 fn disambiguate_duplicate_tab_labels(labels: Vec<String>) -> Vec<String> {
     let mut counts: Vec<(String, usize)> = Vec::new();
     for label in &labels {
@@ -2082,6 +2210,9 @@ fn plugin_brief_description_without_marketplace(
 }
 
 fn plugin_status_label(plugin: &PluginSummary) -> &'static str {
+    if plugin.availability == PluginAvailability::DisabledByAdmin {
+        return "Disabled by admin";
+    }
     if plugin.installed {
         if plugin.enabled {
             "Installed"
@@ -2095,6 +2226,59 @@ fn plugin_status_label(plugin: &PluginSummary) -> &'static str {
             PluginInstallPolicy::InstalledByDefault => "Available",
         }
     }
+}
+
+fn plugin_location_for_marketplace(
+    marketplace: &PluginMarketplaceEntry,
+    plugin: &PluginSummary,
+) -> Option<PluginLocation> {
+    if let Some(marketplace_path) = marketplace.path.clone() {
+        return Some(PluginLocation::Local { marketplace_path });
+    }
+    plugin_remote_identity(plugin).map(|_| PluginLocation::Remote {
+        marketplace_name: marketplace.name.clone(),
+    })
+}
+
+fn plugin_detail_location(plugin: &PluginDetail) -> Option<PluginLocation> {
+    if let Some(marketplace_path) = plugin.marketplace_path.clone() {
+        return Some(PluginLocation::Local { marketplace_path });
+    }
+    plugin_remote_identity(&plugin.summary).map(|_| PluginLocation::Remote {
+        marketplace_name: plugin.marketplace_name.clone(),
+    })
+}
+
+fn plugin_detail_request_for_entry(
+    marketplace: &PluginMarketplaceEntry,
+    plugin: &PluginSummary,
+) -> Option<(PluginLocation, String)> {
+    plugin_location_for_marketplace(marketplace, plugin)
+        .map(|location| (location, plugin_request_name(plugin)))
+}
+
+fn plugin_request_name(plugin: &PluginSummary) -> String {
+    if matches!(&plugin.source, PluginSource::Remote)
+        && let Some(remote_plugin_id) = plugin_remote_identity(plugin)
+    {
+        return remote_plugin_id;
+    }
+    plugin.name.clone()
+}
+
+fn plugin_remote_identity(plugin: &PluginSummary) -> Option<String> {
+    plugin
+        .share_context
+        .as_ref()
+        .map(|context| context.remote_plugin_id.clone())
+        .or_else(|| plugin.remote_plugin_id.clone())
+}
+
+fn plugin_uninstall_id(plugin: &PluginSummary) -> Option<String> {
+    if matches!(&plugin.source, PluginSource::Remote) {
+        return plugin_remote_identity(plugin);
+    }
+    Some(plugin.id.clone())
 }
 
 fn plugin_description(plugin: &PluginSummary) -> Option<String> {

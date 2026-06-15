@@ -29,6 +29,9 @@ use crate::render::Insets;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
+use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
+use crate::terminal_hyperlinks::visible_lines;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crossterm::event::KeyCode;
@@ -395,14 +398,37 @@ struct CellRenderable {
 
 impl Renderable for CellRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let p = Paragraph::new(Text::from(self.cell.transcript_lines(area.width)))
+        let hyperlink_lines = self.cell.transcript_hyperlink_lines(area.width);
+        let p = Paragraph::new(Text::from(visible_lines(hyperlink_lines.clone())))
             .style(self.style)
             .wrap(Wrap { trim: false });
         p.render(area, buf);
+        mark_buffer_hyperlinks(buf, area, &hyperlink_lines, /*scroll_rows*/ 0);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
         self.cell.desired_transcript_height(width)
+    }
+}
+
+struct HyperlinkLinesRenderable {
+    lines: Vec<HyperlinkLine>,
+}
+
+impl Renderable for HyperlinkLinesRenderable {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        Paragraph::new(Text::from(visible_lines(self.lines.clone())))
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+        mark_buffer_hyperlinks(buf, area, &self.lines, /*scroll_rows*/ 0);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        Paragraph::new(Text::from(visible_lines(self.lines.clone())))
+            .wrap(Wrap { trim: false })
+            .line_count(width)
+            .try_into()
+            .unwrap_or(/*default*/ 0)
     }
 }
 
@@ -612,7 +638,7 @@ impl TranscriptOverlay {
         &mut self,
         width: u16,
         active_key: Option<ActiveCellTranscriptKey>,
-        compute_lines: impl FnOnce(u16) -> Option<Vec<Line<'static>>>,
+        compute_lines: impl FnOnce(u16) -> Option<Vec<HyperlinkLine>>,
     ) {
         let next_key = active_key.map(|key| LiveTailKey {
             width,
@@ -678,12 +704,12 @@ impl TranscriptOverlay {
     }
 
     fn live_tail_renderable(
-        lines: Vec<Line<'static>>,
+        lines: Vec<HyperlinkLine>,
         has_prior_cells: bool,
         is_stream_continuation: bool,
     ) -> Box<dyn Renderable> {
-        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
-        let mut renderable: Box<dyn Renderable> = Box::new(CachedRenderable::new(paragraph));
+        let mut renderable: Box<dyn Renderable> =
+            Box::new(CachedRenderable::new(HyperlinkLinesRenderable { lines }));
         if has_prior_cells && !is_stream_continuation {
             renderable = Box::new(InsetRenderable::new(
                 renderable,
@@ -1042,6 +1068,27 @@ mod tests {
     }
 
     #[test]
+    fn transcript_overlay_preserves_semantic_web_links() {
+        let destination = "https://example.com/a/very/long/path";
+        let mut overlay = transcript_overlay(vec![Arc::new(history_cell::AgentMarkdownCell::new(
+            destination.to_string(),
+            std::path::Path::new("/tmp"),
+        ))]);
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 24, /*height*/ 10,
+        );
+        let mut buf = Buffer::empty(area);
+
+        overlay.render(area, &mut buf);
+
+        assert!(area.positions().any(|position| {
+            buf[position]
+                .symbol()
+                .contains(&format!("\x1b]8;;{destination}\x07"))
+        }));
+    }
+
+    #[test]
     fn transcript_overlay_renders_live_tail() {
         let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
             lines: vec![Line::from("alpha")],
@@ -1053,13 +1100,44 @@ mod tests {
                 is_stream_continuation: false,
                 animation_tick: None,
             }),
-            |_| Some(vec![Line::from("tail")]),
+            |_| Some(vec![HyperlinkLine::from("tail")]),
         );
 
         let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());
+    }
+
+    #[test]
+    fn transcript_overlay_live_tail_preserves_semantic_web_links() {
+        let destination = "https://example.com/a/streamed/path";
+        let cell = history_cell::AgentMarkdownCell::new(
+            destination.to_string(),
+            std::path::Path::new("/tmp"),
+        );
+        let mut overlay = transcript_overlay(Vec::new());
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 24, /*height*/ 10,
+        );
+        let mut buf = Buffer::empty(area);
+
+        overlay.sync_live_tail(
+            area.width,
+            Some(ActiveCellTranscriptKey {
+                revision: 1,
+                is_stream_continuation: false,
+                animation_tick: None,
+            }),
+            |width| Some(cell.transcript_hyperlink_lines(width)),
+        );
+        overlay.render(area, &mut buf);
+
+        assert!(area.positions().any(|position| {
+            buf[position]
+                .symbol()
+                .contains(&format!("\x1b]8;;{destination}\x07"))
+        }));
     }
 
     #[test]
@@ -1077,11 +1155,11 @@ mod tests {
 
         overlay.sync_live_tail(/*width*/ 40, Some(key), |_| {
             calls.set(calls.get() + 1);
-            Some(vec![Line::from("tail")])
+            Some(vec![HyperlinkLine::from("tail")])
         });
         overlay.sync_live_tail(/*width*/ 40, Some(key), |_| {
             calls.set(calls.get() + 1);
-            Some(vec![Line::from("tail2")])
+            Some(vec![HyperlinkLine::from("tail2")])
         });
 
         assert_eq!(calls.get(), 1);
@@ -1133,7 +1211,7 @@ mod tests {
         cells.push(apply_begin_cell);
 
         let apply_end_cell: Arc<dyn HistoryCell> = history_cell::new_approval_decision_cell(
-            vec!["ls".into()],
+            history_cell::ApprovalDecisionSubject::Command(vec!["ls".into()]),
             ReviewDecision::Approved,
             history_cell::ApprovalDecisionActor::User,
         )

@@ -49,6 +49,8 @@ pub(crate) fn select_handlers_for_matcher_inputs(
             | HookEventName::PermissionRequest
             | HookEventName::PostToolUse
             | HookEventName::SessionStart
+            | HookEventName::SubagentStart
+            | HookEventName::SubagentStop
             | HookEventName::PreCompact
             | HookEventName::PostCompact => {
                 if matcher_inputs.is_empty() {
@@ -139,13 +141,14 @@ pub(crate) fn completed_summary(
 
 fn scope_for_event(event_name: HookEventName) -> HookScope {
     match event_name {
-        HookEventName::SessionStart => HookScope::Thread,
+        HookEventName::SessionStart | HookEventName::SubagentStart => HookScope::Thread,
         HookEventName::PreToolUse
         | HookEventName::PermissionRequest
         | HookEventName::PostToolUse
         | HookEventName::PreCompact
         | HookEventName::PostCompact
         | HookEventName::UserPromptSubmit
+        | HookEventName::SubagentStop
         | HookEventName::Stop => HookScope::Turn,
     }
 }

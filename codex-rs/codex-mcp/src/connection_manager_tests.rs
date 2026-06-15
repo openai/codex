@@ -1,24 +1,33 @@
 use super::*;
 use crate::codex_apps::CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION;
 use crate::codex_apps::CodexAppsToolsCacheContext;
+use crate::codex_apps::load_startup_cached_codex_apps_server_info;
 use crate::codex_apps::load_startup_cached_codex_apps_tools_snapshot;
 use crate::codex_apps::read_cached_codex_apps_tools;
 use crate::codex_apps::write_cached_codex_apps_tools;
+use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
 use crate::declared_openai_file_input_param_names;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::elicitation_is_rejected_by_policy;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::StartupOutcomeError;
+use crate::server::EffectiveMcpServer;
+use crate::server::McpServerMetadata;
 use crate::server::McpServerOrigin;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
-use crate::tools::normalize_tools_for_model;
+use crate::tools::normalize_tools_for_model_with_prefix;
 use crate::tools::tool_with_model_visible_input_schema;
+use codex_config::AppToolApproval;
 use codex_config::Constrained;
 use codex_config::McpServerConfig;
+use codex_config::McpServerToolConfig;
+use codex_config::types::AuthKeyringBackendKind;
+use codex_exec_server::EnvironmentManager;
 use codex_protocol::ToolName;
+use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::McpAuthStatus;
@@ -36,25 +45,18 @@ use std::sync::Arc;
 use tempfile::tempdir;
 
 fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
-    let tool_namespace = format!("mcp__{server_name}__");
     ToolInfo {
         server_name: server_name.to_string(),
         supports_parallel_tool_calls: false,
         server_origin: None,
         callable_name: tool_name.to_string(),
-        callable_namespace: tool_namespace,
+        callable_namespace: server_name.to_string(),
         namespace_description: None,
-        tool: Tool {
-            name: tool_name.to_string().into(),
-            title: None,
-            description: Some(format!("Test tool: {tool_name}").into()),
-            input_schema: Arc::new(JsonObject::default()),
-            output_schema: None,
-            annotations: None,
-            execution: None,
-            icons: None,
-            meta: None,
-        },
+        tool: Tool::new(
+            tool_name.to_string(),
+            format!("Test tool: {tool_name}"),
+            Arc::new(JsonObject::default()),
+        ),
         connector_id: None,
         connector_name: None,
         plugin_display_names: Vec::new(),
@@ -88,6 +90,17 @@ fn create_codex_apps_tools_cache_context(
     }
 }
 
+fn create_test_server_info(title: &str) -> McpServerInfo {
+    McpServerInfo {
+        name: "codex-apps".to_string(),
+        title: Some(title.to_string()),
+        version: "1.0.0".to_string(),
+        description: None,
+        icons: None,
+        website_url: None,
+    }
+}
+
 fn model_tool_names(tools: &[ToolInfo]) -> HashSet<ToolName> {
     tools
         .iter()
@@ -96,7 +109,10 @@ fn model_tool_names(tools: &[ToolInfo]) -> HashSet<ToolName> {
 }
 
 fn model_tool_name_len(name: &ToolName) -> usize {
-    name.namespace.as_deref().map_or(0, str::len) + name.name.len()
+    name.namespace
+        .as_deref()
+        .map_or(0, |namespace| namespace.len() + "__".len())
+        + name.name.len()
 }
 
 fn is_code_mode_compatible_tool_name(name: &ToolName) -> bool {
@@ -300,13 +316,14 @@ fn test_normalize_tools_short_non_duplicated_names() {
         create_test_tool("server1", "tool2"),
     ];
 
-    let model_tools = normalize_tools_for_model(tools);
+    let model_tools =
+        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
 
     assert_eq!(
         model_tool_names(&model_tools),
         HashSet::from([
-            ToolName::namespaced("mcp__server1__", "tool1"),
-            ToolName::namespaced("mcp__server1__", "tool2")
+            ToolName::namespaced("mcp__server1", "tool1"),
+            ToolName::namespaced("mcp__server1", "tool2")
         ])
     );
 }
@@ -318,12 +335,13 @@ fn test_normalize_tools_duplicated_names_skipped() {
         create_test_tool("server1", "duplicate_tool"),
     ];
 
-    let model_tools = normalize_tools_for_model(tools);
+    let model_tools =
+        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
 
     // Only the first tool should remain, the second is skipped
     assert_eq!(
         model_tool_names(&model_tools),
-        HashSet::from([ToolName::namespaced("mcp__server1__", "duplicate_tool")])
+        HashSet::from([ToolName::namespaced("mcp__server1", "duplicate_tool")])
     );
 }
 
@@ -342,7 +360,8 @@ fn test_normalize_tools_long_names_same_server() {
         ),
     ];
 
-    let model_tools = normalize_tools_for_model(tools);
+    let model_tools =
+        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
 
     assert_eq!(model_tools.len(), 2);
 
@@ -352,7 +371,7 @@ fn test_normalize_tools_long_names_same_server() {
     assert!(
         names
             .iter()
-            .all(|name| name.namespace.as_deref() == Some("mcp__my_server__"))
+            .all(|name| name.namespace.as_deref() == Some("mcp__my_server"))
     );
     assert!(
         names.iter().all(is_code_mode_compatible_tool_name),
@@ -364,14 +383,15 @@ fn test_normalize_tools_long_names_same_server() {
 fn test_normalize_tools_sanitizes_invalid_characters() {
     let tools = vec![create_test_tool("server.one", "tool.two-three")];
 
-    let model_tools = normalize_tools_for_model(tools);
+    let model_tools =
+        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
 
     assert_eq!(model_tools.len(), 1);
     let tool = model_tools.into_iter().next().expect("one tool");
     let model_name = tool.canonical_tool_name();
     assert_eq!(
         model_name,
-        ToolName::namespaced("mcp__server_one__", "tool_two_three")
+        ToolName::namespaced("mcp__server_one", "tool_two_three")
     );
     assert_eq!(
         ToolName::namespaced(tool.callable_namespace.clone(), tool.callable_name.clone()),
@@ -380,7 +400,7 @@ fn test_normalize_tools_sanitizes_invalid_characters() {
     // The callable parts are sanitized for model-visible tool calls, but the raw
     // MCP name is preserved for the actual MCP call.
     assert_eq!(tool.server_name, "server.one");
-    assert_eq!(tool.callable_namespace, "mcp__server_one__");
+    assert_eq!(tool.callable_namespace, "mcp__server_one");
     assert_eq!(tool.callable_name, "tool_two_three");
     assert_eq!(tool.tool.name, "tool.two-three");
 
@@ -394,15 +414,16 @@ fn test_normalize_tools_sanitizes_invalid_characters() {
 fn test_normalize_tools_keeps_hyphenated_mcp_tools_callable() {
     let tools = vec![create_test_tool("music-studio", "get-strudel-guide")];
 
-    let model_tools = normalize_tools_for_model(tools);
+    let model_tools =
+        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
 
     assert_eq!(model_tools.len(), 1);
     let tool = model_tools.into_iter().next().expect("one tool");
     assert_eq!(
         tool.canonical_tool_name(),
-        ToolName::namespaced("mcp__music_studio__", "get_strudel_guide")
+        ToolName::namespaced("mcp__music_studio", "get_strudel_guide")
     );
-    assert_eq!(tool.callable_namespace, "mcp__music_studio__");
+    assert_eq!(tool.callable_namespace, "mcp__music_studio");
     assert_eq!(tool.callable_name, "get_strudel_guide");
     assert_eq!(tool.tool.name, "get-strudel-guide");
 }
@@ -414,7 +435,8 @@ fn test_normalize_tools_disambiguates_sanitized_namespace_collisions() {
         create_test_tool("basic_server", "query"),
     ];
 
-    let model_tools = normalize_tools_for_model(tools);
+    let model_tools =
+        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
 
     assert_eq!(model_tools.len(), 2);
     let mut namespaces = model_tools
@@ -444,7 +466,8 @@ fn test_normalize_tools_disambiguates_sanitized_tool_name_collisions() {
         create_test_tool("server", "tool_name"),
     ];
 
-    let model_tools = normalize_tools_for_model(tools);
+    let model_tools =
+        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
 
     assert_eq!(model_tools.len(), 2);
     let raw_tool_names = model_tools
@@ -578,8 +601,8 @@ fn codex_apps_tools_cache_is_scoped_per_user() {
     assert_eq!(read_user_1[0].callable_name, "one");
     assert_eq!(read_user_2[0].callable_name, "two");
     assert_ne!(
-        cache_context_user_1.cache_path(),
-        cache_context_user_2.cache_path(),
+        cache_context_user_1.tools_cache_path(),
+        cache_context_user_2.tools_cache_path(),
         "each user should get an isolated cache file"
     );
 }
@@ -623,7 +646,7 @@ fn codex_apps_tools_cache_is_ignored_when_schema_version_mismatches() {
         Some("account-one"),
         Some("user-one"),
     );
-    let cache_path = cache_context.cache_path();
+    let cache_path = cache_context.tools_cache_path();
     if let Some(parent) = cache_path.parent() {
         std::fs::create_dir_all(parent).expect("create parent");
     }
@@ -645,7 +668,7 @@ fn codex_apps_tools_cache_is_ignored_when_json_is_invalid() {
         Some("account-one"),
         Some("user-one"),
     );
-    let cache_path = cache_context.cache_path();
+    let cache_path = cache_context.tools_cache_path();
     if let Some(parent) = cache_path.parent() {
         std::fs::create_dir_all(parent).expect("create parent");
     }
@@ -666,21 +689,112 @@ fn startup_cached_codex_apps_tools_loads_from_disk_cache() {
         CODEX_APPS_MCP_SERVER_NAME,
         "calendar_search",
     )];
-    write_cached_codex_apps_tools(&cache_context, &cached_tools);
+    let server_info = create_test_server_info("Codex Apps");
+    write_cached_codex_apps_tools_if_needed(
+        CODEX_APPS_MCP_SERVER_NAME,
+        Some(&cache_context),
+        &server_info,
+        &cached_tools,
+    );
 
-    let startup_snapshot = load_startup_cached_codex_apps_tools_snapshot(
+    let startup_tools = load_startup_cached_codex_apps_tools_snapshot(
+        CODEX_APPS_MCP_SERVER_NAME,
+        Some(&cache_context),
+    )
+    .expect("expected startup snapshot to load from cache");
+    let cached_server_info = load_startup_cached_codex_apps_server_info(
         CODEX_APPS_MCP_SERVER_NAME,
         Some(&cache_context),
     );
-    let startup_tools = startup_snapshot.expect("expected startup snapshot to load from cache");
 
     assert_eq!(startup_tools.len(), 1);
     assert_eq!(startup_tools[0].server_name, CODEX_APPS_MCP_SERVER_NAME);
     assert_eq!(startup_tools[0].callable_name, "calendar_search");
+    assert_eq!(cached_server_info, Some(server_info));
+}
+
+#[test]
+fn startup_cached_codex_apps_tools_loads_without_server_info_cache() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache_context = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        Some("account-one"),
+        Some("user-one"),
+    );
+    let cache_path = cache_context.tools_cache_path();
+    if let Some(parent) = cache_path.parent() {
+        std::fs::create_dir_all(parent).expect("create parent");
+    }
+    let bytes = serde_json::to_vec_pretty(&serde_json::json!({
+        "schema_version": CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION,
+        "tools": [create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "calendar_search")],
+    }))
+    .expect("serialize");
+    std::fs::write(cache_path, bytes).expect("write");
+
+    let startup_tools = load_startup_cached_codex_apps_tools_snapshot(
+        CODEX_APPS_MCP_SERVER_NAME,
+        Some(&cache_context),
+    )
+    .expect("legacy startup snapshot should remain available");
+    let cached_server_info = load_startup_cached_codex_apps_server_info(
+        CODEX_APPS_MCP_SERVER_NAME,
+        Some(&cache_context),
+    );
+
+    assert_eq!(startup_tools.len(), 1);
+    assert_eq!(startup_tools[0].callable_name, "calendar_search");
+    assert_eq!(cached_server_info, None);
+}
+
+#[test]
+fn codex_apps_server_info_cache_survives_legacy_tools_cache_write() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache_context = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        Some("account-one"),
+        Some("user-one"),
+    );
+    let server_info = create_test_server_info("Codex Apps");
+    write_cached_codex_apps_tools_if_needed(
+        CODEX_APPS_MCP_SERVER_NAME,
+        Some(&cache_context),
+        &server_info,
+        &[create_test_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "calendar_search",
+        )],
+    );
+
+    let cache_path = cache_context.tools_cache_path();
+    if let Some(parent) = cache_path.parent() {
+        std::fs::create_dir_all(parent).expect("create parent");
+    }
+    let bytes = serde_json::to_vec_pretty(&serde_json::json!({
+        "schema_version": CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION - 1,
+        "tools": [create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "calendar_search")],
+    }))
+    .expect("serialize");
+    std::fs::write(cache_path, bytes).expect("write legacy tools cache");
+
+    assert_eq!(
+        load_startup_cached_codex_apps_server_info(
+            CODEX_APPS_MCP_SERVER_NAME,
+            Some(&cache_context),
+        ),
+        Some(server_info)
+    );
+    assert!(
+        load_startup_cached_codex_apps_tools_snapshot(
+            CODEX_APPS_MCP_SERVER_NAME,
+            Some(&cache_context),
+        )
+        .is_none()
+    );
 }
 
 #[tokio::test]
-async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
+async fn list_all_tools_uses_cached_tool_info_snapshot_while_client_is_pending() {
     let startup_tools = vec![create_test_tool(
         CODEX_APPS_MCP_SERVER_NAME,
         "calendar_create_event",
@@ -690,13 +804,17 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let mut manager =
-        McpConnectionManager::new_uninitialized(&approval_policy, &permission_profile);
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
     manager.clients.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
-            startup_snapshot: Some(startup_tools),
+            cached_tool_info_snapshot: Some(startup_tools),
+            cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
@@ -708,7 +826,7 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
         .iter()
         .find(|tool| {
             tool.canonical_tool_name()
-                == ToolName::namespaced("mcp__codex_apps__", "calendar_create_event")
+                == ToolName::namespaced("mcp__codex_apps", "calendar_create_event")
         })
         .expect("tool from startup cache");
     assert_eq!(tool.server_name, CODEX_APPS_MCP_SERVER_NAME);
@@ -716,19 +834,146 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
 }
 
 #[tokio::test]
-async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot() {
+async fn list_available_server_infos_uses_cache_while_client_is_pending() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let mut manager =
-        McpConnectionManager::new_uninitialized(&approval_policy, &permission_profile);
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    let server_info = create_test_server_info("Codex Apps");
     manager.clients.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
-            startup_snapshot: None,
+            cached_tool_info_snapshot: Some(Vec::new()),
+            cached_server_info: Some(server_info.clone()),
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+
+    let timeout_result = tokio::time::timeout(
+        Duration::from_millis(10),
+        manager.list_available_server_infos(),
+    )
+    .await;
+    let server_infos = timeout_result.expect("server info lookup should not block on startup");
+    assert_eq!(
+        server_infos.get(CODEX_APPS_MCP_SERVER_NAME),
+        Some(&server_info)
+    );
+}
+
+#[tokio::test]
+async fn list_all_tools_accepts_canonical_namespaced_tool_names() {
+    let startup_tools = vec![create_test_tool("rmcp", "echo")];
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ false,
+    );
+    manager.clients.insert(
+        "rmcp".to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            cached_tool_info_snapshot: Some(startup_tools),
+            cached_server_info: None,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+
+    let tools = manager.list_all_tools().await;
+    let tool = tools
+        .iter()
+        .find(|tool| tool.canonical_tool_name() == ToolName::namespaced("rmcp", "echo"))
+        .expect("split MCP tool namespace and name should resolve");
+
+    let expected = ("rmcp", "rmcp", "echo", "echo");
+    assert_eq!(
+        (
+            tool.server_name.as_str(),
+            tool.callable_namespace.as_str(),
+            tool.callable_name.as_str(),
+            tool.tool.name.as_ref(),
+        ),
+        expected
+    );
+}
+
+#[tokio::test]
+async fn list_all_tools_applies_legacy_mcp_prefix_by_default() {
+    let startup_tools = vec![create_test_tool("rmcp", "echo")];
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.clients.insert(
+        "rmcp".to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            cached_tool_info_snapshot: Some(startup_tools),
+            cached_server_info: None,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+
+    let tools = manager.list_all_tools().await;
+    let tool = tools
+        .iter()
+        .find(|tool| tool.canonical_tool_name() == ToolName::namespaced("mcp__rmcp", "echo"))
+        .expect("legacy-prefixed MCP tool name should resolve");
+
+    let expected = ("rmcp", "mcp__rmcp", "echo", "echo");
+    assert_eq!(
+        (
+            tool.server_name.as_str(),
+            tool.callable_namespace.as_str(),
+            tool.callable_name.as_str(),
+            tool.tool.name.as_ref(),
+        ),
+        expected
+    );
+}
+
+#[tokio::test]
+async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_snapshot() {
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.clients.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            cached_tool_info_snapshot: None,
+            cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
@@ -741,19 +986,65 @@ async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot(
 }
 
 #[tokio::test]
-async fn list_all_tools_does_not_block_when_startup_snapshot_cache_hit_is_empty() {
+async fn shutdown_cancels_pending_tool_listing() {
+    let cancel_token = CancellationToken::new();
+    let cancel_token_for_startup = cancel_token.clone();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let pending_client = async move {
+        let _ = started_tx.send(());
+        cancel_token_for_startup.cancelled().await;
+        Err(StartupOutcomeError::Cancelled)
+    }
+    .boxed()
+    .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.clients.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            cached_tool_info_snapshot: None,
+            cached_server_info: None,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token,
+        },
+    );
+    let manager = Arc::new(manager);
+    let manager_for_list = Arc::clone(&manager);
+    let list_task = tokio::spawn(async move { manager_for_list.list_all_tools().await });
+
+    started_rx.await.expect("tool listing should start");
+    tokio::time::timeout(Duration::from_secs(1), manager.shutdown())
+        .await
+        .expect("shutdown should cancel speculative tool listing");
+    let tools = list_task.await.expect("tool listing task should not panic");
+    assert!(tools.is_empty());
+}
+
+#[tokio::test]
+async fn list_all_tools_does_not_block_when_cached_tool_info_snapshot_is_empty() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let mut manager =
-        McpConnectionManager::new_uninitialized(&approval_policy, &permission_profile);
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
     manager.clients.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
-            startup_snapshot: Some(Vec::new()),
+            cached_tool_info_snapshot: Some(Vec::new()),
+            cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
@@ -767,11 +1058,12 @@ async fn list_all_tools_does_not_block_when_startup_snapshot_cache_hit_is_empty(
 }
 
 #[tokio::test]
-async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
+async fn list_all_tools_uses_cached_tool_info_snapshot_when_client_startup_fails() {
     let startup_tools = vec![create_test_tool(
         CODEX_APPS_MCP_SERVER_NAME,
         "calendar_create_event",
     )];
+    let server_info = create_test_server_info("Codex Apps");
     let failed_client = futures::future::ready::<Result<ManagedClient, StartupOutcomeError>>(Err(
         StartupOutcomeError::Failed {
             error: "startup failed".to_string(),
@@ -781,14 +1073,18 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
     .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let mut manager =
-        McpConnectionManager::new_uninitialized(&approval_policy, &permission_profile);
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
     let startup_complete = Arc::new(std::sync::atomic::AtomicBool::new(true));
     manager.clients.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: failed_client,
-            startup_snapshot: Some(startup_tools),
+            cached_tool_info_snapshot: Some(startup_tools),
+            cached_server_info: Some(server_info.clone()),
             startup_complete,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
@@ -800,11 +1096,18 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
         .iter()
         .find(|tool| {
             tool.canonical_tool_name()
-                == ToolName::namespaced("mcp__codex_apps__", "calendar_create_event")
+                == ToolName::namespaced("mcp__codex_apps", "calendar_create_event")
         })
         .expect("tool from startup cache");
     assert_eq!(tool.server_name, CODEX_APPS_MCP_SERVER_NAME);
     assert_eq!(tool.callable_name, "calendar_create_event");
+    assert_eq!(
+        manager
+            .list_available_server_infos()
+            .await
+            .get(CODEX_APPS_MCP_SERVER_NAME),
+        Some(&server_info)
+    );
 }
 
 #[tokio::test]
@@ -816,8 +1119,11 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let mut manager =
-        McpConnectionManager::new_uninitialized(&approval_policy, &permission_profile);
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
     manager.server_metadata.insert(
         server_name.to_string(),
         McpServerMetadata {
@@ -826,13 +1132,16 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
                 "https://docs.example".to_string(),
             )),
             supports_parallel_tool_calls: true,
+            default_tools_approval_mode: None,
+            tool_approval_modes: HashMap::new(),
         },
     );
     manager.clients.insert(
         server_name.to_string(),
         AsyncManagedClient {
             client: pending_client,
-            startup_snapshot: Some(startup_tools),
+            cached_tool_info_snapshot: Some(startup_tools),
+            cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
@@ -845,6 +1154,142 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
     assert_eq!(tool.server_name, server_name);
     assert!(tool.supports_parallel_tool_calls);
     assert_eq!(tool.server_origin.as_deref(), Some("https://docs.example"));
+}
+
+#[test]
+fn server_metadata_preserves_tool_approval_policy() {
+    let mut config = crate::codex_apps_mcp_server_config(
+        "https://docs.example",
+        /*apps_mcp_product_sku*/ None,
+    );
+    config.default_tools_approval_mode = Some(AppToolApproval::Prompt);
+    config.tools.insert(
+        "search".to_string(),
+        McpServerToolConfig {
+            approval_mode: Some(AppToolApproval::Approve),
+        },
+    );
+    let metadata = McpServerMetadata::from(&EffectiveMcpServer::configured(config));
+
+    assert_eq!(metadata.tool_approval_mode("read"), AppToolApproval::Prompt);
+    assert_eq!(
+        metadata.tool_approval_mode("search"),
+        AppToolApproval::Approve
+    );
+}
+
+#[tokio::test]
+async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let (tx_event, rx_event) = async_channel::unbounded();
+    drop(rx_event);
+    let codex_home = tempdir().expect("tempdir");
+    let mcp_servers = HashMap::from([
+        (
+            "stdio".to_string(),
+            EffectiveMcpServer::configured(McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "echo".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+                enabled: true,
+                required: false,
+                supports_parallel_tool_calls: false,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                default_tools_approval_mode: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
+            }),
+        ),
+        (
+            "http".to_string(),
+            EffectiveMcpServer::configured(McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "http://127.0.0.1:1".to_string(),
+                    bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+                enabled: true,
+                required: false,
+                supports_parallel_tool_calls: false,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                default_tools_approval_mode: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
+            }),
+        ),
+    ]);
+
+    let cancel_token = CancellationToken::new();
+    let manager = McpConnectionManager::new(
+        &mcp_servers,
+        OAuthCredentialsStoreMode::default(),
+        AuthKeyringBackendKind::default(),
+        HashMap::new(),
+        &approval_policy,
+        String::new(),
+        tx_event,
+        cancel_token.clone(),
+        PermissionProfile::default(),
+        McpRuntimeContext::new(
+            Arc::new(EnvironmentManager::without_environments()),
+            PathBuf::from("/tmp"),
+        ),
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: None,
+            chatgpt_user_id: None,
+            is_workspace_account: false,
+        },
+        /*host_owned_codex_apps_enabled*/ false,
+        /*prefix_mcp_tool_names*/ true,
+        ElicitationCapability::default(),
+        ToolPluginProvenance::default(),
+        /*auth*/ None,
+        /*elicitation_reviewer*/ None,
+    )
+    .await;
+
+    assert!(manager.clients.contains_key("stdio"));
+    assert!(manager.clients.contains_key("http"));
+    assert!(
+        !manager
+            .wait_for_server_ready("stdio", Duration::from_millis(10))
+            .await
+    );
+    let error = match manager
+        .clients
+        .get("stdio")
+        .expect("stdio client")
+        .client()
+        .await
+    {
+        Ok(_) => panic!("local stdio MCP startup should fail"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        startup_outcome_error_message(error),
+        "local stdio MCP server `stdio` requires a local environment"
+    );
+    cancel_token.cancel();
 }
 
 #[test]
@@ -882,7 +1327,7 @@ fn mcp_init_error_display_prompts_for_github_pat() {
                 http_headers: None,
                 env_http_headers: None,
             },
-            experimental_environment: None,
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
@@ -893,6 +1338,7 @@ fn mcp_init_error_display_prompts_for_github_pat() {
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth: None,
             oauth_resource: None,
             tools: HashMap::new(),
         }),
@@ -934,7 +1380,7 @@ fn mcp_init_error_display_reports_generic_errors() {
                 http_headers: None,
                 env_http_headers: None,
             },
-            experimental_environment: None,
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
@@ -945,6 +1391,7 @@ fn mcp_init_error_display_reports_generic_errors() {
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth: None,
             oauth_resource: None,
             tools: HashMap::new(),
         }),

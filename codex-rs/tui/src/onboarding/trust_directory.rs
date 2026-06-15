@@ -1,7 +1,5 @@
 use std::path::PathBuf;
 
-use crate::legacy_core::config::set_project_trust_level;
-use codex_protocol::config_types::TrustLevel;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
@@ -24,7 +22,6 @@ use crate::selection_list::selection_option_row;
 
 use super::onboarding_screen::StepState;
 pub(crate) struct TrustDirectoryWidget {
-    pub codex_home: PathBuf,
     pub cwd: PathBuf,
     pub trust_target: PathBuf,
     pub show_windows_create_sandbox_hint: bool,
@@ -166,12 +163,8 @@ impl StepStateProvider for TrustDirectoryWidget {
 
 impl TrustDirectoryWidget {
     fn handle_trust(&mut self) {
-        let target = self.trust_target.clone();
-        if let Err(e) = set_project_trust_level(&self.codex_home, &target, TrustLevel::Trusted) {
-            tracing::error!("Failed to set project trusted: {e:?}");
-            self.error = Some(format!("Failed to set trust for {}: {e}", target.display()));
-        }
-
+        self.highlighted = TrustDirectorySelection::Trust;
+        self.error = None;
         self.selection = Some(TrustDirectorySelection::Trust);
     }
 
@@ -197,13 +190,22 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::Terminal;
     use std::path::PathBuf;
-    use tempfile::TempDir;
+
+    fn widget(error: Option<String>) -> TrustDirectoryWidget {
+        TrustDirectoryWidget {
+            cwd: PathBuf::from("/workspace/project"),
+            trust_target: PathBuf::from("/workspace/project"),
+            show_windows_create_sandbox_hint: false,
+            should_quit: false,
+            selection: None,
+            highlighted: TrustDirectorySelection::Trust,
+            error,
+        }
+    }
 
     #[test]
     fn release_event_does_not_change_selection() {
-        let codex_home = TempDir::new().expect("temp home");
         let mut widget = TrustDirectoryWidget {
-            codex_home: codex_home.path().to_path_buf(),
             cwd: PathBuf::from("."),
             trust_target: PathBuf::from("."),
             show_windows_create_sandbox_hint: false,
@@ -227,20 +229,26 @@ mod tests {
 
     #[test]
     fn renders_snapshot_for_git_repo() {
-        let codex_home = TempDir::new().expect("temp home");
-        let widget = TrustDirectoryWidget {
-            codex_home: codex_home.path().to_path_buf(),
-            cwd: PathBuf::from("/workspace/project"),
-            trust_target: PathBuf::from("/workspace/project"),
-            show_windows_create_sandbox_hint: false,
-            should_quit: false,
-            selection: None,
-            highlighted: TrustDirectorySelection::Trust,
-            error: None,
-        };
+        let widget = widget(/*error*/ None);
 
         let mut terminal =
             Terminal::new(VT100Backend::new(/*width*/ 70, /*height*/ 14)).expect("terminal");
+        terminal
+            .draw(|f| (&widget).render_ref(f.area(), f.buffer_mut()))
+            .expect("draw");
+
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn renders_snapshot_for_trust_error() {
+        let widget = widget(Some(
+            "Failed to set trust for /workspace/project: config/batchWrite failed in TUI: Invalid configuration: features.fast_mode=true is not supported; allowed set [fast_mode=false]"
+                .to_string(),
+        ));
+
+        let mut terminal =
+            Terminal::new(VT100Backend::new(/*width*/ 70, /*height*/ 18)).expect("terminal");
         terminal
             .draw(|f| (&widget).render_ref(f.area(), f.buffer_mut()))
             .expect("draw");

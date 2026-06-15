@@ -37,8 +37,11 @@ struct ParsedDetail {
 pub(super) fn detail_lines(check: &DoctorCheck, options: HumanOutputOptions) -> Vec<HumanDetail> {
     let parsed = parsed_details(check);
     let details = match check.category.as_str() {
+        "system" => system_details(&parsed),
         "runtime" => runtime_details(&parsed),
         "install" => install_details(&parsed, options),
+        "git" => git_details(&parsed, options),
+        "title" => title_details(&parsed),
         "config" => config_details(&parsed, options),
         "state" => state_details(&parsed),
         _ => generic_details(&parsed),
@@ -50,6 +53,42 @@ pub(super) fn detail_lines(check: &DoctorCheck, options: HumanOutputOptions) -> 
         .collect::<Vec<_>>();
     details.extend(issue_remedies(check));
     details
+}
+
+fn system_details(parsed: &[ParsedDetail]) -> Vec<HumanDetail> {
+    let mut out = Vec::new();
+    push_row_if_present(&mut out, parsed, "os", "os");
+    push_row_if_present(&mut out, parsed, "os language", "OS language");
+    push_row_if_present(&mut out, parsed, "LC_ALL", "LC_ALL");
+    push_row_if_present(&mut out, parsed, "LC_CTYPE", "LC_CTYPE");
+    push_row_if_present(&mut out, parsed, "LANG", "LANG");
+    push_row_if_present(&mut out, parsed, "VISUAL", "VISUAL");
+    push_row_if_present(&mut out, parsed, "EDITOR", "EDITOR");
+    push_row_if_present(&mut out, parsed, "PAGER", "PAGER");
+    push_row_if_present(&mut out, parsed, "GIT_PAGER", "GIT_PAGER");
+    push_row_if_present(&mut out, parsed, "GH_PAGER", "GH_PAGER");
+    push_row_if_present(&mut out, parsed, "LESS", "LESS");
+    push_remaining(
+        &mut out,
+        parsed,
+        &[
+            "os",
+            "os type",
+            "os version",
+            "os language",
+            "LC_ALL",
+            "LC_CTYPE",
+            "LANG",
+            "VISUAL",
+            "EDITOR",
+            "PAGER",
+            "GIT_PAGER",
+            "GH_PAGER",
+            "LESS",
+        ],
+        &[],
+    );
+    out
 }
 
 pub(super) fn detail_value(check: &DoctorCheck, label: &str) -> Option<String> {
@@ -232,6 +271,97 @@ fn install_details(parsed: &[ParsedDetail], options: HumanOutputOptions) -> Vec<
     out
 }
 
+fn git_details(parsed: &[ParsedDetail], options: HumanOutputOptions) -> Vec<HumanDetail> {
+    let mut out = Vec::new();
+    push_row_if_present(&mut out, parsed, "selected git", "selected git");
+    push_row_if_present(&mut out, parsed, "git version", "version");
+    push_row_if_present(&mut out, parsed, "git exec path", "exec path");
+    push_row_if_present(&mut out, parsed, "repo detected", "repo detected");
+    push_row_if_present(&mut out, parsed, "repo root", "repo root");
+    push_row_if_present(&mut out, parsed, ".git entry", ".git entry");
+    push_row_if_present(&mut out, parsed, "git branch", "branch");
+    push_row_if_present(&mut out, parsed, "core.fsmonitor", "core.fsmonitor");
+
+    let path_entries = numbered_values(parsed, "PATH git #");
+    if !path_entries.is_empty() {
+        let total = path_entries.len();
+        let shown = if options.show_all {
+            total
+        } else {
+            total.min(3)
+        };
+        out.push(HumanDetail::Row {
+            label: format!("PATH entries ({total})"),
+            value: path_entries[0].clone(),
+            expected: None,
+        });
+        out.extend(
+            path_entries
+                .iter()
+                .skip(1)
+                .take(shown.saturating_sub(1))
+                .cloned()
+                .map(HumanDetail::Continuation),
+        );
+        if shown < total {
+            out.push(HumanDetail::Continuation(
+                "… (full list with --all)".to_string(),
+            ));
+        }
+    }
+
+    push_remaining(
+        &mut out,
+        parsed,
+        &[
+            "selected git",
+            "PATH git entries",
+            "git version",
+            "git exec path",
+            "git build options",
+            "repo detected",
+            "repo root",
+            ".git entry",
+            "git branch",
+            "core.fsmonitor",
+        ],
+        &["PATH git #"],
+    );
+    out
+}
+
+fn title_details(parsed: &[ParsedDetail]) -> Vec<HumanDetail> {
+    let mut out = Vec::new();
+    push_row_if_present(&mut out, parsed, "terminal title source", "title source");
+    push_row_if_present(&mut out, parsed, "terminal title items", "title items");
+    push_row_if_present(&mut out, parsed, "terminal title activity", "activity item");
+    push_row_if_present(
+        &mut out,
+        parsed,
+        "terminal title project source",
+        "project source",
+    );
+    push_row_if_present(
+        &mut out,
+        parsed,
+        "terminal title project value",
+        "project value",
+    );
+    push_remaining(
+        &mut out,
+        parsed,
+        &[
+            "terminal title source",
+            "terminal title items",
+            "terminal title activity",
+            "terminal title project source",
+            "terminal title project value",
+        ],
+        &[],
+    );
+    out
+}
+
 fn config_details(parsed: &[ParsedDetail], options: HumanOutputOptions) -> Vec<HumanDetail> {
     let mut out = Vec::new();
     if let Some(model) = value(parsed, "model") {
@@ -294,6 +424,8 @@ fn state_details(parsed: &[ParsedDetail]) -> Vec<HumanDetail> {
     push_row_if_present(&mut out, parsed, "sqlite home", "sqlite home");
     push_database_row(&mut out, parsed, "state DB");
     push_database_row(&mut out, parsed, "log DB");
+    push_database_row(&mut out, parsed, "goals DB");
+    push_database_row(&mut out, parsed, "memories DB");
 
     for (source, label) in [
         ("active rollout files", "active rollouts"),
@@ -317,8 +449,12 @@ fn state_details(parsed: &[ParsedDetail]) -> Vec<HumanDetail> {
             "sqlite home",
             "state DB",
             "log DB",
+            "goals DB",
             "state DB integrity",
             "log DB integrity",
+            "goals DB integrity",
+            "memories DB",
+            "memories DB integrity",
             "active rollout files",
             "archived rollout files",
         ],

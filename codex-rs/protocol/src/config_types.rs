@@ -21,6 +21,21 @@ use wildmatch::WildMatchPattern;
 
 use crate::openai_models::ReasoningEffort;
 
+/// Selects which part of the active context is charged against
+/// `model_auto_compact_token_limit`.
+#[derive(
+    Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum AutoCompactTokenLimitScope {
+    /// Count the full active context against the limit.
+    #[default]
+    Total,
+    /// Count sampled output and later growth after the carried window prefix.
+    BodyAfterPrefix,
+}
+
 /// A summary of the reasoning performed by the model. This can be useful for
 /// debugging and understanding the model's reasoning process.
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries
@@ -99,7 +114,7 @@ impl fmt::Display for ProfileV2NameParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "invalid --profile-v2 value `{}`; pass a plain name such as `work`",
+            "invalid --profile value `{}`; pass a plain name such as `work`",
             self.value
         )
     }
@@ -151,8 +166,8 @@ pub enum ApprovalsReviewer {
     #[default]
     #[serde(rename = "user")]
     User,
-    #[serde(rename = "guardian_subagent", alias = "auto_review")]
-    #[strum(serialize = "guardian_subagent")]
+    #[serde(rename = "auto_review", alias = "guardian_subagent")]
+    #[strum(serialize = "auto_review")]
     AutoReview,
 }
 
@@ -417,6 +432,12 @@ pub enum ServiceTier {
     Flex,
 }
 
+/// Request/config sentinel for explicit standard routing.
+///
+/// This is not a catalog service tier id. It means the user intentionally
+/// selected no service tier, so model catalog defaults should not apply.
+pub const SERVICE_TIER_DEFAULT_REQUEST_VALUE: &str = "default";
+
 impl ServiceTier {
     pub const fn request_value(self) -> &'static str {
         match self {
@@ -614,7 +635,7 @@ impl CollaborationMode {
     }
 
     pub fn reasoning_effort(&self) -> Option<ReasoningEffort> {
-        self.settings_ref().reasoning_effort
+        self.settings_ref().reasoning_effort.clone()
     }
 
     /// Updates the collaboration mode with new model and/or effort values.
@@ -633,7 +654,7 @@ impl CollaborationMode {
         let settings = self.settings_ref();
         let updated_settings = Settings {
             model: model.unwrap_or_else(|| settings.model.clone()),
-            reasoning_effort: effort.unwrap_or(settings.reasoning_effort),
+            reasoning_effort: effort.unwrap_or_else(|| settings.reasoning_effort.clone()),
             developer_instructions: developer_instructions
                 .unwrap_or_else(|| settings.developer_instructions.clone()),
         };
@@ -655,7 +676,10 @@ impl CollaborationMode {
             mode: mask.mode.unwrap_or(self.mode),
             settings: Settings {
                 model: mask.model.clone().unwrap_or_else(|| settings.model.clone()),
-                reasoning_effort: mask.reasoning_effort.unwrap_or(settings.reasoning_effort),
+                reasoning_effort: mask
+                    .reasoning_effort
+                    .clone()
+                    .unwrap_or_else(|| settings.reasoning_effort.clone()),
                 developer_instructions: mask
                     .developer_instructions
                     .clone()
@@ -736,7 +760,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_string(&ApprovalsReviewer::AutoReview).expect("serialize reviewer"),
-            "\"guardian_subagent\""
+            "\"auto_review\""
         );
 
         for value in ["user", "auto_review", "guardian_subagent"] {

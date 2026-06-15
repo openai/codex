@@ -39,6 +39,61 @@ def test_thread_set_name_and_read(tmp_path) -> None:
     }
 
 
+def test_sync_and_async_initialization_round_trip_metadata(tmp_path) -> None:
+    """Public clients should initialize and start threads through app-server."""
+
+    async def async_scenario(harness: AppServerHarness) -> dict[str, object]:
+        async with AsyncCodex(config=harness.app_server_config()) as codex:
+            thread = await codex.thread_start()
+            server = codex.metadata.serverInfo
+            return {
+                "thread_id": thread.id,
+                "user_agent": codex.metadata.userAgent,
+                "server_name": None if server is None else server.name,
+                "server_version": None if server is None else server.version,
+            }
+
+    with AppServerHarness(tmp_path) as harness:
+        with Codex(config=harness.app_server_config()) as codex:
+            thread = codex.thread_start()
+            server = codex.metadata.serverInfo
+            sync_summary = {
+                "thread_id": thread.id,
+                "user_agent": codex.metadata.userAgent,
+                "server_name": None if server is None else server.name,
+                "server_version": None if server is None else server.version,
+            }
+        async_summary = asyncio.run(async_scenario(harness))
+
+    assert {
+        "sync": {
+            "thread_id_present": bool(sync_summary["thread_id"]),
+            "user_agent_present": bool(sync_summary["user_agent"]),
+            "server_name_present": bool(sync_summary["server_name"]),
+            "server_version_present": bool(sync_summary["server_version"]),
+        },
+        "async": {
+            "thread_id_present": bool(async_summary["thread_id"]),
+            "user_agent_present": bool(async_summary["user_agent"]),
+            "server_name_present": bool(async_summary["server_name"]),
+            "server_version_present": bool(async_summary["server_version"]),
+        },
+    } == {
+        "sync": {
+            "thread_id_present": True,
+            "user_agent_present": True,
+            "server_name_present": True,
+            "server_version_present": True,
+        },
+        "async": {
+            "thread_id_present": True,
+            "user_agent_present": True,
+            "server_name_present": True,
+            "server_version_present": True,
+        },
+    }
+
+
 def test_thread_list_filters_archived_threads(tmp_path) -> None:
     """Thread listing should reflect archive state through app-server."""
     with AppServerHarness(tmp_path) as harness:
@@ -102,7 +157,7 @@ def test_async_lifecycle_methods_round_trip(tmp_path) -> None:
 
             async with AsyncCodex(config=harness.app_server_config()) as codex:
                 thread = await codex.thread_start()
-                run_result = await thread.run("materialize async thread")
+                turn_result = await thread.run("materialize async thread")
                 await thread.set_name("async lifecycle")
                 named = await thread.read()
                 resumed = await codex.thread_resume(thread.id)
@@ -111,14 +166,14 @@ def test_async_lifecycle_methods_round_trip(tmp_path) -> None:
                 unarchived = await codex.thread_unarchive(thread.id)
 
         assert {
-            "run_final_response": run_result.final_response,
+            "turn_final_response": turn_result.final_response,
             "named_thread": named.thread.name,
             "resumed_id": resumed.id,
             "forked_is_distinct": forked.id != thread.id,
             "archive_response": archive_response.model_dump(by_alias=True, mode="json"),
             "unarchived_id": unarchived.id,
         } == {
-            "run_final_response": "async materialized",
+            "turn_final_response": "async materialized",
             "named_thread": "async lifecycle",
             "resumed_id": thread.id,
             "forked_is_distinct": True,
@@ -198,19 +253,19 @@ def test_compact_rpc_hits_mock_responses(tmp_path) -> None:
 
         with Codex(config=harness.app_server_config()) as codex:
             thread = codex.thread_start()
-            run_result = thread.run("create history")
+            turn_result = thread.run("create history")
             compact_response = thread.compact()
             requests = harness.responses.wait_for_requests(2)
 
     assert {
-        "run_final_response": run_result.final_response,
+        "turn_final_response": turn_result.final_response,
         "compact_response": compact_response.model_dump(
             by_alias=True,
             mode="json",
         ),
         "request_kinds": [request_kind(request.path) for request in requests],
     } == {
-        "run_final_response": "history",
+        "turn_final_response": "history",
         "compact_response": {},
         "request_kinds": ["responses", "responses"],
     }

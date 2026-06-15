@@ -4,7 +4,6 @@ use std::sync::Arc;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
-use codex_rollout::EventPersistenceMode;
 use codex_rollout::persisted_rollout_items;
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -17,7 +16,6 @@ use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
-use crate::ThreadEventPersistenceMode;
 use crate::ThreadMetadataPatch;
 use crate::ThreadStore;
 use crate::ThreadStoreResult;
@@ -33,7 +31,6 @@ use crate::thread_metadata_sync::ThreadMetadataSync;
 pub struct LiveThread {
     thread_id: ThreadId,
     thread_store: Arc<dyn ThreadStore>,
-    event_persistence_mode: EventPersistenceMode,
     metadata_sync: Arc<Mutex<ThreadMetadataSync>>,
 }
 
@@ -92,13 +89,11 @@ impl LiveThread {
         params: CreateThreadParams,
     ) -> ThreadStoreResult<Self> {
         let thread_id = params.thread_id;
-        let event_persistence_mode = event_persistence_mode(params.event_persistence_mode);
         let metadata_sync = ThreadMetadataSync::for_create(&params).await;
         thread_store.create_thread(params).await?;
         Ok(Self {
             thread_id,
             thread_store,
-            event_persistence_mode,
             metadata_sync: Arc::new(Mutex::new(metadata_sync)),
         })
     }
@@ -108,7 +103,6 @@ impl LiveThread {
         mut params: ResumeThreadParams,
     ) -> ThreadStoreResult<Self> {
         let thread_id = params.thread_id;
-        let event_persistence_mode = event_persistence_mode(params.event_persistence_mode);
         let should_load_history = params.history.is_none();
         let include_archived = params.include_archived;
         thread_store.resume_thread(params.clone()).await?;
@@ -122,7 +116,11 @@ impl LiveThread {
             {
                 Ok(history) => params.history = Some(history.items),
                 Err(err) => {
-                    let _ = thread_store.discard_thread(thread_id).await;
+                    if let Err(discard_err) = thread_store.discard_thread(thread_id).await {
+                        warn!(
+                            "failed to discard thread persistence after resume history load failed: {discard_err}"
+                        );
+                    }
                     return Err(err);
                 }
             }
@@ -131,22 +129,24 @@ impl LiveThread {
         Ok(Self {
             thread_id,
             thread_store,
-            event_persistence_mode,
             metadata_sync: Arc::new(Mutex::new(metadata_sync)),
         })
     }
 
     pub async fn append_items(&self, items: &[RolloutItem]) -> ThreadStoreResult<()> {
-        let canonical_items = persisted_rollout_items(items, self.event_persistence_mode);
-        if canonical_items.is_empty() {
+        let canonical_items = persisted_rollout_items(items);
+        if items.is_empty() {
             return Ok(());
         }
         self.thread_store
             .append_items(AppendThreadItemsParams {
                 thread_id: self.thread_id,
-                items: canonical_items.clone(),
+                items: items.to_vec(),
             })
             .await?;
+        if canonical_items.is_empty() {
+            return Ok(());
+        }
         let update = self
             .metadata_sync
             .lock()
@@ -299,12 +299,5 @@ impl LiveThread {
             .await
             .mark_pending_update_applied(&update);
         Ok(())
-    }
-}
-
-fn event_persistence_mode(mode: ThreadEventPersistenceMode) -> EventPersistenceMode {
-    match mode {
-        ThreadEventPersistenceMode::Limited => EventPersistenceMode::Limited,
-        ThreadEventPersistenceMode::Extended => EventPersistenceMode::Extended,
     }
 }

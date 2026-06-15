@@ -8,7 +8,7 @@ use super::tool_definition_to_responses_api_tool;
 use crate::JsonSchema;
 use crate::ToolDefinition;
 use crate::ToolName;
-use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -50,8 +50,7 @@ fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {
 
 #[test]
 fn dynamic_tool_to_responses_api_tool_preserves_defer_loading() {
-    let tool = DynamicToolSpec {
-        namespace: None,
+    let tool = DynamicToolFunctionSpec {
         name: "lookup_order".to_string(),
         description: "Look up an order".to_string(),
         input_schema: json!({
@@ -87,11 +86,10 @@ fn dynamic_tool_to_responses_api_tool_preserves_defer_loading() {
 
 #[test]
 fn mcp_tool_to_deferred_responses_api_tool_sets_defer_loading() {
-    let tool = rmcp::model::Tool {
-        name: "lookup_order".to_string().into(),
-        title: None,
-        description: Some("Look up an order".to_string().into()),
-        input_schema: std::sync::Arc::new(rmcp::model::object(json!({
+    let tool = rmcp::model::Tool::new(
+        "lookup_order",
+        "Look up an order",
+        std::sync::Arc::new(rmcp::model::object(json!({
             "type": "object",
             "properties": {
                 "order_id": {"type": "string"}
@@ -99,12 +97,7 @@ fn mcp_tool_to_deferred_responses_api_tool_sets_defer_loading() {
             "required": ["order_id"],
             "additionalProperties": false,
         }))),
-        output_schema: None,
-        annotations: None,
-        execution: None,
-        icons: None,
-        meta: None,
-    };
+    );
 
     assert_eq!(
         mcp_tool_to_deferred_responses_api_tool(

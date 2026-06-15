@@ -25,21 +25,21 @@ pub(super) async fn create_thread(
         model_provider_id: params.metadata.model_provider.clone(),
         generate_memories: matches!(params.metadata.memory_mode, ThreadMemoryMode::Enabled),
     };
-    let recorder = RolloutRecorder::new(
+    RolloutRecorder::new(
         &config,
         RolloutRecorderParams::new(
             params.thread_id,
             params.forked_from_id,
+            params.parent_thread_id,
             params.source,
             params.thread_source,
             params.base_instructions,
             params.dynamic_tools,
-        ),
+        )
+        .with_multi_agent_version(params.multi_agent_version),
     )
     .await
     .map_err(|err| ThreadStoreError::Internal {
         message: format!("failed to initialize local thread recorder: {err}"),
-    })?;
-
-    Ok(recorder)
+    })
 }

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_shell_command_sse_response;
@@ -32,6 +32,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::shell::default_user_shell;
+use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use pretty_assertions::assert_eq;
@@ -59,14 +60,11 @@ async fn thread_shell_command_history_responses_exclude_persisted_command_execut
         &BTreeMap::default(),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.as_path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.as_path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
-            persist_extended_history: true,
-            ..Default::default()
-        })
+        .send_thread_start_request(ThreadStartParams::default())
         .await?;
     let start_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -183,6 +181,49 @@ async fn thread_shell_command_history_responses_exclude_persisted_command_execut
 }
 
 #[tokio::test]
+async fn thread_shell_command_returns_error_when_local_environment_is_disabled() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let server = create_mock_responses_server_sequence(vec![]).await;
+    create_config_toml(
+        codex_home.as_path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
+
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.as_path(),
+        &[(CODEX_EXEC_SERVER_URL_ENV_VAR, Some("none"))],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+    let shell_id = mcp
+        .send_thread_shell_command_request(ThreadShellCommandParams {
+            thread_id: thread.id,
+            command: "pwd".to_string(),
+        })
+        .await?;
+    let error = mcp
+        .read_stream_until_error_message(RequestId::Integer(shell_id))
+        .await?;
+    assert_eq!(error.error.message, "local environment is not configured");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
@@ -211,14 +252,11 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
         &BTreeMap::default(),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.as_path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.as_path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
-            persist_extended_history: true,
-            ..Default::default()
-        })
+        .send_thread_start_request(ThreadStartParams::default())
         .await?;
     let start_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -231,6 +269,7 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "run python".to_string(),
                 text_elements: Vec::new(),
@@ -365,7 +404,7 @@ fn current_shell_output_command(text: &str) -> Result<(String, String)> {
 }
 
 async fn wait_for_command_execution_started(
-    mcp: &mut McpProcess,
+    mcp: &mut TestAppServer,
     expected_id: Option<&str>,
 ) -> Result<ItemStartedNotification> {
     loop {
@@ -387,7 +426,7 @@ async fn wait_for_command_execution_started(
 }
 
 async fn wait_for_command_execution_started_by_source(
-    mcp: &mut McpProcess,
+    mcp: &mut TestAppServer,
     expected_source: CommandExecutionSource,
 ) -> Result<ItemStartedNotification> {
     loop {
@@ -402,7 +441,7 @@ async fn wait_for_command_execution_started_by_source(
 }
 
 async fn wait_for_command_execution_completed(
-    mcp: &mut McpProcess,
+    mcp: &mut TestAppServer,
     expected_id: Option<&str>,
 ) -> Result<ItemCompletedNotification> {
     loop {
@@ -424,7 +463,7 @@ async fn wait_for_command_execution_completed(
 }
 
 async fn wait_for_command_execution_output_delta(
-    mcp: &mut McpProcess,
+    mcp: &mut TestAppServer,
     item_id: &str,
 ) -> Result<CommandExecutionOutputDeltaNotification> {
     loop {

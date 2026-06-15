@@ -50,6 +50,10 @@ pub fn start_memories_startup_task(
 
     tokio::spawn(async move {
         let root = memory_root(&config.codex_home);
+        if let Err(err) = tokio::fs::create_dir_all(&root).await {
+            warn!("failed creating memories root: {err}");
+            return;
+        }
         if let Err(err) = seed_extension_instructions(&root).await {
             warn!("failed seeding memory extension instructions: {err}");
         }

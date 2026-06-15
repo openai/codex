@@ -196,7 +196,7 @@ impl ThreadMetadataBuilder {
             created_at,
             updated_at,
             source,
-            thread_source: self.thread_source,
+            thread_source: self.thread_source.clone(),
             agent_nickname: self.agent_nickname.clone(),
             agent_role: self.agent_role.clone(),
             agent_path: self
@@ -236,6 +236,21 @@ impl ThreadMetadata {
         }
         if existing.git_origin_url.is_some() {
             self.git_origin_url = existing.git_origin_url.clone();
+        }
+    }
+
+    /// Preserve an existing user-facing title when reconciling rollout-derived metadata.
+    pub fn prefer_existing_explicit_title(&mut self, existing: &Self) {
+        let existing_title = existing.title.trim();
+        if existing_title.is_empty()
+            || existing.first_user_message.as_deref().map(str::trim) == Some(existing_title)
+        {
+            return;
+        }
+
+        let title = self.title.trim();
+        if title.is_empty() || self.first_user_message.as_deref().map(str::trim) == Some(title) {
+            self.title = existing.title.clone();
         }
     }
 
@@ -569,13 +584,13 @@ mod tests {
     }
 
     #[test]
-    fn thread_row_ignores_unknown_reasoning_effort_values() {
+    fn thread_row_preserves_model_defined_reasoning_effort_values() {
         let metadata = ThreadMetadata::try_from(thread_row(Some("future")))
             .expect("thread metadata should parse");
 
         assert_eq!(
             metadata,
-            expected_thread_metadata(/*reasoning_effort*/ None)
+            expected_thread_metadata(Some(ReasoningEffort::Custom("future".to_string())))
         );
     }
 }

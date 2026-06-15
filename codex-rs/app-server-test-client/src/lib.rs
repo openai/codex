@@ -70,6 +70,7 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::config::Config;
 use codex_otel::OtelProvider;
 use codex_otel::current_span_w3c_trace_context;
+use codex_protocol::dynamic_tools::normalize_dynamic_tool_specs;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_utils_cli::CliConfigOverrides;
@@ -135,7 +136,7 @@ struct Cli {
     /// Prefix a filename with '@' to read from a file.
     ///
     /// Example:
-    ///   --dynamic-tools '[{"name":"demo","description":"Demo","inputSchema":{"type":"object"}}]'
+    ///   --dynamic-tools '[{"type":"function","name":"demo","description":"Demo","inputSchema":{"type":"object"}}]'
     ///   --dynamic-tools @/path/to/tools.json
     #[arg(long, value_name = "json-or-@file", global = true)]
     dynamic_tools: Option<String>,
@@ -734,6 +735,7 @@ async fn trigger_zsh_fork_multi_cmd_approval(
 
             let mut turn_params = TurnStartParams {
                 thread_id: thread_response.thread.id.clone(),
+                client_user_message_id: None,
                 input: vec![V2UserInput::Text {
                     text: message,
                     text_elements: Vec::new(),
@@ -818,6 +820,7 @@ async fn resume_message_v2(
 
         let turn_response = client.turn_start(TurnStartParams {
             thread_id: resume_response.thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: user_message,
                 text_elements: Vec::new(),
@@ -959,6 +962,7 @@ async fn send_message_v2_with_policies(
             println!("< thread/start response: {thread_response:?}");
             let mut turn_params = TurnStartParams {
                 thread_id: thread_response.thread.id.clone(),
+                client_user_message_id: None,
                 input: vec![V2UserInput::Text {
                     text: user_message,
                     // Test client sends plain text without UI element ranges.
@@ -999,6 +1003,7 @@ async fn send_follow_up_v2(
 
         let first_turn_params = TurnStartParams {
             thread_id: thread_response.thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: first_message,
                 // Test client sends plain text without UI element ranges.
@@ -1012,6 +1017,7 @@ async fn send_follow_up_v2(
 
         let follow_up_params = TurnStartParams {
             thread_id: thread_response.thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: follow_up_message,
                 // Test client sends plain text without UI element ranges.
@@ -1124,6 +1130,7 @@ async fn thread_list(endpoint: &Endpoint, config_overrides: &[String], limit: u3
             model_providers: None,
             source_kinds: None,
             archived: None,
+            parent_thread_id: None,
             cwd: None,
             use_state_db_only: false,
             search_term: None,
@@ -1255,6 +1262,7 @@ fn live_elicitation_timeout_pause(
     let started_at = Instant::now();
     let turn_response = client.turn_start(TurnStartParams {
         thread_id: thread_id.clone(),
+        client_user_message_id: None,
         input: vec![V2UserInput::Text {
             text: prompt,
             text_elements: Vec::new(),
@@ -1366,11 +1374,12 @@ fn parse_dynamic_tools_arg(dynamic_tools: &Option<String>) -> Result<Option<Vec<
     };
 
     let value: Value = serde_json::from_str(&raw_json).context("parse dynamic tools JSON")?;
-    let tools = match value {
-        Value::Array(_) => serde_json::from_value(value).context("decode dynamic tools array")?,
-        Value::Object(_) => vec![serde_json::from_value(value).context("decode dynamic tool")?],
+    let values = match value {
+        Value::Array(values) => values,
+        Value::Object(_) => vec![value],
         _ => bail!("dynamic tools JSON must be an object or array"),
     };
+    let tools = normalize_dynamic_tool_specs(values).context("decode dynamic tools")?;
 
     Ok(Some(tools))
 }

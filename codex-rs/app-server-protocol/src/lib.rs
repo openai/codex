@@ -36,7 +36,6 @@ pub use protocol::v1::InitializeParams;
 pub use protocol::v1::InitializeResponse;
 pub use protocol::v1::InterruptConversationResponse;
 pub use protocol::v1::LoginApiKeyParams;
-pub use protocol::v1::Profile;
 pub use protocol::v1::SandboxSettings;
 pub use protocol::v1::Tools;
 pub use protocol::v1::UserSavedConfig;

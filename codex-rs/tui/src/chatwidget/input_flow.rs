@@ -47,9 +47,10 @@ impl ChatWidget {
                 text,
                 text_elements,
                 action,
+                pending_pastes,
             } => {
                 let user_message = self.user_message_from_submission(text, text_elements);
-                self.queue_user_message_with_options(user_message, action);
+                self.queue_user_message_with_options(user_message, action, pending_pastes);
             }
             InputResult::Command(cmd) => {
                 self.handle_slash_command_dispatch(cmd);
@@ -69,18 +70,28 @@ impl ChatWidget {
     }
 
     pub(super) fn queue_user_message(&mut self, user_message: UserMessage) {
-        self.queue_user_message_with_options(user_message, QueuedInputAction::Plain);
+        self.queue_user_message_with_options(user_message, QueuedInputAction::Plain, Vec::new());
+    }
+
+    pub(crate) fn set_queue_submissions_until_session_configured(&mut self, queue: bool) {
+        self.bottom_pane
+            .set_queue_submissions(queue && !self.is_session_configured());
     }
 
     pub(super) fn queue_user_message_with_options(
         &mut self,
         user_message: UserMessage,
         action: QueuedInputAction,
+        pending_pastes: Vec<(String, String)>,
     ) {
         if !self.is_session_configured() || self.is_user_turn_pending_or_running() {
             self.input_queue
                 .queued_user_messages
-                .push_back(QueuedUserMessage::new(user_message, action));
+                .push_back(QueuedUserMessage {
+                    user_message,
+                    action,
+                    pending_pastes,
+                });
             self.input_queue
                 .queued_user_message_history_records
                 .push_back(UserMessageHistoryRecord::UserMessageText);
@@ -112,7 +123,7 @@ impl ChatWidget {
                     break;
                 }
                 QueuedInputAction::ParseSlash => {
-                    let drain = self.submit_queued_slash_prompt(queued_message.into_user_message());
+                    let drain = self.submit_queued_slash_prompt(queued_message);
                     if drain == QueueDrain::Stop {
                         submitted_follow_up = self.is_user_turn_pending_or_running();
                         break;
@@ -161,7 +172,7 @@ impl ChatWidget {
         mut collaboration_mode: CollaborationModeMask,
     ) {
         if collaboration_mode.mode == Some(ModeKind::Plan)
-            && let Some(effort) = self.config.plan_mode_reasoning_effort
+            && let Some(effort) = self.config.plan_mode_reasoning_effort.clone()
         {
             collaboration_mode.reasoning_effort = Some(Some(effort));
         }
@@ -173,7 +184,7 @@ impl ChatWidget {
             );
             return;
         }
-        self.set_collaboration_mask(collaboration_mode);
+        self.set_collaboration_mask_from_user_action(collaboration_mode);
         let should_queue = self.is_plan_streaming_in_tui();
         let user_message = UserMessage {
             text,

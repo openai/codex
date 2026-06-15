@@ -17,11 +17,13 @@ use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::PreToolUseCommandInput;
+use crate::schema::SubagentCommandInputFields;
 
 #[derive(Debug, Clone)]
 pub struct PreToolUseRequest {
     pub session_id: ThreadId,
     pub turn_id: String,
+    pub subagent: Option<common::SubagentHookContext>,
     pub cwd: AbsolutePathBuf,
     pub transcript_path: Option<PathBuf>,
     pub model: String,
@@ -166,9 +168,12 @@ fn latest_updated_input(
 /// stable. Shell-like tools pass `{ "command": ... }` as `tool_input`; MCP
 /// tools pass their resolved JSON arguments.
 fn command_input_json(request: &PreToolUseRequest) -> Result<String, serde_json::Error> {
+    let subagent = SubagentCommandInputFields::from(request.subagent.as_ref());
     serde_json::to_string(&PreToolUseCommandInput {
         session_id: request.session_id.to_string(),
         turn_id: request.turn_id.clone(),
+        agent_id: subagent.agent_id,
+        agent_type: subagent.agent_type,
         transcript_path: crate::schema::NullableString::from_path(request.transcript_path.clone()),
         cwd: request.cwd.display().to_string(),
         hook_event_name: "PreToolUse".to_string(),
@@ -763,6 +768,7 @@ mod tests {
         super::PreToolUseRequest {
             session_id: ThreadId::new(),
             turn_id: "turn-1".to_string(),
+            subagent: None,
             cwd: test_path_buf("/tmp").abs(),
             transcript_path: None,
             model: "gpt-test".to_string(),

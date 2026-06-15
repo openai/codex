@@ -1,11 +1,12 @@
 use anyhow::Context;
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use codex_app_server_protocol::ProcessExitedNotification;
 use codex_app_server_protocol::ProcessKillParams;
 use codex_app_server_protocol::ProcessSpawnParams;
 use codex_app_server_protocol::RequestId;
+use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -99,6 +100,33 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
             stderr_cap_reached: false,
         }
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn process_spawn_returns_error_when_local_environment_is_disabled() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.path(),
+        &[(CODEX_EXEC_SERVER_URL_ENV_VAR, Some("none"))],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let process_request_id = mcp
+        .send_process_spawn_request(process_spawn_params(
+            "disabled-process".to_string(),
+            codex_home.path(),
+            vec!["sh".to_string(), "-lc".to_string(), "true".to_string()],
+        )?)
+        .await?;
+    let error = mcp
+        .read_stream_until_error_message(RequestId::Integer(process_request_id))
+        .await?;
+    assert_eq!(error.error.message, "local environment is not configured");
+
     Ok(())
 }
 
@@ -202,10 +230,10 @@ async fn process_kill_terminates_running_process() -> Result<()> {
     Ok(())
 }
 
-async fn initialized_mcp(codex_home: &Path) -> Result<(MockServer, McpProcess)> {
+async fn initialized_mcp(codex_home: &Path) -> Result<(MockServer, TestAppServer)> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     create_config_toml(codex_home, &server.uri(), "never")?;
-    let mut mcp = McpProcess::new(codex_home).await?;
+    let mut mcp = TestAppServer::new(codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     Ok((server, mcp))
 }
@@ -229,7 +257,7 @@ fn process_spawn_params(
     })
 }
 
-async fn read_process_exited(mcp: &mut McpProcess) -> Result<ProcessExitedNotification> {
+async fn read_process_exited(mcp: &mut TestAppServer) -> Result<ProcessExitedNotification> {
     let notification = mcp
         .read_stream_until_notification_message("process/exited")
         .await?;

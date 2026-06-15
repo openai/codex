@@ -1,6 +1,5 @@
 use super::*;
 use codex_extension_api::ExtensionData;
-use codex_extension_api::TurnItemContributionFuture;
 use codex_extension_api::TurnItemContributor;
 use codex_protocol::items::AgentMessageContent;
 use pretty_assertions::assert_eq;
@@ -14,7 +13,7 @@ impl TurnItemContributor for RewriteAgentMessageContributor {
         _thread_store: &'a ExtensionData,
         _turn_store: &'a ExtensionData,
         item: &'a mut TurnItem,
-    ) -> TurnItemContributionFuture<'a> {
+    ) -> codex_extension_api::ExtensionFuture<'a, Result<(), String>> {
         Box::pin(async move {
             if let TurnItem::AgentMessage(agent_message) = item {
                 agent_message.content = vec![AgentMessageContent::Text {

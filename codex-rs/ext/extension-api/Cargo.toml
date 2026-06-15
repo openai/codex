@@ -14,5 +14,12 @@ doctest = false
 workspace = true
 
 [dependencies]
+codex-config = { workspace = true }
+codex-context-fragments = { workspace = true }
 codex-protocol = { workspace = true }
 codex-tools = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

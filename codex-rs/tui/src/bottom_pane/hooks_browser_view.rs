@@ -736,6 +736,8 @@ fn event_label(event_name: HookEventName) -> &'static str {
         HookEventName::PostCompact => "PostCompact",
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        HookEventName::SubagentStart => "SubagentStart",
+        HookEventName::SubagentStop => "SubagentStop",
         HookEventName::Stop => "Stop",
     }
 }
@@ -749,6 +751,8 @@ fn event_description(event_name: HookEventName) -> &'static str {
         HookEventName::PostCompact => "After context compaction",
         HookEventName::SessionStart => "When a new session starts",
         HookEventName::UserPromptSubmit => "When the user submits a prompt",
+        HookEventName::SubagentStart => "When a subagent is created",
+        HookEventName::SubagentStop => "Right before a subagent ends its turn",
         HookEventName::Stop => "Right before Codex ends its turn",
     }
 }
@@ -774,6 +778,7 @@ fn detail_source_value(hook: &HookMetadata) -> String {
         HookSource::System
         | HookSource::Mdm
         | HookSource::CloudRequirements
+        | HookSource::CloudManagedConfig
         | HookSource::LegacyManagedConfigFile
         | HookSource::LegacyManagedConfigMdm => config_source_label(hook.source).to_string(),
         _ => format!(
@@ -793,6 +798,7 @@ fn config_source_label(source: HookSource) -> &'static str {
         HookSource::SessionFlags => "Session flags",
         HookSource::Plugin => unreachable!("plugin hooks are handled by summary_source"),
         HookSource::CloudRequirements => "Admin config",
+        HookSource::CloudManagedConfig => "Cloud-managed config",
         HookSource::LegacyManagedConfigFile => "Admin config",
         HookSource::LegacyManagedConfigMdm => "Admin config",
         HookSource::Unknown => "Unknown source",

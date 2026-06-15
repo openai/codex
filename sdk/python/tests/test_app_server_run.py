@@ -145,8 +145,8 @@ def test_async_thread_run_uses_mock_responses(
     asyncio.run(scenario())
 
 
-def test_sync_run_result_uses_last_unknown_phase_message(tmp_path) -> None:
-    """RunResult should use the last unknown-phase agent message as final text."""
+def test_sync_turn_result_uses_last_unknown_phase_message(tmp_path) -> None:
+    """TurnResult should use the last unknown-phase agent message as final text."""
     with AppServerHarness(tmp_path) as harness:
         harness.responses.enqueue_sse(
             sse(
@@ -171,8 +171,8 @@ def test_sync_run_result_uses_last_unknown_phase_message(tmp_path) -> None:
     }
 
 
-def test_sync_run_result_preserves_empty_last_message(tmp_path) -> None:
-    """RunResult should preserve an empty final agent message instead of skipping it."""
+def test_sync_turn_result_preserves_empty_last_message(tmp_path) -> None:
+    """TurnResult should preserve an empty final agent message instead of skipping it."""
     with AppServerHarness(tmp_path) as harness:
         harness.responses.enqueue_sse(
             sse(
@@ -197,8 +197,8 @@ def test_sync_run_result_preserves_empty_last_message(tmp_path) -> None:
     }
 
 
-def test_sync_run_result_does_not_promote_commentary_only_to_final(tmp_path) -> None:
-    """RunResult final_response should stay unset when app-server marks only commentary."""
+def test_sync_turn_result_does_not_promote_commentary_only_to_final(tmp_path) -> None:
+    """TurnResult final_response should stay unset when app-server marks only commentary."""
     with AppServerHarness(tmp_path) as harness:
         harness.responses.enqueue_sse(
             sse(
@@ -226,8 +226,8 @@ def test_sync_run_result_does_not_promote_commentary_only_to_final(tmp_path) -> 
     }
 
 
-def test_async_run_result_uses_last_unknown_phase_message(tmp_path) -> None:
-    """Async RunResult should use the last unknown-phase agent message."""
+def test_async_turn_result_uses_last_unknown_phase_message(tmp_path) -> None:
+    """Async TurnResult should use the last unknown-phase agent message."""
 
     async def scenario() -> None:
         """Run one async result-mapping case against a pinned app-server."""
@@ -263,10 +263,10 @@ def test_async_run_result_uses_last_unknown_phase_message(tmp_path) -> None:
     asyncio.run(scenario())
 
 
-def test_async_run_result_does_not_promote_commentary_only_to_final(
+def test_async_turn_result_does_not_promote_commentary_only_to_final(
     tmp_path,
 ) -> None:
-    """Async RunResult final_response should stay unset for commentary-only output."""
+    """Async TurnResult final_response should stay unset for commentary-only output."""
 
     async def scenario() -> None:
         """Run one async commentary mapping case against a pinned app-server."""
@@ -318,7 +318,7 @@ def test_thread_run_raises_when_real_app_server_reports_failed_turn(tmp_path) ->
 
 
 def test_final_answer_phase_survives_real_app_server_mapping(tmp_path) -> None:
-    """RunResult should use the final-answer item emitted by app-server."""
+    """TurnResult should use the final-answer item emitted by app-server."""
     with AppServerHarness(tmp_path) as harness:
         harness.responses.enqueue_sse(
             sse(

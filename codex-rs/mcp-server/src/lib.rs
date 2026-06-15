@@ -96,10 +96,10 @@ pub async fn run_main(
     let environment_manager = Arc::new(
         EnvironmentManager::from_codex_home(
             config.codex_home.clone(),
-            ExecServerRuntimePaths::from_optional_paths(
+            Some(ExecServerRuntimePaths::from_optional_paths(
                 arg0_paths.codex_self_exe.clone(),
                 arg0_paths.codex_linux_sandbox_exe.clone(),
-            )?,
+            )?),
         )
         .await
         .map_err(std::io::Error::other)?,

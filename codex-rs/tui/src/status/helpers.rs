@@ -185,8 +185,6 @@ fn title_case(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::legacy_core::DEFAULT_AGENTS_MD_FILENAME;
-    use crate::legacy_core::LOCAL_AGENTS_MD_FILENAME;
     use crate::legacy_core::config::ConfigBuilder;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use pretty_assertions::assert_eq;
@@ -227,7 +225,7 @@ mod tests {
     async fn compose_agents_summary_includes_global_agents_path() {
         let codex_home = TempDir::new().expect("temp codex home");
         let cwd = TempDir::new().expect("temp cwd");
-        let global_agents_path = codex_home.path().join(DEFAULT_AGENTS_MD_FILENAME);
+        let global_agents_path = codex_home.path().join("global.md");
         let config = test_config(&codex_home, &cwd).await;
 
         assert_eq!(
@@ -240,7 +238,7 @@ mod tests {
     async fn compose_agents_summary_names_global_agents_override() {
         let codex_home = TempDir::new().expect("temp codex home");
         let cwd = TempDir::new().expect("temp cwd");
-        let override_path = codex_home.path().join(LOCAL_AGENTS_MD_FILENAME);
+        let override_path = codex_home.path().join("override.md");
         let config = test_config(&codex_home, &cwd).await;
 
         assert_eq!(
@@ -253,8 +251,8 @@ mod tests {
     async fn compose_agents_summary_orders_global_before_project_agents() {
         let codex_home = TempDir::new().expect("temp codex home");
         let cwd = TempDir::new().expect("temp cwd");
-        let global_agents_path = codex_home.path().join(DEFAULT_AGENTS_MD_FILENAME);
-        let project_agents_path = cwd.path().join(DEFAULT_AGENTS_MD_FILENAME);
+        let global_agents_path = codex_home.path().join("global.md");
+        let project_agents_path = cwd.path().join("project.md");
         let config = test_config(&codex_home, &cwd).await;
 
         let summary = compose_agents_summary(
@@ -270,7 +268,7 @@ mod tests {
             Some(format_directory_display(&global_agents_path, /*max_width*/ None).as_str())
         );
         let project_path = paths.next().expect("project agents path");
-        assert!(project_path.ends_with(DEFAULT_AGENTS_MD_FILENAME));
+        assert!(project_path.ends_with("project.md"));
         assert_eq!(paths.next(), None);
     }
 }

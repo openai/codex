@@ -104,16 +104,29 @@ impl ChatWidget {
             && self.has_queued_follow_up_messages()
             && self.bottom_pane.no_modal_or_popup_active()
         {
-            if let Some(user_message) = self.pop_latest_queued_user_message() {
-                self.restore_user_message_to_composer(user_message);
+            if let Some(composer) = self.pop_latest_queued_composer_state() {
+                self.restore_composer_state(composer);
                 self.refresh_pending_input_preview();
                 self.request_redraw();
             }
             return;
         }
 
-        if matches!(key_event.code, KeyCode::Esc)
-            && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+        const REVIEW_STEER_UNAVAILABLE_MESSAGE: &str = "Steer messages aren't supported during /review. Press Ctrl+C now to cancel the review.";
+
+        if self.chat_keymap.interrupt_turn.is_pressed(key_event)
+            && self.review.is_review_mode
+            && (!self.input_queue.pending_steers.is_empty()
+                || !self.input_queue.rejected_steers_queue.is_empty())
+            && self.bottom_pane.is_task_running()
+            && self.bottom_pane.no_modal_or_popup_active()
+            && !self.should_handle_vim_insert_escape(key_event)
+        {
+            self.add_warning_message(REVIEW_STEER_UNAVAILABLE_MESSAGE.to_string());
+            return;
+        }
+
+        if self.chat_keymap.interrupt_turn.is_pressed(key_event)
             && !self.input_queue.pending_steers.is_empty()
             && self.bottom_pane.is_task_running()
             && self.bottom_pane.no_modal_or_popup_active()
@@ -289,7 +302,7 @@ impl ChatWidget {
             /*initial_text*/ existing_name.unwrap_or_default().to_string(),
             /*context_label*/ None,
             Box::new(move |name: String| {
-                let Some(name) = crate::legacy_core::util::normalize_thread_name(&name) else {
+                let Some(name) = normalize_thread_name(&name) else {
                     tx.send(AppEvent::InsertHistoryCell(Box::new(
                         history_cell::new_error_event("Thread name cannot be empty.".to_string()),
                     )));
@@ -342,20 +355,10 @@ impl ChatWidget {
     /// pane. If cancellable work is active, Ctrl+C also submits `Op::Interrupt` after the shortcut
     /// is armed.
     ///
-    /// Active realtime conversations take precedence over bottom-pane Ctrl+C handling so the
-    /// first press always stops live voice, even when the composer contains the recording meter.
-    ///
     /// When the double-press quit shortcut is enabled, pressing the same shortcut again before
     /// expiry requests a shutdown-first quit.
     fn on_ctrl_c(&mut self) {
         let key = key_hint::ctrl(KeyCode::Char('c'));
-        if self.realtime_conversation.is_live() {
-            self.bottom_pane.clear_quit_shortcut_hint();
-            self.quit_shortcut_expires_at = None;
-            self.quit_shortcut_key = None;
-            self.stop_realtime_conversation_from_ui();
-            return;
-        }
         let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
         if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
             if DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
@@ -375,7 +378,8 @@ impl ChatWidget {
                 self.quit_shortcut_expires_at = None;
                 self.quit_shortcut_key = None;
                 self.bottom_pane.clear_quit_shortcut_hint();
-                self.submit_op(AppCommand::interrupt());
+                self.pause_active_goal_for_interrupt();
+                self.submit_op(AppCommand::interrupt_and_restore_prompt_if_no_output());
             } else {
                 self.request_quit_without_confirmation();
             }
@@ -392,7 +396,8 @@ impl ChatWidget {
         self.arm_quit_shortcut(key);
 
         if self.is_cancellable_work_active() {
-            self.submit_op(AppCommand::interrupt());
+            self.pause_active_goal_for_interrupt();
+            self.submit_op(AppCommand::interrupt_and_restore_prompt_if_no_output());
         }
     }
 
@@ -451,5 +456,25 @@ impl ChatWidget {
     // Review mode counts as cancellable work so Ctrl+C interrupts instead of quitting.
     fn is_cancellable_work_active(&self) -> bool {
         self.bottom_pane.is_task_running() || self.review.is_review_mode
+    }
+
+    fn pause_active_goal_for_interrupt(&self) {
+        if !self.turn_lifecycle.agent_turn_running {
+            return;
+        }
+        if !self
+            .current_goal_status
+            .as_ref()
+            .is_some_and(GoalStatusState::is_active)
+        {
+            return;
+        }
+        let Some(thread_id) = self.thread_id else {
+            return;
+        };
+        self.app_event_tx.send(AppEvent::SetThreadGoalStatus {
+            thread_id,
+            status: AppThreadGoalStatus::Paused,
+        });
     }
 }

@@ -14,6 +14,7 @@ pub struct FeedbackUploadParams {
     pub reason: Option<String>,
     #[ts(optional = nullable)]
     pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub include_logs: bool,
     #[ts(optional = nullable)]
     pub extra_log_files: Option<Vec<PathBuf>>,

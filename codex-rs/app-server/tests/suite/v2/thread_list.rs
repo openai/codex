@@ -1,5 +1,6 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
+use app_test_support::create_fake_parented_rollout_with_source;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_fake_rollout_with_source;
 use app_test_support::create_final_assistant_message_sse_response;
@@ -17,6 +18,7 @@ use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadSearchResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
@@ -33,6 +35,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_state::DirectionalThreadSpawnEdgeStatus;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use std::cmp::Reverse;
@@ -46,14 +49,14 @@ use uuid::Uuid;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-async fn init_mcp(codex_home: &Path) -> Result<McpProcess> {
-    let mut mcp = McpProcess::new(codex_home).await?;
+async fn init_mcp(codex_home: &Path) -> Result<TestAppServer> {
+    let mut mcp = TestAppServer::new(codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     Ok(mcp)
 }
 
 async fn list_threads(
-    mcp: &mut McpProcess,
+    mcp: &mut TestAppServer,
     cursor: Option<String>,
     limit: Option<u32>,
     providers: Option<Vec<String>>,
@@ -73,7 +76,7 @@ async fn list_threads(
 }
 
 async fn list_threads_with_sort(
-    mcp: &mut McpProcess,
+    mcp: &mut TestAppServer,
     cursor: Option<String>,
     limit: Option<u32>,
     providers: Option<Vec<String>>,
@@ -93,6 +96,7 @@ async fn list_threads_with_sort(
             cwd: None,
             use_state_db_only: false,
             search_term: None,
+            parent_thread_id: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -101,6 +105,37 @@ async fn list_threads_with_sort(
     )
     .await??;
     to_response::<ThreadListResponse>(resp)
+}
+
+async fn list_threads_for_parent(
+    mcp: &mut TestAppServer,
+    parent_thread_id: ThreadId,
+    cursor: Option<String>,
+    limit: u32,
+    model_providers: Option<Vec<String>>,
+    source_kinds: Option<Vec<ThreadSourceKind>>,
+) -> Result<ThreadListResponse> {
+    let request_id = mcp
+        .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            cursor,
+            limit: Some(limit),
+            sort_key: None,
+            sort_direction: None,
+            model_providers,
+            source_kinds,
+            archived: None,
+            cwd: None,
+            use_state_db_only: false,
+            search_term: None,
+            parent_thread_id: Some(parent_thread_id.to_string()),
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    to_response::<ThreadListResponse>(response)
 }
 
 fn create_fake_rollouts<F, G>(
@@ -226,6 +261,7 @@ async fn thread_list_reports_system_error_idle_flag_after_failed_turn() -> Resul
     let seed_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "seed history".to_string(),
                 text_elements: Vec::new(),
@@ -248,6 +284,7 @@ async fn thread_list_reports_system_error_idle_flag_after_failed_turn() -> Resul
     let failed_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "fail turn".to_string(),
                 text_elements: Vec::new(),
@@ -533,6 +570,7 @@ async fn thread_list_respects_cwd_filters() -> Result<()> {
             ])),
             use_state_db_only: false,
             search_term: None,
+            parent_thread_id: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -642,6 +680,7 @@ sqlite = true
             cwd: None,
             use_state_db_only: false,
             search_term: Some("needle".to_string()),
+            parent_thread_id: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -656,6 +695,161 @@ sqlite = true
     assert_eq!(next_cursor, None);
     let ids: Vec<_> = data.iter().map(|thread| thread.id.as_str()).collect();
     assert_eq!(ids, vec![newer_match, older_match]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_search_returns_content_matches() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let older_match = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T10-00-00",
+        "2025-01-02T10:00:00Z",
+        "match: needle",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let _non_match = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T11-00-00",
+        "2025-01-02T11:00:00Z",
+        "no hit here",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let newer_match = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T12-00-00",
+        "2025-01-02T12:00:00Z",
+        "mixed NEEDLE suffix",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    let request_id = mcp
+        .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            sort_direction: None,
+            source_kinds: None,
+            archived: None,
+            search_term: "needle".to_string(),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadSearchResponse {
+        data, next_cursor, ..
+    } = to_response::<ThreadSearchResponse>(resp)?;
+
+    assert_eq!(next_cursor, None);
+    let ids: Vec<_> = data
+        .iter()
+        .map(|result| result.thread.id.as_str())
+        .collect();
+    assert_eq!(ids, vec![newer_match, older_match]);
+    assert_eq!(data[0].snippet, "mixed NEEDLE suffix");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_search_matches_json_escaped_content() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let search_term = r#"quoted "needle" \ path"#;
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T10-00-00",
+        "2025-01-02T10:00:00Z",
+        search_term,
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    let request_id = mcp
+        .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            sort_direction: None,
+            source_kinds: None,
+            archived: None,
+            search_term: search_term.to_string(),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadSearchResponse { data, .. } = to_response::<ThreadSearchResponse>(resp)?;
+
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].thread.id, thread_id);
+    assert_eq!(data[0].snippet, search_term);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_search_filters_by_source_kind() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let cli_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T10-00-00",
+        "2025-02-01T10:00:00Z",
+        "shared needle",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let exec_id = create_fake_rollout_with_source(
+        codex_home.path(),
+        "2025-02-01T11-00-00",
+        "2025-02-01T11:00:00Z",
+        "shared needle",
+        Some("mock_provider"),
+        /*git_info*/ None,
+        CoreSessionSource::Exec,
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    let request_id = mcp
+        .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            sort_direction: None,
+            source_kinds: Some(vec![ThreadSourceKind::Exec]),
+            archived: None,
+            search_term: "needle".to_string(),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadSearchResponse { data, .. } = to_response::<ThreadSearchResponse>(resp)?;
+
+    let ids: Vec<_> = data
+        .iter()
+        .map(|result| result.thread.id.as_str())
+        .collect();
+    assert_eq!(ids, vec![exec_id.as_str()]);
+    assert_ne!(cli_id, exec_id);
 
     Ok(())
 }
@@ -703,6 +897,7 @@ sqlite = true
             cwd: None,
             use_state_db_only: false,
             search_term: None,
+            parent_thread_id: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -741,6 +936,7 @@ sqlite = true
             )),
             use_state_db_only: true,
             search_term: None,
+            parent_thread_id: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -770,6 +966,7 @@ sqlite = true
             )),
             use_state_db_only: false,
             search_term: None,
+            parent_thread_id: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -779,6 +976,162 @@ sqlite = true
     .await??;
     let scanned_response = to_response::<ThreadListResponse>(resp)?;
     assert_eq!(scanned_response.data.len(), 0);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_parent_filter_reads_direct_children_from_state_db() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+    let parent_id = ThreadId::new();
+    let older_child_id = ThreadId::new();
+    let newer_child_id = ThreadId::new();
+    let grandchild_id = ThreadId::new();
+    let state_db = codex_state::StateRuntime::init(
+        codex_home.path().to_path_buf(),
+        "mock_provider".to_string(),
+    )
+    .await?;
+    for (thread_id, created_at, source, model_provider) in [
+        (
+            older_child_id,
+            "2025-02-01T10:00:00Z",
+            CoreSessionSource::SubAgent(SubAgentSource::Other("agent_job:job-1".to_string())),
+            "other_provider",
+        ),
+        (
+            newer_child_id,
+            "2025-02-01T11:00:00Z",
+            CoreSessionSource::Cli,
+            "mock_provider",
+        ),
+        (
+            grandchild_id,
+            "2025-02-01T12:00:00Z",
+            CoreSessionSource::SubAgent(SubAgentSource::Other("agent_job:job-2".to_string())),
+            "mock_provider",
+        ),
+    ] {
+        let created_at = DateTime::parse_from_rfc3339(created_at)?.with_timezone(&Utc);
+        let mut builder = codex_state::ThreadMetadataBuilder::new(
+            thread_id,
+            codex_home.path().join(format!("{thread_id}.jsonl")),
+            created_at,
+            source,
+        );
+        builder.model_provider = Some(model_provider.to_string());
+        builder.cwd = codex_home.path().to_path_buf();
+        builder.cli_version = Some("0.0.0".to_string());
+        let mut metadata = builder.build(model_provider);
+        metadata.preview = Some("child thread".to_string());
+        metadata.first_user_message = metadata.preview.clone();
+        state_db.upsert_thread(&metadata).await?;
+    }
+    for (parent_thread_id, child_thread_id) in [
+        (parent_id, older_child_id),
+        (parent_id, newer_child_id),
+        (newer_child_id, grandchild_id),
+    ] {
+        state_db
+            .upsert_thread_spawn_edge(
+                parent_thread_id,
+                child_thread_id,
+                DirectionalThreadSpawnEdgeStatus::Open,
+            )
+            .await?;
+    }
+    state_db
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await?;
+    let mut mcp = init_mcp(codex_home.path()).await?;
+
+    let first_page = list_threads_for_parent(
+        &mut mcp, parent_id, /*cursor*/ None, /*limit*/ 1, /*model_providers*/ None,
+        /*source_kinds*/ None,
+    )
+    .await?;
+    let second_page = list_threads_for_parent(
+        &mut mcp,
+        parent_id,
+        first_page.next_cursor.clone(),
+        /*limit*/ 1,
+        /*model_providers*/ None,
+        /*source_kinds*/ None,
+    )
+    .await?;
+
+    assert_eq!(
+        first_page
+            .data
+            .iter()
+            .map(|thread| thread.id.clone())
+            .collect::<Vec<_>>(),
+        vec![newer_child_id.to_string()]
+    );
+    assert_eq!(
+        second_page
+            .data
+            .iter()
+            .map(|thread| thread.id.clone())
+            .collect::<Vec<_>>(),
+        vec![older_child_id.to_string()]
+    );
+    assert_eq!(second_page.next_cursor, None);
+    let expected_parent_id = parent_id.to_string();
+    assert!(
+        first_page
+            .data
+            .iter()
+            .chain(&second_page.data)
+            .all(|thread| thread.parent_thread_id.as_deref() == Some(expected_parent_id.as_str()))
+    );
+    let interactive_only = list_threads_for_parent(
+        &mut mcp,
+        parent_id,
+        /*cursor*/ None,
+        /*limit*/ 10,
+        /*model_providers*/ None,
+        /*source_kinds*/ Some(Vec::new()),
+    )
+    .await?;
+    assert_eq!(
+        interactive_only
+            .data
+            .iter()
+            .map(|thread| thread.id.clone())
+            .collect::<Vec<_>>(),
+        vec![newer_child_id.to_string()]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_parent_filter_rejects_malformed_thread_id() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    let request_id = mcp
+        .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            sort_direction: None,
+            model_providers: None,
+            source_kinds: None,
+            archived: None,
+            cwd: None,
+            use_state_db_only: false,
+            search_term: None,
+            parent_thread_id: Some("not-a-thread-id".to_string()),
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(error.error.code, -32600);
 
     Ok(())
 }
@@ -891,7 +1244,7 @@ async fn thread_list_filters_by_subagent_variant() -> Result<()> {
 
     let parent_thread_id = ThreadId::from_string(&Uuid::new_v4().to_string())?;
 
-    let review_id = create_fake_rollout_with_source(
+    let review_id = create_fake_parented_rollout_with_source(
         codex_home.path(),
         "2025-02-02T09-00-00",
         "2025-02-02T09:00:00Z",
@@ -899,6 +1252,7 @@ async fn thread_list_filters_by_subagent_variant() -> Result<()> {
         Some("mock_provider"),
         /*git_info*/ None,
         CoreSessionSource::SubAgent(SubAgentSource::Review),
+        parent_thread_id,
     )?;
     let compact_id = create_fake_rollout_with_source(
         codex_home.path(),
@@ -951,6 +1305,10 @@ async fn thread_list_filters_by_subagent_variant() -> Result<()> {
         .map(|thread| thread.id.as_str())
         .collect();
     assert_eq!(review_ids, vec![review_id.as_str()]);
+    assert_eq!(
+        review.data[0].parent_thread_id,
+        Some(parent_thread_id.to_string())
+    );
 
     let compact = list_threads(
         &mut mcp,
@@ -1465,6 +1823,7 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
                 cwd: None,
                 use_state_db_only: false,
                 search_term: None,
+                parent_thread_id: None,
             })
             .await?;
         let resp: JSONRPCResponse = timeout(
@@ -1507,6 +1866,7 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
                 cwd: None,
                 use_state_db_only: false,
                 search_term: None,
+                parent_thread_id: None,
             })
             .await?;
         let resp: JSONRPCResponse = timeout(
@@ -1745,6 +2105,7 @@ async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
             cwd: None,
             use_state_db_only: false,
             search_term: None,
+            parent_thread_id: None,
         })
         .await?;
     let error: JSONRPCError = timeout(

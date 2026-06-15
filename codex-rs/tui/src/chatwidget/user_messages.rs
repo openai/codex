@@ -6,6 +6,7 @@
 //! suppress duplicate rows for pending steers.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::ops::Deref;
 use std::path::PathBuf;
@@ -25,16 +26,16 @@ use super::ChatWidget;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct UserMessage {
-    pub(super) text: String,
-    pub(super) local_images: Vec<LocalImageAttachment>,
+    pub(crate) text: String,
+    pub(crate) local_images: Vec<LocalImageAttachment>,
     /// Remote image attachments represented as URLs (for example data URLs)
     /// provided by app-server clients.
     ///
     /// Unlike `local_images`, these are not created by TUI image attach/paste
     /// flows. The TUI can restore and remove them while editing/backtracking.
-    pub(super) remote_image_urls: Vec<String>,
-    pub(super) text_elements: Vec<TextElement>,
-    pub(super) mention_bindings: Vec<MentionBinding>,
+    pub(crate) remote_image_urls: Vec<String>,
+    pub(crate) text_elements: Vec<TextElement>,
+    pub(crate) mention_bindings: Vec<MentionBinding>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -59,6 +60,7 @@ pub(super) enum ShellEscapePolicy {
 pub(super) struct QueuedUserMessage {
     pub(super) user_message: UserMessage,
     pub(super) action: QueuedInputAction,
+    pub(super) pending_pastes: Vec<(String, String)>,
 }
 
 impl QueuedUserMessage {
@@ -66,6 +68,7 @@ impl QueuedUserMessage {
         Self {
             user_message,
             action,
+            pending_pastes: Vec::new(),
         }
     }
 
@@ -274,6 +277,34 @@ fn remap_placeholders_in_text(
     }
 
     (rebuilt, rebuilt_elements)
+}
+
+pub(super) fn remap_colliding_paste_placeholders(
+    mut message: UserMessage,
+    mut pending_pastes: Vec<(String, String)>,
+    used: &mut HashSet<String>,
+) -> (UserMessage, Vec<(String, String)>) {
+    let mut mapping = HashMap::new();
+    for (placeholder, text) in &mut pending_pastes {
+        if used.insert(placeholder.clone()) {
+            continue;
+        }
+
+        let base = format!("[Pasted Content {} chars]", text.chars().count());
+        let mut suffix = 2;
+        let replacement = loop {
+            let candidate = format!("{base} #{suffix}");
+            if used.insert(candidate.clone()) {
+                break candidate;
+            }
+            suffix += 1;
+        };
+        mapping.insert(placeholder.clone(), replacement.clone());
+        *placeholder = replacement;
+    }
+    (message.text, message.text_elements) =
+        remap_placeholders_in_text(message.text, message.text_elements, &mapping);
+    (message, pending_pastes)
 }
 
 // When merging multiple queued drafts (e.g., after interrupt), each draft starts numbering
@@ -578,6 +609,7 @@ impl ChatWidget {
                 UserInput::Text {
                     text,
                     text_elements: current_text_elements,
+                    ..
                 } => append_text_with_rebased_elements(
                     &mut message,
                     &mut text_elements,
@@ -593,8 +625,8 @@ impl ChatWidget {
                         )
                     }),
                 ),
-                UserInput::Image { url } => remote_image_urls.push(url.clone()),
-                UserInput::LocalImage { path } => local_images.push(path.clone()),
+                UserInput::Image { url, .. } => remote_image_urls.push(url.clone()),
+                UserInput::LocalImage { path, .. } => local_images.push(path.clone()),
                 UserInput::Skill { .. } | UserInput::Mention { .. } => {}
             }
         }

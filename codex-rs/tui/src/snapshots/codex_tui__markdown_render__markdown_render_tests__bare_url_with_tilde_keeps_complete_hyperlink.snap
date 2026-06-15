@@ -1,0 +1,15 @@
+---
+source: tui/src/markdown_render_tests.rs
+expression: rendered
+---
+[
+    (
+        "https://www.cs.tufts.edu/~nr/cs257/archive/olin-shivers/dissertation.pdf",
+        [
+            (
+                0..72,
+                "https://www.cs.tufts.edu/~nr/cs257/archive/olin-shivers/dissertation.pdf",
+            ),
+        ],
+    ),
+]

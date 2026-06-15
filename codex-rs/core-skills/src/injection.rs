@@ -13,6 +13,7 @@ use codex_exec_server::LOCAL_FS;
 use codex_otel::SessionTelemetry;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
 
 #[derive(Debug, Default)]
@@ -26,6 +27,32 @@ pub struct SkillInjection {
     pub name: String,
     pub path: String,
     pub contents: String,
+}
+
+/// Host skill prompts that have already been injected by an extension for this
+/// turn.
+///
+/// Core uses this to keep the legacy skill-injection path from sending the same
+/// host `SKILL.md` body again while the skills extension is being wired in.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InjectedHostSkillPrompts {
+    paths: HashSet<String>,
+}
+
+impl InjectedHostSkillPrompts {
+    pub fn insert_path(&mut self, path: impl Into<String>) {
+        let path = path.into();
+        self.paths.insert(normalize_host_skill_path(&path));
+        self.paths.insert(path);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty()
+    }
+
+    pub fn contains_path(&self, path: &str) -> bool {
+        self.paths.contains(path) || self.paths.contains(&normalize_host_skill_path(path))
+    }
 }
 
 pub async fn build_skill_injections(
@@ -49,10 +76,8 @@ pub async fn build_skill_injections(
         let fs = loaded_skills
             .and_then(|outcome| outcome.file_system_for_skill(skill))
             .unwrap_or_else(|| Arc::clone(&LOCAL_FS));
-        match fs
-            .read_file_text(&skill.path_to_skills_md, /*sandbox*/ None)
-            .await
-        {
+        let path = PathUri::from_abs_path(&skill.path_to_skills_md);
+        match fs.read_file_text(&path, /*sandbox*/ None).await {
             Ok(contents) => {
                 emit_skill_injected_metric(otel, skill, "ok");
                 invocations.push(SkillInvocation {
@@ -83,6 +108,10 @@ pub async fn build_skill_injections(
     analytics_client.track_skill_invocations(tracking, invocations);
 
     result
+}
+
+fn normalize_host_skill_path(path: &str) -> String {
+    normalize_skill_path(path).replace('\\', "/")
 }
 
 fn emit_skill_injected_metric(
@@ -132,7 +161,7 @@ pub fn collect_explicit_skill_mentions(
     let mut blocked_plain_names: HashSet<String> = HashSet::new();
 
     for input in inputs {
-        if let UserInput::Skill { name, path } = input {
+        if let UserInput::Skill { name, path, .. } = input {
             blocked_plain_names.insert(name.clone());
             let Ok(path) = AbsolutePathBuf::relative_to_current_dir(path) else {
                 continue;

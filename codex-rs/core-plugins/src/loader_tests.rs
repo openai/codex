@@ -1,5 +1,6 @@
 use super::*;
 use crate::manifest::load_plugin_manifest;
+use crate::test_support::write_file;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigRequirements;
@@ -65,80 +66,156 @@ fn configured_plugins_from_stack_merges_user_layers() {
     );
 }
 
-#[test]
-fn plugin_mcp_file_supports_mcp_servers_object_format() {
-    let parsed = serde_json::from_str::<PluginMcpFile>(
+#[tokio::test]
+async fn hooks_only_scope_shares_plugin_resolution_without_loading_other_capabilities() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let plugin_root = temp_dir.path().join("plugins/cache/test/valid/local");
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"valid"}"#,
+    );
+    write_file(
+        &plugin_root.join("skills/example/SKILL.md"),
+        "---\nname: example\ndescription: example skill\n---\n",
+    );
+    write_file(
+        &plugin_root.join(".mcp.json"),
+        r#"{"mcpServers":{"example":{"command":"echo"}}}"#,
+    );
+    write_file(
+        &plugin_root.join(".app.json"),
+        r#"{"apps":{"example":{"id":"connector_example"}}}"#,
+    );
+    write_file(
+        &plugin_root.join("hooks/hooks.json"),
         r#"{
-  "mcpServers": {
-    "sample": {
-      "command": "sample-mcp"
-    }
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo startup"
+          }
+        ]
+      }
+    ]
   }
 }"#,
-    )
-    .expect("parse wrapped plugin mcp config")
-    .into_mcp_servers();
-
-    assert_eq!(
-        parsed,
-        HashMap::from([(
-            "sample".to_string(),
-            serde_json::json!({
-                "command": "sample-mcp"
-            }),
-        )])
     );
-}
 
-#[test]
-fn plugin_mcp_file_supports_mcp_servers_object_format_with_metadata() {
-    let parsed = serde_json::from_str::<PluginMcpFile>(
-        r#"{
-  "$schema": "https://example.com/plugin-mcp.schema.json",
-  "mcpServers": {
-    "sample": {
-      "command": "sample-mcp"
-    }
-  }
-}"#,
-    )
-    .expect("parse plugin mcp config with metadata")
-    .into_mcp_servers();
-
-    assert_eq!(
-        parsed,
-        HashMap::from([(
-            "sample".to_string(),
-            serde_json::json!({
-                "command": "sample-mcp"
-            }),
-        )])
+    let disabled_root = temp_dir.path().join("plugins/cache/test/disabled/local");
+    write_file(
+        &disabled_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"disabled"}"#,
     );
-}
-
-#[test]
-fn plugin_mcp_file_supports_top_level_server_map_format() {
-    let parsed = serde_json::from_str::<PluginMcpFile>(
-        r#"{
-  "linear": {
-    "type": "http",
-    "url": "https://mcp.linear.app/mcp"
-  }
-}"#,
-    )
-    .expect("parse flat plugin mcp config")
-    .into_mcp_servers();
-
-    assert_eq!(
-        parsed,
-        HashMap::from([(
-            "linear".to_string(),
-            serde_json::json!({
-                "type": "http",
-                "url": "https://mcp.linear.app/mcp"
-            }),
-        )])
+    write_file(
+        &disabled_root.join("hooks/hooks.json"),
+        r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo disabled"}]}]}}"#,
     );
+
+    let malformed_root = temp_dir.path().join("plugins/cache/test/malformed/local");
+    write_file(
+        &malformed_root.join(".codex-plugin/plugin.json"),
+        "not valid json",
+    );
+
+    let warning_root = temp_dir.path().join("plugins/cache/test/warning/local");
+    write_file(
+        &warning_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"warning"}"#,
+    );
+    write_file(&warning_root.join("hooks/hooks.json"), "not valid json");
+
+    let stack = ConfigLayerStack::new(
+        vec![user_layer(
+            user_config_path(&temp_dir, "config.toml"),
+            r#"
+[plugins."valid@test"]
+enabled = true
+
+[plugins."disabled@test"]
+enabled = false
+
+[plugins.invalid]
+enabled = true
+
+[plugins."malformed@test"]
+enabled = true
+
+[plugins."missing@test"]
+enabled = true
+
+[plugins."warning@test"]
+enabled = true
+"#,
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config layer stack");
+    let store = PluginStore::new(temp_dir.path().to_path_buf());
+
+    let full = load_plugins_from_layer_stack(
+        &stack,
+        HashMap::new(),
+        &store,
+        Some(Product::Codex),
+        /*prefer_remote_curated_conflicts*/ false,
+    )
+    .await;
+    let hooks_only = load_plugins_from_layer_stack_with_scope(
+        &stack,
+        HashMap::new(),
+        &store,
+        /*prefer_remote_curated_conflicts*/ false,
+        PluginLoadScope::HooksOnly,
+    )
+    .await;
+
+    let validation_state = |outcome: &PluginLoadOutcome<McpServerConfig>| {
+        outcome
+            .plugins()
+            .iter()
+            .map(|plugin| {
+                (
+                    plugin.config_name.clone(),
+                    plugin.enabled,
+                    plugin.root.clone(),
+                    plugin.error.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(validation_state(&hooks_only), validation_state(&full));
+    assert_eq!(
+        hooks_only.effective_plugin_hook_sources(),
+        full.effective_plugin_hook_sources()
+    );
+    assert_eq!(
+        hooks_only.effective_plugin_hook_warnings(),
+        full.effective_plugin_hook_warnings()
+    );
+
+    let full_valid = full
+        .plugins()
+        .iter()
+        .find(|plugin| plugin.config_name == "valid@test")
+        .expect("full load should include valid plugin");
+    assert!(full_valid.manifest_name.is_some());
+    assert!(!full_valid.skill_roots.is_empty());
+    assert!(!full_valid.mcp_servers.is_empty());
+    assert!(!full_valid.apps.is_empty());
+
+    let hooks_only_valid = hooks_only
+        .plugins()
+        .iter()
+        .find(|plugin| plugin.config_name == "valid@test")
+        .expect("hooks-only load should include valid plugin");
+    assert_eq!(hooks_only_valid.manifest_name, None);
+    assert!(hooks_only_valid.skill_roots.is_empty());
+    assert!(hooks_only_valid.mcp_servers.is_empty());
+    assert!(hooks_only_valid.apps.is_empty());
 }
 
 #[test]

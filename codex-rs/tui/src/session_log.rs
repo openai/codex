@@ -30,6 +30,10 @@ impl SessionLogger {
         let mut opts = OpenOptions::new();
         opts.create(true).truncate(true).write(true);
 
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
@@ -88,10 +92,7 @@ pub(crate) fn maybe_init(config: &Config) {
     let path = if let Ok(path) = std::env::var("CODEX_TUI_SESSION_LOG_PATH") {
         PathBuf::from(path)
     } else {
-        let mut p = match crate::legacy_core::config::log_dir(config) {
-            Ok(dir) => dir,
-            Err(_) => std::env::temp_dir(),
-        };
+        let mut p = config.log_dir.clone();
         let filename = format!(
             "session-{}.jsonl",
             chrono::Utc::now().format("%Y%m%dT%H%M%SZ")

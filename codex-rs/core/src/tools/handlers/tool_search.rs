@@ -2,11 +2,10 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::ToolSearchOutput;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::tool_search_spec::create_tool_search_tool;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::registry::ToolHandler;
-use crate::tools::tool_search_entry::ToolSearchEntry;
-use crate::tools::tool_search_entry::ToolSearchInfo;
 use bm25::Document;
 use bm25::Language;
 use bm25::SearchEngine;
@@ -15,6 +14,8 @@ use codex_tools::LoadableToolSpec;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolName;
+use codex_tools::ToolSearchEntry;
+use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
 use codex_tools::coalesce_loadable_tool_specs;
@@ -52,29 +53,29 @@ impl ToolSearchHandler {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ToolSearchHandler {
-    type Output = ToolSearchOutput;
-
     fn tool_name(&self) -> ToolName {
         ToolName::plain(TOOL_SEARCH_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_tool_search_tool(
-            &self.search_source_infos,
-            TOOL_SEARCH_DEFAULT_LIMIT,
-        ))
+    fn spec(&self) -> ToolSpec {
+        create_tool_search_tool(&self.search_source_infos, TOOL_SEARCH_DEFAULT_LIMIT)
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
         true
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl ToolSearchHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
-    ) -> Result<ToolSearchOutput, FunctionCallError> {
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation { payload, .. } = invocation;
 
         let args = match payload {
@@ -101,16 +102,16 @@ impl ToolExecutor<ToolInvocation> for ToolSearchHandler {
         }
 
         if self.entries.is_empty() {
-            return Ok(ToolSearchOutput { tools: Vec::new() });
+            return Ok(boxed_tool_output(ToolSearchOutput { tools: Vec::new() }));
         }
 
         let tools = self.search(query, limit)?;
 
-        Ok(ToolSearchOutput { tools })
+        Ok(boxed_tool_output(ToolSearchOutput { tools }))
     }
 }
 
-impl ToolHandler for ToolSearchHandler {}
+impl CoreToolRuntime for ToolSearchHandler {}
 
 impl ToolSearchHandler {
     fn search(
@@ -143,7 +144,8 @@ mod tests {
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::McpHandler;
     use codex_mcp::ToolInfo;
-    use codex_protocol::dynamic_tools::DynamicToolSpec;
+    use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+    use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
     use codex_tools::ResponsesApiNamespace;
     use codex_tools::ResponsesApiNamespaceTool;
     use codex_tools::ResponsesApiTool;
@@ -153,8 +155,12 @@ mod tests {
 
     #[test]
     fn mixed_search_results_coalesce_mcp_namespaces() {
-        let dynamic_tools = [DynamicToolSpec {
-            namespace: Some("codex_app".to_string()),
+        let dynamic_namespace = DynamicToolNamespaceSpec {
+            name: "codex_app".to_string(),
+            description: "Tools in the codex_app namespace.".to_string(),
+            tools: Vec::new(),
+        };
+        let dynamic_tools = [DynamicToolFunctionSpec {
             name: "automation_update".to_string(),
             description: "Create, update, view, or delete recurring automations.".to_string(),
             input_schema: serde_json::json!({
@@ -175,12 +181,13 @@ mod tests {
             .iter()
             .map(|tool| {
                 McpHandler::new(tool.clone())
+                    .expect("MCP tool should convert")
                     .search_info()
                     .expect("MCP handler should return search info")
             })
             .collect::<Vec<_>>();
         search_infos.extend(dynamic_tools.iter().map(|tool| {
-            DynamicToolHandler::new(tool)
+            DynamicToolHandler::new_in_namespace(&dynamic_namespace, tool)
                 .expect("dynamic tool should convert")
                 .search_info()
                 .expect("dynamic handler should return search info")
@@ -200,8 +207,8 @@ mod tests {
             tools,
             vec![
                 LoadableToolSpec::Namespace(ResponsesApiNamespace {
-                    name: "mcp__calendar__".to_string(),
-                    description: "Tools in the mcp__calendar__ namespace.".to_string(),
+                    name: "mcp__calendar".to_string(),
+                    description: "Tools in the mcp__calendar namespace.".to_string(),
                     tools: vec![
                         ResponsesApiNamespaceTool::Function(ResponsesApiTool {
                             name: "create_event".to_string(),
@@ -259,23 +266,17 @@ mod tests {
             supports_parallel_tool_calls: false,
             server_origin: None,
             callable_name: tool_name.to_string(),
-            callable_namespace: format!("mcp__{server_name}__"),
+            callable_namespace: format!("mcp__{server_name}"),
             namespace_description: None,
-            tool: Tool {
-                name: tool_name.to_string().into(),
-                title: None,
-                description: Some(format!("{description_prefix} desktop tool").into()),
-                input_schema: Arc::new(rmcp::model::object(serde_json::json!({
+            tool: Tool::new(
+                tool_name.to_string(),
+                format!("{description_prefix} desktop tool"),
+                Arc::new(rmcp::model::object(serde_json::json!({
                     "type": "object",
                     "properties": {},
                     "additionalProperties": false,
                 }))),
-                output_schema: None,
-                annotations: None,
-                execution: None,
-                icons: None,
-                meta: None,
-            },
+            ),
             connector_id: None,
             connector_name: None,
             plugin_display_names: Vec::new(),

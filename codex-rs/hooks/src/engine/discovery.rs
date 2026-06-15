@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -69,6 +70,7 @@ pub(crate) fn discover_handlers(
     let mut hook_entries = Vec::new();
     let mut warnings = plugin_hook_load_warnings;
     let mut display_order = 0_i64;
+    let mut visited_json_hook_folders = HashSet::new();
     let hook_states = hook_states_from_stack(config_layer_stack);
     let policy = HookDiscoveryPolicy {
         allow_managed_hooks_only: config_layer_stack.is_some_and(|config_layer_stack| {
@@ -111,7 +113,12 @@ pub(crate) fn discover_handlers(
             if !policy.allows(&policy_source) {
                 continue;
             }
-            let json_hooks = load_hooks_json(layer.hooks_config_folder().as_deref(), &mut warnings);
+            let json_hooks = match layer.hooks_config_folder() {
+                Some(config_folder) if visited_json_hook_folders.insert(config_folder.clone()) => {
+                    load_hooks_json(Some(config_folder.as_path()), &mut warnings)
+                }
+                _ => None,
+            };
             let toml_hooks = load_toml_hooks_from_layer(layer, &mut warnings);
 
             if let (Some((json_source_path, json_events)), Some((toml_source_path, toml_events))) =
@@ -274,8 +281,15 @@ fn fallback_managed_hooks_source_path(
         Some(RequirementSource::MdmManagedPreferences { domain, key }) => {
             synthetic_layer_path(&format!("<mdm:{domain}:{key}>/requirements.toml"))
         }
-        Some(RequirementSource::CloudRequirements) => {
-            synthetic_layer_path("<cloud-requirements>/requirements.toml")
+        Some(RequirementSource::Composite { .. }) => {
+            synthetic_layer_path("<requirements-composition>/requirements.toml")
+        }
+        Some(RequirementSource::EnterpriseManaged { id, name }) => {
+            let name = escape_xml_text(name);
+            let id = escape_xml_text(id);
+            synthetic_layer_path(&format!(
+                "<enterprise-managed:{name}:{id}>/requirements.toml"
+            ))
         }
         Some(RequirementSource::LegacyManagedConfigTomlFromMdm) => {
             synthetic_layer_path("<legacy-managed-config.toml-mdm>/managed_config.toml")
@@ -361,6 +375,9 @@ fn config_toml_source_path(layer: &ConfigLayerEntry) -> AbsolutePathBuf {
         ConfigLayerSource::Mdm { domain, key } => {
             synthetic_layer_path(&format!("<mdm:{domain}:{key}>/{CONFIG_TOML_FILE}"))
         }
+        ConfigLayerSource::EnterpriseManaged { id, name } => synthetic_layer_path(&format!(
+            "<enterprise-managed:{name}:{id}>/{CONFIG_TOML_FILE}"
+        )),
         ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {
             synthetic_layer_path("<legacy-managed-config.toml-mdm>/managed_config.toml")
         }
@@ -378,6 +395,21 @@ fn synthetic_layer_path(path: &str) -> AbsolutePathBuf {
     {
         AbsolutePathBuf::resolve_path_against_base(path, "/")
     }
+}
+
+fn escape_xml_text(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 fn append_hook_events(
@@ -586,6 +618,7 @@ fn hook_metadata_for_config_layer_source(source: &ConfigLayerSource) -> (HookSou
         ConfigLayerSource::User { .. } => (HookSource::User, false),
         ConfigLayerSource::Project { .. } => (HookSource::Project, false),
         ConfigLayerSource::Mdm { .. } => (HookSource::Mdm, true),
+        ConfigLayerSource::EnterpriseManaged { .. } => (HookSource::CloudManagedConfig, true),
         ConfigLayerSource::SessionFlags => (HookSource::SessionFlags, false),
         ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => {
             (HookSource::LegacyManagedConfigFile, true)
@@ -606,7 +639,14 @@ fn hook_source_for_requirement_source(source: Option<&RequirementSource>) -> Hoo
         Some(RequirementSource::LegacyManagedConfigTomlFromMdm) => {
             HookSource::LegacyManagedConfigMdm
         }
-        Some(RequirementSource::CloudRequirements) => HookSource::CloudRequirements,
+        Some(RequirementSource::Composite { sources }) => {
+            // Requirements hook composition preserves contributing sources in
+            // priority order, but discovery only carries one source for the
+            // whole merged hooks field. Use the primary contributor as the best
+            // available coarse attribution.
+            hook_source_for_requirement_source(sources.first())
+        }
+        Some(RequirementSource::EnterpriseManaged { .. }) => HookSource::CloudRequirements,
         Some(RequirementSource::Unknown) | None => HookSource::Unknown,
     }
 }
@@ -616,6 +656,7 @@ mod tests {
     use codex_config::ConfigLayerEntry;
     use codex_config::ConfigLayerSource;
     use codex_config::HookEventsToml;
+    use codex_config::RequirementSource;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookSource;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -670,6 +711,41 @@ mod tests {
             env: std::collections::HashMap::new(),
             plugin_id: None,
         }
+    }
+
+    #[test]
+    fn composite_requirement_hook_source_uses_primary_source() {
+        let source = RequirementSource::Composite {
+            sources: vec![
+                RequirementSource::SystemRequirementsToml {
+                    file: test_path_buf("/etc/codex/requirements.toml").abs(),
+                },
+                RequirementSource::EnterpriseManaged {
+                    id: "layer-1".to_string(),
+                    name: "Engineering".to_string(),
+                },
+            ],
+        };
+
+        assert_eq!(
+            super::hook_source_for_requirement_source(Some(&source)),
+            HookSource::System
+        );
+    }
+
+    #[test]
+    fn enterprise_managed_synthetic_path_escapes_display_fields() {
+        let source = RequirementSource::EnterpriseManaged {
+            id: "id<&>".to_string(),
+            name: "Name <Admin> & \"Ops\"".to_string(),
+        };
+
+        let source_path = super::fallback_managed_hooks_source_path(Some(&source));
+        let source_path = source_path.display().to_string();
+
+        assert!(source_path.contains("Name &lt;Admin&gt; &amp; &quot;Ops&quot;"));
+        assert!(source_path.contains("id&lt;&amp;&gt;"));
+        assert!(!source_path.contains("Name <Admin>"));
     }
 
     fn command_group(matcher: Option<&str>) -> MatcherGroup {
@@ -989,6 +1065,13 @@ mod tests {
                 key: "config".to_string(),
             }),
             (HookSource::Mdm, true),
+        );
+        assert_eq!(
+            super::hook_metadata_for_config_layer_source(&ConfigLayerSource::EnterpriseManaged {
+                id: "cfg_123".to_string(),
+                name: "Base policy".to_string(),
+            }),
+            (HookSource::CloudManagedConfig, true),
         );
         assert_eq!(
             super::hook_metadata_for_config_layer_source(&ConfigLayerSource::SessionFlags),

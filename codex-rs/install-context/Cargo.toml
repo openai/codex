@@ -13,6 +13,7 @@ doctest = false
 workspace = true
 
 [dependencies]
+codex-utils-absolute-path = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 
 [dev-dependencies]

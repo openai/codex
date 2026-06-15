@@ -12,6 +12,7 @@ use super::seatbelt_regex_for_unreadable_glob;
 use super::unix_socket_dir_params;
 use super::unix_socket_policy;
 use codex_network_proxy::ConfigReloader;
+use codex_network_proxy::ConfigReloaderFuture;
 use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkProxy;
@@ -81,18 +82,17 @@ fn seatbelt_protected_metadata_name_requirements(root: &Path) -> String {
 
 struct TestConfigReloader;
 
-#[async_trait::async_trait]
 impl ConfigReloader for TestConfigReloader {
     fn source_label(&self) -> String {
         "seatbelt test config".to_string()
     }
 
-    async fn maybe_reload(&self) -> anyhow::Result<Option<ConfigState>> {
-        Ok(None)
+    fn maybe_reload(&self) -> ConfigReloaderFuture<'_, Option<ConfigState>> {
+        Box::pin(async { Ok(None) })
     }
 
-    async fn reload_now(&self) -> anyhow::Result<ConfigState> {
-        Err(anyhow::anyhow!("seatbelt test config cannot reload"))
+    fn reload_now(&self) -> ConfigReloaderFuture<'_, ConfigState> {
+        Box::pin(async { Err(anyhow::anyhow!("seatbelt test config cannot reload")) })
     }
 }
 
@@ -166,8 +166,8 @@ fn dynamic_network_policy_allows_tls_without_darwin_user_cache_write() {
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         },
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs::default(),
@@ -195,7 +195,7 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path { path: unreadable },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
 
@@ -267,7 +267,7 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path { path: unreadable },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
 
@@ -372,7 +372,7 @@ fn unreadable_glob_policy_includes_canonicalized_static_prefix() {
     let mut policy = FileSystemSandboxPolicy::default();
     policy.entries.push(FileSystemSandboxEntry {
         path: FileSystemPath::GlobPattern { pattern },
-        access: FileSystemAccessMode::None,
+        access: FileSystemAccessMode::Deny,
     });
 
     let seatbelt_policy = build_seatbelt_unreadable_glob_policy(&policy, temp_dir.path());
@@ -439,8 +439,8 @@ fn dynamic_network_policy_preserves_restricted_policy_when_proxy_config_without_
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         },
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs {
@@ -475,8 +475,8 @@ fn dynamic_network_policy_blocks_dns_when_local_binding_has_no_proxy_ports() {
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         },
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs {
@@ -503,8 +503,8 @@ fn dynamic_network_policy_preserves_restricted_policy_for_managed_network_withou
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         },
         /*enforce_managed_network*/ true,
         &ProxyPolicyInputs {
@@ -793,8 +793,8 @@ fn create_seatbelt_args_full_network_with_proxy_is_still_proxy_only() {
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         },
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs {

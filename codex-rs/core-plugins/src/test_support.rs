@@ -3,7 +3,6 @@ use std::path::Path;
 
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::PluginsConfigInput;
-use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_config::loader::load_config_layers_state;
@@ -89,10 +88,6 @@ pub(crate) fn write_openai_curated_marketplace(root: &Path, plugin_names: &[&str
     }
 }
 
-pub(crate) fn write_curated_plugin_sha(codex_home: &Path) {
-    write_curated_plugin_sha_with(codex_home, TEST_CURATED_PLUGIN_SHA);
-}
-
 pub(crate) fn write_curated_plugin_sha_with(codex_home: &Path, sha: &str) {
     write_file(&codex_home.join(".tmp/plugins.sha"), &format!("{sha}\n"));
 }
@@ -106,7 +101,6 @@ pub(crate) async fn load_plugins_config(codex_home: &Path, cwd: &Path) -> Plugin
         Some(cwd),
         &[],
         LoaderOverrides::without_managed_config_for_tests(),
-        CloudRequirementsLoader::default(),
         &NoopThreadConfigLoader,
     )
     .await
@@ -118,11 +112,6 @@ pub(crate) async fn load_plugins_config(codex_home: &Path, cwd: &Path) -> Plugin
         feature_enabled(
             &effective_config,
             "remote_plugin",
-            /*default_enabled*/ false,
-        ),
-        feature_enabled(
-            &effective_config,
-            "plugin_hooks",
             /*default_enabled*/ false,
         ),
         "https://chatgpt.com/backend-api/".to_string(),

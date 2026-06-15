@@ -10,6 +10,7 @@ use std::path::Path;
 
 use codex_core::config::Config;
 use codex_install_context::InstallContext;
+use codex_install_context::InstallMethod;
 use serde::Deserialize;
 
 use super::CheckStatus;
@@ -129,22 +130,22 @@ fn push_cached_version_details(details: &mut Vec<String>, version_file: &Path) {
 }
 
 fn update_action_label(context: &InstallContext) -> &'static str {
-    match context {
-        InstallContext::Npm => "npm install -g @openai/codex",
-        InstallContext::Bun => "bun install -g @openai/codex",
-        InstallContext::Brew => "brew upgrade --cask codex",
-        InstallContext::Standalone { .. } => "standalone installer",
-        InstallContext::Other => "manual or unknown",
+    match &context.method {
+        InstallMethod::Npm => "npm install -g @openai/codex",
+        InstallMethod::Bun => "bun install -g @openai/codex",
+        InstallMethod::Brew => "brew upgrade --cask codex",
+        InstallMethod::Standalone { .. } => "standalone installer",
+        InstallMethod::Other => "manual or unknown",
     }
 }
 
 fn fetch_latest_version(context: &InstallContext) -> Result<String, String> {
-    match context {
-        InstallContext::Brew => fetch_homebrew_cask_version(),
-        InstallContext::Npm
-        | InstallContext::Bun
-        | InstallContext::Standalone { .. }
-        | InstallContext::Other => fetch_latest_github_release_version(),
+    match &context.method {
+        InstallMethod::Brew => fetch_homebrew_cask_version(),
+        InstallMethod::Npm
+        | InstallMethod::Bun
+        | InstallMethod::Standalone { .. }
+        | InstallMethod::Other => fetch_latest_github_release_version(),
     }
 }
 
@@ -216,11 +217,17 @@ mod tests {
     #[test]
     fn update_action_labels_install_contexts() {
         assert_eq!(
-            update_action_label(&InstallContext::Npm),
+            update_action_label(&InstallContext {
+                method: InstallMethod::Npm,
+                package_layout: None,
+            }),
             "npm install -g @openai/codex"
         );
         assert_eq!(
-            update_action_label(&InstallContext::Other),
+            update_action_label(&InstallContext {
+                method: InstallMethod::Other,
+                package_layout: None,
+            }),
             "manual or unknown"
         );
     }

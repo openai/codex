@@ -5,8 +5,9 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::sandboxing::SandboxPermissions;
 use crate::test_support::models_manager_with_provider;
-use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolCallSource;
+use crate::tools::context::ToolOutput;
+use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::ConfigLayerEntry;
@@ -22,8 +23,8 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::AdditionalPermissionProfile as PermissionProfile;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::NetworkPermissions;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -48,8 +49,23 @@ use tempfile::tempdir;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-fn expect_text_output(output: &FunctionToolOutput) -> String {
-    function_call_output_content_items_to_text(&output.body).unwrap_or_default()
+fn expect_text_output<T>(output: &T) -> String
+where
+    T: ToolOutput + ?Sized,
+{
+    let response = output.to_response_item(
+        "call-guardian",
+        &ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+    );
+    match response {
+        ResponseInputItem::FunctionCallOutput { output, .. }
+        | ResponseInputItem::CustomToolCallOutput { output, .. } => {
+            output.body.to_text().unwrap_or_default()
+        }
+        other => panic!("expected function output, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -108,15 +124,22 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
         }),
         ..RequestPermissionProfile::default()
     };
+    let environment = turn_context
+        .environments
+        .primary()
+        .expect("primary environment")
+        .selection();
     let response = tokio::time::timeout(
         Duration::from_secs(45),
-        session.request_permissions(
+        session.request_permissions_for_environment(
             &turn_context,
             "perm-call-1".to_string(),
             RequestPermissionsArgs {
+                environment_id: None,
                 reason: Some("need network".to_string()),
                 permissions: requested_permissions.clone(),
             },
+            environment,
             CancellationToken::new(),
         ),
     )
@@ -132,7 +155,9 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
         })
     );
     assert_eq!(
-        session.granted_turn_permissions().await,
+        session
+            .granted_turn_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID)
+            .await,
         Some(requested_permissions.into())
     );
 
@@ -195,14 +220,21 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
         let requested_permissions = requested_permissions.clone();
         let cancellation_token = cancellation_token.clone();
         async move {
+            let environment = turn_context
+                .environments
+                .primary()
+                .expect("primary environment")
+                .selection();
             session
-                .request_permissions(
+                .request_permissions_for_environment(
                     &turn_context,
                     "perm-call-cancelled".to_string(),
                     RequestPermissionsArgs {
+                        environment_id: None,
                         reason: Some("need network".to_string()),
                         permissions: requested_permissions,
                     },
+                    environment,
                     cancellation_token,
                 )
                 .await
@@ -230,7 +262,12 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
         .expect("request_permissions should stop when cancelled")
         .expect("request_permissions task should not panic");
     assert_eq!(response, None);
-    assert_eq!(session.granted_turn_permissions().await, None);
+    assert_eq!(
+        session
+            .granted_turn_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID)
+            .await,
+        None
+    );
 }
 
 #[tokio::test]
@@ -364,6 +401,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
                 scope: PermissionGrantScope::Turn,
                 strict_auto_review: true,
             },
+            codex_exec_server::LOCAL_ENVIRONMENT_ID,
             Some(&originating_turn_state),
         )
         .await;
@@ -548,12 +586,15 @@ async fn shell_command_allows_sticky_turn_permissions_without_inline_request_per
         let mut active_turn = session.active_turn.lock().await;
         let active_turn = active_turn.as_mut().expect("active turn");
         let mut turn_state = active_turn.turn_state.lock().await;
-        turn_state.record_granted_permissions(PermissionProfile {
-            network: Some(NetworkPermissions {
-                enabled: Some(true),
-            }),
-            ..Default::default()
-        });
+        turn_state.record_granted_permissions(
+            codex_exec_server::LOCAL_ENVIRONMENT_ID,
+            PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                ..Default::default()
+            },
+        );
     }
 
     let session = Arc::new(session);
@@ -664,6 +705,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
 
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
+        user_instructions: Default::default(),
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
         models_manager,
@@ -676,10 +718,11 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         session_source: SessionSource::SubAgent(SubAgentSource::Other(
             GUARDIAN_REVIEWER_NAME.to_string(),
         )),
+        forked_from_thread_id: None,
+        parent_thread_id: None,
         thread_source: None,
         agent_control: AgentControl::default(),
         dynamic_tools: Vec::new(),
-        persist_extended_history: false,
         metrics_service_name: None,
         inherited_shell_snapshot: None,
         inherited_exec_policy: Some(Arc::new(parent_exec_policy)),
@@ -689,9 +732,11 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         environment_selections: ResolvedTurnEnvironments {
             turn_environments: Vec::new(),
         },
+        thread_extension_init: codex_extension_api::ExtensionDataInit::default(),
         analytics_events_client: None,
         thread_store,
         attestation_provider: None,
+        inherited_multi_agent_version: None,
     })
     .await
     .expect("spawn guardian subagent");
@@ -711,6 +756,5 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
             }],
         }
     );
-
     drop(codex);
 }

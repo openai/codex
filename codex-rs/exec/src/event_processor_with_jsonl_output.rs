@@ -223,6 +223,7 @@ impl EventProcessorWithJsonOutput {
                     arguments,
                     result: result.map(|result| McpToolCallItemResult {
                         content: result.content,
+                        meta: result.meta,
                         structured_content: result.structured_content,
                     }),
                     error: error.map(|error| McpToolCallItemError {
@@ -428,6 +429,11 @@ impl EventProcessorWithJsonOutput {
                     },
                 }));
                 CodexStatus::Running
+            }
+            ServerNotification::Warning(notification) => {
+                let warning = self.collect_warning(notification.message);
+                events.extend(warning.events);
+                warning.status
             }
             ServerNotification::Error(notification) => {
                 let message = match notification.error.additional_details {

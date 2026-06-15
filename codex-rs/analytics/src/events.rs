@@ -3,12 +3,15 @@ use std::time::Instant;
 use crate::facts::AcceptedLineFingerprint;
 use crate::facts::AppInvocation;
 use crate::facts::CodexCompactionEvent;
+use crate::facts::CodexErrKind;
+use crate::facts::CodexGoalEvent;
 use crate::facts::CompactionImplementation;
 use crate::facts::CompactionPhase;
 use crate::facts::CompactionReason;
 use crate::facts::CompactionStatus;
 use crate::facts::CompactionStrategy;
 use crate::facts::CompactionTrigger;
+use crate::facts::GoalEventKind;
 use crate::facts::HookRunFact;
 use crate::facts::InvocationType;
 use crate::facts::PluginState;
@@ -62,6 +65,7 @@ pub(crate) enum TrackEventRequest {
     AppUsed(CodexAppUsedEventRequest),
     HookRun(CodexHookRunEventRequest),
     Compaction(Box<CodexCompactionEventRequest>),
+    Goal(Box<CodexGoalEventRequest>),
     TurnEvent(Box<CodexTurnEventRequest>),
     TurnSteer(CodexTurnSteerEventRequest),
     CommandExecution(CodexCommandExecutionEventRequest),
@@ -147,6 +151,7 @@ pub(crate) struct CodexRuntimeMetadata {
 #[derive(Serialize)]
 pub(crate) struct ThreadInitializedEventParams {
     pub(crate) thread_id: String,
+    pub(crate) session_id: String,
     pub(crate) app_server_client: CodexAppServerClientMetadata,
     pub(crate) runtime: CodexRuntimeMetadata,
     pub(crate) model: String,
@@ -155,6 +160,7 @@ pub(crate) struct ThreadInitializedEventParams {
     pub(crate) initialization_mode: ThreadInitializationMode,
     pub(crate) subagent_source: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
+    pub(crate) forked_from_thread_id: Option<String>,
     pub(crate) created_at: u64,
 }
 
@@ -260,6 +266,7 @@ pub struct GuardianReviewEventParams {
     pub decision: GuardianReviewDecision,
     pub terminal_status: GuardianReviewTerminalStatus,
     pub failure_reason: Option<GuardianReviewFailureReason>,
+    pub attempt_count: i64,
     pub risk_level: Option<GuardianRiskLevel>,
     pub user_authorization: Option<GuardianUserAuthorization>,
     pub outcome: Option<GuardianAssessmentOutcome>,
@@ -267,6 +274,11 @@ pub struct GuardianReviewEventParams {
     pub guardian_session_kind: Option<GuardianReviewSessionKind>,
     pub guardian_model: Option<String>,
     pub guardian_reasoning_effort: Option<String>,
+    pub guardian_default_review_model_id: Option<String>,
+    pub guardian_catalog_contains_auto_review: Option<bool>,
+    pub guardian_review_model_overridden: Option<bool>,
+    pub guardian_review_model_override: Option<String>,
+    pub guardian_model_provider_id: Option<String>,
     pub had_prior_review_context: Option<bool>,
     pub review_timeout_ms: u64,
     pub tool_call_count: Option<u64>,
@@ -332,6 +344,7 @@ impl GuardianReviewTrackContext {
             decision: result.decision,
             terminal_status: result.terminal_status,
             failure_reason: result.failure_reason,
+            attempt_count: result.attempt_count,
             risk_level: result.risk_level,
             user_authorization: result.user_authorization,
             outcome: result.outcome,
@@ -339,6 +352,11 @@ impl GuardianReviewTrackContext {
             guardian_session_kind: result.guardian_session_kind,
             guardian_model: result.guardian_model,
             guardian_reasoning_effort: result.guardian_reasoning_effort,
+            guardian_default_review_model_id: result.guardian_default_review_model_id,
+            guardian_catalog_contains_auto_review: result.guardian_catalog_contains_auto_review,
+            guardian_review_model_overridden: result.guardian_review_model_overridden,
+            guardian_review_model_override: result.guardian_review_model_override,
+            guardian_model_provider_id: result.guardian_model_provider_id,
             had_prior_review_context: result.had_prior_review_context,
             review_timeout_ms: self.review_timeout_ms,
             // TODO(rhan-oai): plumb nested Guardian review session tool-call counts.
@@ -367,6 +385,7 @@ pub struct GuardianReviewAnalyticsResult {
     pub decision: GuardianReviewDecision,
     pub terminal_status: GuardianReviewTerminalStatus,
     pub failure_reason: Option<GuardianReviewFailureReason>,
+    pub attempt_count: i64,
     pub risk_level: Option<GuardianRiskLevel>,
     pub user_authorization: Option<GuardianUserAuthorization>,
     pub outcome: Option<GuardianAssessmentOutcome>,
@@ -374,6 +393,11 @@ pub struct GuardianReviewAnalyticsResult {
     pub guardian_session_kind: Option<GuardianReviewSessionKind>,
     pub guardian_model: Option<String>,
     pub guardian_reasoning_effort: Option<String>,
+    pub guardian_default_review_model_id: Option<String>,
+    pub guardian_catalog_contains_auto_review: Option<bool>,
+    pub guardian_review_model_overridden: Option<bool>,
+    pub guardian_review_model_override: Option<String>,
+    pub guardian_model_provider_id: Option<String>,
     pub had_prior_review_context: Option<bool>,
     pub reviewed_action_truncated: bool,
     pub token_usage: Option<TokenUsage>,
@@ -386,6 +410,7 @@ impl GuardianReviewAnalyticsResult {
             decision: GuardianReviewDecision::Denied,
             terminal_status: GuardianReviewTerminalStatus::FailedClosed,
             failure_reason: None,
+            attempt_count: 1,
             risk_level: None,
             user_authorization: None,
             outcome: None,
@@ -393,6 +418,11 @@ impl GuardianReviewAnalyticsResult {
             guardian_session_kind: None,
             guardian_model: None,
             guardian_reasoning_effort: None,
+            guardian_default_review_model_id: None,
+            guardian_catalog_contains_auto_review: None,
+            guardian_review_model_overridden: None,
+            guardian_review_model_override: None,
+            guardian_model_provider_id: None,
             had_prior_review_context: None,
             reviewed_action_truncated: false,
             token_usage: None,
@@ -400,26 +430,41 @@ impl GuardianReviewAnalyticsResult {
         }
     }
 
-    pub fn from_session(
-        guardian_thread_id: String,
-        guardian_session_kind: GuardianReviewSessionKind,
-        guardian_model: String,
-        guardian_reasoning_effort: Option<String>,
-        had_prior_review_context: bool,
-    ) -> Self {
+    pub fn from_session(params: GuardianReviewSessionAnalyticsParams) -> Self {
         Self {
-            guardian_thread_id: Some(guardian_thread_id),
-            guardian_session_kind: Some(guardian_session_kind),
-            guardian_model: Some(guardian_model),
-            guardian_reasoning_effort,
-            had_prior_review_context: Some(had_prior_review_context),
+            guardian_thread_id: Some(params.guardian_thread_id),
+            guardian_session_kind: Some(params.guardian_session_kind),
+            guardian_model: Some(params.guardian_model),
+            guardian_reasoning_effort: params.guardian_reasoning_effort,
+            guardian_default_review_model_id: Some(params.guardian_default_review_model_id),
+            guardian_catalog_contains_auto_review: Some(
+                params.guardian_catalog_contains_auto_review,
+            ),
+            guardian_review_model_overridden: Some(params.guardian_review_model_overridden),
+            guardian_review_model_override: params.guardian_review_model_override,
+            guardian_model_provider_id: Some(params.guardian_model_provider_id),
+            had_prior_review_context: Some(params.had_prior_review_context),
             ..Self::without_session()
         }
     }
 }
 
+pub struct GuardianReviewSessionAnalyticsParams {
+    pub guardian_thread_id: String,
+    pub guardian_session_kind: GuardianReviewSessionKind,
+    pub guardian_model: String,
+    pub guardian_reasoning_effort: Option<String>,
+    pub guardian_default_review_model_id: String,
+    pub guardian_catalog_contains_auto_review: bool,
+    pub guardian_review_model_overridden: bool,
+    pub guardian_review_model_override: Option<String>,
+    pub guardian_model_provider_id: String,
+    pub had_prior_review_context: bool,
+}
+
 #[derive(Serialize)]
 pub(crate) struct GuardianReviewEventPayload {
+    pub(crate) session_id: String,
     pub(crate) app_server_client: CodexAppServerClientMetadata,
     pub(crate) runtime: CodexRuntimeMetadata,
     #[serde(flatten)]
@@ -622,6 +667,7 @@ pub(crate) struct CodexMcpToolCallEventParams {
     pub(crate) mcp_server_name: String,
     pub(crate) mcp_tool_name: String,
     pub(crate) mcp_error_present: bool,
+    pub(crate) plugin_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -738,6 +784,7 @@ pub(crate) struct CodexHookRunEventRequest {
 #[derive(Serialize)]
 pub(crate) struct CodexCompactionEventParams {
     pub(crate) thread_id: String,
+    pub(crate) session_id: String,
     pub(crate) turn_id: String,
     pub(crate) app_server_client: CodexAppServerClientMetadata,
     pub(crate) runtime: CodexRuntimeMetadata,
@@ -750,9 +797,13 @@ pub(crate) struct CodexCompactionEventParams {
     pub(crate) phase: CompactionPhase,
     pub(crate) strategy: CompactionStrategy,
     pub(crate) status: CompactionStatus,
-    pub(crate) error: Option<String>,
+    pub(crate) codex_error_kind: Option<CodexErrKind>,
+    pub(crate) codex_error_http_status_code: Option<u16>,
     pub(crate) active_context_tokens_before: i64,
     pub(crate) active_context_tokens_after: i64,
+    pub(crate) retained_image_count: Option<usize>,
+    pub(crate) compaction_summary_tokens: Option<i64>,
+    pub(crate) cached_input_tokens: Option<i64>,
     pub(crate) started_at: u64,
     pub(crate) completed_at: u64,
     pub(crate) duration_ms: Option<u64>,
@@ -765,8 +816,33 @@ pub(crate) struct CodexCompactionEventRequest {
 }
 
 #[derive(Serialize)]
+pub(crate) struct CodexGoalEventParams {
+    pub(crate) thread_id: String,
+    pub(crate) session_id: String,
+    pub(crate) turn_id: Option<String>,
+    pub(crate) app_server_client: CodexAppServerClientMetadata,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) thread_source: Option<ThreadSource>,
+    pub(crate) subagent_source: Option<String>,
+    pub(crate) parent_thread_id: Option<String>,
+    pub(crate) goal_id: String,
+    pub(crate) event_kind: GoalEventKind,
+    pub(crate) goal_status: codex_state::ThreadGoalStatus,
+    pub(crate) has_token_budget: bool,
+    pub(crate) cumulative_tokens_accounted: Option<i64>,
+    pub(crate) cumulative_time_accounted_seconds: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexGoalEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexGoalEventParams,
+}
+
+#[derive(Serialize)]
 pub(crate) struct CodexTurnEventParams {
     pub(crate) thread_id: String,
+    pub(crate) session_id: String,
     pub(crate) turn_id: String,
     // TODO(rhan-oai): Populate once queued/default submission type is plumbed from
     // the turn/start callsites instead of always being reported as None.
@@ -789,10 +865,13 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) sandbox_network_access: bool,
     pub(crate) collaboration_mode: Option<&'static str>,
     pub(crate) personality: Option<String>,
+    pub(crate) workspace_kind: Option<String>,
     pub(crate) num_input_images: usize,
     pub(crate) is_first_turn: bool,
     pub(crate) status: Option<TurnStatus>,
     pub(crate) turn_error: Option<CodexErrorInfo>,
+    pub(crate) codex_error_kind: Option<CodexErrKind>,
+    pub(crate) codex_error_http_status_code: Option<u16>,
     pub(crate) steer_count: Option<usize>,
     pub(crate) total_tool_call_count: Option<usize>,
     pub(crate) shell_command_count: Option<usize>,
@@ -807,6 +886,13 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) output_tokens: Option<i64>,
     pub(crate) reasoning_output_tokens: Option<i64>,
     pub(crate) total_tokens: Option<i64>,
+    pub(crate) before_first_sampling_ms: u64,
+    pub(crate) sampling_ms: u64,
+    pub(crate) between_sampling_overhead_ms: u64,
+    pub(crate) tool_blocking_ms: u64,
+    pub(crate) after_last_sampling_ms: u64,
+    pub(crate) sampling_request_count: u32,
+    pub(crate) sampling_retry_count: u32,
     pub(crate) duration_ms: Option<u64>,
     pub(crate) started_at: Option<u64>,
     pub(crate) completed_at: Option<u64>,
@@ -821,6 +907,7 @@ pub(crate) struct CodexTurnEventRequest {
 #[derive(Serialize)]
 pub(crate) struct CodexTurnSteerEventParams {
     pub(crate) thread_id: String,
+    pub(crate) session_id: String,
     pub(crate) expected_turn_id: Option<String>,
     pub(crate) accepted_turn_id: Option<String>,
     pub(crate) app_server_client: CodexAppServerClientMetadata,
@@ -855,6 +942,7 @@ pub(crate) struct CodexPluginMetadata {
 pub(crate) struct CodexPluginUsedMetadata {
     #[serde(flatten)]
     pub(crate) plugin: CodexPluginMetadata,
+    pub(crate) mcp_server_names: Option<Vec<String>>,
     pub(crate) thread_id: Option<String>,
     pub(crate) turn_id: Option<String>,
     pub(crate) model_slug: Option<String>,
@@ -926,6 +1014,7 @@ pub(crate) fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPlu
 
 pub(crate) fn codex_compaction_event_params(
     input: CodexCompactionEvent,
+    session_id: String,
     app_server_client: CodexAppServerClientMetadata,
     runtime: CodexRuntimeMetadata,
     thread_source: Option<ThreadSource>,
@@ -934,6 +1023,7 @@ pub(crate) fn codex_compaction_event_params(
 ) -> CodexCompactionEventParams {
     CodexCompactionEventParams {
         thread_id: input.thread_id,
+        session_id,
         turn_id: input.turn_id,
         app_server_client,
         runtime,
@@ -946,12 +1036,43 @@ pub(crate) fn codex_compaction_event_params(
         phase: input.phase,
         strategy: input.strategy,
         status: input.status,
-        error: input.error,
+        codex_error_kind: input.codex_error_kind,
+        codex_error_http_status_code: input.codex_error_http_status_code,
         active_context_tokens_before: input.active_context_tokens_before,
         active_context_tokens_after: input.active_context_tokens_after,
+        retained_image_count: input.retained_image_count,
+        compaction_summary_tokens: input.compaction_summary_tokens,
+        cached_input_tokens: input.cached_input_tokens,
         started_at: input.started_at,
         completed_at: input.completed_at,
         duration_ms: input.duration_ms,
+    }
+}
+
+pub(crate) fn codex_goal_event_params(
+    input: CodexGoalEvent,
+    session_id: String,
+    app_server_client: CodexAppServerClientMetadata,
+    runtime: CodexRuntimeMetadata,
+    thread_source: Option<ThreadSource>,
+    subagent_source: Option<String>,
+    parent_thread_id: Option<String>,
+) -> CodexGoalEventParams {
+    CodexGoalEventParams {
+        thread_id: input.thread_id,
+        session_id,
+        turn_id: input.turn_id,
+        app_server_client,
+        runtime,
+        thread_source,
+        subagent_source,
+        parent_thread_id,
+        goal_id: input.goal_id,
+        event_kind: input.event_kind,
+        goal_status: input.goal_status,
+        has_token_budget: input.has_token_budget,
+        cumulative_tokens_accounted: input.cumulative_tokens_accounted,
+        cumulative_time_accounted_seconds: input.cumulative_time_accounted_seconds,
     }
 }
 
@@ -959,8 +1080,13 @@ pub(crate) fn codex_plugin_used_metadata(
     tracking: &TrackEventsContext,
     plugin: PluginTelemetryMetadata,
 ) -> CodexPluginUsedMetadata {
+    let mcp_server_names = plugin
+        .capability_summary
+        .as_ref()
+        .map(|summary| summary.mcp_server_names.clone());
     CodexPluginUsedMetadata {
         plugin: codex_plugin_metadata(plugin),
+        mcp_server_names,
         thread_id: Some(tracking.thread_id.clone()),
         turn_id: Some(tracking.turn_id.clone()),
         model_slug: Some(tracking.model_slug.clone()),
@@ -990,6 +1116,8 @@ fn analytics_hook_event_name(event_name: HookEventName) -> &'static str {
         HookEventName::PostCompact => "PostCompact",
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        HookEventName::SubagentStart => "SubagentStart",
+        HookEventName::SubagentStop => "SubagentStop",
         HookEventName::Stop => "Stop",
     }
 }
@@ -1003,6 +1131,7 @@ fn analytics_hook_source(source: HookSource) -> &'static str {
         HookSource::SessionFlags => "session_flags",
         HookSource::Plugin => "plugin",
         HookSource::CloudRequirements => "cloud_requirements",
+        HookSource::CloudManagedConfig => "cloud_managed_config",
         HookSource::LegacyManagedConfigFile => "legacy_managed_config_file",
         HookSource::LegacyManagedConfigMdm => "legacy_managed_config_mdm",
         HookSource::Unknown => "unknown",
@@ -1024,6 +1153,7 @@ pub(crate) fn subagent_thread_started_event_request(
 ) -> ThreadInitializedEvent {
     let event_params = ThreadInitializedEventParams {
         thread_id: input.thread_id,
+        session_id: input.session_id,
         app_server_client: CodexAppServerClientMetadata {
             product_client_id: input.product_client_id,
             client_name: Some(input.client_name),
@@ -1037,9 +1167,8 @@ pub(crate) fn subagent_thread_started_event_request(
         thread_source: Some(ThreadSource::Subagent),
         initialization_mode: ThreadInitializationMode::New,
         subagent_source: Some(subagent_source_name(&input.subagent_source)),
-        parent_thread_id: input
-            .parent_thread_id
-            .or_else(|| subagent_parent_thread_id(&input.subagent_source)),
+        parent_thread_id: input.parent_thread_id,
+        forked_from_thread_id: input.forked_from_thread_id,
         created_at: input.created_at,
     };
     ThreadInitializedEvent {
@@ -1049,22 +1178,7 @@ pub(crate) fn subagent_thread_started_event_request(
 }
 
 pub(crate) fn subagent_source_name(subagent_source: &SubAgentSource) -> String {
-    match subagent_source {
-        SubAgentSource::Review => "review".to_string(),
-        SubAgentSource::Compact => "compact".to_string(),
-        SubAgentSource::ThreadSpawn { .. } => "thread_spawn".to_string(),
-        SubAgentSource::MemoryConsolidation => "memory_consolidation".to_string(),
-        SubAgentSource::Other(other) => other.clone(),
-    }
-}
-
-pub(crate) fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Option<String> {
-    match subagent_source {
-        SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        } => Some(parent_thread_id.to_string()),
-        _ => None,
-    }
+    subagent_source.kind().to_string()
 }
 
 fn analytics_hook_status(status: HookRunStatus) -> HookRunStatus {

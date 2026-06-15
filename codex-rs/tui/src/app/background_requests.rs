@@ -6,6 +6,10 @@
 
 use super::plugin_mentions::fetch_plugin_mentions;
 use super::*;
+use crate::app_event::ConnectorsSnapshot;
+use crate::config_update::format_config_error;
+use codex_app_server_protocol::AppsListParams;
+use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveParams;
@@ -20,20 +24,39 @@ use crate::hooks_rpc::write_hook_trust;
 use crate::hooks_rpc::write_hook_trusts;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+const TOKEN_ACTIVITY_FETCH_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(/*secs*/ 15);
+
 impl App {
     pub(super) fn fetch_mcp_inventory(
         &mut self,
         app_server: &AppServerSession,
         detail: McpServerStatusDetail,
+        thread_id: Option<ThreadId>,
     ) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
+        let request_thread_id = self.mcp_inventory_request_thread_id(thread_id);
         tokio::spawn(async move {
-            let result = fetch_all_mcp_server_statuses(request_handle, detail)
+            let result = fetch_all_mcp_server_statuses(request_handle, detail, request_thread_id)
                 .await
                 .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::McpInventoryLoaded { result, detail });
+            app_event_tx.send(AppEvent::McpInventoryLoaded {
+                result,
+                detail,
+                thread_id,
+            });
         });
+    }
+
+    fn mcp_inventory_request_thread_id(&self, thread_id: Option<ThreadId>) -> Option<ThreadId> {
+        thread_id.filter(|thread_id| {
+            self.active_thread_id == Some(*thread_id)
+                && self
+                    .agent_navigation
+                    .get(thread_id)
+                    .is_none_or(|entry| !entry.is_closed)
+        })
     }
 
     /// Spawns a background task to fetch account rate limits and deliver the
@@ -55,6 +78,25 @@ impl App {
                 .await
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::RateLimitsLoaded { origin, result });
+        });
+    }
+
+    pub(super) fn refresh_token_activity(
+        &mut self,
+        app_server: &AppServerSession,
+        request_id: u64,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = tokio::time::timeout(
+                TOKEN_ACTIVITY_FETCH_TIMEOUT,
+                fetch_account_token_activity(request_handle),
+            )
+            .await
+            .map_err(|_| "account/usage/read timed out in TUI".to_string())
+            .and_then(|result| result.map_err(|err| err.to_string()));
+            app_event_tx.send(AppEvent::TokenActivityLoaded { request_id, result });
         });
     }
 
@@ -92,14 +134,56 @@ impl App {
         });
     }
 
-    pub(super) fn fetch_plugins_list(&mut self, app_server: &AppServerSession, cwd: PathBuf) {
+    pub(super) fn fetch_connectors_list(
+        &mut self,
+        app_server: &AppServerSession,
+        force_refetch: bool,
+    ) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
+        let thread_id = self
+            .current_displayed_thread_id()
+            .map(|thread_id| thread_id.to_string());
         tokio::spawn(async move {
-            let result = fetch_plugins_list(request_handle, cwd.clone())
+            let result = fetch_connectors_list(request_handle, force_refetch, thread_id)
                 .await
                 .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::PluginsLoaded { cwd, result });
+            app_event_tx.send(AppEvent::ConnectorsLoaded {
+                result,
+                is_final: true,
+            });
+        });
+    }
+
+    pub(super) fn fetch_plugins_list(&mut self, app_server: &AppServerSession, cwd: PathBuf) {
+        self.chat_widget.on_plugins_list_fetch_started(cwd.clone());
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        let plugin_sharing_enabled = self.config.features.enabled(Feature::PluginSharing);
+        let remote_plugin_enabled = self.config.features.enabled(Feature::RemotePlugin);
+        tokio::spawn(async move {
+            let result = fetch_plugins_list(request_handle.clone(), cwd.clone())
+                .await
+                .map_err(|err| err.to_string());
+            let should_fetch_additional_remote_sections = result.is_ok();
+            app_event_tx.send(AppEvent::PluginsLoaded {
+                cwd: cwd.clone(),
+                result,
+            });
+            if should_fetch_additional_remote_sections {
+                let (marketplaces, section_errors) = fetch_additional_plugin_remote_sections(
+                    request_handle,
+                    cwd.clone(),
+                    plugin_sharing_enabled,
+                    remote_plugin_enabled,
+                )
+                .await;
+                app_event_tx.send(AppEvent::PluginRemoteSectionsLoaded {
+                    cwd,
+                    marketplaces,
+                    section_errors,
+                });
+            }
         });
     }
 
@@ -200,7 +284,7 @@ impl App {
         &mut self,
         app_server: &AppServerSession,
         cwd: PathBuf,
-        marketplace_path: AbsolutePathBuf,
+        location: PluginLocation,
         plugin_name: String,
         plugin_display_name: String,
     ) {
@@ -208,14 +292,14 @@ impl App {
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
             let cwd_for_event = cwd.clone();
-            let marketplace_path_for_event = marketplace_path.clone();
+            let location_for_event = location.clone();
             let plugin_name_for_event = plugin_name.clone();
-            let result = fetch_plugin_install(request_handle, marketplace_path, plugin_name)
+            let result = fetch_plugin_install(request_handle, location, plugin_name)
                 .await
                 .map_err(|err| format!("Failed to install plugin: {err}"));
             app_event_tx.send(AppEvent::PluginInstallLoaded {
                 cwd: cwd_for_event,
-                marketplace_path: marketplace_path_for_event,
+                location: location_for_event,
                 plugin_name: plugin_name_for_event,
                 plugin_display_name,
                 result,
@@ -317,7 +401,12 @@ impl App {
             let result = write_hook_enabled(request_handle, key, enabled)
                 .await
                 .map(|_| ())
-                .map_err(|err| format!("Failed to update hook config: {err}"));
+                .map_err(|err| {
+                    format!(
+                        "Failed to update hook config: {}",
+                        format_config_error(&err)
+                    )
+                });
             app_event_tx.send(AppEvent::HookEnabledSet {
                 key: key_for_event,
                 enabled,
@@ -338,7 +427,7 @@ impl App {
             let result = write_hook_trust(request_handle, key, current_hash)
                 .await
                 .map(|_| ())
-                .map_err(|err| format!("Failed to trust hook: {err}"));
+                .map_err(|err| format!("Failed to trust hook: {}", format_config_error(&err)));
             app_event_tx.send(AppEvent::HookTrusted { result });
         });
     }
@@ -354,22 +443,22 @@ impl App {
             let result = write_hook_trusts(request_handle, updates)
                 .await
                 .map(|_| ())
-                .map_err(|err| format!("Failed to trust hooks: {err}"));
+                .map_err(|err| format!("Failed to trust hooks: {}", format_config_error(&err)));
             app_event_tx.send(AppEvent::HookTrusted { result });
         });
     }
 
     pub(super) fn refresh_plugin_mentions(&mut self, app_server: &AppServerSession) {
-        let config = self.config.clone();
+        let cwd = self.config.cwd.to_path_buf();
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
-        if !config.features.enabled(Feature::Plugins) {
+        if !self.config.features.enabled(Feature::Plugins) {
             app_event_tx.send(AppEvent::PluginMentionsLoaded { plugins: None });
             return;
         }
 
         tokio::spawn(async move {
-            match fetch_plugin_mentions(request_handle, config).await {
+            match fetch_plugin_mentions(request_handle, cwd).await {
                 Ok(plugins) => {
                     app_event_tx.send(AppEvent::PluginMentionsLoaded {
                         plugins: Some(plugins),
@@ -505,14 +594,18 @@ impl App {
     /// Process the completed MCP inventory fetch: clear the loading spinner, then
     /// render either the full tool/resource listing or an error into chat history.
     ///
-    /// When both the local config and the app-server report zero servers, a special
-    /// "empty" cell is shown instead of the full table.
+    /// When the app-server reports zero servers, a special "empty" cell is shown
+    /// instead of the full table.
     pub(super) fn handle_mcp_inventory_result(
         &mut self,
         result: Result<Vec<McpServerStatus>, String>,
         detail: McpServerStatusDetail,
+        thread_id: Option<ThreadId>,
     ) {
-        let config = self.chat_widget.config_ref().clone();
+        if thread_id.is_some() && thread_id != self.current_displayed_thread_id() {
+            return;
+        }
+
         self.chat_widget.clear_mcp_inventory_loading();
         self.clear_committed_mcp_inventory_loading();
 
@@ -525,7 +618,7 @@ impl App {
             }
         };
 
-        if config.mcp_servers.get().is_empty() && statuses.is_empty() {
+        if statuses.is_empty() {
             self.chat_widget
                 .add_to_history(history_cell::empty_mcp_output());
             return;
@@ -533,7 +626,7 @@ impl App {
 
         self.chat_widget
             .add_to_history(history_cell::new_mcp_tools_output_from_statuses(
-                &config, &statuses, detail,
+                &statuses, detail,
             ));
     }
 
@@ -556,9 +649,11 @@ impl App {
 pub(super) async fn fetch_all_mcp_server_statuses(
     request_handle: AppServerRequestHandle,
     detail: McpServerStatusDetail,
+    thread_id: Option<ThreadId>,
 ) -> Result<Vec<McpServerStatus>> {
     let mut cursor = None;
     let mut statuses = Vec::new();
+    let thread_id = thread_id.map(|id| id.to_string());
 
     loop {
         let request_id = RequestId::String(format!("mcp-inventory-{}", Uuid::new_v4()));
@@ -569,6 +664,7 @@ pub(super) async fn fetch_all_mcp_server_statuses(
                     cursor: cursor.clone(),
                     limit: Some(100),
                     detail: Some(detail),
+                    thread_id: thread_id.clone(),
                 },
             })
             .await
@@ -597,6 +693,19 @@ pub(super) async fn fetch_account_rate_limits(
         .wrap_err("account/rateLimits/read failed in TUI")?;
 
     Ok(app_server_rate_limit_snapshots(response))
+}
+
+pub(super) async fn fetch_account_token_activity(
+    request_handle: AppServerRequestHandle,
+) -> Result<codex_app_server_protocol::GetAccountTokenUsageResponse> {
+    let request_id = RequestId::String(format!("account-token-usage-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::GetAccountTokenUsage {
+            request_id,
+            params: None,
+        })
+        .await
+        .wrap_err("account/usage/read failed in TUI")
 }
 
 pub(super) async fn send_add_credits_nudge_email(
@@ -634,6 +743,29 @@ pub(super) async fn fetch_skills_list(
         .wrap_err("skills/list failed in TUI")
 }
 
+pub(super) async fn fetch_connectors_list(
+    request_handle: AppServerRequestHandle,
+    force_refetch: bool,
+    thread_id: Option<String>,
+) -> Result<ConnectorsSnapshot> {
+    let request_id = RequestId::String(format!("apps-list-{}", Uuid::new_v4()));
+    let response: AppsListResponse = request_handle
+        .request_typed(ClientRequest::AppsList {
+            request_id,
+            params: AppsListParams {
+                cursor: None,
+                limit: None,
+                thread_id,
+                force_refetch,
+            },
+        })
+        .await
+        .wrap_err("app/list failed in TUI")?;
+    Ok(ConnectorsSnapshot {
+        connectors: response.data,
+    })
+}
+
 pub(super) async fn fetch_plugins_list(
     request_handle: AppServerRequestHandle,
     cwd: PathBuf,
@@ -643,6 +775,114 @@ pub(super) async fn fetch_plugins_list(
         .wrap_err("plugin/list failed while loading the plugins menu")?;
     hide_cli_only_plugin_marketplaces(&mut response);
     Ok(response)
+}
+
+pub(super) async fn fetch_additional_plugin_remote_sections(
+    request_handle: AppServerRequestHandle,
+    cwd: PathBuf,
+    plugin_sharing_enabled: bool,
+    remote_plugin_enabled: bool,
+) -> (Vec<PluginMarketplaceEntry>, Vec<PluginRemoteSectionError>) {
+    let mut marketplaces = Vec::new();
+    let mut section_errors = Vec::new();
+    let mut sections = Vec::new();
+    if !remote_plugin_enabled {
+        sections.push((
+            "vertical",
+            "OpenAI Curated",
+            vec![PluginListMarketplaceKind::Vertical],
+        ));
+    }
+    sections.push((
+        "workspace",
+        "Workspace",
+        vec![PluginListMarketplaceKind::WorkspaceDirectory],
+    ));
+    if plugin_sharing_enabled {
+        sections.push((
+            "shared-with-me",
+            "Shared with me",
+            vec![PluginListMarketplaceKind::SharedWithMe],
+        ));
+    } else {
+        section_errors.push(plugin_sharing_disabled_remote_section_error());
+    }
+
+    for (section_id, label, marketplace_kinds) in sections {
+        match request_plugin_list_for_kinds(request_handle.clone(), cwd.clone(), marketplace_kinds)
+            .await
+        {
+            Ok(mut response) => {
+                hide_cli_only_plugin_marketplaces(&mut response);
+                marketplaces.extend(response.marketplaces);
+            }
+            Err(err) => {
+                let message = format!("{err:#}");
+                section_errors.push(PluginRemoteSectionError {
+                    section_id: section_id.to_string(),
+                    label: label.to_string(),
+                    message: plugin_remote_section_error_message(label, &message),
+                });
+            }
+        }
+    }
+
+    (marketplaces, section_errors)
+}
+
+fn plugin_remote_section_error_message(label: &str, err: &str) -> String {
+    let next_step = plugin_remote_section_error_next_step(label, err);
+    if next_step.is_empty() {
+        err.to_string()
+    } else {
+        format!("{err} {next_step}")
+    }
+}
+
+fn plugin_remote_section_error_next_step(label: &str, err: &str) -> &'static str {
+    let err = err.to_ascii_lowercase();
+    if err.contains("api key auth is not supported") {
+        "Sign in with ChatGPT auth; API key auth cannot load remote plugin catalogs."
+    } else if err.contains("authentication required")
+        || err.contains("not signed in")
+        || err.contains("not logged in")
+    {
+        "Sign in to ChatGPT, then try loading this section again."
+    } else if err.contains("codex plugins are disabled")
+        || err.contains("plugin sharing is disabled")
+        || err.contains("plugin sharing is not enabled")
+        || err.contains("feature disabled")
+    {
+        "Ask a workspace admin to enable Codex plugins or plugin sharing."
+    } else if err.contains("workspace") && (err.contains("access") || err.contains("mismatch")) {
+        "Switch to the matching workspace or ask the sharer for access."
+    } else if err.contains("not found") || err.contains("status 404") {
+        "Check that you are signed in to the correct workspace and still have access."
+    } else if err.contains("old build") || err.contains("update codex") || err.contains("stale") {
+        "Update Codex, then try opening the shared plugin again."
+    } else if err.contains("service unavailable")
+        || err.contains("temporarily unavailable")
+        || err.contains("status 503")
+        || err.contains("failed to send")
+        || err.contains("request")
+        || err.contains("status")
+    {
+        "Try again later; local plugin functionality is still available."
+    } else if err.contains("disabled by admin") || err.contains("admin disabled") {
+        "Ask a workspace admin to confirm plugin access."
+    } else if label == "Shared with me" && err.contains("plugin") && err.contains("disabled") {
+        "Ask the sharer or a workspace admin to confirm plugin access."
+    } else {
+        ""
+    }
+}
+
+fn plugin_sharing_disabled_remote_section_error() -> PluginRemoteSectionError {
+    PluginRemoteSectionError {
+        section_id: "shared-with-me".to_string(),
+        label: "Shared with me".to_string(),
+        message: "Plugin sharing is disabled for this Codex session. Enable plugin sharing to load shared plugins.".to_string(),
+    }
 }
 
 const CLI_HIDDEN_PLUGIN_MARKETPLACES: &[&str] = &["openai-bundled"];
@@ -657,6 +897,23 @@ pub(super) async fn request_plugin_list(
     request_handle: AppServerRequestHandle,
     cwd: PathBuf,
 ) -> Result<PluginListResponse> {
+    request_plugin_list_with_marketplace_kinds(request_handle, cwd, /*marketplace_kinds*/ None)
+        .await
+}
+
+pub(super) async fn request_plugin_list_for_kinds(
+    request_handle: AppServerRequestHandle,
+    cwd: PathBuf,
+    marketplace_kinds: Vec<PluginListMarketplaceKind>,
+) -> Result<PluginListResponse> {
+    request_plugin_list_with_marketplace_kinds(request_handle, cwd, Some(marketplace_kinds)).await
+}
+
+async fn request_plugin_list_with_marketplace_kinds(
+    request_handle: AppServerRequestHandle,
+    cwd: PathBuf,
+    marketplace_kinds: Option<Vec<PluginListMarketplaceKind>>,
+) -> Result<PluginListResponse> {
     let cwd = AbsolutePathBuf::try_from(cwd).wrap_err("plugin list cwd must be absolute")?;
     let request_id = RequestId::String(format!("plugin-list-{}", Uuid::new_v4()));
     request_handle
@@ -664,7 +921,7 @@ pub(super) async fn request_plugin_list(
             request_id,
             params: PluginListParams {
                 cwds: Some(vec![cwd]),
-                marketplace_kinds: None,
+                marketplace_kinds,
             },
         })
         .await
@@ -759,16 +1016,17 @@ pub(super) async fn fetch_marketplace_upgrade(
 }
 pub(super) async fn fetch_plugin_install(
     request_handle: AppServerRequestHandle,
-    marketplace_path: AbsolutePathBuf,
+    location: PluginLocation,
     plugin_name: String,
 ) -> Result<PluginInstallResponse> {
     let request_id = RequestId::String(format!("plugin-install-{}", Uuid::new_v4()));
+    let (marketplace_path, remote_marketplace_name) = location.into_request_params();
     request_handle
         .request_typed(ClientRequest::PluginInstall {
             request_id,
             params: PluginInstallParams {
-                marketplace_path: Some(marketplace_path),
-                remote_marketplace_name: None,
+                marketplace_path,
+                remote_marketplace_name,
                 plugin_name,
             },
         })
@@ -917,6 +1175,7 @@ pub(super) fn mcp_inventory_maps_from_statuses(statuses: Vec<McpServerStatus>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::test_support::make_test_app;
     use codex_app_server_protocol::PluginMarketplaceEntry;
     use codex_protocol::mcp::Tool;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -986,10 +1245,96 @@ mod tests {
     }
 
     #[test]
+    fn plugin_location_request_params_select_exactly_one_location() {
+        let local_path = test_absolute_path("/marketplaces/local");
+
+        assert_eq!(
+            PluginLocation::Local {
+                marketplace_path: local_path.clone()
+            }
+            .into_request_params(),
+            (Some(local_path), None)
+        );
+        assert_eq!(
+            PluginLocation::Remote {
+                marketplace_name: "workspace-directory".to_string()
+            }
+            .into_request_params(),
+            (None, Some("workspace-directory".to_string()))
+        );
+    }
+
+    #[test]
+    fn plugin_remote_section_error_message_adds_concrete_next_steps() {
+        let cases = [
+            (
+                "Workspace",
+                "chatgpt authentication required for remote plugin catalog",
+                "Sign in to ChatGPT, then try loading this section again.",
+            ),
+            (
+                "OpenAI Curated",
+                "chatgpt authentication required for remote plugin catalog; api key auth is not supported",
+                "Sign in with ChatGPT auth; API key auth cannot load remote plugin catalogs.",
+            ),
+            (
+                "Shared with me",
+                "remote plugin catalog request failed with status 404: missing",
+                "Check that you are signed in to the correct workspace and still have access.",
+            ),
+            (
+                "Shared with me",
+                "workspace access mismatch",
+                "Switch to the matching workspace or ask the sharer for access.",
+            ),
+            (
+                "Shared with me",
+                "old build fallback",
+                "Update Codex, then try opening the shared plugin again.",
+            ),
+            (
+                "Shared with me",
+                "remote service unavailable",
+                "Try again later; local plugin functionality is still available.",
+            ),
+            (
+                "Workspace",
+                "plugin disabled by admin",
+                "Ask a workspace admin to confirm plugin access.",
+            ),
+            (
+                "Shared with me",
+                "plugin sharing is not enabled",
+                "Ask a workspace admin to enable Codex plugins or plugin sharing.",
+            ),
+        ];
+
+        for (label, err, next_step) in cases {
+            assert_eq!(
+                plugin_remote_section_error_message(label, err),
+                format!("{err} {next_step}")
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_sharing_disabled_remote_section_error_targets_shared_with_me() {
+        assert_eq!(
+            plugin_sharing_disabled_remote_section_error(),
+            PluginRemoteSectionError {
+                section_id: "shared-with-me".to_string(),
+                label: "Shared with me".to_string(),
+                message: "Plugin sharing is disabled for this Codex session. Enable plugin sharing to load shared plugins.".to_string(),
+            }
+        );
+    }
+
+    #[test]
     fn mcp_inventory_maps_prefix_tool_names_by_server() {
         let statuses = vec![
             McpServerStatus {
                 name: "docs".to_string(),
+                server_info: None,
                 tools: HashMap::from([(
                     "list".to_string(),
                     Tool {
@@ -1009,6 +1354,7 @@ mod tests {
             },
             McpServerStatus {
                 name: "disabled".to_string(),
+                server_info: None,
                 tools: HashMap::new(),
                 resources: Vec::new(),
                 resource_templates: Vec::new(),
@@ -1033,6 +1379,26 @@ mod tests {
             auth_statuses.get("disabled"),
             Some(&McpAuthStatus::Unsupported)
         );
+    }
+
+    #[tokio::test]
+    async fn mcp_inventory_omits_thread_id_for_closed_agent_thread() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+        app.agent_navigation.upsert(
+            thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
+            /*is_closed*/ false,
+        );
+
+        assert_eq!(
+            app.mcp_inventory_request_thread_id(Some(thread_id)),
+            Some(thread_id)
+        );
+
+        app.agent_navigation.mark_closed(thread_id);
+
+        assert_eq!(app.mcp_inventory_request_thread_id(Some(thread_id)), None);
     }
 
     #[test]

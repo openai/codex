@@ -13,10 +13,12 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 pub(crate) use crate::tools::handlers::multi_agents_common::*;
+use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::registry::ToolHandler;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -33,9 +35,14 @@ use codex_protocol::protocol::CollabWaitingBeginEvent;
 use codex_protocol::protocol::CollabWaitingEndEvent;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolName;
+use codex_tools::ToolSearchInfo;
+use codex_tools::ToolSearchSourceInfo;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+
+const MULTI_AGENT_TOOL_SEARCH_SOURCE_NAME: &str = "Multi-agent tools";
+const MULTI_AGENT_TOOL_SEARCH_SOURCE_DESCRIPTION: &str = "Spawn and manage sub-agents.";
 
 pub(crate) fn parse_agent_id_target(target: &str) -> Result<ThreadId, FunctionCallError> {
     ThreadId::from_string(target).map_err(|err| {
@@ -56,6 +63,20 @@ pub(crate) fn parse_agent_id_targets(
         .into_iter()
         .map(|target| parse_agent_id_target(&target))
         .collect()
+}
+
+fn multi_agent_tool_search_info(
+    search_text: &str,
+    spec: codex_tools::ToolSpec,
+) -> Option<ToolSearchInfo> {
+    ToolSearchInfo::from_spec(
+        search_text.to_string(),
+        spec,
+        Some(ToolSearchSourceInfo {
+            name: MULTI_AGENT_TOOL_SEARCH_SOURCE_NAME.to_string(),
+            description: Some(MULTI_AGENT_TOOL_SEARCH_SOURCE_DESCRIPTION.to_string()),
+        }),
+    )
 }
 
 pub(crate) use close_agent::Handler as CloseAgentHandler;

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openai_codex.client import AppServerClient, _params_dict
+from openai_codex.client import CodexClient, _params_dict
 from openai_codex.generated.notification_registry import notification_turn_id
 from openai_codex.generated.v2_all import (
     AgentMessageDeltaNotification,
@@ -63,7 +63,7 @@ def test_thread_resume_response_accepts_auto_review_reviewer() -> None:
 
 
 def test_notifications_are_typed_with_canonical_v2_methods() -> None:
-    client = AppServerClient()
+    client = CodexClient()
     event = client._coerce_notification(
         "thread/tokenUsage/updated",
         {
@@ -94,7 +94,7 @@ def test_notifications_are_typed_with_canonical_v2_methods() -> None:
 
 
 def test_unknown_notifications_fall_back_to_unknown_payloads() -> None:
-    client = AppServerClient()
+    client = CodexClient()
     event = client._coerce_notification(
         "unknown/notification",
         {
@@ -110,7 +110,7 @@ def test_unknown_notifications_fall_back_to_unknown_payloads() -> None:
 
 
 def test_invalid_notification_payload_falls_back_to_unknown() -> None:
-    client = AppServerClient()
+    client = CodexClient()
     event = client._coerce_notification("thread/tokenUsage/updated", {"threadId": "missing"})
 
     assert event.method == "thread/tokenUsage/updated"
@@ -144,7 +144,7 @@ def test_generated_notification_turn_id_handles_known_payload_shapes() -> None:
 
 def test_turn_notification_router_demuxes_registered_turns() -> None:
     """The router should deliver out-of-order turn events to the matching queues."""
-    client = AppServerClient()
+    client = CodexClient()
     client.register_turn_notifications("turn-1")
     client.register_turn_notifications("turn-2")
 
@@ -185,9 +185,35 @@ def test_turn_notification_router_demuxes_registered_turns() -> None:
     ]
 
 
+def test_goal_notification_router_routes_by_thread_id() -> None:
+    """A goal operation should receive turn notifications across physical turn ids."""
+    client = CodexClient()
+    state = client.register_goal_operation("thread-1")
+
+    client._router.route_notification(
+        client._coerce_notification(
+            "item/agentMessage/delta",
+            {
+                "delta": "continued",
+                "itemId": "item-1",
+                "threadId": "thread-1",
+                "turnId": "turn-2",
+            },
+        )
+    )
+
+    event = client.next_goal_notification(state)
+
+    assert isinstance(event.payload, AgentMessageDeltaNotification)
+    assert (event.method, event.payload.delta) == (
+        "item/agentMessage/delta",
+        "continued",
+    )
+
+
 def test_client_reader_routes_interleaved_turn_notifications_by_turn_id() -> None:
     """Reader-loop routing should preserve order within each interleaved turn stream."""
-    client = AppServerClient()
+    client = CodexClient()
     client.register_turn_notifications("turn-1")
     client.register_turn_notifications("turn-2")
 
@@ -266,7 +292,7 @@ def test_client_reader_routes_interleaved_turn_notifications_by_turn_id() -> Non
 
 def test_turn_notification_router_buffers_events_before_registration() -> None:
     """Early turn events should be replayed once their TurnHandle registers."""
-    client = AppServerClient()
+    client = CodexClient()
     client._router.route_notification(
         client._coerce_notification(
             "item/agentMessage/delta",
@@ -291,7 +317,7 @@ def test_turn_notification_router_buffers_events_before_registration() -> None:
 
 def test_turn_notification_router_clears_unregistered_turn_when_completed() -> None:
     """A completed unregistered turn should not leave a pending queue behind."""
-    client = AppServerClient()
+    client = CodexClient()
     client._router.route_notification(
         client._coerce_notification(
             "item/agentMessage/delta",
@@ -318,7 +344,7 @@ def test_turn_notification_router_clears_unregistered_turn_when_completed() -> N
 
 def test_turn_notification_router_routes_unknown_turn_notifications() -> None:
     """Unknown notifications should still route when their raw params carry a turn id."""
-    client = AppServerClient()
+    client = CodexClient()
     client.register_turn_notifications("turn-1")
     client.register_turn_notifications("turn-2")
 

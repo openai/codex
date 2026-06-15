@@ -489,6 +489,7 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-1".to_string(),
                     item_id: "perm-1".to_string(),
+                    environment_id: None,
                     started_at_ms: 0,
                     cwd: absolute_path(if cfg!(windows) { r"C:\tmp" } else { "/tmp" }),
                     reason: None,
@@ -508,6 +509,7 @@ mod tests {
                     turn_id: "turn-2".to_string(),
                     item_id: "tool-1".to_string(),
                     questions: Vec::new(),
+                    auto_resolution_ms: None,
                 },
             }),
             None
@@ -797,6 +799,7 @@ mod tests {
                 turn_id: "turn-1".to_string(),
                 item_id: "tool-1".to_string(),
                 questions: Vec::new(),
+                auto_resolution_ms: None,
             },
         });
 
@@ -819,6 +822,7 @@ mod tests {
                     turn_id: "turn-1".to_string(),
                     item_id: item_id.to_string(),
                     questions: Vec::new(),
+                    auto_resolution_ms: None,
                 },
             });
         }
