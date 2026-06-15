@@ -1,10 +1,10 @@
 use pretty_assertions::assert_eq;
 use std::fs;
 
-use super::DesktopDistributionError;
+use super::DesktopInstallationError;
 use super::DesktopResources;
 #[cfg(unix)]
-use super::InstalledDesktop;
+use super::VerifiedDesktopInstallation;
 use super::canonical;
 
 #[test]
@@ -41,12 +41,12 @@ fn rejects_non_normal_and_wrong_kind_paths() {
     for path in ["", ".", "../resources/plugins", "/tmp"] {
         assert!(matches!(
             resources.contained_directory(path),
-            Err(DesktopDistributionError::Containment(_))
+            Err(DesktopInstallationError::Containment(_))
         ));
     }
     assert!(matches!(
         resources.contained_file("plugins"),
-        Err(DesktopDistributionError::Containment(_))
+        Err(DesktopInstallationError::Containment(_))
     ));
 }
 
@@ -66,7 +66,7 @@ fn rejects_symlink_traversal() {
 
     assert!(matches!(
         resources.contained_file("plugins/hook.json"),
-        Err(DesktopDistributionError::Containment(_))
+        Err(DesktopInstallationError::Containment(_))
     ));
 
     let app_root = temp.path().join("Codex.app");
@@ -75,7 +75,7 @@ fn rejects_symlink_traversal() {
         .expect("create app contents");
     symlink(&outside, &resources_link).expect("create resources symlink");
     assert!(matches!(
-        InstalledDesktop::from_paths(app_root, resources_link),
-        Err(DesktopDistributionError::Containment(_))
+        VerifiedDesktopInstallation::from_paths(app_root, resources_link),
+        Err(DesktopInstallationError::Containment(_))
     ));
 }

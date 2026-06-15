@@ -22,10 +22,10 @@ mod platform;
 const DESKTOP_RESOURCES_PATH_ENV_VAR: &str = "CODEX_DESKTOP_RESOURCES_PATH";
 
 #[derive(Debug, thiserror::Error)]
-pub enum DesktopDistributionError {
+pub enum DesktopInstallationError {
     /// No launcher hint was provided and no installed Codex Desktop app was found. This can
     /// happen, for example, when Desktop was uninstalled after installing a bundled plugin.
-    #[error("no installed Codex Desktop distribution was found")]
+    #[error("no Codex Desktop installation was found")]
     NotFound,
     /// The platform app-discovery mechanism could not be queried successfully.
     #[error("Codex Desktop discovery failed: {0}")]
@@ -52,19 +52,19 @@ impl DesktopResources {
     pub fn contained_file(
         &self,
         relative_path: impl AsRef<Path>,
-    ) -> Result<AbsolutePathBuf, DesktopDistributionError> {
+    ) -> Result<AbsolutePathBuf, DesktopInstallationError> {
         contained_path(&self.root, relative_path.as_ref(), ResourceKind::File)
     }
 
     pub fn contained_directory(
         &self,
         relative_path: impl AsRef<Path>,
-    ) -> Result<AbsolutePathBuf, DesktopDistributionError> {
+    ) -> Result<AbsolutePathBuf, DesktopInstallationError> {
         contained_path(&self.root, relative_path.as_ref(), ResourceKind::Directory)
     }
 
     /// Uses a resources directory supplied by the trusted Desktop launcher.
-    pub fn from_trusted_path(root: PathBuf) -> Result<Self, DesktopDistributionError> {
+    pub fn from_trusted_path(root: PathBuf) -> Result<Self, DesktopInstallationError> {
         let root = canonical(&root, "resources root")?;
         if !root.as_path().is_dir() {
             return Err(containment("expected the resources root to be a directory"));
@@ -74,12 +74,12 @@ impl DesktopResources {
 }
 
 #[derive(Debug)]
-pub struct InstalledDesktop {
+pub struct VerifiedDesktopInstallation {
     app_root: AbsolutePathBuf,
     resources: DesktopResources,
 }
 
-impl InstalledDesktop {
+impl VerifiedDesktopInstallation {
     pub fn app_root(&self) -> &Path {
         self.app_root.as_path()
     }
@@ -88,7 +88,7 @@ impl InstalledDesktop {
     fn from_paths(
         app_root: PathBuf,
         resources_root: PathBuf,
-    ) -> Result<Self, DesktopDistributionError> {
+    ) -> Result<Self, DesktopInstallationError> {
         let app_root = canonical(&app_root, "application root")?;
         let resources = DesktopResources::from_trusted_path(resources_root)?;
         if resources.root == app_root || !resources.root.as_path().starts_with(app_root.as_path()) {
@@ -104,29 +104,29 @@ impl InstalledDesktop {
 }
 
 /// Uses resources supplied by Desktop, otherwise discovers the installed stable app.
-pub fn locate_current_or_installed_resources() -> Result<DesktopResources, DesktopDistributionError>
+pub fn locate_current_or_installed_resources() -> Result<DesktopResources, DesktopInstallationError>
 {
     if let Some(resources_root) = std::env::var_os(DESKTOP_RESOURCES_PATH_ENV_VAR) {
         return DesktopResources::from_trusted_path(PathBuf::from(resources_root));
     }
-    discover_installed_distribution()?
-        .map(|distribution| distribution.resources)
-        .ok_or(DesktopDistributionError::NotFound)
+    discover_desktop_installation()?
+        .map(|installation| installation.resources)
+        .ok_or(DesktopInstallationError::NotFound)
 }
 
 /// Discovers an installed Desktop app without consulting the launcher resources hint.
-pub fn discover_installed_distribution()
--> Result<Option<InstalledDesktop>, DesktopDistributionError> {
+pub fn discover_desktop_installation()
+-> Result<Option<VerifiedDesktopInstallation>, DesktopInstallationError> {
     platform::discover()
 }
 
 /// Validates a macOS Codex app bundle at a known path using the same identity and containment
 /// checks as installed-app discovery. Returns `Ok(None)` when the path is not a trusted Codex
-/// Desktop distribution.
+/// Desktop installation.
 #[cfg(target_os = "macos")]
-pub fn validate_installed_distribution_at(
+pub fn validate_desktop_installation_at(
     app_root: impl AsRef<Path>,
-) -> Result<Option<InstalledDesktop>, DesktopDistributionError> {
+) -> Result<Option<VerifiedDesktopInstallation>, DesktopInstallationError> {
     platform::validate_candidate(app_root.as_ref())
 }
 
@@ -145,7 +145,7 @@ fn contained_path(
     root: &AbsolutePathBuf,
     relative_path: &Path,
     kind: ResourceKind,
-) -> Result<AbsolutePathBuf, DesktopDistributionError> {
+) -> Result<AbsolutePathBuf, DesktopInstallationError> {
     if relative_path.as_os_str().is_empty()
         || relative_path
             .components()
@@ -162,7 +162,7 @@ fn contained_path(
         ));
     }
     let metadata =
-        fs::metadata(path.as_path()).map_err(|source| DesktopDistributionError::Filesystem {
+        fs::metadata(path.as_path()).map_err(|source| DesktopInstallationError::Filesystem {
             stage: "resource metadata",
             source,
         })?;
@@ -182,14 +182,14 @@ fn contained_path(
 fn canonical(
     path: &Path,
     stage: &'static str,
-) -> Result<AbsolutePathBuf, DesktopDistributionError> {
+) -> Result<AbsolutePathBuf, DesktopInstallationError> {
     AbsolutePathBuf::from_absolute_path_checked(path)
         .and_then(|path| path.canonicalize())
-        .map_err(|source| DesktopDistributionError::Filesystem { stage, source })
+        .map_err(|source| DesktopInstallationError::Filesystem { stage, source })
 }
 
-fn containment(message: impl Into<String>) -> DesktopDistributionError {
-    DesktopDistributionError::Containment(message.into())
+fn containment(message: impl Into<String>) -> DesktopInstallationError {
+    DesktopInstallationError::Containment(message.into())
 }
 
 #[cfg(test)]

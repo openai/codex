@@ -33,7 +33,7 @@ members = [
     "connectors",
     "config",
     "context-fragments",
-    "desktop-distribution",
+    "desktop-installation",
     "shell-command",
     "shell-escalation",
     "skills",
@@ -166,7 +166,7 @@ codex-home = { path = "codex-home" }
 codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
 codex-context-fragments = { path = "context-fragments" }
-codex-desktop-distribution = { path = "desktop-distribution" }
+codex-desktop-installation = { path = "desktop-installation" }
 codex-core = { path = "core" }
 codex-core-api = { path = "core-api" }
 codex-core-plugins = { path = "core-plugins" }

@@ -1,6 +1,6 @@
 use anyhow::Context as _;
-use codex_desktop_distribution::discover_installed_distribution;
-use codex_desktop_distribution::validate_installed_distribution_at;
+use codex_desktop_installation::discover_desktop_installation;
+use codex_desktop_installation::validate_desktop_installation_at;
 use std::ffi::CString;
 use std::path::Path;
 use std::path::PathBuf;
@@ -66,10 +66,10 @@ fn is_apple_silicon_mac() -> bool {
 }
 
 async fn find_existing_codex_app_path() -> anyhow::Result<Option<PathBuf>> {
-    let distribution = tokio::task::spawn_blocking(discover_installed_distribution)
+    let installation = tokio::task::spawn_blocking(discover_desktop_installation)
         .await
         .context("Desktop discovery task failed")??;
-    Ok(distribution.map(|distribution| distribution.app_root().to_path_buf()))
+    Ok(installation.map(|installation| installation.app_root().to_path_buf()))
 }
 
 async fn open_codex_app(app_path: &Path, workspace: &Path) -> anyhow::Result<()> {
@@ -174,15 +174,15 @@ async fn install_codex_app_bundle(app_in_volume: &Path) -> anyhow::Result<PathBu
 
 async fn validate_installed_codex_app(app_path: PathBuf) -> anyhow::Result<PathBuf> {
     let candidate = app_path.clone();
-    let distribution =
-        tokio::task::spawn_blocking(move || validate_installed_distribution_at(candidate))
+    let installation =
+        tokio::task::spawn_blocking(move || validate_desktop_installation_at(candidate))
             .await
             .context("Desktop validation task failed")??;
     let app_path_display = app_path.display();
-    let distribution = distribution.with_context(|| {
+    let installation = installation.with_context(|| {
         format!("refusing to launch unverified Codex Desktop at {app_path_display}")
     })?;
-    Ok(distribution.app_root().to_path_buf())
+    Ok(installation.app_root().to_path_buf())
 }
 
 fn candidate_applications_dirs() -> anyhow::Result<Vec<PathBuf>> {

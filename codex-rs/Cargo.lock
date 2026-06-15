@@ -2291,7 +2291,7 @@ dependencies = [
  "codex-config",
  "codex-core",
  "codex-core-plugins",
- "codex-desktop-distribution",
+ "codex-desktop-installation",
  "codex-exec",
  "codex-exec-server",
  "codex-execpolicy",
@@ -2784,7 +2784,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-desktop-distribution"
+name = "codex-desktop-installation"
 version = "0.0.0"
 dependencies = [
  "codex-utils-absolute-path",

@@ -1,5 +1,5 @@
 use anyhow::Context as _;
-use codex_desktop_distribution::discover_installed_distribution;
+use codex_desktop_installation::discover_desktop_installation;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::process::Command;
@@ -32,7 +32,7 @@ pub async fn run_windows_app_open_or_install(
 }
 
 async fn codex_app_is_installed() -> anyhow::Result<bool> {
-    Ok(tokio::task::spawn_blocking(discover_installed_distribution)
+    Ok(tokio::task::spawn_blocking(discover_desktop_installation)
         .await
         .context("Desktop discovery task failed")??
         .is_some())

@@ -1,0 +1,6 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "desktop-installation",
+    crate_name = "codex_desktop_installation",
+)
