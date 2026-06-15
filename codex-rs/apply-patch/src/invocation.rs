@@ -186,17 +186,7 @@ pub async fn verify_apply_patch_args(
                 );
             }
             Hunk::DeleteFile { .. } => {
-                let path_uri = match PathUri::from_abs_path(&path) {
-                    Ok(path_uri) => path_uri,
-                    Err(e) => {
-                        return MaybeApplyPatchVerified::CorrectnessError(
-                            ApplyPatchError::IoError(IoError {
-                                context: format!("Failed to read {}", path.display()),
-                                source: e,
-                            }),
-                        );
-                    }
-                };
+                let path_uri = PathUri::from_abs_path(&path);
                 let content = match fs.read_file_text(&path_uri, sandbox).await {
                     Ok(content) => content,
                     Err(e) => {

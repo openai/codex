@@ -1,3 +1,6 @@
+use std::ffi::OsStr;
+use std::ffi::OsString;
+use std::io::ErrorKind;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -8,6 +11,13 @@ use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
+use codex_app_server::AppServerRuntimeOptions;
+use codex_app_server::AppServerTransport;
+use codex_app_server::AppServerWebsocketAuthSettings;
+use codex_app_server::PluginStartupTasks;
+use codex_app_server::RemoteControlStartupMode;
+use codex_app_server::run_main_with_transport_options;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RemoteControlClient;
 use codex_app_server_protocol::RemoteControlClientsListOrder;
@@ -22,12 +32,18 @@ use codex_app_server_protocol::RemoteControlPairingStartParams;
 use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_app_server_protocol::RemoteControlPairingStatusParams;
 use codex_app_server_protocol::RemoteControlPairingStatusResponse;
+use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_app_server_protocol::RemoteControlStatusReadResponse;
 use codex_app_server_protocol::RequestId;
+use codex_arg0::Arg0DispatchPaths;
+use codex_config::LoaderOverrides;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_protocol::protocol::SessionSource;
 use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
+use codex_utils_cli::CliConfigOverrides;
 use pretty_assertions::assert_eq;
+use serial_test::serial;
 use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncReadExt;
@@ -41,6 +57,34 @@ use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+const REMOTE_CONTROL_DISABLED_BY_REQUIREMENTS_MESSAGE: &str =
+    "remote control is disabled by managed requirements";
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &OsStr) -> Self {
+        let original = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.original {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
 
 async fn remote_control_preference(
     state_db: &StateRuntime,
@@ -59,6 +103,149 @@ async fn wait_for_response(mcp: &mut TestAppServer, request_id: i64) -> Result<J
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await?
+}
+
+async fn assert_remote_control_disabled_by_requirements(
+    mcp: &mut TestAppServer,
+    request_id: i64,
+) -> Result<()> {
+    let JSONRPCError { error, .. } = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(error.code, -32600);
+    assert_eq!(
+        error.message,
+        REMOTE_CONTROL_DISABLED_BY_REQUIREMENTS_MESSAGE
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_requirements_reject_all_remote_control_rpcs() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        "allow_remote_control = false\n",
+    )?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let notification = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("remoteControl/status/changed"),
+    )
+    .await??;
+    let status: RemoteControlStatusChangedNotification = serde_json::from_value(
+        notification
+            .params
+            .context("remote-control status notification should include params")?,
+    )?;
+    assert_eq!(status.status, RemoteControlConnectionStatus::Disabled);
+    assert_eq!(status.environment_id, None);
+
+    let request_ids = [
+        mcp.send_remote_control_enable_request().await?,
+        mcp.send_remote_control_disable_request().await?,
+        mcp.send_remote_control_status_read_request().await?,
+        mcp.send_remote_control_pairing_start_request(RemoteControlPairingStartParams {
+            manual_code: false,
+        })
+        .await?,
+        mcp.send_remote_control_pairing_status_request(RemoteControlPairingStatusParams {
+            pairing_code: Some("pairing-code".to_string()),
+            manual_pairing_code: None,
+        })
+        .await?,
+        mcp.send_remote_control_clients_list_request(RemoteControlClientsListParams {
+            environment_id: "environment-id".to_string(),
+            cursor: None,
+            limit: None,
+            order: None,
+        })
+        .await?,
+        mcp.send_remote_control_clients_revoke_request(RemoteControlClientsRevokeParams {
+            environment_id: "environment-id".to_string(),
+            client_id: "client-id".to_string(),
+        })
+        .await?,
+    ];
+
+    for request_id in request_ids {
+        assert_remote_control_disabled_by_requirements(&mut mcp, request_id).await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_requirements_allow_remote_control_true_does_not_enable_or_block_it() -> Result<()>
+{
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        "allow_remote_control = true\n",
+    )?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_remote_control_status_read_request().await?;
+    let response = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: RemoteControlStatusReadResponse = to_response(response)?;
+    assert_eq!(received.status, RemoteControlConnectionStatus::Disabled);
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn explicit_remote_control_startup_fails_when_disabled_by_requirements() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        "allow_remote_control = false\n",
+    )?;
+    let managed_config_path = codex_home.path().join("managed_config.toml");
+    let socket_path = codex_home.path().join("app-server.sock");
+    let transport =
+        AppServerTransport::from_listen_url(&format!("unix://{}", socket_path.display()))?;
+    let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
+
+    let result = timeout(
+        STARTUP_TIMEOUT,
+        run_main_with_transport_options(
+            Arg0DispatchPaths {
+                codex_self_exe: Some(std::env::current_exe()?),
+                codex_linux_sandbox_exe: None,
+                main_execve_wrapper_exe: None,
+            },
+            CliConfigOverrides::default(),
+            LoaderOverrides::with_managed_config_path_for_tests(managed_config_path),
+            /*strict_config*/ false,
+            /*default_analytics_enabled*/ false,
+            transport,
+            SessionSource::VSCode,
+            AppServerWebsocketAuthSettings::default(),
+            AppServerRuntimeOptions {
+                plugin_startup_tasks: PluginStartupTasks::Skip,
+                remote_control_startup_mode: RemoteControlStartupMode::EnabledEphemeral,
+                install_shutdown_signal_handler: false,
+            },
+        ),
+    )
+    .await?;
+    let err = result.expect_err("managed requirements should reject explicit remote control");
+    assert_eq!(err.kind(), ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        REMOTE_CONTROL_DISABLED_BY_REQUIREMENTS_MESSAGE
+    );
+    assert!(!socket_path.exists());
+    Ok(())
 }
 
 #[tokio::test]
@@ -85,6 +272,54 @@ async fn listen_off_honors_persisted_remote_control_enable() -> Result<()> {
 
     let _app_server = TestAppServer::new_with_args(codex_home.path(), &["--listen", "off"]).await?;
     timeout(STARTUP_TIMEOUT, listener.accept()).await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn listen_off_ignores_persisted_enable_when_disabled_by_requirements() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let listener = configured_remote_control_listener(codex_home.path()).await?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        "allow_remote_control = false\n",
+    )?;
+    let websocket_url = format!(
+        "ws://{}/backend-api/wham/remote/control/server",
+        listener.local_addr()?
+    );
+    let state_db =
+        StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".to_string()).await?;
+    state_db
+        .upsert_remote_control_enrollment(&RemoteControlEnrollmentRecord {
+            websocket_url: websocket_url.clone(),
+            account_id: "account_id".to_string(),
+            app_server_client_name: None,
+            server_id: "server-id".to_string(),
+            environment_id: "environment-id".to_string(),
+            server_name: "server-name".to_string(),
+            remote_control_enabled: Some(true),
+        })
+        .await?;
+
+    let mut app_server =
+        TestAppServer::new_with_args(codex_home.path(), &["--listen", "off"]).await?;
+    let status = timeout(STARTUP_TIMEOUT, app_server.wait_for_exit()).await??;
+    assert!(!status.success());
+    timeout(Duration::from_millis(100), listener.accept())
+        .await
+        .expect_err("managed requirements should prevent a remote-control connection");
+    assert_eq!(
+        state_db
+            .get_remote_control_enrollment(
+                &websocket_url,
+                "account_id",
+                /*app_server_client_name*/ None
+            )
+            .await?
+            .context("enrollment should remain persisted")?
+            .remote_control_enabled,
+        Some(true)
+    );
     Ok(())
 }
 

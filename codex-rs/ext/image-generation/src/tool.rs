@@ -267,7 +267,7 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::Compaction { .. }
-            | ResponseItem::CompactionTrigger
+            | ResponseItem::CompactionTrigger { .. }
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other => {}
         }
@@ -283,9 +283,9 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
                     ContentItem::InputText { .. } | ContentItem::OutputText { .. } => None,
                 }));
             }
-            ResponseItem::FunctionCallOutput { call_id, output }
-                if function_call_ids.contains(call_id.as_str()) =>
-            {
+            ResponseItem::FunctionCallOutput {
+                call_id, output, ..
+            } if function_call_ids.contains(call_id.as_str()) => {
                 image_urls.extend(output_image_urls(output));
             }
             ResponseItem::CustomToolCallOutput {
@@ -308,7 +308,7 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::Compaction { .. }
-            | ResponseItem::CompactionTrigger
+            | ResponseItem::CompactionTrigger { .. }
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other => {}
         }
@@ -341,12 +341,7 @@ async fn image_url(
     path: &AbsolutePathBuf,
     environment: &ToolEnvironment,
 ) -> Result<ImageUrl, FunctionCallError> {
-    let path_uri = PathUri::from_abs_path(path).map_err(|error| {
-        FunctionCallError::RespondToModel(format!(
-            "unable to read referenced image at `{}`: {error}",
-            path.display()
-        ))
-    })?;
+    let path_uri = PathUri::from_abs_path(path);
     let bytes = environment
         .file_system
         .read_file(&path_uri, Some(&environment.file_system_sandbox_context))

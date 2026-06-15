@@ -320,7 +320,7 @@ async fn read_resolved_agent_role_file(
     path: &AbsolutePathBuf,
     role_name_hint: Option<&str>,
 ) -> std::io::Result<ResolvedAgentRoleFile> {
-    let path_uri = PathUri::from_abs_path(path)?;
+    let path_uri = PathUri::from_abs_path(path);
     let contents = fs.read_file_text(&path_uri, /*sandbox*/ None).await?;
     let config_base_dir = path.parent().unwrap_or_else(|| path.clone());
     parse_agent_role_file_contents(
@@ -393,7 +393,7 @@ async fn validate_agent_role_config_file(
         return Ok(());
     };
 
-    let config_file_uri = PathUri::from_abs_path(config_file)?;
+    let config_file_uri = PathUri::from_abs_path(config_file);
     let metadata = fs
         .get_metadata(&config_file_uri, /*sandbox*/ None)
         .await
@@ -525,7 +525,7 @@ async fn collect_agent_role_files(
     let mut files = Vec::new();
     let mut dirs = vec![dir.clone()];
     while let Some(dir) = dirs.pop() {
-        let dir_uri = PathUri::from_abs_path(&dir)?;
+        let dir_uri = PathUri::from_abs_path(&dir);
         let entries = match fs.read_directory(&dir_uri, /*sandbox*/ None).await {
             Ok(entries) => entries,
             Err(err) if err.kind() == ErrorKind::NotFound => continue,

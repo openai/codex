@@ -25,6 +25,8 @@ use codex_model_provider::create_model_provider;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_4_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_models_manager::manager::StaticModelsManager;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::NetworkApprovalProtocol;
@@ -32,6 +34,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -78,6 +81,50 @@ use tokio_util::sync::CancellationToken;
 fn fixed_guardian_parent_session_id() -> ThreadId {
     ThreadId::from_string("11111111-1111-4111-8111-111111111111")
         .expect("fixed parent session id should be a valid UUID")
+}
+
+const GUARDIAN_MEMORY_CONTEXT_PROBE: &str = "guardian memory context probe";
+const GUARDIAN_SKILL_NAME: &str = "guardian-context-probe";
+const GUARDIAN_SKILL_BODY_PROBE: &str = "guardian skill body probe";
+
+// The memories extension depends on codex-core, so this probe verifies the nested Guardian config
+// at request assembly without introducing a circular test dependency.
+struct GuardianMemoryContextEnabled(bool);
+
+struct GuardianMemoryContextProbe;
+
+impl codex_extension_api::ThreadLifecycleContributor<Config> for GuardianMemoryContextProbe {
+    fn on_thread_start<'a>(
+        &'a self,
+        input: codex_extension_api::ThreadStartInput<'a, Config>,
+    ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            input.thread_store.insert(GuardianMemoryContextEnabled(
+                input.config.memories.use_memories,
+            ));
+        })
+    }
+}
+
+impl codex_extension_api::ContextContributor for GuardianMemoryContextProbe {
+    fn contribute<'a>(
+        &'a self,
+        _session_store: &'a codex_extension_api::ExtensionData,
+        thread_store: &'a codex_extension_api::ExtensionData,
+    ) -> codex_extension_api::ExtensionFuture<'a, Vec<codex_extension_api::PromptFragment>> {
+        Box::pin(async move {
+            if thread_store
+                .get::<GuardianMemoryContextEnabled>()
+                .is_some_and(|enabled| enabled.0)
+            {
+                vec![codex_extension_api::PromptFragment::developer_policy(
+                    GUARDIAN_MEMORY_CONTEXT_PROBE,
+                )]
+            } else {
+                Vec::new()
+            }
+        })
+    }
 }
 
 #[test]
@@ -251,6 +298,7 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
                             .to_string(),
                     }],
                     phase: None,
+                    metadata: None,
                 },
                 ResponseItem::FunctionCall {
                     id: None,
@@ -258,12 +306,14 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
                     namespace: None,
                     arguments: "{\"repo\":\"openai/codex\"}".to_string(),
                     call_id: "call-1".to_string(),
+                    metadata: None,
                 },
                 ResponseItem::FunctionCallOutput {
                     call_id: "call-1".to_string(),
                     output: codex_protocol::models::FunctionCallOutputPayload::from_text(
                         "repo visibility: public".to_string(),
                     ),
+                    metadata: None,
                 },
                 ResponseItem::Message {
                     id: None,
@@ -273,6 +323,7 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
                             .to_string(),
                     }],
                     phase: None,
+                    metadata: None,
                 },
             ],
         )
@@ -479,6 +530,7 @@ async fn build_guardian_prompt_delta_mode_preserves_original_numbering() -> anyh
                         text: "Please also push the second docs fix.".to_string(),
                     }],
                     phase: None,
+                    metadata: None,
                 },
                 ResponseItem::Message {
                     id: None,
@@ -487,6 +539,7 @@ async fn build_guardian_prompt_delta_mode_preserves_original_numbering() -> anyh
                         text: "I need approval for the second push.".to_string(),
                     }],
                     phase: None,
+                    metadata: None,
                 },
             ],
         )
@@ -609,6 +662,7 @@ async fn build_guardian_prompt_stale_delta_version_falls_back_to_full_prompt() -
                         text: "Compacted retained user request.".to_string(),
                     }],
                     phase: None,
+                    metadata: None,
                 },
                 ResponseItem::Message {
                     id: None,
@@ -617,6 +671,7 @@ async fn build_guardian_prompt_stale_delta_version_falls_back_to_full_prompt() -
                         text: "Compacted summary of earlier guardian context.".to_string(),
                     }],
                     phase: None,
+                    metadata: None,
                 },
             ],
             /*reference_context_item*/ None,
@@ -633,6 +688,7 @@ async fn build_guardian_prompt_stale_delta_version_falls_back_to_full_prompt() -
                         text: "Please push after the compaction.".to_string(),
                     }],
                     phase: None,
+                    metadata: None,
                 },
                 ResponseItem::Message {
                     id: None,
@@ -641,6 +697,7 @@ async fn build_guardian_prompt_stale_delta_version_falls_back_to_full_prompt() -
                         text: "I need approval for the post-compaction push.".to_string(),
                     }],
                     phase: None,
+                    metadata: None,
                 },
             ],
         )
@@ -688,6 +745,7 @@ fn collect_guardian_transcript_entries_skips_contextual_user_messages() {
                 text: "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>".to_string(),
             }],
             phase: None,
+            metadata: None,
         },
         ResponseItem::Message {
             id: None,
@@ -696,6 +754,7 @@ fn collect_guardian_transcript_entries_skips_contextual_user_messages() {
                 text: "hello".to_string(),
             }],
             phase: None,
+            metadata: None,
         },
     ];
 
@@ -723,6 +782,7 @@ fn collect_guardian_transcript_entries_keeps_manual_approval_developer_message()
                 text: "ordinary developer context".to_string(),
             }],
             phase: None,
+            metadata: None,
         },
         ResponseItem::Message {
             id: None,
@@ -731,6 +791,7 @@ fn collect_guardian_transcript_entries_keeps_manual_approval_developer_message()
                 text: approval_text.clone(),
             }],
             phase: None,
+            metadata: None,
         },
     ];
 
@@ -755,6 +816,7 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
                 text: "check the repo".to_string(),
             }],
             phase: None,
+            metadata: None,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -762,12 +824,14 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
             namespace: None,
             arguments: "{\"path\":\"README.md\"}".to_string(),
             call_id: "call-1".to_string(),
+            metadata: None,
         },
         ResponseItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
             output: codex_protocol::models::FunctionCallOutputPayload::from_text(
                 "repo is public".to_string(),
             ),
+            metadata: None,
         },
         ResponseItem::Message {
             id: None,
@@ -776,6 +840,7 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
                 text: "I need to push a fix".to_string(),
             }],
             phase: None,
+            metadata: None,
         },
     ];
 
@@ -1346,9 +1411,20 @@ fn guardian_output_schema_requires_only_outcome_and_allows_optional_details() {
     );
 }
 
-async fn guardian_request_model_for_auto_review_override(
+enum GuardianTestCatalog {
+    Bundled,
+    ParentOnly,
+}
+
+async fn guardian_request_model_for_auto_review(
     auto_review_model_override: Option<String>,
-) -> anyhow::Result<(String, String, String)> {
+    catalog: GuardianTestCatalog,
+) -> anyhow::Result<(
+    String,
+    String,
+    String,
+    codex_analytics::GuardianReviewAnalyticsResult,
+)> {
     let server = start_mock_server().await;
     let guardian_assessment = serde_json::json!({
         "outcome": "allow",
@@ -1364,7 +1440,24 @@ async fn guardian_request_model_for_auto_review_override(
     )
     .await;
 
-    let (session, mut turn) = guardian_test_session_and_turn(&server).await;
+    let (mut session, mut turn) = guardian_test_session_and_turn(&server).await;
+    match catalog {
+        GuardianTestCatalog::Bundled => {}
+        GuardianTestCatalog::ParentOnly => {
+            let parent_model = turn.model_info.clone();
+            let auth_manager = Arc::clone(&session.services.auth_manager);
+            let models_manager = StaticModelsManager::new(
+                Some(auth_manager),
+                ModelsResponse {
+                    models: vec![parent_model],
+                },
+            );
+            Arc::get_mut(&mut session)
+                .expect("session should be unique")
+                .services
+                .models_manager = Arc::new(models_manager);
+        }
+    }
     Arc::get_mut(&mut turn)
         .expect("turn should be unique")
         .model_info
@@ -1373,7 +1466,7 @@ async fn guardian_request_model_for_auto_review_override(
     let preferred_model = turn.provider.approval_review_preferred_model().to_string();
     seed_guardian_parent_history(&session, &turn).await;
 
-    let outcome = run_guardian_review_session_for_test(
+    let (outcome, analytics_result) = run_guardian_review_session_for_test(
         Arc::clone(&session),
         turn,
         GuardianApprovalRequest::Shell {
@@ -1390,19 +1483,24 @@ async fn guardian_request_model_for_auto_review_override(
         /*max_attempts*/ 1,
     )
     .await;
-    let (GuardianReviewOutcome::Completed(_), _) = outcome else {
+    let GuardianReviewOutcome::Completed(_) = outcome else {
         panic!("expected guardian assessment");
     };
 
-    let request_model = request_log
-        .single_request()
+    let request = request_log.single_request();
+    let request_model = request
         .body_json()
         .get("model")
         .and_then(|value| value.as_str())
         .expect("guardian request should include a model")
         .to_string();
 
-    Ok((request_model, parent_model, preferred_model))
+    Ok((
+        request_model,
+        parent_model,
+        preferred_model,
+        analytics_result,
+    ))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1411,12 +1509,36 @@ async fn guardian_review_uses_model_catalog_override_when_preferred_review_model
     skip_if_no_network!(Ok(()));
 
     let override_model = "guardian-review-model-override".to_string();
-    let (request_model, parent_model, preferred_model) =
-        guardian_request_model_for_auto_review_override(Some(override_model.clone())).await?;
+    let (request_model, parent_model, preferred_model, analytics_result) =
+        guardian_request_model_for_auto_review(
+            Some(override_model.clone()),
+            GuardianTestCatalog::Bundled,
+        )
+        .await?;
 
     assert_eq!(request_model, override_model);
     assert_ne!(request_model, parent_model);
     assert_ne!(request_model, preferred_model);
+    assert_eq!(
+        analytics_result.guardian_catalog_contains_auto_review,
+        Some(true)
+    );
+    assert_eq!(
+        analytics_result.guardian_default_review_model_id.as_deref(),
+        Some(preferred_model.as_str())
+    );
+    assert_eq!(
+        analytics_result.guardian_review_model_overridden,
+        Some(true)
+    );
+    assert_eq!(
+        analytics_result.guardian_review_model_override.as_deref(),
+        Some(override_model.as_str())
+    );
+    assert_eq!(
+        analytics_result.guardian_model_provider_id.as_deref(),
+        Some(OPENAI_PROVIDER_ID)
+    );
 
     Ok(())
 }
@@ -1426,12 +1548,73 @@ async fn guardian_review_uses_preferred_review_model_without_model_catalog_overr
 -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (request_model, parent_model, preferred_model) =
-        guardian_request_model_for_auto_review_override(/*auto_review_model_override*/ None)
-            .await?;
+    let (request_model, parent_model, preferred_model, analytics_result) =
+        guardian_request_model_for_auto_review(
+            /*auto_review_model_override*/ None,
+            GuardianTestCatalog::Bundled,
+        )
+        .await?;
 
     assert_eq!(request_model, preferred_model);
     assert_ne!(request_model, parent_model);
+    assert_eq!(
+        analytics_result.guardian_catalog_contains_auto_review,
+        Some(true)
+    );
+    assert_eq!(
+        analytics_result.guardian_default_review_model_id.as_deref(),
+        Some(preferred_model.as_str())
+    );
+    assert_eq!(
+        analytics_result.guardian_review_model_overridden,
+        Some(false)
+    );
+    assert_eq!(
+        analytics_result.guardian_review_model_override.as_deref(),
+        None
+    );
+    assert_eq!(
+        analytics_result.guardian_model_provider_id.as_deref(),
+        Some(OPENAI_PROVIDER_ID)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_records_missing_auto_review_model_in_analytics_metadata()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (request_model, parent_model, preferred_model, analytics_result) =
+        guardian_request_model_for_auto_review(
+            /*auto_review_model_override*/ None,
+            GuardianTestCatalog::ParentOnly,
+        )
+        .await?;
+
+    assert_eq!(request_model, parent_model);
+    assert_ne!(request_model, preferred_model);
+    assert_eq!(
+        analytics_result.guardian_catalog_contains_auto_review,
+        Some(false)
+    );
+    assert_eq!(
+        analytics_result.guardian_default_review_model_id.as_deref(),
+        Some(preferred_model.as_str())
+    );
+    assert_eq!(
+        analytics_result.guardian_review_model_overridden,
+        Some(false)
+    );
+    assert_eq!(
+        analytics_result.guardian_review_model_override.as_deref(),
+        None
+    );
+    assert_eq!(
+        analytics_result.guardian_model_provider_id.as_deref(),
+        Some(OPENAI_PROVIDER_ID)
+    );
 
     Ok(())
 }
@@ -1465,6 +1648,11 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     let mut config = (*turn.config).clone();
     config.cwd = temp_cwd.abs();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    config.memories.use_memories = true;
+    config
+        .features
+        .enable(Feature::MemoryTool)
+        .expect("memory tool feature is configurable");
     let config = Arc::new(config);
     let models_manager = test_support::models_manager_with_provider(
         config.codex_home.to_path_buf(),
@@ -1472,11 +1660,45 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         config.model_provider.clone(),
     );
     session.services.models_manager = models_manager;
+    let memory_extension = Arc::new(GuardianMemoryContextProbe);
+    let mut extensions = codex_extension_api::ExtensionRegistryBuilder::<Config>::new();
+    extensions.thread_lifecycle_contributor(memory_extension.clone());
+    extensions.prompt_contributor(memory_extension);
+    session.services.extensions = Arc::new(extensions.build());
+
+    let skill_dir = config
+        .codex_home
+        .to_path_buf()
+        .join("skills")
+        .join(GUARDIAN_SKILL_NAME);
+    std::fs::create_dir_all(&skill_dir)?;
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        format!(
+            "---\nname: {GUARDIAN_SKILL_NAME}\ndescription: Guardian skill injection probe.\n---\n\n{GUARDIAN_SKILL_BODY_PROBE}\n"
+        ),
+    )?;
+    session.services.skills_manager.clear_cache();
     turn.config = Arc::clone(&config);
     turn.provider = create_model_provider(config.model_provider.clone(), turn.auth_manager.clone());
     let session = Arc::new(session);
     let turn = Arc::new(turn);
     seed_guardian_parent_history(&session, &turn).await;
+    session
+        .record_conversation_items(
+            turn.as_ref(),
+            &[ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!(
+                        "Use ${GUARDIAN_SKILL_NAME} before deciding whether the push is safe."
+                    ),
+                }],
+                phase: None,
+            }],
+        )
+        .await;
 
     let request = GuardianApprovalRequest::Shell {
         id: "shell-1".to_string(),
@@ -1518,6 +1740,19 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     ));
     let request = request_log.single_request();
     let request_body = request.body_json();
+    let guardian_user_text = request.message_input_texts("user").join("\n");
+    assert!(
+        guardian_user_text.contains(&format!("${GUARDIAN_SKILL_NAME}")),
+        "guardian request should contain the untrusted skill mention from the parent transcript"
+    );
+    assert!(
+        !request.body_contains_text(GUARDIAN_SKILL_BODY_PROBE),
+        "guardian request should not inject a skill body from its generated review prompt"
+    );
+    assert!(
+        !request.body_contains_text(GUARDIAN_MEMORY_CONTEXT_PROBE),
+        "guardian request should not include memory context"
+    );
     assert_eq!(
         request_body.pointer("/text/format/strict"),
         Some(&serde_json::json!(false))
@@ -1692,6 +1927,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                         text: "Please push the second docs fix too.".to_string(),
                     }],
                     phase: None,
+                    metadata: None,
                 },
                 ResponseItem::Message {
                     id: None,
@@ -1700,6 +1936,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                         text: "I need approval for the second docs fix.".to_string(),
                     }],
                     phase: None,
+                    metadata: None,
                 },
             ],
         )
@@ -1737,6 +1974,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                         text: "Please push the third docs fix too.".to_string(),
                     }],
                     phase: None,
+                    metadata: None,
                 },
                 ResponseItem::Message {
                     id: None,
@@ -1745,6 +1983,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                         text: "I need approval for the third docs fix.".to_string(),
                     }],
                     phase: None,
+                    metadata: None,
                 },
             ],
         )
@@ -2484,7 +2723,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
                             text: "Please inspect pending changes before pushing.".to_string(),
                         }],
                         phase: None,
-                    },
+                        metadata: None,},
                     ResponseItem::Message {
                         id: None,
                         role: "assistant".to_string(),
@@ -2492,7 +2731,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
                             text: "I need approval to run git diff.".to_string(),
                         }],
                         phase: None,
-                    },
+                        metadata: None,},
                 ],
             )
             .await;
@@ -2551,7 +2790,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
                             text: "Now inspect whether pushing is safe.".to_string(),
                         }],
                         phase: None,
-                    },
+                        metadata: None,},
                     ResponseItem::Message {
                         id: None,
                         role: "assistant".to_string(),
@@ -2559,7 +2798,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
                             text: "I need approval to push after the diff check.".to_string(),
                         }],
                         phase: None,
-                    },
+                        metadata: None,},
                 ],
             )
             .await;
@@ -2762,7 +3001,7 @@ async fn guardian_review_session_config_uses_live_network_proxy_state() {
 }
 
 #[tokio::test]
-async fn guardian_review_session_config_disables_mcp_apps_and_plugins() {
+async fn guardian_review_session_config_disables_mcp_apps_plugins_and_memories() {
     let mut parent_config = test_config().await;
     let server: McpServerConfig =
         toml::from_str("command = \"docs-server\"").expect("deserialize MCP server");
@@ -2779,6 +3018,8 @@ async fn guardian_review_session_config_disables_mcp_apps_and_plugins() {
         .enable(Feature::Plugins)
         .expect("plugins feature is configurable");
     parent_config.include_apps_instructions = true;
+    parent_config.memories.use_memories = true;
+    parent_config.memories.dedicated_tools = true;
 
     let guardian_config = build_guardian_review_session_config_for_test(
         &parent_config,
@@ -2792,6 +3033,8 @@ async fn guardian_review_session_config_disables_mcp_apps_and_plugins() {
     assert!(!guardian_config.features.enabled(Feature::Apps));
     assert!(!guardian_config.features.enabled(Feature::Plugins));
     assert!(!guardian_config.include_apps_instructions);
+    assert!(!guardian_config.memories.use_memories);
+    assert!(!guardian_config.memories.dedicated_tools);
 }
 
 #[tokio::test]

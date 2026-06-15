@@ -178,6 +178,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
             },
         ],
         phase: None,
+        metadata: None,
     };
 
     assert_eq!(actual, expected);
@@ -268,6 +269,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
             },
         ],
         phase: None,
+        metadata: None,
     };
 
     assert_eq!(actual, expected);

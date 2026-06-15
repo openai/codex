@@ -373,14 +373,8 @@ pub fn build_exec_request(
             "command args are empty",
         ))
     })?;
-    let cwd = PathUri::from_abs_path(&cwd).map_err(|_| {
-        CodexErr::InvalidRequest("command cwd cannot be represented as a file URI".to_string())
-    })?;
-    let sandbox_policy_cwd_uri = PathUri::from_abs_path(sandbox_cwd).map_err(|_| {
-        CodexErr::InvalidRequest(
-            "sandbox policy cwd cannot be represented as a file URI".to_string(),
-        )
-    })?;
+    let cwd = PathUri::from_abs_path(&cwd);
+    let sandbox_policy_cwd_uri = PathUri::from_abs_path(sandbox_cwd);
 
     let manager = SandboxManager::new();
     let command = SandboxCommand {

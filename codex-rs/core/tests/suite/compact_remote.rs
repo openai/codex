@@ -8,6 +8,9 @@ use codex_core::compact::SUMMARY_PREFIX;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -131,6 +134,7 @@ fn canonical_json(value: &Value) -> Value {
 
 const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
 const DUMMY_FUNCTION_NAME: &str = "test_tool";
+const TURN_STATE_HEADER: &str = "x-codex-turn-state";
 const REMOTE_COMPACT_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn summary_with_prefix(summary: &str) -> String {
@@ -157,6 +161,7 @@ fn format_labeled_requests_snapshot(
 fn compacted_summary_only_output(summary: &str) -> Vec<ResponseItem> {
     vec![ResponseItem::Compaction {
         encrypted_content: summary_with_prefix(summary),
+        metadata: None,
     }]
 }
 
@@ -325,6 +330,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
 
     let compacted_history = vec![ResponseItem::Compaction {
         encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        metadata: None,
     }];
     let compact_mock = responses::mount_compact_json_once(
         harness.server(),
@@ -1146,22 +1152,24 @@ async fn remote_compact_filters_deferred_dynamic_tools() -> Result<()> {
         "properties": {},
         "additionalProperties": false,
     });
-    let dynamic_tools = vec![
-        DynamicToolSpec {
-            namespace: Some("codex_app".to_string()),
-            name: hidden_tool.to_string(),
-            description: "Hidden until discovered.".to_string(),
-            input_schema: input_schema.clone(),
-            defer_loading: true,
-        },
-        DynamicToolSpec {
-            namespace: Some("codex_app".to_string()),
-            name: visible_tool.to_string(),
-            description: "Visible immediately.".to_string(),
-            input_schema,
-            defer_loading: false,
-        },
-    ];
+    let dynamic_tools = vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+        name: "codex_app".to_string(),
+        description: "Codex app tools.".to_string(),
+        tools: vec![
+            DynamicToolNamespaceTool::Function(DynamicToolFunctionSpec {
+                name: hidden_tool.to_string(),
+                description: "Hidden until discovered.".to_string(),
+                input_schema: input_schema.clone(),
+                defer_loading: true,
+            }),
+            DynamicToolNamespaceTool::Function(DynamicToolFunctionSpec {
+                name: visible_tool.to_string(),
+                description: "Visible immediately.".to_string(),
+                input_schema,
+                defer_loading: false,
+            }),
+        ],
+    })];
     let new_thread = test
         .thread_manager
         .start_thread_with_tools(test.config.clone(), dynamic_tools)
@@ -1783,13 +1791,18 @@ async fn remote_compact_trims_tool_search_output_to_empty_tools_array() -> Resul
         "required": ["mode"],
         "additionalProperties": false,
     });
-    let dynamic_tool = DynamicToolSpec {
-        namespace: Some("codex_app".to_string()),
-        name: tool_name.to_string(),
-        description: tool_description,
-        input_schema,
-        defer_loading: true,
-    };
+    let dynamic_tool = DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+        name: "codex_app".to_string(),
+        description: "Codex app tools.".to_string(),
+        tools: vec![DynamicToolNamespaceTool::Function(
+            DynamicToolFunctionSpec {
+                name: tool_name.to_string(),
+                description: tool_description,
+                input_schema,
+                defer_loading: true,
+            },
+        )],
+    });
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
@@ -2344,6 +2357,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
     let compacted_history = vec![
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+            metadata: None,
         },
         ResponseItem::Message {
             id: None,
@@ -2352,6 +2366,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
                 text: "COMPACTED_ASSISTANT_NOTE".to_string(),
             }],
             phase: None,
+            metadata: None,
         },
     ];
     let compact_mock = responses::mount_compact_json_once(
@@ -2400,7 +2415,9 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
             let has_compaction_item = replacement_history.iter().any(|item| {
                 matches!(
                     item,
-                    ResponseItem::Compaction { encrypted_content }
+                    ResponseItem::Compaction {
+                        encrypted_content, ..
+                    }
                         if encrypted_content == "ENCRYPTED_COMPACTION_SUMMARY"
                 )
             });
@@ -2491,9 +2508,11 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
                 text: stale_developer_message.to_string(),
             }],
             phase: None,
+            metadata: None,
         },
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+            metadata: None,
         },
     ];
     let compact_mock = responses::mount_compact_json_once(
@@ -2631,9 +2650,11 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
                 text: stale_developer_message.to_string(),
             }],
             phase: None,
+            metadata: None,
         },
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+            metadata: None,
         },
     ];
     let compact_mock = responses::mount_compact_json_once(
@@ -3585,6 +3606,355 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_pre_turn_compact_response_seeds_turn_state() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(200);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_response_sequence(
+        harness.server(),
+        vec![
+            responses::sse_response(responses::sse(vec![
+                responses::ev_assistant_message("m1", "BEFORE_COMPACT_REPLY"),
+                responses::ev_completed_with_tokens("r1", /*total_tokens*/ 500),
+            ])),
+            responses::sse_response(responses::sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_COMPACT_REPLY"),
+                responses::ev_completed_with_tokens("r2", /*total_tokens*/ 80),
+            ])),
+        ],
+    )
+    .await;
+    let compact_mock = responses::mount_compact_response_once(
+        harness.server(),
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .insert_header(TURN_STATE_HEADER, "compact-state")
+            .set_body_json(json!({
+                "output": compacted_summary_only_output("PRE_TURN_COMPACT_SUMMARY"),
+            })),
+    )
+    .await;
+
+    // Phase 1: the first turn raises usage above the pre-turn compact threshold.
+    // Phase 2: the next turn compacts before sampling and establishes turn state.
+    for text in ["BEFORE_COMPACT_USER", "AFTER_COMPACT_USER"] {
+        codex
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: text.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+                thread_settings: Default::default(),
+            })
+            .await?;
+        wait_for_turn_complete(&codex).await;
+    }
+
+    // Phase 3: compact starts empty, and its returned state is sent to the first sample.
+    assert_eq!(
+        compact_mock.single_request().header(TURN_STATE_HEADER),
+        None
+    );
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].header(TURN_STATE_HEADER), None);
+    assert_eq!(
+        requests[1].header(TURN_STATE_HEADER).as_deref(),
+        Some("compact-state")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_mid_turn_compact_v1_sends_turn_state_over_http() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(200);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+    let responses_mock = responses::mount_response_sequence(
+        harness.server(),
+        vec![
+            responses::sse_response(responses::sse(vec![
+                responses::ev_function_call("call-before-compact", DUMMY_FUNCTION_NAME, "{}"),
+                responses::ev_completed_with_tokens("r1", /*total_tokens*/ 500),
+            ]))
+            .insert_header(TURN_STATE_HEADER, "sampling-state"),
+            responses::sse_response(responses::sse(vec![
+                responses::ev_function_call("call-after-compact", DUMMY_FUNCTION_NAME, "{}"),
+                responses::ev_completed_with_tokens("r2", /*total_tokens*/ 80),
+            ]))
+            .insert_header(TURN_STATE_HEADER, "continuation-state"),
+            responses::sse_response(responses::sse(vec![
+                responses::ev_assistant_message("m1", "FINAL_REPLY"),
+                responses::ev_completed_with_tokens("r3", /*total_tokens*/ 80),
+            ])),
+        ],
+    )
+    .await;
+    let compact_mock = responses::mount_compact_response_once(
+        harness.server(),
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .insert_header(TURN_STATE_HEADER, "compact-state")
+            .set_body_json(json!({
+                "output": compacted_summary_only_output("MID_TURN_COMPACT_SUMMARY"),
+            })),
+    )
+    .await;
+
+    // Phase 1: sampling mints state and crosses the token limit with a pending tool follow-up.
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "RUN_WITH_MID_TURN_COMPACT".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    // Phase 2: v1 compact receives the state established by sampling.
+    let compact_request = compact_mock.single_request();
+    assert_eq!(compact_request.path(), "/v1/responses/compact");
+    assert_eq!(
+        compact_request.header(TURN_STATE_HEADER).as_deref(),
+        Some("sampling-state")
+    );
+
+    // Phase 3: every remaining request keeps replaying that first value.
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].header(TURN_STATE_HEADER), None);
+    assert_eq!(
+        requests[1].header(TURN_STATE_HEADER).as_deref(),
+        Some("sampling-state")
+    );
+    assert_eq!(
+        requests[2].header(TURN_STATE_HEADER).as_deref(),
+        Some("sampling-state")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_mid_turn_compact_v2_sends_turn_state_over_http() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                let _ = config.features.enable(Feature::RemoteCompactionV2);
+                config.model_auto_compact_token_limit = Some(200);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+    let responses_mock = responses::mount_response_sequence(
+        harness.server(),
+        vec![
+            responses::sse_response(responses::sse(vec![
+                responses::ev_function_call("call-before-compact", DUMMY_FUNCTION_NAME, "{}"),
+                responses::ev_completed_with_tokens("r1", /*total_tokens*/ 500),
+            ]))
+            .insert_header(TURN_STATE_HEADER, "sampling-state"),
+            responses::sse_response(responses::sse(vec![
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "V2_COMPACT_SUMMARY",
+                    }
+                }),
+                responses::ev_completed("r-compact"),
+            ]))
+            .insert_header(TURN_STATE_HEADER, "compact-state"),
+            responses::sse_response(responses::sse(vec![
+                responses::ev_function_call("call-after-compact", DUMMY_FUNCTION_NAME, "{}"),
+                responses::ev_completed_with_tokens("r2", /*total_tokens*/ 80),
+            ]))
+            .insert_header(TURN_STATE_HEADER, "continuation-state"),
+            responses::sse_response(responses::sse(vec![
+                responses::ev_assistant_message("m1", "FINAL_REPLY"),
+                responses::ev_completed_with_tokens("r3", /*total_tokens*/ 80),
+            ])),
+        ],
+    )
+    .await;
+
+    // Phase 1: sampling mints state and schedules inline v2 compaction.
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "RUN_WITH_MID_TURN_COMPACT_V2".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 4);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.path() == "/v1/responses")
+    );
+    assert_eq!(requests[0].header(TURN_STATE_HEADER), None);
+
+    // Phase 2: the v2 compaction request replays the state already established by sampling.
+    assert!(
+        requests[1]
+            .body_json()
+            .to_string()
+            .contains("\"type\":\"compaction_trigger\"")
+    );
+    assert_eq!(
+        requests[1].header(TURN_STATE_HEADER).as_deref(),
+        Some("sampling-state")
+    );
+
+    // Phase 3: later response headers do not replace the first value in the OnceLock.
+    assert_eq!(
+        requests[2].header(TURN_STATE_HEADER).as_deref(),
+        Some("sampling-state")
+    );
+    assert_eq!(
+        requests[3].header(TURN_STATE_HEADER).as_deref(),
+        Some("sampling-state")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_mid_turn_compact_v2_sends_turn_state_over_websocket() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![vec![
+        vec![
+            responses::ev_response_created("warm-1"),
+            responses::ev_completed("warm-1"),
+        ],
+        vec![
+            json!({
+                "type": "response.metadata",
+                "headers": {(TURN_STATE_HEADER): "sampling-state"},
+            }),
+            responses::ev_function_call("call-before-compact", DUMMY_FUNCTION_NAME, "{}"),
+            responses::ev_completed_with_tokens("r1", /*total_tokens*/ 500),
+        ],
+        vec![
+            json!({
+                "type": "response.metadata",
+                "headers": {(TURN_STATE_HEADER): "compact-state"},
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "compaction",
+                    "encrypted_content": "V2_WS_COMPACT_SUMMARY",
+                }
+            }),
+            responses::ev_completed("r-compact"),
+        ],
+        vec![
+            json!({
+                "type": "response.metadata",
+                "headers": {(TURN_STATE_HEADER): "continuation-state"},
+            }),
+            responses::ev_function_call("call-after-compact", DUMMY_FUNCTION_NAME, "{}"),
+            responses::ev_completed_with_tokens("r2", /*total_tokens*/ 80),
+        ],
+        vec![
+            responses::ev_assistant_message("m1", "FINAL_REPLY"),
+            responses::ev_completed_with_tokens("r3", /*total_tokens*/ 80),
+        ],
+    ]])
+    .await;
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::RemoteCompactionV2);
+            config.model_auto_compact_token_limit = Some(200);
+        });
+    let test = builder.build_with_websocket_server(&server).await?;
+
+    // Phase 1: startup prewarm stays empty, then WebSocket sampling mints state and schedules
+    // inline v2 compaction.
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "RUN_WITH_WS_MID_TURN_COMPACT_V2".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&test.codex).await;
+
+    let requests = server.single_connection();
+    assert_eq!(requests.len(), 5);
+    assert_eq!(requests[0].body_json()["generate"].as_bool(), Some(false));
+    // Phase 2: the v2 compact request replays the state already established by sampling.
+    assert!(
+        requests[2]
+            .body_json()
+            .to_string()
+            .contains("\"type\":\"compaction_trigger\"")
+    );
+    // Phase 3: both post-compact requests keep replaying that first value.
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.body_json()["client_metadata"][TURN_STATE_HEADER].clone())
+            .collect::<Vec<_>>(),
+        vec![
+            json!(null),
+            json!(null),
+            json!("sampling-state"),
+            json!("sampling-state"),
+            json!("sampling-state"),
+        ]
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -3690,6 +4060,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_summary_only_reinject
 
     let compacted_history = vec![ResponseItem::Compaction {
         encrypted_content: summary_with_prefix("REMOTE_SUMMARY_ONLY"),
+        metadata: None,
     }];
     let compact_mock = responses::mount_compact_json_once(
         harness.server(),

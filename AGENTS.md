@@ -43,6 +43,10 @@ In the codex-rs folder where the rust code lives:
   directory reads, update the crate's `BUILD.bazel` (`compile_data`, `build_script_data`, or test
   data) or Bazel may fail even when Cargo passes.
 - Do not create small helper methods that are referenced only once.
+- For tracing async work, instrument the function or method definition with
+  `#[tracing::instrument(...)]` instead of attaching spans to futures with
+  `.instrument(...)` at call sites. Before adding instrumentation, check whether the callee—or
+  the implementation method it immediately delegates to—is already instrumented.
 - Avoid large modules:
   - Prefer adding new modules instead of growing existing ones.
   - Target Rust modules under 500 LoC, excluding tests.
@@ -257,6 +261,7 @@ These guidelines apply to app-server protocol work in `codex-rs`, especially:
   `*Params` for request payloads, `*Response` for responses, and `*Notification` for notifications.
 - Expose RPC methods as `<resource>/<method>` and keep `<resource>` singular (for example, `thread/read`, `app/list`).
 - Always expose fields as camelCase on the wire with `#[serde(rename_all = "camelCase")]` unless a tagged union or explicit compatibility requirement needs a targeted rename.
+- Always expose string enum values as camelCase on the wire with matching serde and TS `rename_all = "camelCase"` annotations unless an explicit compatibility requirement needs targeted renames.
 - Exception: config RPC payloads are expected to use snake_case to mirror config.toml keys (see the config read/write/list APIs in `app-server-protocol/src/protocol/v2.rs`).
 - Always set `#[ts(export_to = "v2/")]` on v2 request/response/notification types so generated TypeScript lands in the correct namespace.
 - Never use `#[serde(skip_serializing_if = "Option::is_none")]` for v2 API payload fields.
@@ -297,3 +302,7 @@ This project uses Python 3+. You should not use the `__future__` module.
 
 If you need to worry about feature compatibility between different 3.xx point releases, check the
 closest `pyproject.toml`'s `requires-python` field to see what minimum runtime version is supported.
+
+## Platform Support
+
+Tests and features must support Linux, macOS and Windows unless feature is explicitly OS-specific.

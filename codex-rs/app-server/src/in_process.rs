@@ -898,7 +898,10 @@ mod tests {
         ));
         assert!(server_notification_requires_delivery(
             &ServerNotification::ExternalAgentConfigImportCompleted(
-                ExternalAgentConfigImportCompletedNotification {},
+                ExternalAgentConfigImportCompletedNotification {
+                    import_id: "import".to_string(),
+                    item_type_results: Vec::new(),
+                },
             )
         ));
     }

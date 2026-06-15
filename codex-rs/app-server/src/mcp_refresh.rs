@@ -71,6 +71,8 @@ async fn build_refresh_config(
             config.mcp_oauth_credentials_store_mode,
         )
         .map_err(io::Error::other)?,
+        auth_keyring_backend_kind: serde_json::to_value(config.auth_keyring_backend_kind())
+            .map_err(io::Error::other)?,
     })
 }
 
@@ -104,6 +106,7 @@ mod tests {
     use codex_config::ThreadConfigLoadErrorCode;
     use codex_config::ThreadConfigLoader;
     use codex_config::ThreadConfigSource;
+    use codex_config::types::AuthKeyringBackendKind;
     use codex_core::config::ConfigOverrides;
     use codex_core::init_state_db;
     use codex_core::thread_store_from_config;
@@ -142,6 +145,38 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn refresh_config_uses_latest_auth_keyring_backend() -> anyhow::Result<()> {
+        let (temp_dir, thread_manager, config_manager, _loader) = refresh_test_state().await?;
+        std::fs::write(
+            temp_dir.path().join(codex_config::CONFIG_TOML_FILE),
+            "[features]\nsecret_auth_storage = true\n",
+        )?;
+
+        let mut good_thread = None;
+        for thread_id in thread_manager.list_thread_ids().await {
+            let thread = thread_manager.get_thread(thread_id).await?;
+            let thread_config = thread.config().await;
+            if thread_config.cwd.ends_with("good") {
+                good_thread = Some(thread);
+                break;
+            }
+        }
+        let thread = good_thread.expect("good test thread should exist");
+
+        let refresh_config = build_refresh_config(thread.as_ref(), &config_manager).await?;
+        let backend = serde_json::from_value::<AuthKeyringBackendKind>(
+            refresh_config.auth_keyring_backend_kind,
+        )?;
+
+        assert_eq!(
+            thread.config().await.auth_keyring_backend_kind(),
+            AuthKeyringBackendKind::Direct
+        );
+        assert_eq!(backend, AuthKeyringBackendKind::Secrets);
+        Ok(())
+    }
+
     async fn refresh_test_state() -> anyhow::Result<(
         TempDir,
         Arc<ThreadManager>,
@@ -153,6 +188,10 @@ mod tests {
         let bad_cwd = temp_dir.path().join("bad");
         std::fs::create_dir_all(&good_cwd)?;
         std::fs::create_dir_all(&bad_cwd)?;
+        std::fs::write(
+            temp_dir.path().join(codex_config::CONFIG_TOML_FILE),
+            "[features]\nsecret_auth_storage = false\n",
+        )?;
 
         let initial_config_manager =
             ConfigManager::without_managed_config_for_tests(temp_dir.path().to_path_buf());
@@ -198,6 +237,7 @@ mod tests {
                         analytics_events_client: codex_analytics::AnalyticsEventsClient::disabled(),
                         thread_manager: thread_manager.clone(),
                         goal_service: Arc::new(codex_goal_extension::GoalService::new()),
+                        environment_manager: Arc::clone(&environment_manager),
                         executor_skill_provider: Arc::clone(&executor_skill_provider),
                         thread_store: Arc::clone(&thread_store),
                     },

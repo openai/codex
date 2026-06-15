@@ -1130,6 +1130,7 @@ async fn installed_tools_with_start(
                 config: &(),
                 session_source: &session_source,
                 persistent_thread_state_available,
+                environments: &[],
                 session_store: &session_store,
                 thread_store: &thread_store,
             })
@@ -1182,6 +1183,7 @@ impl GoalExtensionHarness {
                     config: &(),
                     session_source: &session_source,
                     persistent_thread_state_available: true,
+                    environments: &[],
                     session_store: &session_store,
                     thread_store: &thread_store,
                 })
