@@ -341,20 +341,6 @@ pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Marketpla
     })
 }
 
-pub(crate) fn load_raw_marketplace_plugin_names(
-    path: &AbsolutePathBuf,
-) -> Result<(String, HashSet<String>), MarketplaceError> {
-    let marketplace = load_raw_marketplace_manifest(path)?;
-    Ok((
-        marketplace.name,
-        marketplace
-            .plugins
-            .into_iter()
-            .map(|plugin| plugin.name)
-            .collect(),
-    ))
-}
-
 #[doc(hidden)]
 pub fn list_marketplaces_with_home(
     additional_roots: &[AbsolutePathBuf],

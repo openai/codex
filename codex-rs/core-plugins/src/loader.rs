@@ -8,7 +8,6 @@ use crate::manifest::load_plugin_manifest;
 use crate::marketplace::MarketplacePluginSource;
 use crate::marketplace::list_marketplaces;
 use crate::marketplace::load_marketplace;
-use crate::marketplace::load_raw_marketplace_plugin_names;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RemoteInstalledPlugin;
 use crate::store::PluginStore;
@@ -302,24 +301,11 @@ pub fn refresh_curated_plugin_cache(
     let mut plugin_sources = HashMap::<String, AbsolutePathBuf>::new();
 
     for curated_marketplace_path in curated_marketplace_paths {
-        let (marketplace_name, marketplace_plugin_names) =
-            load_raw_marketplace_plugin_names(&curated_marketplace_path).map_err(|err| {
-                format!("failed to load curated marketplace plugin names for cache refresh: {err}")
-            })?;
-        loaded_marketplace_names.insert(marketplace_name.clone());
         let curated_marketplace = load_marketplace(&curated_marketplace_path).map_err(|err| {
             format!("failed to load curated marketplace for cache refresh: {err}")
         })?;
-
-        for plugin_name in marketplace_plugin_names {
-            let plugin_id =
-                PluginId::new(plugin_name, marketplace_name.clone()).map_err(|err| match err {
-                    PluginIdError::Invalid(message) => {
-                        format!("failed to prepare curated plugin cache refresh: {message}")
-                    }
-                })?;
-            marketplace_plugin_keys.insert(plugin_id.as_key());
-        }
+        let marketplace_name = curated_marketplace.name;
+        loaded_marketplace_names.insert(marketplace_name.clone());
 
         for plugin in curated_marketplace.plugins {
             let plugin_id =
@@ -331,6 +317,7 @@ pub fn refresh_curated_plugin_cache(
                     }
                 })?;
             let plugin_key = plugin_id.as_key();
+            marketplace_plugin_keys.insert(plugin_key.clone());
             if plugin_sources.contains_key(&plugin_key) {
                 warn!(
                     plugin = %plugin.name,

@@ -58,38 +58,32 @@ pub(crate) fn write_curated_plugin(root: &Path, plugin_name: &str) {
 }
 
 pub(crate) fn write_openai_curated_marketplace(root: &Path, plugin_names: &[&str]) {
-    let plugins = plugin_names
-        .iter()
-        .map(|plugin_name| {
-            format!(
-                r#"{{
-      "name": "{plugin_name}",
-      "source": {{
-        "source": "local",
-        "path": "./plugins/{plugin_name}"
-      }}
-    }}"#
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",\n");
-    write_file(
-        &root.join(".agents/plugins/marketplace.json"),
-        &format!(
-            r#"{{
-  "name": "{OPENAI_CURATED_MARKETPLACE_NAME}",
-  "plugins": [
-{plugins}
-  ]
-}}"#
-        ),
+    write_curated_marketplace(
+        root,
+        "marketplace.json",
+        OPENAI_CURATED_MARKETPLACE_NAME,
+        /*display_name*/ None,
+        plugin_names,
     );
-    for plugin_name in plugin_names {
-        write_curated_plugin(root, plugin_name);
-    }
 }
 
 pub(crate) fn write_openai_api_curated_marketplace(root: &Path, plugin_names: &[&str]) {
+    write_curated_marketplace(
+        root,
+        "api_marketplace.json",
+        OPENAI_API_CURATED_MARKETPLACE_NAME,
+        Some("OpenAI Curated"),
+        plugin_names,
+    );
+}
+
+fn write_curated_marketplace(
+    root: &Path,
+    manifest_name: &str,
+    marketplace_name: &str,
+    display_name: Option<&str>,
+    plugin_names: &[&str],
+) {
     let plugins = plugin_names
         .iter()
         .map(|plugin_name| {
@@ -105,14 +99,21 @@ pub(crate) fn write_openai_api_curated_marketplace(root: &Path, plugin_names: &[
         })
         .collect::<Vec<_>>()
         .join(",\n");
+    let interface = display_name
+        .map(|display_name| {
+            format!(
+                r#"
+  "interface": {{
+    "displayName": "{display_name}"
+  }},"#
+            )
+        })
+        .unwrap_or_default();
     write_file(
-        &root.join(".agents/plugins/api_marketplace.json"),
+        &root.join(".agents/plugins").join(manifest_name),
         &format!(
             r#"{{
-  "name": "{OPENAI_API_CURATED_MARKETPLACE_NAME}",
-  "interface": {{
-    "displayName": "OpenAI Curated"
-  }},
+  "name": "{marketplace_name}",{interface}
   "plugins": [
 {plugins}
   ]

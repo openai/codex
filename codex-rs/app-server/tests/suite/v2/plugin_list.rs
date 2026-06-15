@@ -4023,6 +4023,35 @@ fn write_openai_curated_marketplace(
     codex_home: &std::path::Path,
     plugin_names: &[&str],
 ) -> std::io::Result<()> {
+    write_curated_marketplace(
+        codex_home,
+        "marketplace.json",
+        "openai-curated",
+        /*display_name*/ None,
+        plugin_names,
+    )
+}
+
+fn write_openai_api_curated_marketplace(
+    codex_home: &std::path::Path,
+    plugin_names: &[&str],
+) -> std::io::Result<()> {
+    write_curated_marketplace(
+        codex_home,
+        "api_marketplace.json",
+        "openai-api-curated",
+        Some("OpenAI Curated"),
+        plugin_names,
+    )
+}
+
+fn write_curated_marketplace(
+    codex_home: &std::path::Path,
+    manifest_name: &str,
+    marketplace_name: &str,
+    display_name: Option<&str>,
+    plugin_names: &[&str],
+) -> std::io::Result<()> {
     let curated_root = codex_home.join(".tmp/plugins");
     std::fs::create_dir_all(curated_root.join(".git"))?;
     std::fs::create_dir_all(curated_root.join(".agents/plugins"))?;
@@ -4041,63 +4070,21 @@ fn write_openai_curated_marketplace(
         })
         .collect::<Vec<_>>()
         .join(",\n");
-    std::fs::write(
-        curated_root.join(".agents/plugins/marketplace.json"),
-        format!(
-            r#"{{
-  "name": "openai-curated",
-  "plugins": [
-{plugins}
-  ]
-}}"#
-        ),
-    )?;
-
-    for plugin_name in plugin_names {
-        let plugin_root = curated_root.join(format!("plugins/{plugin_name}/.codex-plugin"));
-        std::fs::create_dir_all(&plugin_root)?;
-        std::fs::write(
-            plugin_root.join("plugin.json"),
-            format!(r#"{{"name":"{plugin_name}"}}"#),
-        )?;
-    }
-    std::fs::create_dir_all(codex_home.join(".tmp"))?;
-    std::fs::write(
-        codex_home.join(".tmp/plugins.sha"),
-        format!("{TEST_CURATED_PLUGIN_SHA}\n"),
-    )?;
-    Ok(())
-}
-
-fn write_openai_api_curated_marketplace(
-    codex_home: &std::path::Path,
-    plugin_names: &[&str],
-) -> std::io::Result<()> {
-    let curated_root = codex_home.join(".tmp/plugins");
-    std::fs::create_dir_all(curated_root.join(".agents/plugins"))?;
-    let plugins = plugin_names
-        .iter()
-        .map(|plugin_name| {
+    let interface = display_name
+        .map(|display_name| {
             format!(
-                r#"{{
-      "name": "{plugin_name}",
-      "source": {{
-        "source": "local",
-        "path": "./plugins/{plugin_name}"
-      }}
-    }}"#
+                r#"
+  "interface": {{
+    "displayName": "{display_name}"
+  }},"#
             )
         })
-        .collect::<Vec<_>>()
-        .join(",\n");
+        .unwrap_or_default();
     std::fs::write(
-        curated_root.join(".agents/plugins/api_marketplace.json"),
+        curated_root.join(".agents/plugins").join(manifest_name),
         format!(
             r#"{{
-  "name": "openai-api-curated",
-  "interface": {{
-    "displayName": "OpenAI Curated"
-  }},
+  "name": "{marketplace_name}",{interface}
   "plugins": [
 {plugins}
   ]
