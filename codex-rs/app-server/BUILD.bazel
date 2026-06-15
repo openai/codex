@@ -5,8 +5,6 @@ codex_rust_crate(
     crate_name = "codex_app_server",
     extra_binaries = [
         "//codex-rs/bwrap:bwrap",
-        "//codex-rs/cli:codex",
-        "//codex-rs/rmcp-client:test_stdio_server",
     ],
     integration_test_timeout = "long",
     test_shard_counts = {
