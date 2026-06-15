@@ -654,6 +654,7 @@ mod tests {
                     codex_config::types::WindowsSandboxModeToml::Elevated,
                     codex_config::types::WindowsSandboxModeToml::Unelevated,
                 ]),
+                sandbox_private_desktop: None,
             }),
             ..ConfigRequirementsToml::default()
         });
