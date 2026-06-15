@@ -1,3 +1,5 @@
+//! Backend client operations for reading available rate-limit reset credits and consuming one.
+
 use super::Client;
 use super::PathStyle;
 use crate::types::ConsumeRateLimitResetCreditResponse;
