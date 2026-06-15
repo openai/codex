@@ -142,45 +142,67 @@ mod thread_processor_behavior_tests {
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
+    use serde_json::Value;
     use serde_json::json;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
 
+    fn dynamic_tool(
+        namespace: Option<&str>,
+        name: impl Into<String>,
+        input_schema: Value,
+        defer_loading: bool,
+    ) -> DynamicToolSpec {
+        let function = DynamicToolFunctionSpec {
+            name: name.into(),
+            description: "test".to_string(),
+            input_schema,
+            defer_loading,
+        };
+        match namespace {
+            Some(namespace) => {
+                DynamicToolSpec::Namespace(codex_app_server_protocol::DynamicToolNamespaceSpec {
+                    name: namespace.to_string(),
+                    description: "test namespace".to_string(),
+                    tools: vec![DynamicToolNamespaceTool::Function(function)],
+                })
+            }
+            None => DynamicToolSpec::Function(function),
+        }
+    }
+
     #[test]
     fn validate_dynamic_tools_rejects_unsupported_input_schema() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: None,
-            name: "my_tool".to_string(),
-            description: "test".to_string(),
-            input_schema: json!({"type": "null"}),
-            defer_loading: false,
-        }];
+        let tools = vec![dynamic_tool(
+            /*namespace*/ None,
+            "my_tool",
+            json!({"type": "null"}),
+            /*defer_loading*/ false,
+        )];
         let err = validate_dynamic_tools(&tools).expect_err("invalid schema");
         assert!(err.contains("my_tool"), "unexpected error: {err}");
     }
 
     #[test]
     fn validate_dynamic_tools_accepts_sanitizable_input_schema() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: None,
-            name: "my_tool".to_string(),
-            description: "test".to_string(),
+        let tools = vec![dynamic_tool(
+            /*namespace*/ None,
+            "my_tool",
             // Missing `type` is common; core sanitizes these to a supported schema.
-            input_schema: json!({"properties": {}}),
-            defer_loading: false,
-        }];
+            json!({"properties": {}}),
+            /*defer_loading*/ false,
+        )];
         validate_dynamic_tools(&tools).expect("valid schema");
     }
 
     #[test]
     fn validate_dynamic_tools_accepts_nullable_field_schema() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: None,
-            name: "my_tool".to_string(),
-            description: "test".to_string(),
-            input_schema: json!({
+        let tools = vec![dynamic_tool(
+            /*namespace*/ None,
+            "my_tool",
+            json!({
                 "type": "object",
                 "properties": {
                     "query": {"type": ["string", "null"]}
@@ -188,45 +210,57 @@ mod thread_processor_behavior_tests {
                 "required": ["query"],
                 "additionalProperties": false
             }),
-            defer_loading: false,
-        }];
+            /*defer_loading*/ false,
+        )];
         validate_dynamic_tools(&tools).expect("valid schema");
     }
 
     #[test]
     fn validate_dynamic_tools_accepts_same_name_in_different_namespaces() {
         let tools = vec![
-            ApiDynamicToolSpec {
-                namespace: Some("codex_app".to_string()),
-                name: "my_tool".to_string(),
-                description: "test".to_string(),
-                input_schema: json!({
+            dynamic_tool(
+                Some("codex_app"),
+                "my_tool",
+                json!({
                     "type": "object",
                     "properties": {},
                     "additionalProperties": false
                 }),
-                defer_loading: true,
-            },
-            ApiDynamicToolSpec {
-                namespace: Some("other_app".to_string()),
-                name: "my_tool".to_string(),
-                description: "test".to_string(),
-                input_schema: json!({
+                /*defer_loading*/ true,
+            ),
+            dynamic_tool(
+                Some("other_app"),
+                "my_tool",
+                json!({
                     "type": "object",
                     "properties": {},
                     "additionalProperties": false
                 }),
-                defer_loading: true,
-            },
+                /*defer_loading*/ true,
+            ),
         ];
         validate_dynamic_tools(&tools).expect("valid schema");
     }
 
     #[test]
     fn validate_dynamic_tools_accepts_responses_compatible_identifiers() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: Some("Codex-App_2".to_string()),
-            name: "lookup-ticket_2".to_string(),
+        let tools = vec![dynamic_tool(
+            Some("Codex-App_2"),
+            "lookup-ticket_2",
+            json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            /*defer_loading*/ true,
+        )];
+        validate_dynamic_tools(&tools).expect("valid schema");
+    }
+
+    #[test]
+    fn validate_dynamic_tools_rejects_duplicate_name_in_same_namespace() {
+        let function = || DynamicToolFunctionSpec {
+            name: "my_tool".to_string(),
             description: "test".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -234,36 +268,17 @@ mod thread_processor_behavior_tests {
                 "additionalProperties": false
             }),
             defer_loading: true,
-        }];
-        validate_dynamic_tools(&tools).expect("valid schema");
-    }
-
-    #[test]
-    fn validate_dynamic_tools_rejects_duplicate_name_in_same_namespace() {
-        let tools = vec![
-            ApiDynamicToolSpec {
-                namespace: Some("codex_app".to_string()),
-                name: "my_tool".to_string(),
-                description: "test".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false
-                }),
-                defer_loading: true,
+        };
+        let tools = vec![DynamicToolSpec::Namespace(
+            codex_app_server_protocol::DynamicToolNamespaceSpec {
+                name: "codex_app".to_string(),
+                description: "test namespace".to_string(),
+                tools: vec![
+                    DynamicToolNamespaceTool::Function(function()),
+                    DynamicToolNamespaceTool::Function(function()),
+                ],
             },
-            ApiDynamicToolSpec {
-                namespace: Some("codex_app".to_string()),
-                name: "my_tool".to_string(),
-                description: "test".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false
-                }),
-                defer_loading: true,
-            },
-        ];
+        )];
         let err = validate_dynamic_tools(&tools).expect_err("duplicate name");
         assert!(err.contains("codex_app"), "unexpected error: {err}");
         assert!(err.contains("my_tool"), "unexpected error: {err}");
@@ -311,53 +326,48 @@ mod thread_processor_behavior_tests {
 
     #[test]
     fn validate_dynamic_tools_rejects_empty_namespace() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: Some("".to_string()),
-            name: "my_tool".to_string(),
-            description: "test".to_string(),
-            input_schema: json!({
+        let tools = vec![dynamic_tool(
+            Some(""),
+            "my_tool",
+            json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
             }),
-            defer_loading: false,
-        }];
+            /*defer_loading*/ false,
+        )];
         let err = validate_dynamic_tools(&tools).expect_err("empty namespace");
-        assert!(err.contains("my_tool"), "unexpected error: {err}");
         assert!(err.contains("namespace"), "unexpected error: {err}");
     }
 
     #[test]
     fn validate_dynamic_tools_rejects_reserved_namespace() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: Some("mcp__server__".to_string()),
-            name: "my_tool".to_string(),
-            description: "test".to_string(),
-            input_schema: json!({
+        let tools = vec![dynamic_tool(
+            Some("mcp__server__"),
+            "my_tool",
+            json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
             }),
-            defer_loading: false,
-        }];
+            /*defer_loading*/ false,
+        )];
         let err = validate_dynamic_tools(&tools).expect_err("reserved namespace");
-        assert!(err.contains("my_tool"), "unexpected error: {err}");
         assert!(err.contains("reserved"), "unexpected error: {err}");
     }
 
     #[test]
     fn validate_dynamic_tools_rejects_name_not_supported_by_responses() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: None,
-            name: "lookup.ticket".to_string(),
-            description: "test".to_string(),
-            input_schema: json!({
+        let tools = vec![dynamic_tool(
+            /*namespace*/ None,
+            "lookup.ticket",
+            json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
             }),
-            defer_loading: false,
-        }];
+            /*defer_loading*/ false,
+        )];
         let err = validate_dynamic_tools(&tools).expect_err("invalid name");
         assert!(err.contains("lookup.ticket"), "unexpected error: {err}");
         assert!(
@@ -368,17 +378,16 @@ mod thread_processor_behavior_tests {
 
     #[test]
     fn validate_dynamic_tools_rejects_namespace_not_supported_by_responses() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: Some("codex.app".to_string()),
-            name: "lookup_ticket".to_string(),
-            description: "test".to_string(),
-            input_schema: json!({
+        let tools = vec![dynamic_tool(
+            Some("codex.app"),
+            "lookup_ticket",
+            json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
             }),
-            defer_loading: true,
-        }];
+            /*defer_loading*/ true,
+        )];
         let err = validate_dynamic_tools(&tools).expect_err("invalid namespace");
         assert!(err.contains("codex.app"), "unexpected error: {err}");
         assert!(
@@ -390,54 +399,59 @@ mod thread_processor_behavior_tests {
     #[test]
     fn validate_dynamic_tools_rejects_name_longer_than_responses_limit() {
         let long_name = "a".repeat(129);
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: None,
-            name: long_name.clone(),
-            description: "test".to_string(),
-            input_schema: json!({
+        let tools = vec![dynamic_tool(
+            /*namespace*/ None,
+            long_name.clone(),
+            json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
             }),
-            defer_loading: false,
-        }];
+            /*defer_loading*/ false,
+        )];
         let err = validate_dynamic_tools(&tools).expect_err("name too long");
         assert!(err.contains("at most 128"), "unexpected error: {err}");
         assert!(err.contains(&long_name), "unexpected error: {err}");
     }
 
     #[test]
-    fn validate_dynamic_tools_rejects_namespace_longer_than_responses_limit() {
+    fn validate_dynamic_tools_rejects_namespace_fields_over_limits() {
         let long_namespace = "a".repeat(65);
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: Some(long_namespace.clone()),
-            name: "lookup_ticket".to_string(),
-            description: "test".to_string(),
-            input_schema: json!({
+        let mut tools = vec![dynamic_tool(
+            Some(&long_namespace),
+            "lookup_ticket",
+            json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
             }),
-            defer_loading: true,
-        }];
+            /*defer_loading*/ true,
+        )];
         let err = validate_dynamic_tools(&tools).expect_err("namespace too long");
         assert!(err.contains("at most 64"), "unexpected error: {err}");
         assert!(err.contains(&long_namespace), "unexpected error: {err}");
+
+        let DynamicToolSpec::Namespace(namespace) = &mut tools[0] else {
+            unreachable!("expected namespace")
+        };
+        namespace.name = "tickets".to_string();
+        namespace.description = "a".repeat(1025);
+        let err = validate_dynamic_tools(&tools).expect_err("namespace description too long");
+        assert!(err.contains("at most 1024"), "unexpected error: {err}");
     }
 
     #[test]
     fn validate_dynamic_tools_rejects_reserved_responses_namespace() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: Some("functions".to_string()),
-            name: "lookup_ticket".to_string(),
-            description: "test".to_string(),
-            input_schema: json!({
+        let tools = vec![dynamic_tool(
+            Some("functions"),
+            "lookup_ticket",
+            json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
             }),
-            defer_loading: true,
-        }];
+            /*defer_loading*/ true,
+        )];
         let err = validate_dynamic_tools(&tools).expect_err("reserved Responses namespace");
         assert!(err.contains("functions"), "unexpected error: {err}");
         assert!(err.contains("Responses API"), "unexpected error: {err}");
