@@ -236,6 +236,37 @@ Example with notification opt-out:
 - `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk, with optional `reloadUserConfig: true` to hot-reload loaded threads, including multiple `desktop.*` edits.
 - `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`), the layered permission-profile allow map (`allowedPermissionProfiles`), the managed permission-profile default (`defaultPermissions`), lifecycle hook lockdown (`allowManagedHooksOnly`), computer use policy (`computerUse`), pinned feature values (`featureRequirements`), managed lifecycle hooks (`hooks`), `enforceResidency`, and `network` constraints such as canonical domain/socket permissions plus `managedAllowedDomainsOnly` and `dangerFullAccessDenylistOnly`.
 
+### Example: Supply an account-scoped feature default
+
+The Codex App can evaluate a Statsig gate and pass the resulting default to Rust without adding a
+Statsig client to `codex-rs`. For example, the App can target personal accounts with `cdp = true`
+and workspace accounts with `cdp = false`, then send the selected value after app-server
+initialization:
+
+```json
+{
+  "method": "experimentalFeature/enablement/set",
+  "id": 20,
+  "params": {
+    "enablement": {
+      "cdp": true
+    }
+  }
+}
+```
+
+This value is an in-memory default, not an administrator policy. An explicit `features.cdp` value
+in `config.toml` takes precedence, and a cloud-delivered requirement can pin the value for managed
+accounts:
+
+```toml
+[features]
+cdp = false
+```
+
+The persistent personal-account opt-in/opt-out experience is intentionally outside this example;
+it needs a separate product decision about where that account preference is stored and synchronized.
+
 ### Example: Start or resume a thread
 
 Start a fresh thread when you need a new Codex conversation.

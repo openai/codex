@@ -127,6 +127,11 @@ pub enum Feature {
     LocalThreadStoreCompression,
     /// Enable the Chronicle sidecar for passive screen-context memories.
     Chronicle,
+    /// Enable CDP.
+    ///
+    /// The Codex App supplies the account-scoped rollout default at runtime.
+    /// Explicit config and managed requirements retain higher precedence.
+    Cdp,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
@@ -868,6 +873,15 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::Chronicle,
         key: "chronicle",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Cdp,
+        key: "cdp",
+        stage: Stage::UnderDevelopment,
+        // The App supplies the account-scoped default through
+        // `experimentalFeature/enablement/set`. Keep the Rust fallback off for
+        // clients that do not evaluate the rollout.
         default_enabled: false,
     },
     FeatureSpec {
