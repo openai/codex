@@ -950,14 +950,14 @@ pub(crate) async fn apply_bespoke_event_handling(
                 codex_error_info: ev.codex_error_info.map(V2CodexErrorInfo::from),
                 additional_details: None,
             };
-            outgoing
-                .send_server_notification(ServerNotification::Error(ErrorNotification {
-                    error: turn_error.clone(),
-                    will_retry: false,
-                    thread_id: conversation_id.to_string(),
-                    turn_id: event_turn_id.clone(),
-                }))
-                .await;
+            handle_error_notification(
+                conversation_id,
+                &event_turn_id,
+                turn_error,
+                &outgoing,
+                &thread_state,
+            )
+            .await;
         }
         EventMsg::StreamError(ev) => {
             // We don't need to update the turn summary store for stream errors as they are intermediate error states for retries,
@@ -1642,6 +1642,24 @@ async fn handle_error(
     state.turn_summary.last_error = Some(error);
 }
 
+async fn handle_error_notification(
+    conversation_id: ThreadId,
+    event_turn_id: &str,
+    error: TurnError,
+    outgoing: &ThreadScopedOutgoingMessageSender,
+    thread_state: &Arc<Mutex<ThreadState>>,
+) {
+    handle_error(conversation_id, error.clone(), thread_state).await;
+    outgoing
+        .send_server_notification(ServerNotification::Error(ErrorNotification {
+            error,
+            will_retry: false,
+            thread_id: conversation_id.to_string(),
+            turn_id: event_turn_id.to_string(),
+        }))
+        .await;
+}
+
 async fn on_request_user_input_response(
     event_turn_id: String,
     pending_request_id: RequestId,
@@ -1819,20 +1837,18 @@ async fn on_request_permissions_response(
         Err(err) => {
             let message = format!("failed to localize granted filesystem paths: {err}");
             error!("{message}");
-            let turn_error = TurnError {
-                message,
-                codex_error_info: None,
-                additional_details: None,
-            };
-            handle_error(conversation_id, turn_error.clone(), &thread_state).await;
-            outgoing
-                .send_server_notification(ServerNotification::Error(ErrorNotification {
-                    error: turn_error,
-                    will_retry: false,
-                    thread_id: conversation_id.to_string(),
-                    turn_id,
-                }))
-                .await;
+            handle_error_notification(
+                conversation_id,
+                &turn_id,
+                TurnError {
+                    message,
+                    codex_error_info: None,
+                    additional_details: None,
+                },
+                &outgoing,
+                &thread_state,
+            )
+            .await;
             if let Err(err) = conversation.submit(Op::Interrupt).await {
                 error!("failed to interrupt turn after invalid permission paths: {err}");
             }

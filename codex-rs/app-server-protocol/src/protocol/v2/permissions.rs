@@ -274,6 +274,7 @@ impl From<FileSystemSpecialPath> for CoreFileSystemSpecialPath {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
+// TODO(anp): Rename this type to distinguish it from the generic protocol FileSystemPath.
 pub enum FileSystemPath {
     Path { path: ApiPathString },
     GlobPattern { pattern: String },
