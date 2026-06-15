@@ -26,8 +26,16 @@ const GROUPS: &[OutputGroup] = &[
     OutputGroup {
         title: "Environment",
         keys: &[
-            "system", "runtime", "install", "search", "git", "terminal", "title", "state",
+            "system",
+            "runtime",
+            "install",
+            "search",
+            "git",
+            "terminal",
+            "title",
+            "state",
             "threads",
+            "migrations",
         ],
     },
     OutputGroup {

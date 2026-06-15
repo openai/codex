@@ -72,6 +72,12 @@ fn sqlite_error_detail_classifies_corruption_and_lock_errors() {
     assert!(!sqlite_error_detail_is_corruption("database is locked"));
     assert!(sqlite_error_detail_is_lock("database is locked"));
     assert!(sqlite_error_detail_is_lock("database is busy"));
+    assert!(sqlite_error_detail_is_migration_incompatible(
+        "migration 36 was previously applied but has been modified"
+    ));
+    assert!(sqlite_error_detail_is_migration_incompatible(
+        "migration 12 is partially applied; fix and remove row"
+    ));
 }
 
 #[tokio::test]

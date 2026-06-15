@@ -1,14 +1,14 @@
 //! Implements the `codex doctor` diagnostic report.
 //!
-//! Doctor is intentionally read-mostly: checks inspect the current installation,
+//! Doctor is read-only by default: checks inspect the current installation,
 //! configuration, authentication, terminal, state paths, and bounded reachability
 //! probes without attempting repair or starting long-lived services. Each check
 //! returns a redacted, serializable row so the same data can back the human
 //! summary and `--json` support report.
 //!
-//! A failing check should describe the problem and remediation, but it should not
-//! mutate user state. That keeps the command safe to run before filing a support
-//! issue or while diagnosing a broken local installation.
+//! A failing check should describe the problem and remediation. The explicit,
+//! interactive `--fix` path is reserved for narrowly scoped repairs that create
+//! backups before mutating user state.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -66,16 +66,19 @@ use serde::Serialize;
 use supports_color::Stream;
 
 mod background;
+mod fix;
 mod git;
 mod output;
 mod progress;
 mod runtime;
+mod state_migrations;
 mod system;
 mod thread_inventory;
 mod title;
 mod updates;
 
 use background::background_server_check;
+use fix::run_migration_fix;
 use git::git_check;
 use output::HumanOutputOptions;
 use output::redact_detail;
@@ -84,6 +87,7 @@ use progress::DoctorProgress;
 use progress::doctor_progress;
 use runtime::runtime_check;
 use runtime::search_check;
+use state_migrations::migration_check;
 use system::system_check;
 use thread_inventory::thread_inventory_check;
 use title::terminal_title_check;
@@ -151,6 +155,10 @@ pub struct DoctorCommand {
     /// Emit a redacted machine-readable report.
     #[arg(long, default_value_t = false)]
     json: bool,
+
+    /// Repair incompatible state database migration history after confirmation.
+    #[arg(long, default_value_t = false, conflicts_with = "json")]
+    fix: bool,
 
     /// Only show grouped check rows and the final count summary.
     #[arg(long, default_value_t = false)]
@@ -300,15 +308,21 @@ impl DoctorCheck {
 
 /// Builds, renders, and exits according to the current doctor report.
 ///
-/// This is the CLI entry point for codex doctor. It does not repair issues;
-/// failures are represented in the report and cause a non-zero process exit so
-/// scripts can distinguish a clean environment from one that needs attention.
+/// This is the CLI entry point for codex doctor. Checks are read-only unless the
+/// user explicitly selects and confirms `--fix`.
 pub async fn run_doctor(
     command: DoctorCommand,
     root_config_overrides: CliConfigOverrides,
     interactive: &TuiCli,
     arg0_paths: &Arg0DispatchPaths,
 ) -> anyhow::Result<()> {
+    if command.fix {
+        let config = load_config(root_config_overrides.clone(), interactive, arg0_paths)
+            .await
+            .context("failed to load Codex config for database repair")?;
+        let inspections = codex_state::inspect_runtime_db_migrations(&config.sqlite_home).await;
+        run_migration_fix(&config, &inspections).await?;
+    }
     let report = build_report(&command, root_config_overrides, interactive, arg0_paths).await;
 
     if command.json {
@@ -364,6 +378,7 @@ async fn build_report(
                 git_check,
                 terminal_title_check,
                 state_check,
+                migration_check,
                 thread_inventory_check,
                 background_server_check,
                 reachability_check,
@@ -396,6 +411,11 @@ async fn build_report(
                 },
                 run_async_check("state", progress.clone(), state_check(config)),
                 run_async_check(
+                    "state migrations",
+                    progress.clone(),
+                    migration_check(config),
+                ),
+                run_async_check(
                     "thread inventory",
                     progress.clone(),
                     thread_inventory_check(config),
@@ -423,6 +443,7 @@ async fn build_report(
                 git_check,
                 terminal_title_check,
                 state_check,
+                migration_check,
                 thread_inventory_check,
                 background_server_check,
                 reachability_check,

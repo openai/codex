@@ -25,7 +25,7 @@ use uuid::Uuid;
 use crate::ThreadMetadata;
 
 #[cfg(test)]
-pub(super) fn unique_temp_dir() -> PathBuf {
+pub(crate) fn unique_temp_dir() -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());

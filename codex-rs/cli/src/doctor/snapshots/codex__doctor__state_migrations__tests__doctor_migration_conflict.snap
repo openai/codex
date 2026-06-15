@@ -1,0 +1,21 @@
+---
+source: cli/src/doctor/state_migrations_tests.rs
+expression: rendered
+---
+Codex Doctor v0.0.0-test
+
+Notes
+   [XX] migrations   state DB migration 36 was previously applied but has been modified
+-------------------------------------------------------------
+
+Environment
+  [XX] migrations   state DB migration 36 was previously applied but has been modified
+      state DB migration database /Users/example/.codex/state_5.sqlite
+    > state DB migrations      state DB migration 36 was previously applied but has been modified (expected embedded migration metadata)
+    -> run codex doctor --fix
+
+-------------------------------------------------------------
+0 ok | 1 notes | 0 warn | 1 fail failed
+
+--summary compact output           --all expand truncated lists
+--json redacted report

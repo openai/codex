@@ -95,6 +95,11 @@ pub fn runtime_db_path_for_corruption_error(err: &anyhow::Error) -> Option<PathB
     if !is_sqlite_corruption_error(err) {
         return None;
     }
+    runtime_db_path_for_init_error(err)
+}
+
+/// Return the runtime database path attached to any database initialization error.
+pub fn runtime_db_path_for_init_error(err: &anyhow::Error) -> Option<PathBuf> {
     err.chain()
         .find_map(|source| source.downcast_ref::<RuntimeDbInitError>())
         .map(|err| err.path().to_path_buf())
@@ -139,6 +144,13 @@ pub fn sqlite_error_detail_is_corruption(detail: &str) -> bool {
 pub fn sqlite_error_detail_is_lock(detail: &str) -> bool {
     let detail = detail.to_ascii_lowercase();
     detail.contains("database is locked") || detail.contains("database is busy")
+}
+
+pub fn sqlite_error_detail_is_migration_incompatible(detail: &str) -> bool {
+    let detail = detail.to_ascii_lowercase();
+    (detail.contains("migration ")
+        && detail.contains("was previously applied but has been modified"))
+        || (detail.contains("migration ") && detail.contains("is partially applied"))
 }
 
 async fn backup_runtime_db_files(db_path: &Path) -> std::io::Result<Vec<RuntimeDbBackup>> {

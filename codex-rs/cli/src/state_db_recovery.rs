@@ -21,6 +21,10 @@ pub(crate) fn is_corruption(detail: &str) -> bool {
     codex_state::sqlite_error_detail_is_corruption(detail)
 }
 
+pub(crate) fn is_migration_incompatible(detail: &str) -> bool {
+    codex_state::sqlite_error_detail_is_migration_incompatible(detail)
+}
+
 pub(crate) fn is_auto_backup_recoverable(startup_error: &LocalStateDbStartupError) -> bool {
     is_corruption(startup_error.detail()) || sqlite_home_is_blocking_file(startup_error)
 }
@@ -71,8 +75,15 @@ pub(crate) fn confirm_fresh_start_rebuild(
 }
 
 pub(crate) fn print_diagnostic_guidance(startup_error: &LocalStateDbStartupError) {
-    eprintln!("Codex couldn't start because its local database appears to be damaged.");
-    eprintln!("Run `codex doctor` to check your setup and get next-step guidance.");
+    if is_migration_incompatible(startup_error.detail()) {
+        eprintln!(
+            "Codex couldn't start because its local database migration history is incompatible with this version."
+        );
+        eprintln!("Run `codex doctor --fix` to back up and rebuild the affected database.");
+    } else {
+        eprintln!("Codex couldn't start because its local database appears to be damaged.");
+        eprintln!("Run `codex doctor` to check your setup and get next-step guidance.");
+    }
     eprintln!("If this keeps happening, share the technical details below when asking for help.");
     print_technical_details(startup_error);
 }

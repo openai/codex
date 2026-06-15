@@ -3476,6 +3476,22 @@ mod tests {
     }
 
     #[test]
+    fn doctor_fix_parses() {
+        let cli = MultitoolCli::try_parse_from(["codex", "doctor", "--fix"])
+            .expect("doctor --fix should parse");
+
+        assert!(matches!(cli.subcommand, Some(Subcommand::Doctor(_))));
+    }
+
+    #[test]
+    fn doctor_fix_rejects_json_output() {
+        let error = MultitoolCli::try_parse_from(["codex", "doctor", "--fix", "--json"])
+            .expect_err("doctor --fix --json should be rejected");
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
     fn root_strict_config_is_supported_for_exec_server() {
         let cli = MultitoolCli::try_parse_from(["codex", "--strict-config", "exec-server"])
             .expect("parse");

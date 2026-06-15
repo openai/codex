@@ -68,6 +68,7 @@ regex-lite = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 supports-color = { workspace = true }
+sysinfo = { workspace = true }
 sys-locale = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = [

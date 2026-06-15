@@ -284,7 +284,7 @@ async fn init_state_db_for_app_server_target(
 ) -> std::io::Result<Option<StateDbHandle>> {
     match app_server_target {
         AppServerTarget::Embedded => state_db::try_init(config).await.map(Some).map_err(|err| {
-            let database_path = codex_state::runtime_db_path_for_corruption_error(&err)
+            let database_path = codex_state::runtime_db_path_for_init_error(&err)
                 .unwrap_or_else(|| codex_state::state_db_path(config.sqlite_home.as_path()));
             std::io::Error::other(LocalStateDbStartupError::new(
                 database_path,
