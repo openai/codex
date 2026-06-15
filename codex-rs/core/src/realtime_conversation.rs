@@ -73,6 +73,8 @@ const STANDALONE_HANDOFF_ID: &str = "codex";
 const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime-1.5";
 pub(crate) const REALTIME_USER_TEXT_PREFIX: &str = "[USER] ";
 pub(crate) const REALTIME_BACKEND_TEXT_PREFIX: &str = "[BACKEND] ";
+const REALTIME_V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT: &str =
+    "Background agent finished. Use the preceding [BACKEND] messages as the result.";
 const REALTIME_V2_STEER_ACKNOWLEDGEMENT: &str =
     "This was sent to steer the previous background agent task.";
 const REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX: &str =
@@ -1285,6 +1287,7 @@ async fn run_realtime_input_task(input: RealtimeInputTask) {
                     &events_tx,
                     &handoff_state,
                     event_parser,
+                    &mut response_create_queue,
                 )
                     .await
             }
@@ -1340,6 +1343,7 @@ async fn handle_handoff_output(
     events_tx: &Sender<RealtimeEvent>,
     handoff_state: &RealtimeHandoffState,
     event_parser: RealtimeEventParser,
+    response_create_queue: &mut RealtimeResponseCreateQueue,
 ) -> anyhow::Result<()> {
     let handoff_output = handoff_output.context("handoff output channel closed")?;
 
@@ -1366,9 +1370,16 @@ async fn handle_handoff_output(
         },
         RealtimeEventParser::RealtimeV2 => match handoff_output {
             RealtimeOutbound::StandaloneHandoff { text } => {
-                writer
-                    .send_conversation_handoff_append(STANDALONE_HANDOFF_ID.to_string(), text)
+                if let Err(err) = writer
+                    .send_conversation_item_create(text, ConversationTextRole::User)
                     .await
+                {
+                    Err(err)
+                } else {
+                    return response_create_queue
+                        .request_create(writer, events_tx, "standalone handoff")
+                        .await;
+                }
             }
             RealtimeOutbound::HandoffUpdate { handoff_id, text } => {
                 let active_handoff = handoff_state.active_handoff.lock().await.clone();
@@ -1380,13 +1391,26 @@ async fn handle_handoff_output(
                     }
                 }
                 writer
-                    .send_conversation_handoff_append(handoff_id, text)
+                    .send_conversation_item_create(text, ConversationTextRole::User)
                     .await
             }
-            RealtimeOutbound::CompletedHandoff { handoff_id, text } => {
-                writer
-                    .send_conversation_handoff_append(handoff_id, text)
+            RealtimeOutbound::CompletedHandoff {
+                handoff_id,
+                text: _,
+            } => {
+                if let Err(err) = writer
+                    .send_conversation_function_call_output(
+                        handoff_id,
+                        REALTIME_V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT.to_string(),
+                    )
                     .await
+                {
+                    Err(err)
+                } else {
+                    return response_create_queue
+                        .request_create(writer, events_tx, "handoff")
+                        .await;
+                }
             }
             RealtimeOutbound::ConversationItem { text } => {
                 writer

@@ -82,6 +82,8 @@ const DELEGATED_SHELL_TOOL_TIMEOUT_MS: u64 = 30_000;
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 const V2_STEERING_ACKNOWLEDGEMENT: &str =
     "This was sent to steer the previous background agent task.";
+const V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT: &str =
+    "Background agent finished. Use the preceding [BACKEND] messages as the result.";
 const RESPONSE_ITEM_PREFIX: &str =
     "Use the following context to inform future responses, but do not speak it to the user.";
 
@@ -1578,6 +1580,7 @@ async fn realtime_automatic_standalone_output_is_item_and_append_speaks() -> Res
         &harness.sideband_outbound_request(/*request_index*/ 2).await,
         "manual voice update",
     );
+    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 3).await);
 
     harness.shutdown().await;
     Ok(())
@@ -1651,6 +1654,7 @@ async fn realtime_automatic_handoff_output_is_item_and_append_speaks() -> Result
         &harness.sideband_outbound_request(/*request_index*/ 3).await,
         "manual spoken update",
     );
+    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 4).await);
 
     harness.shutdown().await;
     Ok(())
@@ -2039,8 +2043,8 @@ async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_out
     let progress = harness.sideband_outbound_request(/*request_index*/ 1).await;
     assert_v2_progress_update(&progress, "delegated from v2");
 
-    let final_update = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_progress_update(&final_update, "delegated from v2");
+    let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
+    assert_v2_function_call_output(&tool_output, "call_v2", V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT);
 
     harness.shutdown().await;
     Ok(())
@@ -2166,8 +2170,12 @@ async fn webrtc_v2_background_agent_progress_is_sent_before_function_output() ->
     let progress = harness.sideband_outbound_request(/*request_index*/ 1).await;
     assert_v2_progress_update(&progress, "progress before final");
 
-    let final_update = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_progress_update(&final_update, "progress before final");
+    let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
+    assert_v2_function_call_output(
+        &tool_output,
+        "call_progress_order",
+        V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT,
+    );
 
     harness.shutdown().await;
     Ok(())
@@ -2252,8 +2260,12 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
     let progress = harness.sideband_outbound_request(/*request_index*/ 1).await;
     assert_v2_progress_update(&progress, "shell tool finished");
 
-    let final_update = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_progress_update(&final_update, "shell tool finished");
+    let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
+    assert_v2_function_call_output(
+        &tool_output,
+        "call_shell",
+        V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT,
+    );
 
     harness.shutdown().await;
     Ok(())
@@ -2328,8 +2340,12 @@ async fn webrtc_v2_tool_call_does_not_block_sideband_audio() -> Result<()> {
     let progress = harness.sideband_outbound_request(/*request_index*/ 1).await;
     assert_v2_progress_update(&progress, "late delegated result");
 
-    let final_update = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_progress_update(&final_update, "late delegated result");
+    let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
+    assert_v2_function_call_output(
+        &tool_output,
+        "call_audio",
+        V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT,
+    );
 
     harness.shutdown().await;
     Ok(())
@@ -2579,14 +2595,19 @@ fn assert_v2_function_call_output(request: &Value, call_id: &str, expected_outpu
 }
 
 fn assert_v2_progress_update(request: &Value, expected_text: &str) {
-    let expected_output_text = format!("[BACKEND] {expected_text}");
     assert_eq!(
-        request["type"].as_str(),
-        Some("conversation.handoff.append")
-    );
-    assert_eq!(
-        request["output_text"].as_str(),
-        Some(expected_output_text.as_str())
+        request,
+        &json!({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": format!("[BACKEND] {expected_text}")
+                }]
+            }
+        })
     );
 }
 
