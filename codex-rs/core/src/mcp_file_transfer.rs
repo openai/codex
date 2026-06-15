@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -25,6 +26,8 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 
 const DEFAULT_MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
+const TRANSFER_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 #[tracing::instrument(
     name = "mcp_file_transfer.adapt_input",
@@ -262,32 +265,38 @@ async fn download_transfer_file(
         return Err(format!("MCP download exceeds the {max_size}-byte limit"));
     }
     let temporary_path = output_path.with_extension("part");
-    let mut output = tokio::fs::File::create(&temporary_path)
-        .await
-        .map_err(|error| format!("failed to create MCP download: {error}"))?;
-    let mut size = 0_u64;
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| format!("failed to read MCP download: {error}"))?;
-        size = size.saturating_add(chunk.len() as u64);
-        if size > max_size {
-            let _ = tokio::fs::remove_file(&temporary_path).await;
-            return Err(format!("MCP download exceeds the {max_size}-byte limit"));
+    let result = async {
+        let mut output = tokio::fs::File::create(&temporary_path)
+            .await
+            .map_err(|error| format!("failed to create MCP download: {error}"))?;
+        let mut size = 0_u64;
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|error| format!("failed to read MCP download: {error}"))?;
+            size = size.saturating_add(chunk.len() as u64);
+            if size > max_size {
+                return Err(format!("MCP download exceeds the {max_size}-byte limit"));
+            }
+            output
+                .write_all(&chunk)
+                .await
+                .map_err(|error| format!("failed to write MCP download: {error}"))?;
         }
         output
-            .write_all(&chunk)
+            .flush()
             .await
-            .map_err(|error| format!("failed to write MCP download: {error}"))?;
+            .map_err(|error| format!("failed to flush MCP download: {error}"))?;
+        drop(output);
+        tokio::fs::rename(&temporary_path, output_path)
+            .await
+            .map_err(|error| format!("failed to finalize MCP download: {error}"))?;
+        Ok(size)
     }
-    output
-        .flush()
-        .await
-        .map_err(|error| format!("failed to flush MCP download: {error}"))?;
-    drop(output);
-    tokio::fs::rename(&temporary_path, output_path)
-        .await
-        .map_err(|error| format!("failed to finalize MCP download: {error}"))?;
-    Ok(size)
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&temporary_path).await;
+    }
+    result
 }
 
 async fn rewrite_file_value(
@@ -600,6 +609,8 @@ fn transfer_client() -> Result<reqwest::Client, String> {
     );
     let client = reqwest::Client::builder()
         .default_headers(headers)
+        .connect_timeout(TRANSFER_CONNECT_TIMEOUT)
+        .timeout(TRANSFER_TIMEOUT)
         .no_proxy()
         .redirect(Policy::none())
         .build()

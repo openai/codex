@@ -282,3 +282,31 @@ async fn transfer_errors_do_not_expose_signed_urls() {
     );
     assert!(!error.contains(secret));
 }
+
+#[tokio::test]
+async fn failed_download_removes_partial_file() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/download"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![b'x'; 33]))
+        .mount(&server)
+        .await;
+    let directory = tempdir().expect("temp dir");
+    let output = directory.path().join("download.txt");
+
+    let error = download_transfer_file(
+        &codex_mcp::FileTransferDescriptor {
+            transport: None,
+            method: "GET".to_string(),
+            url: format!("{}/download", server.uri()),
+            expires_at: None,
+        },
+        &output,
+        32,
+    )
+    .await
+    .expect_err("oversized transfer");
+
+    assert_eq!(error, "MCP download exceeds the 32-byte limit");
+    assert!(!output.with_extension("part").exists());
+}
