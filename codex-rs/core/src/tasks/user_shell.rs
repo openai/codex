@@ -428,8 +428,8 @@ async fn execute_remote_user_shell_command(
     let parsed_cmd = parse_command(&display_command);
     let call_id = Uuid::new_v4().to_string();
     let raw_command = command;
-    let cwd = turn_environment.cwd.clone();
-    let cwd_uri = cwd.clone().into();
+    let cwd = turn_environment.cwd().clone();
+    let cwd_uri = turn_environment.cwd_uri().clone();
 
     session
         .send_event(
