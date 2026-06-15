@@ -1,6 +1,9 @@
+use super::handlers::prepare_user_submission_task_input;
 use super::input_queue::TurnInput;
 use super::session::Session;
+use super::session::SessionSettingsUpdate;
 use super::turn_context::TurnContext;
+use crate::codex_thread::IdleTurnInput;
 use crate::codex_thread::TryStartTurnIfIdleError;
 use crate::codex_thread::TryStartTurnIfIdleRejectionReason;
 use crate::state::ActiveTurn;
@@ -35,18 +38,19 @@ impl Session {
         }
     }
 
-    /// Starts a regular turn with the provided items only if automatic idle work
+    /// Starts a regular turn with the provided input only if automatic idle work
     /// is allowed for the current session state.
     ///
     /// This is the shared gate for extension-initiated idle work. It refuses to
-    /// start a turn when user/client-triggered work is queued, any task is still
-    /// active, or the session is currently in Plan mode. Active Review tasks are
-    /// covered by the active-task check because Review turns are not steerable.
+    /// start a turn when user/client-triggered work is queued or any task is
+    /// still active. Synthetic input is also rejected in Plan mode; user
+    /// submissions are allowed there. Active Review tasks are covered by the
+    /// active-task check because Review turns are not steerable.
     pub(crate) async fn try_start_turn_if_idle(
         self: &Arc<Self>,
-        input: Vec<ResponseItem>,
+        input: IdleTurnInput,
     ) -> Result<(), TryStartTurnIfIdleError> {
-        if input.is_empty() {
+        if matches!(&input, IdleTurnInput::ResponseItems(items) if items.is_empty()) {
             return Ok(());
         }
         if self.input_queue.has_trigger_turn_mailbox_items().await {
@@ -55,7 +59,9 @@ impl Session {
                 input,
             ));
         }
-        if self.collaboration_mode().await.mode == ModeKind::Plan {
+        if matches!(&input, IdleTurnInput::ResponseItems(_))
+            && self.collaboration_mode().await.mode == ModeKind::Plan
+        {
             return Err(TryStartTurnIfIdleError::new(
                 TryStartTurnIfIdleRejectionReason::PlanMode,
                 input,
@@ -74,23 +80,51 @@ impl Session {
             Arc::clone(&active_turn.turn_state)
         };
 
-        if self.input_queue.has_trigger_turn_mailbox_items().await {
-            self.clear_reserved_idle_turn(&turn_state).await;
-            self.maybe_start_turn_for_pending_work().await;
-            return Err(TryStartTurnIfIdleError::new(
-                TryStartTurnIfIdleRejectionReason::PendingTriggerTurn,
-                input,
-            ));
-        }
-
-        let turn_context = self
-            .new_default_turn_with_sub_id(uuid::Uuid::new_v4().to_string())
-            .await;
-        if turn_context.collaboration_mode.mode == ModeKind::Plan {
+        let sub_id = uuid::Uuid::new_v4().to_string();
+        let turn_context = match &input {
+            IdleTurnInput::ResponseItems(_) => self.new_default_turn_with_sub_id(sub_id).await,
+            IdleTurnInput::UserSubmission(submission) => {
+                let updates = SessionSettingsUpdate {
+                    final_output_json_schema: Some(submission.final_output_json_schema.clone()),
+                    ..Default::default()
+                };
+                match self.new_turn_with_sub_id(sub_id, updates).await {
+                    Ok(turn_context) => turn_context,
+                    Err(_) => {
+                        self.clear_reserved_idle_turn(&turn_state).await;
+                        self.maybe_start_turn_for_pending_work().await;
+                        return Err(TryStartTurnIfIdleError::new(
+                            TryStartTurnIfIdleRejectionReason::InvalidRequest,
+                            input,
+                        ));
+                    }
+                }
+            }
+        };
+        if matches!(&input, IdleTurnInput::ResponseItems(_))
+            && turn_context.collaboration_mode.mode == ModeKind::Plan
+        {
             self.clear_reserved_idle_turn(&turn_state).await;
             self.maybe_start_turn_for_pending_work().await;
             return Err(TryStartTurnIfIdleError::new(
                 TryStartTurnIfIdleRejectionReason::PlanMode,
+                input,
+            ));
+        }
+        if matches!(&input, IdleTurnInput::UserSubmission(_))
+            && self
+                .services
+                .agent_control
+                .ensure_execution_capacity(
+                    turn_context.multi_agent_version,
+                    &turn_context.session_source,
+                )
+                .is_err()
+        {
+            self.clear_reserved_idle_turn(&turn_state).await;
+            self.maybe_start_turn_for_pending_work().await;
+            return Err(TryStartTurnIfIdleError::new(
+                TryStartTurnIfIdleRejectionReason::Busy,
                 input,
             ));
         }
@@ -118,14 +152,30 @@ impl Session {
             ));
         }
 
-        self.input_queue
-            .extend_pending_input_for_turn_state(
-                turn_state.as_ref(),
-                input.into_iter().map(TurnInput::ResponseItem).collect(),
-            )
-            .await;
-        self.start_task(turn_context, Vec::new(), RegularTask::new())
-            .await;
+        match input {
+            IdleTurnInput::ResponseItems(items) => {
+                self.input_queue
+                    .extend_pending_input_for_turn_state(
+                        turn_state.as_ref(),
+                        items.into_iter().map(TurnInput::ResponseItem).collect(),
+                    )
+                    .await;
+                self.start_task(turn_context, Vec::new(), RegularTask::new())
+                    .await;
+            }
+            IdleTurnInput::UserSubmission(submission) => {
+                let task_input = prepare_user_submission_task_input(
+                    self,
+                    &turn_context,
+                    submission,
+                    /*client_user_message_id*/ None,
+                )
+                .await;
+                self.clear_connector_selection().await;
+                self.start_task(turn_context, task_input, RegularTask::new())
+                    .await;
+            }
+        }
         Ok(())
     }
 

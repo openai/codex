@@ -61,6 +61,7 @@ mod hierarchical_agents;
 mod hooks;
 #[cfg(not(target_os = "windows"))]
 mod hooks_mcp;
+mod idle_turn;
 mod image_rollout;
 mod items;
 mod json_result;

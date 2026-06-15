@@ -33,6 +33,7 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::StoredThread;
@@ -74,6 +75,15 @@ pub struct ThreadConfigSnapshot {
     pub thread_source: Option<ThreadSource>,
 }
 
+/// Model-visible input that may start an automatic turn while a thread is idle.
+#[derive(Clone, Debug, PartialEq)]
+pub enum IdleTurnInput {
+    /// Synthetic model input, such as a goal continuation.
+    ResponseItems(Vec<ResponseItem>),
+    /// User-authored input that should behave like a direct user submission.
+    UserSubmission(UserSubmission),
+}
+
 /// Explains why `CodexThread::try_start_turn_if_idle` rejected an automatic
 /// idle turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,6 +97,8 @@ pub enum TryStartTurnIfIdleRejectionReason {
     /// Another turn or task is active, or the idle reservation was lost before
     /// the automatic turn could start.
     Busy,
+    /// The user submission could not produce a valid turn context.
+    InvalidRequest,
 }
 
 /// Rejection returned when an extension asks to start automatic idle work but
@@ -94,11 +106,11 @@ pub enum TryStartTurnIfIdleRejectionReason {
 #[derive(Debug)]
 pub struct TryStartTurnIfIdleError {
     reason: TryStartTurnIfIdleRejectionReason,
-    input: Vec<ResponseItem>,
+    input: IdleTurnInput,
 }
 
 impl TryStartTurnIfIdleError {
-    pub(crate) fn new(reason: TryStartTurnIfIdleRejectionReason, input: Vec<ResponseItem>) -> Self {
+    pub(crate) fn new(reason: TryStartTurnIfIdleRejectionReason, input: IdleTurnInput) -> Self {
         Self { reason, input }
     }
 
@@ -109,7 +121,7 @@ impl TryStartTurnIfIdleError {
 
     /// Consumes the rejection and returns the original model-visible input
     /// unchanged, so callers can retry, drop, or log it explicitly.
-    pub fn into_input(self) -> Vec<ResponseItem> {
+    pub fn into_input(self) -> IdleTurnInput {
         self.input
     }
 }
@@ -298,24 +310,25 @@ impl CodexThread {
         self.codex.session.inject_if_running(items).await
     }
 
-    /// Starts an automatic regular turn with model-visible items only when idle
+    /// Starts an automatic regular turn with model-visible input only when idle
     /// work is allowed for this thread.
     ///
     /// This is the required entry point for extensions that want to launch
     /// model-visible work from `ThreadLifecycleContributor::on_thread_idle`.
     /// The call succeeds only if no user/client-triggered turn is queued, no
-    /// task is currently active, and the thread is not in Plan mode. Active
-    /// Review tasks are rejected by the active-task check because Review turns
-    /// are not steerable.
+    /// task is currently active, and synthetic input is not running in Plan
+    /// mode. User submissions remain valid in Plan mode, like direct input.
+    /// Active Review tasks are rejected by the active-task check because Review
+    /// turns are not steerable.
     ///
     /// On rejection, the returned error includes a stable reason and carries
-    /// the original `items` unchanged so the caller can decide whether to drop
-    /// them, retry later, or log why no automatic turn was started.
+    /// the original input unchanged so the caller can decide whether to drop
+    /// it, retry later, or log why no automatic turn was started.
     pub async fn try_start_turn_if_idle(
         &self,
-        items: Vec<ResponseItem>,
+        input: IdleTurnInput,
     ) -> Result<(), TryStartTurnIfIdleError> {
-        self.codex.session.try_start_turn_if_idle(items).await
+        self.codex.session.try_start_turn_if_idle(input).await
     }
 
     pub async fn set_app_server_client_info(

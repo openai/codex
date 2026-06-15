@@ -193,19 +193,13 @@ pub(super) async fn user_input_or_turn_inner(
     else {
         unreachable!();
     };
-    let UserSubmission {
-        items,
-        final_output_json_schema,
-        responsesapi_client_metadata,
-        additional_context,
-    } = submission;
     let emit_thread_settings_applied = thread_settings != ThreadSettingsOverrides::default();
     let mut updates = if emit_thread_settings_applied {
         thread_settings_update(sess, thread_settings).await
     } else {
         SessionSettingsUpdate::default()
     };
-    updates.final_output_json_schema = Some(final_output_json_schema);
+    updates.final_output_json_schema = Some(submission.final_output_json_schema.clone());
 
     let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
         // new_turn_with_sub_id already emits the error event.
@@ -222,44 +216,27 @@ pub(super) async fn user_input_or_turn_inner(
         .await;
     match sess
         .steer_input(
-            items.clone(),
-            additional_context.clone(),
+            submission.items.clone(),
+            submission.additional_context.clone(),
             /*expected_turn_id*/ None,
             client_user_message_id.clone(),
-            responsesapi_client_metadata.clone(),
+            submission.responsesapi_client_metadata.clone(),
         )
         .await
     {
         Ok(_) => {
-            current_context.session_telemetry.user_prompt(&items);
+            current_context
+                .session_telemetry
+                .user_prompt(&submission.items);
         }
-        Err(SteerInputError::NoActiveTurn(items)) => {
-            if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
-                current_context
-                    .turn_metadata_state
-                    .set_responsesapi_client_metadata(responsesapi_client_metadata);
-            }
-            current_context.session_telemetry.user_prompt(&items);
-            sess.refresh_mcp_servers_if_requested(
+        Err(SteerInputError::NoActiveTurn(_)) => {
+            let task_input = prepare_user_submission_task_input(
+                sess,
                 &current_context,
-                Some(sess.mcp_elicitation_reviewer()),
+                submission,
+                client_user_message_id,
             )
             .await;
-            let additional_context_input = {
-                let mut state = sess.state.lock().await;
-                state.additional_context.merge(additional_context)
-            };
-            let mut task_input = additional_context_input
-                .into_iter()
-                .map(ResponseItem::from)
-                .map(TurnInput::ResponseItem)
-                .collect::<Vec<_>>();
-            if !items.is_empty() {
-                task_input.push(TurnInput::UserInput {
-                    content: items,
-                    client_id: client_user_message_id,
-                });
-            }
             sess.spawn_task(
                 Arc::clone(&current_context),
                 task_input,
@@ -275,6 +252,44 @@ pub(super) async fn user_input_or_turn_inner(
             .await;
         }
     }
+}
+
+pub(crate) async fn prepare_user_submission_task_input(
+    sess: &Arc<Session>,
+    turn_context: &Arc<crate::session::TurnContext>,
+    submission: UserSubmission,
+    client_user_message_id: Option<String>,
+) -> Vec<TurnInput> {
+    let UserSubmission {
+        items,
+        final_output_json_schema: _,
+        responsesapi_client_metadata,
+        additional_context,
+    } = submission;
+    if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
+        turn_context
+            .turn_metadata_state
+            .set_responsesapi_client_metadata(responsesapi_client_metadata);
+    }
+    turn_context.session_telemetry.user_prompt(&items);
+    sess.refresh_mcp_servers_if_requested(turn_context, Some(sess.mcp_elicitation_reviewer()))
+        .await;
+    let additional_context_input = {
+        let mut state = sess.state.lock().await;
+        state.additional_context.merge(additional_context)
+    };
+    let mut task_input = additional_context_input
+        .into_iter()
+        .map(ResponseItem::from)
+        .map(TurnInput::ResponseItem)
+        .collect::<Vec<_>>();
+    if !items.is_empty() {
+        task_input.push(TurnInput::UserInput {
+            content: items,
+            client_id: client_user_message_id,
+        });
+    }
+    task_input
 }
 
 /// Queues an inter-agent message, then lets the shared pending-work scheduler
