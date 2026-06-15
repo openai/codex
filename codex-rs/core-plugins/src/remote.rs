@@ -27,6 +27,10 @@ mod catalog_cache;
 mod remote_installed_plugin_sync;
 mod share;
 
+#[cfg(test)]
+#[path = "remote_tests.rs"]
+mod tests;
+
 pub use remote_installed_plugin_sync::RemoteInstalledPluginBundleSyncError;
 pub use remote_installed_plugin_sync::RemoteInstalledPluginBundleSyncOutcome;
 pub use remote_installed_plugin_sync::RemotePluginCacheMutationGuard;
@@ -812,40 +816,29 @@ fn build_remote_marketplace(
     installed_plugins: Vec<RemotePluginInstalledItem>,
     include_installed_only: bool,
 ) -> Result<Option<RemoteMarketplace>, RemotePluginCatalogError> {
-    let directory_plugins = directory_plugins
-        .into_iter()
-        .map(|plugin| (plugin.id.clone(), plugin))
-        .collect::<BTreeMap<_, _>>();
-    let installed_plugins = installed_plugins
+    let mut installed_plugins = installed_plugins
         .into_iter()
         .map(|plugin| (plugin.plugin.id.clone(), plugin))
         .collect::<BTreeMap<_, _>>();
-    let plugin_ids = directory_plugins
-        .keys()
-        .chain(
-            include_installed_only
-                .then_some(&installed_plugins)
-                .into_iter()
-                .flat_map(|plugins| plugins.keys()),
-        )
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    if plugin_ids.is_empty() {
+    let mut plugins = directory_plugins
+        .into_iter()
+        .map(|plugin| {
+            let installed_plugin = installed_plugins.remove(&plugin.id);
+            build_remote_plugin_summary(&plugin, installed_plugin.as_ref())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if include_installed_only {
+        plugins.extend(
+            installed_plugins
+                .into_values()
+                .map(|plugin| build_remote_plugin_summary(&plugin.plugin, Some(&plugin)))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+    }
+    if plugins.is_empty() {
         return Ok(None);
     }
 
-    let mut plugins = plugin_ids
-        .into_iter()
-        .filter_map(|plugin_id| {
-            let directory_plugin = directory_plugins.get(&plugin_id);
-            let installed_plugin = installed_plugins.get(&plugin_id);
-            directory_plugin
-                .or_else(|| installed_plugin.map(|plugin| &plugin.plugin))
-                .map(|plugin| (plugin, installed_plugin))
-        })
-        .map(|(plugin, installed_plugin)| build_remote_plugin_summary(plugin, installed_plugin))
-        .collect::<Result<Vec<_>, _>>()?;
-    sort_remote_plugin_summaries_by_display_name(&mut plugins);
     Ok(Some(RemoteMarketplace {
         name: name.to_string(),
         display_name: display_name.to_string(),
