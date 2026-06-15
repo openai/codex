@@ -14,7 +14,6 @@ use crate::NoiseRendezvousConnectProvider;
 use crate::client::LazyRemoteExecServerClient;
 use crate::client::http_client::ReqwestHttpClient;
 use crate::client_api::ExecServerTransportParams;
-use crate::client_api::RemoteExecServerUrlProvider;
 use crate::environment_provider::DefaultEnvironmentProvider;
 use crate::environment_provider::EnvironmentDefault;
 use crate::environment_provider::EnvironmentProvider;
@@ -316,30 +315,6 @@ impl EnvironmentManager {
             .insert(environment_id, Arc::new(environment));
         Ok(())
     }
-
-    /// Adds or replaces a remote environment whose signed URL is refreshed for each connection.
-    pub fn upsert_environment_with_url_provider(
-        &self,
-        environment_id: String,
-        provider: Arc<dyn RemoteExecServerUrlProvider>,
-    ) -> Result<(), ExecServerError> {
-        if environment_id.is_empty() {
-            return Err(ExecServerError::Protocol(
-                "environment id cannot be empty".to_string(),
-            ));
-        }
-        self.environments
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(
-                environment_id,
-                Arc::new(Environment::remote_with_url_provider(
-                    provider,
-                    self.local_runtime_paths.clone(),
-                )),
-            );
-        Ok(())
-    }
 }
 
 /// Concrete execution/filesystem environment selected for a session.
@@ -349,7 +324,7 @@ impl EnvironmentManager {
 #[derive(Clone)]
 pub struct Environment {
     exec_server_url: Option<String>,
-    remote: bool,
+    remote_transport: Option<ExecServerTransportParams>,
     info_provider: Arc<dyn EnvironmentInfoProvider>,
     exec_backend: Arc<dyn ExecBackend>,
     filesystem: Arc<dyn ExecutorFileSystem>,
@@ -391,7 +366,7 @@ impl Environment {
     pub fn default_for_tests() -> Self {
         Self {
             exec_server_url: None,
-            remote: false,
+            remote_transport: None,
             info_provider: Arc::new(LocalEnvironmentInfoProvider),
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::unsandboxed()),
@@ -448,7 +423,7 @@ impl Environment {
     pub(crate) fn local(local_runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
             exec_server_url: None,
-            remote: false,
+            remote_transport: None,
             info_provider: Arc::new(LocalEnvironmentInfoProvider),
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::with_runtime_paths(
@@ -481,34 +456,14 @@ impl Environment {
             ExecServerTransportParams::NoiseRendezvous { .. } => None,
             ExecServerTransportParams::StdioCommand { .. } => None,
         };
-        let client = LazyRemoteExecServerClient::new(remote_transport);
+        let client = LazyRemoteExecServerClient::new(remote_transport.clone());
         let exec_backend: Arc<dyn ExecBackend> = Arc::new(RemoteProcess::new(client.clone()));
         let filesystem: Arc<dyn ExecutorFileSystem> =
             Arc::new(RemoteFileSystem::new(client.clone()));
 
         Self {
             exec_server_url,
-            remote: true,
-            info_provider: Arc::new(RemoteEnvironmentInfoProvider::new(client.clone())),
-            exec_backend,
-            filesystem,
-            http_client: Arc::new(client),
-            local_runtime_paths,
-        }
-    }
-
-    fn remote_with_url_provider(
-        provider: Arc<dyn RemoteExecServerUrlProvider>,
-        local_runtime_paths: Option<ExecServerRuntimePaths>,
-    ) -> Self {
-        let client = LazyRemoteExecServerClient::new_with_websocket_url_provider(provider);
-        let exec_backend: Arc<dyn ExecBackend> = Arc::new(RemoteProcess::new(client.clone()));
-        let filesystem: Arc<dyn ExecutorFileSystem> =
-            Arc::new(RemoteFileSystem::new(client.clone()));
-
-        Self {
-            exec_server_url: None,
-            remote: true,
+            remote_transport: Some(remote_transport),
             info_provider: Arc::new(RemoteEnvironmentInfoProvider::new(client.clone())),
             exec_backend,
             filesystem,
@@ -518,7 +473,7 @@ impl Environment {
     }
 
     pub fn is_remote(&self) -> bool {
-        self.remote
+        self.remote_transport.is_some()
     }
 
     /// Returns the remote exec-server URL when this environment is remote.

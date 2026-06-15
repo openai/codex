@@ -12,15 +12,6 @@ use crate::HttpResponseBodyStream;
 use crate::NoiseChannelIdentity;
 use crate::NoiseChannelPublicKey;
 
-/// Supplies a fresh signed WebSocket URL whenever a remote exec-server connection is opened.
-pub trait RemoteExecServerUrlProvider: Send + Sync {
-    /// Returns a URL for the next WebSocket connection attempt.
-    fn websocket_url(&self) -> RemoteExecServerUrlProviderFuture<'_>;
-}
-
-/// Future returned by [`RemoteExecServerUrlProvider`].
-pub type RemoteExecServerUrlProviderFuture<'a> = BoxFuture<'a, Result<String, ExecServerError>>;
-
 pub(crate) const DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -152,12 +143,6 @@ impl ExecServerTransportParams {
             initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
         }
     }
-}
-
-#[derive(Clone)]
-pub(crate) enum LazyRemoteExecServerTransport {
-    Fixed(ExecServerTransportParams),
-    WebSocketUrlProvider(Arc<dyn RemoteExecServerUrlProvider>),
 }
 
 /// Sends HTTP requests through a runtime-selected transport.
