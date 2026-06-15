@@ -2706,6 +2706,11 @@ impl Config {
         // Destructure every field to ensure ConfigRequirements additions are
         // either applied above or handled while constructing the final Config.
         let ConfigRequirements {
+            approval_policy: mut constrained_approval_policy,
+            approvals_reviewer: mut constrained_approvals_reviewer,
+            permission_profile: mut constrained_permission_profile,
+            windows_sandbox_mode: mut constrained_windows_sandbox_mode,
+            web_search_mode: mut constrained_web_search_mode,
             allowed_login_methods: _,
             allowed_chatgpt_workspaces: _,
             cli_auth_credentials_store: _,
@@ -2718,12 +2723,7 @@ impl Config {
             allow_login_shell: _,
             shell_environment_policy: _,
             feedback: _,
-            approval_policy: mut constrained_approval_policy,
-            approvals_reviewer: mut constrained_approvals_reviewer,
-            permission_profile: mut constrained_permission_profile,
-            windows_sandbox_mode: mut constrained_windows_sandbox_mode,
             windows_sandbox_private_desktop: _,
-            web_search_mode: mut constrained_web_search_mode,
             allow_managed_hooks_only: _,
             allow_appshots: _,
             allow_remote_control: _,

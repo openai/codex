@@ -13,6 +13,10 @@ use std::collections::BTreeMap;
 use super::otel;
 
 /// Runtime values that cannot be applied by mutating [`ConfigToml`] alone.
+///
+/// Other managed settings are written back into `ConfigToml`. These values need
+/// additional credential-store compatibility handling or intersection with the
+/// configured authentication restrictions before constructing the final config.
 pub(super) struct AppliedConfigRequirements {
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub forced_login_method: Option<ForcedLoginMethod>,
@@ -21,8 +25,10 @@ pub(super) struct AppliedConfigRequirements {
 
 /// Applies managed requirements to regular config before final config construction.
 ///
-/// Managed values replace their configured counterparts, and conflicts produce
-/// source-aware startup warnings.
+/// Managed values replace or merge with their configured counterparts, and
+/// conflicts produce source-aware startup warnings. Effective authentication
+/// values that need additional resolution are returned separately. Invalid or
+/// conflicting requirements return an error.
 pub(super) fn apply_to_config(
     config: &mut ConfigToml,
     requirements: &ConfigRequirements,
