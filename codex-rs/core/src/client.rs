@@ -118,6 +118,7 @@ use codex_feedback::FeedbackRequestTags;
 use codex_feedback::emit_feedback_request_tags_with_auth_env;
 use codex_login::auth_env_telemetry::AuthEnvTelemetry;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
+use codex_model_provider::ProviderClientSetup;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 #[cfg(test)]
@@ -182,16 +183,6 @@ struct ModelClientState {
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     disable_websockets: AtomicBool,
     cached_websocket_session: StdMutex<WebsocketSession>,
-}
-
-/// Resolved API client setup for a single request attempt.
-///
-/// Keeping this as a single bundle ensures prewarm and normal request paths
-/// share the same auth/provider setup flow.
-struct CurrentClientSetup {
-    auth: Option<CodexAuth>,
-    api_provider: ApiProvider,
-    api_auth: SharedAuthProvider,
 }
 
 #[derive(Clone, Copy)]
@@ -790,15 +781,8 @@ impl ModelClient {
     ///
     /// This centralizes setup used by both prewarm and normal request paths so they stay in
     /// lockstep when auth/provider resolution changes.
-    async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
-        let auth = self.state.provider.auth().await;
-        let api_provider = self.state.provider.api_provider().await?;
-        let api_auth = self.state.provider.api_auth().await?;
-        Ok(CurrentClientSetup {
-            auth,
-            api_provider,
-            api_auth,
-        })
+    async fn current_client_setup(&self) -> Result<ProviderClientSetup> {
+        self.state.provider.client_setup().await
     }
 
     /// Opens a websocket connection using the same header and telemetry wiring as normal turns.

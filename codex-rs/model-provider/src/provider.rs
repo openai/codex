@@ -79,6 +79,13 @@ impl std::error::Error for ProviderAccountError {}
 
 pub type ProviderAccountResult = std::result::Result<ProviderAccountState, ProviderAccountError>;
 
+/// API client configuration derived from one provider-auth snapshot.
+pub struct ProviderClientSetup {
+    pub auth: Option<CodexAuth>,
+    pub api_provider: Provider,
+    pub api_auth: SharedAuthProvider,
+}
+
 /// Default model used for automatic approval review when a provider does not
 /// require a backend-specific model ID.
 pub const DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL: &str = "codex-auto-review";
@@ -144,6 +151,27 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
 
     /// Returns the current app-visible account state for this provider.
     fn account_state(&self) -> ProviderAccountResult;
+
+    /// Resolves the API client configuration for one request attempt.
+    ///
+    /// Implementations must derive every field from the same authentication
+    /// snapshot so credentials and provider routing cannot disagree.
+    fn client_setup(
+        &self,
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ProviderClientSetup>> {
+        Box::pin(async move {
+            let auth = self.auth().await;
+            let api_provider = self
+                .info()
+                .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
+            let api_auth = resolve_provider_auth(auth.as_ref(), self.info())?;
+            Ok(ProviderClientSetup {
+                auth,
+                api_provider,
+                api_auth,
+            })
+        })
+    }
 
     /// Returns provider configuration adapted for the API client.
     fn api_provider(&self) -> ModelProviderFuture<'_, codex_protocol::error::Result<Provider>> {

@@ -24,6 +24,7 @@ use crate::provider::ModelProviderFuture;
 use crate::provider::ProviderAccountResult;
 use crate::provider::ProviderAccountState;
 use crate::provider::ProviderCapabilities;
+use crate::provider::ProviderClientSetup;
 use auth::resolve_provider_auth;
 pub(crate) use catalog::static_model_catalog;
 use catalog::with_default_only_service_tier;
@@ -133,6 +134,22 @@ impl ModelProvider for AmazonBedrockModelProvider {
         Ok(ProviderAccountState {
             account: Some(ProviderAccount::AmazonBedrock),
             requires_openai_auth: false,
+        })
+    }
+
+    fn client_setup(&self) -> ModelProviderFuture<'_, Result<ProviderClientSetup>> {
+        Box::pin(async move {
+            let managed_auth = self.managed_auth();
+            let mut api_provider_info = self.info.clone();
+            api_provider_info.base_url =
+                Some(runtime_base_url(managed_auth.as_ref(), &self.aws).await?);
+            let api_provider = api_provider_info.to_api_provider(/*auth_mode*/ None)?;
+            let api_auth = resolve_provider_auth(managed_auth.as_ref(), &self.aws).await?;
+            Ok(ProviderClientSetup {
+                auth: managed_auth.map(CodexAuth::BedrockApiKey),
+                api_provider,
+                api_auth,
+            })
         })
     }
 
