@@ -28,14 +28,17 @@ pub(crate) struct TurnInputQueue {
 /// Session-scoped pending input storage and active-turn mailbox delivery coordination.
 pub(crate) struct InputQueue {
     mailbox_tx: watch::Sender<()>,
+    steer_tx: watch::Sender<()>,
     mailbox_pending_mails: Mutex<VecDeque<InterAgentCommunication>>,
 }
 
 impl InputQueue {
     pub(crate) fn new() -> Self {
         let (mailbox_tx, _) = watch::channel(());
+        let (steer_tx, _) = watch::channel(());
         Self {
             mailbox_tx,
+            steer_tx,
             mailbox_pending_mails: Mutex::new(VecDeque::new()),
         }
     }
@@ -46,6 +49,19 @@ impl InputQueue {
             mailbox_rx.mark_changed();
         }
         mailbox_rx
+    }
+
+    pub(crate) async fn subscribe_steer(
+        &self,
+        turn_state: Option<&Mutex<TurnState>>,
+    ) -> watch::Receiver<()> {
+        let mut steer_rx = self.steer_tx.subscribe();
+        if let Some(turn_state) = turn_state
+            && turn_state.lock().await.pending_input.has_user_input()
+        {
+            steer_rx.mark_changed();
+        }
+        steer_rx
     }
 
     pub(crate) async fn enqueue_mailbox_communication(
@@ -146,9 +162,12 @@ impl InputQueue {
         turn_state: &Mutex<TurnState>,
         input: Vec<TurnInput>,
     ) {
-        let mut turn_state = turn_state.lock().await;
-        turn_state.pending_input.items.extend(input);
-        turn_state.accept_mailbox_delivery_for_current_turn();
+        {
+            let mut turn_state = turn_state.lock().await;
+            turn_state.pending_input.items.extend(input);
+            turn_state.accept_mailbox_delivery_for_current_turn();
+        }
+        self.steer_tx.send_replace(());
     }
 
     pub(crate) async fn extend_pending_input_for_turn_state(
@@ -228,6 +247,14 @@ impl InputQueue {
     }
 }
 
+impl TurnInputQueue {
+    fn has_user_input(&self) -> bool {
+        self.items
+            .iter()
+            .any(|input| matches!(input, TurnInput::UserInput { .. }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,6 +299,50 @@ mod tests {
             .await;
 
         mailbox_rx.changed().await.expect("mailbox update");
+    }
+
+    #[tokio::test]
+    async fn input_queue_notifies_steer_subscribers() {
+        let input_queue = InputQueue::new();
+        let turn_state = Mutex::new(TurnState::default());
+        let mut steer_rx = input_queue.subscribe_steer(Some(&turn_state)).await;
+
+        input_queue
+            .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
+                &turn_state,
+                vec![TurnInput::UserInput {
+                    content: vec![UserInput::Text {
+                        text: "steer".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    client_id: None,
+                }],
+            )
+            .await;
+
+        steer_rx.changed().await.expect("steer update");
+    }
+
+    #[tokio::test]
+    async fn input_queue_marks_already_pending_steer_as_changed() {
+        let input_queue = InputQueue::new();
+        let turn_state = Mutex::new(TurnState::default());
+        input_queue
+            .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
+                &turn_state,
+                vec![TurnInput::UserInput {
+                    content: vec![UserInput::Text {
+                        text: "already pending".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    client_id: None,
+                }],
+            )
+            .await;
+
+        let mut steer_rx = input_queue.subscribe_steer(Some(&turn_state)).await;
+
+        steer_rx.changed().await.expect("already pending steer");
     }
 
     #[tokio::test]

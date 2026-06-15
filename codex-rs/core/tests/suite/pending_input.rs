@@ -2,6 +2,7 @@ use core_test_support::test_codex::local_selections;
 use std::sync::Arc;
 
 use codex_core::CodexThread;
+use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::PermissionProfile;
@@ -204,6 +205,78 @@ async fn wait_for_agent_message(codex: &CodexThread, text: &str) {
 
 async fn wait_for_turn_complete(codex: &CodexThread) {
     wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
+    const WAIT_CALL_ID: &str = "wait-call";
+    const INITIAL_PROMPT: &str = "wait for an agent";
+    const STEER_PROMPT: &str = "stop waiting and continue";
+
+    let first_chunks = vec![
+        chunk(ev_response_created("resp-1")),
+        chunk(ev_function_call(
+            WAIT_CALL_ID,
+            "wait_agent",
+            r#"{"timeout_ms":10000}"#,
+        )),
+        chunk(ev_completed("resp-1")),
+    ];
+    let (server, _completions) =
+        start_streaming_sse_server(vec![first_chunks, response_completed_chunks("resp-2")]).await;
+    let codex = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+        })
+        .build_with_streaming_server(&server)
+        .await
+        .expect("build Codex test session")
+        .codex;
+
+    submit_user_input(&codex, INITIAL_PROMPT).await;
+    wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::CollabWaitingBegin(_))
+    })
+    .await;
+
+    steer_user_input(&codex, STEER_PROMPT).await;
+    wait_for_turn_complete(&codex).await;
+
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 2);
+    let second: Value = from_slice(&requests[1]).expect("parse second request");
+    let relevant_user_input = message_input_texts(&second, "user")
+        .into_iter()
+        .filter(|text| text == INITIAL_PROMPT || text == STEER_PROMPT)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        relevant_user_input,
+        vec![INITIAL_PROMPT.to_string(), STEER_PROMPT.to_string()]
+    );
+    let wait_output = second["input"]
+        .as_array()
+        .expect("second request input")
+        .iter()
+        .find(|item| {
+            item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                && item.get("call_id").and_then(Value::as_str) == Some(WAIT_CALL_ID)
+        })
+        .and_then(|item| item.get("output"))
+        .and_then(Value::as_str)
+        .expect("wait_agent output");
+    assert_eq!(
+        serde_json::from_str::<Value>(wait_output).expect("parse wait_agent output"),
+        json!({
+            "message": "Wait interrupted by new input.",
+            "timed_out": false,
+        })
+    );
+
+    server.shutdown().await;
 }
 
 fn assert_two_responses_input_snapshot(snapshot_name: &str, requests: &[Vec<u8>]) {

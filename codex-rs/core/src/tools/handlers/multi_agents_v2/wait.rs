@@ -65,7 +65,15 @@ impl Handler {
             None => default_timeout_ms,
         };
 
+        let turn_state = session
+            .input_queue
+            .turn_state_for_sub_id(&session.active_turn, &turn.sub_id)
+            .await;
         let mut mailbox_rx = session.input_queue.subscribe_mailbox().await;
+        let mut steer_rx = session
+            .input_queue
+            .subscribe_steer(turn_state.as_deref())
+            .await;
 
         session
             .send_event(
@@ -82,8 +90,8 @@ impl Handler {
             .await;
 
         let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-        let timed_out = !wait_for_mailbox_change(&mut mailbox_rx, deadline).await;
-        let result = WaitAgentResult::from_timed_out(timed_out);
+        let outcome = wait_for_activity(&mut mailbox_rx, &mut steer_rx, deadline).await;
+        let result = WaitAgentResult::from_outcome(outcome);
 
         session
             .send_event(
@@ -122,15 +130,15 @@ pub(crate) struct WaitAgentResult {
 }
 
 impl WaitAgentResult {
-    fn from_timed_out(timed_out: bool) -> Self {
-        let message = if timed_out {
-            "Wait timed out."
-        } else {
-            "Wait completed."
+    fn from_outcome(outcome: WaitOutcome) -> Self {
+        let message = match outcome {
+            WaitOutcome::MailboxActivity => "Wait completed.",
+            WaitOutcome::Steered => "Wait interrupted by new input.",
+            WaitOutcome::TimedOut => "Wait timed out.",
         };
         Self {
             message: message.to_string(),
-            timed_out,
+            timed_out: outcome == WaitOutcome::TimedOut,
         }
     }
 }
@@ -153,12 +161,26 @@ impl ToolOutput for WaitAgentResult {
     }
 }
 
-async fn wait_for_mailbox_change(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WaitOutcome {
+    MailboxActivity,
+    Steered,
+    TimedOut,
+}
+
+async fn wait_for_activity(
     mailbox_rx: &mut tokio::sync::watch::Receiver<()>,
+    steer_rx: &mut tokio::sync::watch::Receiver<()>,
     deadline: Instant,
-) -> bool {
-    match timeout_at(deadline, mailbox_rx.changed()).await {
-        Ok(Ok(())) => true,
-        Ok(Err(_)) | Err(_) => false,
+) -> WaitOutcome {
+    let activity = async {
+        tokio::select! {
+            result = mailbox_rx.changed() => result.map(|()| WaitOutcome::MailboxActivity),
+            result = steer_rx.changed() => result.map(|()| WaitOutcome::Steered),
+        }
+    };
+    match timeout_at(deadline, activity).await {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(_)) | Err(_) => WaitOutcome::TimedOut,
     }
 }
