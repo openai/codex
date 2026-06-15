@@ -74,11 +74,13 @@ struct RunningProcess {
     retained_bytes: usize,
     next_seq: u64,
     exit_code: Option<i32>,
+    exit_seq: Option<u64>,
     wake_tx: watch::Sender<u64>,
     events: ExecProcessEventLog,
     output_notify: Arc<Notify>,
     open_streams: usize,
     closed: bool,
+    closed_seq: Option<u64>,
 }
 
 enum ProcessEntry {
@@ -232,11 +234,13 @@ impl LocalProcess {
                     retained_bytes: 0,
                     next_seq: 1,
                     exit_code: None,
+                    exit_seq: None,
                     wake_tx: wake_tx.clone(),
                     events: events.clone(),
                     output_notify: Arc::clone(&output_notify),
                     open_streams: 2,
                     closed: false,
+                    closed_seq: None,
                 })),
             );
         }
@@ -307,6 +311,9 @@ impl LocalProcess {
                 for retained in process.output.iter().filter(|chunk| chunk.seq > after_seq) {
                     let chunk_len = retained.chunk.len();
                     if !chunks.is_empty() && total_bytes + chunk_len > max_bytes {
+                        next_seq = chunks
+                            .last()
+                            .map_or(process.next_seq, |chunk: &ProcessOutputChunk| chunk.seq + 1);
                         break;
                     }
                     total_bytes += chunk_len;
@@ -315,8 +322,8 @@ impl LocalProcess {
                         stream: retained.stream,
                         chunk: retained.chunk.clone().into(),
                     });
-                    next_seq = retained.seq + 1;
                     if total_bytes >= max_bytes {
+                        next_seq = retained.seq + 1;
                         break;
                     }
                 }
@@ -327,7 +334,9 @@ impl LocalProcess {
                         next_seq,
                         exited: process.exit_code.is_some(),
                         exit_code: process.exit_code,
+                        exit_seq: process.exit_seq,
                         closed: process.closed,
+                        closed_seq: process.closed_seq,
                         failure: None,
                     },
                     Arc::clone(&process.output_notify),
@@ -689,6 +698,7 @@ async fn watch_exit(
             let seq = process.next_seq;
             process.next_seq += 1;
             process.exit_code = Some(exit_code);
+            process.exit_seq = Some(seq);
             let _ = process.wake_tx.send(seq);
             process
                 .events
@@ -743,6 +753,7 @@ async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>) {
         process.closed = true;
         let seq = process.next_seq;
         process.next_seq += 1;
+        process.closed_seq = Some(seq);
         let _ = process.wake_tx.send(seq);
         process.events.publish(ExecProcessEvent::Closed { seq });
         (
@@ -882,7 +893,9 @@ mod tests {
                 next_seq: 2,
                 exited: true,
                 exit_code: Some(0),
+                exit_seq: Some(1),
                 closed: false,
+                closed_seq: None,
                 failure: None,
             }
         );
@@ -992,11 +1005,13 @@ mod tests {
                 retained_bytes: 0,
                 next_seq: 1,
                 exit_code: None,
+                exit_seq: None,
                 wake_tx: wake_tx.clone(),
                 events: events.clone(),
                 output_notify: Arc::clone(&output_notify),
                 open_streams: 2,
                 closed: false,
+                closed_seq: None,
             })),
         );
         assert!(previous.is_none());

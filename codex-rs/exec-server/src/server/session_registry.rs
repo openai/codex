@@ -14,7 +14,7 @@ use crate::server::process_handler::ProcessHandler;
 #[cfg(test)]
 const DETACHED_SESSION_TTL: Duration = Duration::from_millis(200);
 #[cfg(not(test))]
-const DETACHED_SESSION_TTL: Duration = Duration::from_secs(10);
+const DETACHED_SESSION_TTL: Duration = Duration::from_secs(30);
 
 pub(crate) struct SessionRegistry {
     sessions: Mutex<HashMap<String, Arc<SessionEntry>>>,

@@ -224,7 +224,9 @@ impl BlockingTerminateExecProcess {
             next_seq: 1,
             exited: false,
             exit_code: None,
+            exit_seq: None,
             closed: false,
+            closed_seq: None,
             failure: None,
         })
     }

@@ -38,7 +38,9 @@ impl MockExecProcess {
                 next_seq: 1,
                 exited: false,
                 exit_code: None,
+                exit_seq: None,
                 closed: false,
+                closed_seq: None,
                 failure: None,
             }))
     }
@@ -185,10 +187,12 @@ async fn remote_process_waits_for_early_exit_event() {
             },
             read_responses: Mutex::new(VecDeque::from([ReadResponse {
                 chunks: Vec::new(),
-                next_seq: 2,
+                next_seq: 3,
                 exited: true,
                 exit_code: Some(17),
+                exit_seq: Some(1),
                 closed: true,
+                closed_seq: Some(2),
                 failure: None,
             }])),
             terminate_error: None,

@@ -89,6 +89,8 @@ use crate::rpc::RpcClient;
 use crate::rpc::RpcClientEvent;
 
 pub(crate) mod http_client;
+#[path = "client_recovery.rs"]
+mod recovery;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -161,7 +163,7 @@ pub(crate) struct Session {
 }
 
 struct Inner {
-    client: RpcClient,
+    client: ArcSwap<ClientGeneration>,
     // The remote transport delivers one shared notification stream for every
     // process on the connection. Keep a local process_id -> session registry so
     // we can turn those connection-global notifications into process wakeups
@@ -171,9 +173,8 @@ struct Inner {
     // need serialization so concurrent register/remove operations do not
     // overwrite each other's copy-on-write updates.
     sessions_write_lock: Mutex<()>,
-    // Once the transport closes, every environment operation should fail quickly
-    // with the same canonical message. This client never reconnects, so the
-    // latch only moves from unset to set once.
+    // Once recovery is exhausted, every environment operation should fail
+    // quickly with the same canonical message.
     disconnected: OnceLock<String>,
     // Streaming HTTP responses are keyed by a client-generated request id
     // because they share the same connection-global notification channel as
@@ -184,13 +185,22 @@ struct Inner {
     http_body_streams_write_lock: Mutex<()>,
     http_body_stream_next_id: AtomicU64,
     session_id: std::sync::RwLock<Option<String>>,
-    reader_task: tokio::task::JoinHandle<()>,
+    remote_connect_args: Option<RemoteExecServerConnectArgs>,
+    recovery_lock: Mutex<()>,
+    connection_state_tx: watch::Sender<ConnectionState>,
+    next_generation_id: AtomicU64,
 }
 
-impl Drop for Inner {
-    fn drop(&mut self) {
-        self.reader_task.abort();
-    }
+struct ClientGeneration {
+    id: u64,
+    client: RpcClient,
+}
+
+#[derive(Clone, Debug)]
+enum ConnectionState {
+    Connected(u64),
+    Recovering,
+    Failed(String),
 }
 
 #[derive(Clone)]
@@ -330,6 +340,23 @@ impl ExecServerClient {
         &self,
         options: ExecServerClientConnectOptions,
     ) -> Result<InitializeResponse, ExecServerError> {
+        let generation = self.inner.client.load_full();
+        let response = Self::initialize_generation(&generation, options).await?;
+        {
+            let mut session_id = self
+                .inner
+                .session_id
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *session_id = Some(response.session_id.clone());
+        }
+        Ok(response)
+    }
+
+    async fn initialize_generation(
+        generation: &ClientGeneration,
+        options: ExecServerClientConnectOptions,
+    ) -> Result<InitializeResponse, ExecServerError> {
         let ExecServerClientConnectOptions {
             client_name,
             initialize_timeout,
@@ -337,8 +364,7 @@ impl ExecServerClient {
         } = options;
 
         timeout(initialize_timeout, async {
-            let response: InitializeResponse = self
-                .inner
+            let response: InitializeResponse = generation
                 .client
                 .call(
                     INITIALIZE_METHOD,
@@ -348,15 +374,7 @@ impl ExecServerClient {
                     },
                 )
                 .await?;
-            {
-                let mut session_id = self
-                    .inner
-                    .session_id
-                    .write()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                *session_id = Some(response.session_id.clone());
-            }
-            self.notify_initialized().await?;
+            Self::notify_initialized(generation).await?;
             Ok(response)
         })
         .await
@@ -503,67 +521,87 @@ impl ExecServerClient {
     }
 
     fn is_disconnected(&self) -> bool {
-        self.inner.disconnected.get().is_some() || self.inner.client.is_disconnected()
+        self.inner.disconnected.get().is_some()
     }
 
     pub(crate) async fn connect(
         connection: JsonRpcConnection,
         options: ExecServerClientConnectOptions,
     ) -> Result<Self, ExecServerError> {
-        let (rpc_client, mut events_rx) = RpcClient::new(connection);
-        let inner = Arc::new_cyclic(|weak| {
-            let weak = weak.clone();
-            let reader_task = tokio::spawn(async move {
-                while let Some(event) = events_rx.recv().await {
-                    match event {
-                        RpcClientEvent::Notification(notification) => {
-                            if let Some(inner) = weak.upgrade()
-                                && let Err(err) =
-                                    handle_server_notification(&inner, notification).await
-                            {
-                                let message = record_disconnected(
-                                    &inner,
-                                    format!("exec-server notification handling failed: {err}"),
-                                );
-                                fail_all_in_flight_work(&inner, message).await;
-                                return;
-                            }
-                        }
-                        RpcClientEvent::Disconnected { reason } => {
-                            if let Some(inner) = weak.upgrade() {
-                                let message = record_disconnected(
-                                    &inner,
-                                    disconnected_message(reason.as_deref()),
-                                );
-                                fail_all_in_flight_work(&inner, message).await;
-                            }
-                            return;
-                        }
-                    }
-                }
-            });
+        Self::connect_with_recovery(connection, options, /*remote_connect_args*/ None).await
+    }
 
-            Inner {
-                client: rpc_client,
-                sessions: ArcSwap::from_pointee(HashMap::new()),
-                sessions_write_lock: Mutex::new(()),
-                disconnected: OnceLock::new(),
-                http_body_streams: ArcSwap::from_pointee(HashMap::new()),
-                http_body_stream_failures: ArcSwap::from_pointee(HashMap::new()),
-                http_body_streams_write_lock: Mutex::new(()),
-                http_body_stream_next_id: AtomicU64::new(1),
-                session_id: std::sync::RwLock::new(None),
-                reader_task,
-            }
+    pub(crate) async fn connect_with_recovery(
+        connection: JsonRpcConnection,
+        options: ExecServerClientConnectOptions,
+        remote_connect_args: Option<RemoteExecServerConnectArgs>,
+    ) -> Result<Self, ExecServerError> {
+        let (rpc_client, events_rx) = RpcClient::new(connection);
+        let generation_id = 1;
+        let generation = Arc::new(ClientGeneration {
+            id: generation_id,
+            client: rpc_client,
+        });
+        let (connection_state_tx, _connection_state_rx) =
+            watch::channel(ConnectionState::Connected(generation_id));
+        let inner = Arc::new(Inner {
+            client: ArcSwap::from(generation),
+            sessions: ArcSwap::from_pointee(HashMap::new()),
+            sessions_write_lock: Mutex::new(()),
+            disconnected: OnceLock::new(),
+            http_body_streams: ArcSwap::from_pointee(HashMap::new()),
+            http_body_stream_failures: ArcSwap::from_pointee(HashMap::new()),
+            http_body_streams_write_lock: Mutex::new(()),
+            http_body_stream_next_id: AtomicU64::new(1),
+            session_id: std::sync::RwLock::new(None),
+            remote_connect_args,
+            recovery_lock: Mutex::new(()),
+            connection_state_tx,
+            next_generation_id: AtomicU64::new(generation_id + 1),
         });
 
         let client = Self { inner };
+        client.spawn_generation_reader(generation_id, events_rx);
         client.initialize(options).await?;
         Ok(client)
     }
 
-    async fn notify_initialized(&self) -> Result<(), ExecServerError> {
-        self.inner
+    fn spawn_generation_reader(
+        &self,
+        generation_id: u64,
+        mut events_rx: mpsc::Receiver<RpcClientEvent>,
+    ) {
+        let weak = Arc::downgrade(&self.inner);
+        tokio::spawn(async move {
+            while let Some(event) = events_rx.recv().await {
+                match event {
+                    RpcClientEvent::Notification(notification) => {
+                        if let Some(inner) = weak.upgrade()
+                            && let Err(err) = handle_server_notification(&inner, notification).await
+                        {
+                            inner.handle_generation_disconnect(
+                                generation_id,
+                                format!("exec-server notification handling failed: {err}"),
+                            );
+                            return;
+                        }
+                    }
+                    RpcClientEvent::Disconnected { reason } => {
+                        if let Some(inner) = weak.upgrade() {
+                            inner.handle_generation_disconnect(
+                                generation_id,
+                                disconnected_message(reason.as_deref()),
+                            );
+                        }
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    async fn notify_initialized(generation: &ClientGeneration) -> Result<(), ExecServerError> {
+        generation
             .client
             .notify(INITIALIZED_METHOD, &serde_json::json!({}))
             .await
@@ -575,24 +613,16 @@ impl ExecServerClient {
         P: serde::Serialize,
         T: serde::de::DeserializeOwned,
     {
-        // Reject new work before allocating a JSON-RPC request id. MCP tool
-        // calls, process writes, and fs operations all pass through here, so
-        // this is the shared low-level failure path after environment disconnect.
-        if let Some(error) = self.inner.disconnected_error() {
-            return Err(error);
-        }
+        let generation = self.inner.connected_generation().await?;
 
-        match self.inner.client.call(method, params).await {
+        match generation.client.call(method, params).await {
             Ok(response) => Ok(response),
             Err(error) => {
                 let error = ExecServerError::from(error);
                 if is_transport_closed_error(&error) {
-                    // A call can race with disconnect after the preflight
-                    // check. Only the reader task drains sessions so queued
-                    // process notifications stay ordered before disconnect.
-                    let message = disconnected_message(/*reason*/ None);
-                    let message = record_disconnected(&self.inner, message);
-                    Err(ExecServerError::Disconnected(message))
+                    Err(ExecServerError::Disconnected(disconnected_message(
+                        /*reason*/ None,
+                    )))
                 } else {
                     Err(error)
                 }
@@ -654,35 +684,103 @@ impl SessionState {
             return false;
         };
 
-        let mut ready = Vec::new();
-        {
-            let mut ordered_events = self
-                .ordered_events
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            // We have already delivered this sequence number or moved past it,
-            // so accepting it again would duplicate output or lifecycle events.
-            if seq <= ordered_events.last_published_seq {
-                return false;
-            }
-
-            ordered_events.pending.entry(seq).or_insert(event);
-            loop {
-                let next_seq = ordered_events.last_published_seq + 1;
-                let Some(event) = ordered_events.pending.remove(&next_seq) else {
-                    break;
-                };
-                ordered_events.last_published_seq += 1;
-                ready.push(event);
-            }
+        let mut ordered_events = self
+            .ordered_events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // We have already delivered this sequence number or moved past it,
+        // so accepting it again would duplicate output or lifecycle events.
+        if seq <= ordered_events.last_published_seq {
+            return false;
         }
 
+        ordered_events.pending.entry(seq).or_insert(event);
+        self.publish_ready_events(&mut ordered_events)
+    }
+
+    fn publish_ready_events(&self, ordered_events: &mut OrderedSessionEvents) -> bool {
         let mut published_closed = false;
-        for event in ready {
+        loop {
+            let next_seq = ordered_events.last_published_seq + 1;
+            let Some(event) = ordered_events.pending.remove(&next_seq) else {
+                break;
+            };
+            ordered_events.last_published_seq = next_seq;
             published_closed |= matches!(&event, ExecProcessEvent::Closed { .. });
             self.events.publish(event);
         }
         published_closed
+    }
+
+    fn last_published_seq(&self) -> u64 {
+        self.ordered_events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .last_published_seq
+    }
+
+    fn recover_events(&self, response: ReadResponse) -> Result<bool, ExecServerError> {
+        let ReadResponse {
+            chunks,
+            next_seq,
+            exited,
+            exit_code,
+            exit_seq,
+            closed,
+            closed_seq,
+            failure,
+        } = response;
+        if let Some(message) = failure {
+            return Err(ExecServerError::Protocol(format!(
+                "process failed while recovering: {message}"
+            )));
+        }
+
+        let mut recovered = BTreeMap::new();
+        for chunk in chunks {
+            recovered.insert(chunk.seq, ExecProcessEvent::Output(chunk));
+        }
+        if exited {
+            let seq = exit_seq.ok_or_else(|| {
+                ExecServerError::Protocol(
+                    "recovering exited process did not include its exit sequence".to_string(),
+                )
+            })?;
+            let exit_code = exit_code.ok_or_else(|| {
+                ExecServerError::Protocol(
+                    "recovering exited process did not include its exit code".to_string(),
+                )
+            })?;
+            recovered.insert(seq, ExecProcessEvent::Exited { seq, exit_code });
+        }
+        if closed {
+            let seq = closed_seq.ok_or_else(|| {
+                ExecServerError::Protocol(
+                    "recovering closed process did not include its close sequence".to_string(),
+                )
+            })?;
+            recovered.insert(seq, ExecProcessEvent::Closed { seq });
+        }
+
+        let mut ordered_events = self
+            .ordered_events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let target_seq = next_seq.saturating_sub(1);
+        for seq in ordered_events.last_published_seq.saturating_add(1)..=target_seq {
+            if !ordered_events.pending.contains_key(&seq) && !recovered.contains_key(&seq) {
+                return Err(ExecServerError::Protocol(format!(
+                    "process event {seq} is no longer retained while recovering through sequence {target_seq}"
+                )));
+            }
+        }
+        for (seq, event) in recovered {
+            if seq > ordered_events.last_published_seq {
+                ordered_events.pending.entry(seq).or_insert(event);
+            }
+        }
+        self.note_change(target_seq);
+        Ok(self.publish_ready_events(&mut ordered_events))
     }
 
     async fn set_failure(&self, message: String) {
@@ -714,7 +812,9 @@ impl SessionState {
             next_seq,
             exited: true,
             exit_code: None,
+            exit_seq: None,
             closed: true,
+            closed_seq: None,
             failure: Some(message),
         }
     }
@@ -743,23 +843,35 @@ impl Session {
             return Ok(response);
         }
 
-        match self
-            .client
-            .read(ReadParams {
-                process_id: self.process_id.clone(),
-                after_seq,
-                max_bytes,
-                wait_ms,
-            })
-            .await
-        {
-            Ok(response) => Ok(response),
-            Err(err) if is_transport_closed_error(&err) => {
-                let message = disconnected_message(/*reason*/ None);
-                self.state.set_failure(message.clone()).await;
-                Ok(self.state.synthesized_failure(message))
+        loop {
+            let generation_id = self.client.inner.client.load().id;
+            match self
+                .client
+                .read(ReadParams {
+                    process_id: self.process_id.clone(),
+                    after_seq,
+                    max_bytes,
+                    wait_ms,
+                })
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(err)
+                    if is_transport_closed_error(&err)
+                        && self.client.inner.remote_connect_args.is_some() =>
+                {
+                    self.client
+                        .inner
+                        .wait_for_generation_recovery(generation_id)
+                        .await?;
+                }
+                Err(err) if is_transport_closed_error(&err) => {
+                    let message = disconnected_message(/*reason*/ None);
+                    self.state.set_failure(message.clone()).await;
+                    return Ok(self.state.synthesized_failure(message));
+                }
+                Err(err) => return Err(err),
             }
-            Err(err) => Err(err),
         }
     }
 
@@ -999,6 +1111,8 @@ mod tests {
     use crate::protocol::EXEC_CLOSED_METHOD;
     use crate::protocol::EXEC_EXITED_METHOD;
     use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
+    use crate::protocol::EXEC_READ_METHOD;
+    use crate::protocol::EXEC_WRITE_METHOD;
     use crate::protocol::ExecClosedNotification;
     use crate::protocol::ExecExitedNotification;
     use crate::protocol::ExecOutputDeltaNotification;
@@ -1007,6 +1121,10 @@ mod tests {
     use crate::protocol::INITIALIZED_METHOD;
     use crate::protocol::InitializeResponse;
     use crate::protocol::ProcessOutputChunk;
+    use crate::protocol::ReadParams;
+    use crate::protocol::ReadResponse;
+    use crate::protocol::WriteResponse;
+    use crate::protocol::WriteStatus;
 
     async fn read_jsonrpc_line<R>(lines: &mut tokio::io::Lines<BufReader<R>>) -> JSONRPCMessage
     where
@@ -1108,17 +1226,27 @@ mod tests {
         }
     }
 
-    async fn wait_for_disconnect(client: &ExecServerClient) {
-        timeout(Duration::from_secs(1), async {
+    async fn wait_for_generation(client: &ExecServerClient, generation_id: u64) {
+        let result = timeout(Duration::from_secs(1), async {
             loop {
-                if client.is_disconnected() {
+                if matches!(
+                    client.inner.connection_state_tx.borrow().clone(),
+                    super::ConnectionState::Connected(current_generation_id)
+                        if current_generation_id == generation_id
+                ) {
                     return;
                 }
                 tokio::task::yield_now().await;
             }
         })
-        .await
-        .expect("client should observe disconnect");
+        .await;
+        assert!(
+            result.is_ok(),
+            "client should connect generation {generation_id}; state: {:?}, current generation: {}, disconnected: {:?}",
+            client.inner.connection_state_tx.borrow().clone(),
+            client.inner.client.load().id,
+            client.inner.disconnected.get(),
+        );
     }
 
     #[cfg(not(windows))]
@@ -1539,7 +1667,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_websocket_client_replaces_disconnected_client_with_fresh_session() {
+    async fn remote_websocket_client_resumes_disconnected_session() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("listener should bind");
@@ -1547,6 +1675,9 @@ mod tests {
             "ws://{}",
             listener.local_addr().expect("listener should have address")
         );
+        let (registered_tx, registered_rx) = oneshot::channel();
+        let (disconnect_tx, disconnect_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
         let server = tokio::spawn({
             async move {
                 let mut first = accept_websocket(&listener).await;
@@ -1556,18 +1687,94 @@ mod tests {
                     /*expected_resume_session_id*/ None,
                 )
                 .await;
+                let _ = registered_rx.await;
+                write_jsonrpc_websocket(
+                    &mut first,
+                    JSONRPCMessage::Notification(JSONRPCNotification {
+                        method: EXEC_OUTPUT_DELTA_METHOD.to_string(),
+                        params: Some(
+                            serde_json::to_value(ExecOutputDeltaNotification {
+                                process_id: ProcessId::from("resumed-process"),
+                                seq: 1,
+                                stream: ExecOutputStream::Stdout,
+                                chunk: b"before\n".to_vec().into(),
+                            })
+                            .expect("output notification should serialize"),
+                        ),
+                    }),
+                )
+                .await;
+                let _ = disconnect_rx.await;
                 first
                     .close(None)
                     .await
                     .expect("first websocket should close");
+                drop(first);
 
                 let mut second = accept_websocket(&listener).await;
                 complete_websocket_initialize(
                     &mut second,
-                    "session-2",
-                    /*expected_resume_session_id*/ None,
+                    "session-1",
+                    /*expected_resume_session_id*/ Some("session-1"),
                 )
                 .await;
+
+                let read = read_jsonrpc_websocket(&mut second).await;
+                let read = match read {
+                    JSONRPCMessage::Request(request) if request.method == EXEC_READ_METHOD => {
+                        request
+                    }
+                    other => panic!("expected recovery read request, got {other:?}"),
+                };
+                let params: ReadParams = serde_json::from_value(
+                    read.params
+                        .clone()
+                        .expect("recovery read params should exist"),
+                )
+                .expect("recovery read params should deserialize");
+                assert_eq!(params.after_seq, Some(1));
+                write_jsonrpc_websocket(
+                    &mut second,
+                    JSONRPCMessage::Response(JSONRPCResponse {
+                        id: read.id,
+                        result: serde_json::to_value(ReadResponse {
+                            chunks: vec![ProcessOutputChunk {
+                                seq: 2,
+                                stream: ExecOutputStream::Stdout,
+                                chunk: b"during\n".to_vec().into(),
+                            }],
+                            next_seq: 3,
+                            exited: false,
+                            exit_code: None,
+                            exit_seq: None,
+                            closed: false,
+                            closed_seq: None,
+                            failure: None,
+                        })
+                        .expect("recovery read response should serialize"),
+                    }),
+                )
+                .await;
+
+                let write = read_jsonrpc_websocket(&mut second).await;
+                let write = match write {
+                    JSONRPCMessage::Request(request) if request.method == EXEC_WRITE_METHOD => {
+                        request
+                    }
+                    other => panic!("expected process write request, got {other:?}"),
+                };
+                write_jsonrpc_websocket(
+                    &mut second,
+                    JSONRPCMessage::Response(JSONRPCResponse {
+                        id: write.id,
+                        result: serde_json::to_value(WriteResponse {
+                            status: WriteStatus::Accepted,
+                        })
+                        .expect("write response should serialize"),
+                    }),
+                )
+                .await;
+                let _ = release_rx.await;
             }
         });
 
@@ -1577,15 +1784,55 @@ mod tests {
             initialize_timeout: Duration::from_secs(1),
         });
         let first = client.get().await.expect("first client should connect");
-        wait_for_disconnect(&first).await;
+        let session = first
+            .register_session(&ProcessId::from("resumed-process"))
+            .await
+            .expect("process session should register");
+        let mut events = session.subscribe_events();
+        registered_tx.send(()).expect("registration should signal");
+        assert_eq!(
+            timeout(Duration::from_secs(1), events.recv())
+                .await
+                .expect("initial output should not time out")
+                .expect("event stream should stay open"),
+            ExecProcessEvent::Output(ProcessOutputChunk {
+                seq: 1,
+                stream: ExecOutputStream::Stdout,
+                chunk: b"before\n".to_vec().into(),
+            })
+        );
+        disconnect_tx.send(()).expect("disconnect should signal");
+        wait_for_generation(&first, /*generation_id*/ 2).await;
+        assert_eq!(
+            timeout(Duration::from_secs(1), events.recv())
+                .await
+                .expect("recovered output should not time out")
+                .expect("event stream should stay open"),
+            ExecProcessEvent::Output(ProcessOutputChunk {
+                seq: 2,
+                stream: ExecOutputStream::Stdout,
+                chunk: b"during\n".to_vec().into(),
+            })
+        );
+        assert_eq!(
+            session
+                .write(b"hello\n".to_vec())
+                .await
+                .expect("write should use resumed session"),
+            WriteResponse {
+                status: WriteStatus::Accepted,
+            }
+        );
 
         let (replacement_a, replacement_b) = tokio::join!(client.get(), client.get());
         let replacement_a = replacement_a.expect("first replacement should connect");
         let replacement_b = replacement_b.expect("second replacement should reuse client");
-        assert_eq!(replacement_a.session_id().as_deref(), Some("session-2"));
-        assert_eq!(replacement_b.session_id().as_deref(), Some("session-2"));
+        assert_eq!(replacement_a.session_id().as_deref(), Some("session-1"));
+        assert_eq!(replacement_b.session_id().as_deref(), Some("session-1"));
+        assert!(Arc::ptr_eq(&first.inner, &replacement_a.inner));
         assert!(Arc::ptr_eq(&replacement_a.inner, &replacement_b.inner));
 
+        release_tx.send(()).expect("server should release");
         server.await.expect("server task should finish");
     }
 
