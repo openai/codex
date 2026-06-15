@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
 use std::sync::RwLock;
+use std::sync::Weak;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
@@ -116,6 +117,7 @@ pub struct McpConnectionManager {
 }
 
 struct McpConnections {
+    resource_cache_identity: Arc<()>,
     clients: HashMap<String, AsyncManagedClient>,
     server_metadata: HashMap<String, McpServerMetadata>,
     required_servers: Vec<String>,
@@ -297,6 +299,7 @@ impl McpConnectionManager {
     ) -> Self {
         Self {
             connections: RwLock::new(Arc::new(McpConnections {
+                resource_cache_identity: Arc::new(()),
                 clients: HashMap::new(),
                 server_metadata: HashMap::new(),
                 required_servers: Vec::new(),
@@ -319,6 +322,10 @@ impl McpConnectionManager {
 
     pub(crate) fn contains_server(&self, server_name: &str) -> bool {
         self.connections().clients.contains_key(server_name)
+    }
+
+    pub(crate) fn resource_cache_key(&self) -> Weak<()> {
+        Arc::downgrade(&self.connections().resource_cache_identity)
     }
 
     /// Cancels MCP servers that are still starting without shutting down ready clients.
@@ -975,6 +982,7 @@ async fn start_connections(
         });
     }
     let connections = McpConnections {
+        resource_cache_identity: Arc::new(()),
         clients,
         server_metadata,
         required_servers,

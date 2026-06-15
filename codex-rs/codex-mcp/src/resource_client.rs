@@ -36,9 +36,9 @@ pub struct McpResourceClient {
     manager: Arc<ArcSwap<McpConnectionManager>>,
 }
 
-/// Opaque identity for the manager currently used by an MCP resource client.
+/// Opaque identity for the connection snapshot currently used by an MCP resource client.
 #[derive(Clone)]
-pub struct McpResourceClientCacheKey(Weak<McpConnectionManager>);
+pub struct McpResourceClientCacheKey(Weak<()>);
 
 impl PartialEq for McpResourceClientCacheKey {
     fn eq(&self, other: &Self) -> bool {
@@ -62,9 +62,9 @@ impl McpResourceClient {
         Self { manager }
     }
 
-    /// Returns an identity that changes whenever the published manager changes.
+    /// Returns an identity that changes whenever the manager's connections change.
     pub fn cache_key(&self) -> McpResourceClientCacheKey {
-        McpResourceClientCacheKey(Arc::downgrade(&self.manager.load_full()))
+        McpResourceClientCacheKey(self.manager.load_full().resource_cache_key())
     }
 
     /// Returns whether the current manager contains the named server.
