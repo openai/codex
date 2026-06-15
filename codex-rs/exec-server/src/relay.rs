@@ -23,24 +23,25 @@ use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
 use crate::connection::WEBSOCKET_KEEPALIVE_INTERVAL;
 use crate::relay_proto::RelayData;
+use crate::relay_proto::RelayHandshake;
 use crate::relay_proto::RelayMessageFrame;
 use crate::relay_proto::RelayResume;
 use crate::relay_proto::relay_message_frame;
 use crate::server::ConnectionProcessor;
 
 const RELAY_MESSAGE_FRAME_VERSION: u32 = 1;
-
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum RelayFrameBodyKind {
+pub(crate) enum RelayFrameBodyKind {
     Data,
     Ack,
     Resume,
     Reset,
     Heartbeat,
+    Handshake,
 }
 
 impl RelayMessageFrame {
-    fn data(stream_id: String, seq: u32, payload: Vec<u8>) -> Self {
+    pub(crate) fn data(stream_id: String, seq: u32, payload: Vec<u8>) -> Self {
         Self {
             version: RELAY_MESSAGE_FRAME_VERSION,
             stream_id,
@@ -55,7 +56,7 @@ impl RelayMessageFrame {
         }
     }
 
-    fn resume(stream_id: String) -> Self {
+    pub(crate) fn resume(stream_id: String) -> Self {
         Self {
             version: RELAY_MESSAGE_FRAME_VERSION,
             stream_id,
@@ -67,7 +68,19 @@ impl RelayMessageFrame {
         }
     }
 
-    fn validate(&self) -> Result<RelayFrameBodyKind, ExecServerError> {
+    pub(crate) fn handshake(stream_id: String, payload: Vec<u8>) -> Self {
+        Self {
+            version: RELAY_MESSAGE_FRAME_VERSION,
+            stream_id,
+            ack: 0,
+            ack_bits: 0,
+            body: Some(relay_message_frame::Body::Handshake(RelayHandshake {
+                payload,
+            })),
+        }
+    }
+
+    pub(crate) fn validate(&self) -> Result<RelayFrameBodyKind, ExecServerError> {
         if self.version != RELAY_MESSAGE_FRAME_VERSION {
             return Err(ExecServerError::Protocol(format!(
                 "unsupported relay message frame version {}",
@@ -99,27 +112,56 @@ impl RelayMessageFrame {
                 Ok(RelayFrameBodyKind::Reset)
             }
             Some(relay_message_frame::Body::Heartbeat(_)) => Ok(RelayFrameBodyKind::Heartbeat),
+            Some(relay_message_frame::Body::Handshake(handshake)) => {
+                if handshake.payload.is_empty() {
+                    return Err(ExecServerError::Protocol(
+                        "relay handshake message frame is missing payload".to_string(),
+                    ));
+                }
+                Ok(RelayFrameBodyKind::Handshake)
+            }
             None => Err(ExecServerError::Protocol(
                 "relay message frame is missing body".to_string(),
             )),
         }
     }
 
-    fn into_jsonrpc_message(self) -> Result<JSONRPCMessage, ExecServerError> {
+    pub(crate) fn into_data(self) -> Result<RelayData, ExecServerError> {
         let kind = self.validate()?;
         if kind != RelayFrameBodyKind::Data {
             return Err(ExecServerError::Protocol(
                 "expected relay data message frame".to_string(),
             ));
         }
-        let payload = match self.body {
-            Some(relay_message_frame::Body::Data(data)) => data.payload,
-            _ => Vec::new(),
-        };
+        match self.body {
+            Some(relay_message_frame::Body::Data(data)) => Ok(data),
+            _ => Err(ExecServerError::Protocol(
+                "expected relay data message frame".to_string(),
+            )),
+        }
+    }
+
+    fn into_jsonrpc_message(self) -> Result<JSONRPCMessage, ExecServerError> {
+        let payload = self.into_data()?.payload;
         serde_json::from_slice(&payload).map_err(ExecServerError::Json)
     }
 
-    fn into_reset_reason(self) -> Option<String> {
+    pub(crate) fn into_handshake_payload(self) -> Result<Vec<u8>, ExecServerError> {
+        let kind = self.validate()?;
+        if kind != RelayFrameBodyKind::Handshake {
+            return Err(ExecServerError::Protocol(
+                "expected relay handshake message frame".to_string(),
+            ));
+        }
+        match self.body {
+            Some(relay_message_frame::Body::Handshake(handshake)) => Ok(handshake.payload),
+            _ => Err(ExecServerError::Protocol(
+                "expected relay handshake message frame".to_string(),
+            )),
+        }
+    }
+
+    pub(crate) fn into_reset_reason(self) -> Option<String> {
         match self.body {
             Some(relay_message_frame::Body::Reset(reset)) if !reset.reason.is_empty() => {
                 Some(reset.reason)
@@ -129,16 +171,18 @@ impl RelayMessageFrame {
     }
 }
 
-fn encode_relay_message_frame(frame: &RelayMessageFrame) -> Vec<u8> {
+pub(crate) fn encode_relay_message_frame(frame: &RelayMessageFrame) -> Vec<u8> {
     frame.encode_to_vec()
 }
 
-fn decode_relay_message_frame(payload: &[u8]) -> Result<RelayMessageFrame, ExecServerError> {
+pub(crate) fn decode_relay_message_frame(
+    payload: &[u8],
+) -> Result<RelayMessageFrame, ExecServerError> {
     RelayMessageFrame::decode(payload)
         .map_err(|err| ExecServerError::Protocol(format!("invalid relay message frame: {err}")))
 }
 
-fn jsonrpc_payload(message: &JSONRPCMessage) -> Result<Vec<u8>, ExecServerError> {
+pub(crate) fn jsonrpc_payload(message: &JSONRPCMessage) -> Result<Vec<u8>, ExecServerError> {
     serde_json::to_vec(message).map_err(ExecServerError::Json)
 }
 
@@ -304,7 +348,8 @@ where
                                 }
                                 RelayFrameBodyKind::Ack
                                 | RelayFrameBodyKind::Resume
-                                | RelayFrameBodyKind::Heartbeat => {}
+                                | RelayFrameBodyKind::Heartbeat
+                                | RelayFrameBodyKind::Handshake => {}
                             }
                         }
                         Some(Ok(Message::Close(_))) | None => {
@@ -423,6 +468,7 @@ pub(crate) async fn run_multiplexed_environment<S>(
                         continue;
                     }
                 };
+
                 let stream = streams.entry(stream_id.clone()).or_insert_with(|| {
                     spawn_virtual_stream(
                         stream_id.clone(),
@@ -453,7 +499,8 @@ pub(crate) async fn run_multiplexed_environment<S>(
             }
             RelayFrameBodyKind::Ack
             | RelayFrameBodyKind::Resume
-            | RelayFrameBodyKind::Heartbeat => {}
+            | RelayFrameBodyKind::Heartbeat
+            | RelayFrameBodyKind::Handshake => {}
         }
     }
 
@@ -547,6 +594,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tokio::net::TcpListener;
     use tokio::time::timeout;
+    use tokio_tungstenite::WebSocketStream;
     use tokio_tungstenite::accept_async;
     use tokio_tungstenite::connect_async;
     use tokio_tungstenite::tungstenite::Message;

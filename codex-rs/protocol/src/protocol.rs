@@ -182,6 +182,10 @@ pub struct McpServerRefreshConfig {
 pub struct ConversationStartParams {
     /// Overrides the configured realtime architecture for this session only.
     pub architecture: Option<RealtimeConversationArchitecture>,
+    /// Sends automatic Codex responses as realtime conversation items instead of handoff appends.
+    pub codex_responses_as_items: bool,
+    /// Optional prefix added to automatic Codex response items when `codex_responses_as_items` is set.
+    pub codex_response_item_prefix: Option<String>,
     /// Overrides the configured realtime model for this session only.
     pub model: Option<String>,
     /// Selects whether the realtime session should produce text or audio output.
@@ -407,6 +411,11 @@ pub enum ConversationTextRole {
     Developer,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConversationSpeechParams {
+    pub text: String,
+}
+
 /// Persistent thread-settings overrides that can be applied before user input or
 /// on their own.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -502,6 +511,9 @@ pub enum Op {
 
     /// Send text input to the running realtime conversation stream.
     RealtimeConversationText(ConversationTextParams),
+
+    /// Append speakable text to the running realtime conversation stream.
+    RealtimeConversationSpeech(ConversationSpeechParams),
 
     /// Close the running realtime conversation stream.
     RealtimeConversationClose,
@@ -762,6 +774,7 @@ impl Op {
             Self::RealtimeConversationStart(_) => "realtime_conversation_start",
             Self::RealtimeConversationAudio(_) => "realtime_conversation_audio",
             Self::RealtimeConversationText(_) => "realtime_conversation_text",
+            Self::RealtimeConversationSpeech(_) => "realtime_conversation_speech",
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::UserInput { .. } => "user_input",
