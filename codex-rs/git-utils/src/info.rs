@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::collections::btree_map::Entry;
 use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
@@ -7,6 +8,7 @@ use std::path::PathBuf;
 use codex_file_system::ExecutorFileSystem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use futures::FutureExt;
 use futures::future::join_all;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -281,15 +283,83 @@ fn trim_git_suffix(value: &str) -> &str {
 }
 
 pub async fn get_has_changes(cwd: &Path) -> Option<bool> {
-    let git = Path::new("git");
-    let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
-    let output =
-        run_git_command_with_timeout_from(git, &["status", "--porcelain"], cwd, fsmonitor).await?;
-    if !output.status.success() {
-        return None;
-    }
+    get_has_changes_from(Path::new("git"), cwd).await
+}
 
-    Some(!output.stdout.is_empty())
+async fn get_has_changes_from(git: &Path, cwd: &Path) -> Option<bool> {
+    let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
+    let status_args = ["status", "--porcelain"];
+    match fsmonitor {
+        crate::FsmonitorOverride::Disabled => {
+            let output = run_git_command_from(git, &status_args, cwd, fsmonitor).await?;
+            output.status.success().then_some(!output.stdout.is_empty())
+        }
+        crate::FsmonitorOverride::BuiltIn => {
+            type StatusCompletion =
+                futures::future::Shared<futures::future::BoxFuture<'static, Option<bool>>>;
+
+            // BTreeMap permits const initialization; the number of active checkouts is
+            // small enough that a lazily initialized HashMap would add machinery, not speed.
+            // The synchronous lock protects only this small map and is never held across
+            // an await.
+            static STATUS_PROCESSES_IN_FLIGHT: std::sync::Mutex<
+                BTreeMap<PathBuf, StatusCompletion>,
+            > = std::sync::Mutex::new(BTreeMap::new());
+
+            // Do not pass --no-optional-locks here. This lets status save the
+            // fsmonitor token returned after a daemon restart; an inherited
+            // GIT_OPTIONAL_LOCKS override remains authoritative. Otherwise every
+            // status must scan the worktree until another command writes the index.
+            // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/Documentation/git.adoc#L1021-L1027
+            // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/builtin/commit.c#L1629-L1658
+            // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/fsmonitor.c#L691-L725
+            // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/fsmonitor.c#L121-L153
+            let checkout = get_git_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
+            let checkout = checkout.canonicalize().unwrap_or(checkout);
+            let completion = {
+                let mut processes = STATUS_PROCESSES_IN_FLIGHT
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                match processes.entry(checkout) {
+                    Entry::Occupied(entry) => entry.get().clone(),
+                    Entry::Vacant(entry) => {
+                        let mut command = new_git_command(git, cwd, fsmonitor);
+                        command.args(status_args);
+
+                        // Status refreshes the index before trying its optional lock. The lock
+                        // attempt does not wait, and status continues without writing if
+                        // another process owns it. When the lock succeeds, keep that process
+                        // alive through status collection so it can commit or roll back the
+                        // lock. Run status independently and share its result with later callers
+                        // so cancellation or timeout cannot start another status for this
+                        // checkout.
+                        // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/builtin/commit.c#L1629-L1658
+                        // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/repository.c#L478-L484
+                        // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/lockfile.h#L155-L208
+                        let task_checkout = entry.key().clone();
+                        let task = tokio::spawn(async move {
+                            let result = command.output().await.ok().and_then(|output| {
+                                output.status.success().then_some(!output.stdout.is_empty())
+                            });
+                            STATUS_PROCESSES_IN_FLIGHT
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .remove(&task_checkout);
+                            result
+                        });
+                        let completion = async move { task.await.ok().flatten() }.boxed().shared();
+                        entry.insert(completion.clone());
+                        completion
+                    }
+                }
+            };
+
+            timeout(GIT_COMMAND_TIMEOUT, completion)
+                .await
+                .ok()
+                .flatten()
+        }
+    }
 }
 
 fn parse_git_remote_urls(stdout: &str) -> Option<BTreeMap<String, String>> {
@@ -397,7 +467,7 @@ pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
 async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {
     // These callers only inspect repository metadata. Worktree workflows probe
     // once and pass their override directly to the lower-level runner.
-    run_git_command_with_timeout_from(
+    run_git_command_from(
         Path::new("git"),
         args,
         cwd,
@@ -429,21 +499,27 @@ async fn detect_local_fsmonitor_override(git: &Path, cwd: &Path) -> crate::Fsmon
     crate::detect_fsmonitor_override(&mut runner).await
 }
 
-async fn run_git_command_with_timeout_from(
+fn new_git_command(git: &Path, cwd: &Path, fsmonitor: crate::FsmonitorOverride) -> Command {
+    let mut command = Command::new(git);
+    command
+        // Keep internal Git commands independent of repository-selected hooks
+        // and fsmonitor helpers while preserving built-in fsmonitor acceleration.
+        .args(["-c", &format!("core.hooksPath={DISABLED_HOOKS_PATH}")])
+        .args(["-c", fsmonitor.git_config_arg()])
+        .current_dir(cwd);
+    command
+}
+
+async fn run_git_command_from(
     git: &Path,
     args: &[&str],
     cwd: &Path,
     fsmonitor: crate::FsmonitorOverride,
 ) -> Option<std::process::Output> {
-    let mut command = Command::new(git);
+    let mut command = new_git_command(git, cwd, fsmonitor);
     command
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        // Keep internal Git commands independent of repository-selected hooks
-        // and fsmonitor helpers while preserving built-in fsmonitor acceleration.
-        .args(["-c", &format!("core.hooksPath={DISABLED_HOOKS_PATH}")])
-        .args(["-c", fsmonitor.git_config_arg()])
+        .arg("--no-optional-locks")
         .args(args)
-        .current_dir(cwd)
         .kill_on_drop(true);
     let result = timeout(GIT_COMMAND_TIMEOUT, command.output()).await;
 
@@ -732,7 +808,7 @@ async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -
 async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
     let git = Path::new("git");
     let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
-    let output = run_git_command_with_timeout_from(
+    let output = run_git_command_from(
         git,
         &["diff", "--no-textconv", "--no-ext-diff", &sha.0],
         cwd,
@@ -747,7 +823,7 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
     }
     let mut diff = String::from_utf8(output.stdout).ok()?;
 
-    if let Some(untracked_output) = run_git_command_with_timeout_from(
+    if let Some(untracked_output) = run_git_command_from(
         git,
         &["ls-files", "--others", "--exclude-standard"],
         cwd,
@@ -779,7 +855,7 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
                     null_device,
                     &file_owned,
                 ];
-                run_git_command_with_timeout_from(git, &args_vec, cwd, fsmonitor).await
+                run_git_command_from(git, &args_vec, cwd, fsmonitor).await
             });
             let results = join_all(futures_iter).await;
             for extra in results.into_iter().flatten() {
@@ -980,19 +1056,9 @@ mod tests {
         // The config response mirrors:
         // git -c core.fsmonitor=/tmp/fsmonitor-helper \
         //   config --null --get core.fsmonitor
-        let fsmonitor = detect_local_fsmonitor_override(&git, temp_dir.path()).await;
-        let output = run_git_command_with_timeout_from(
-            &git,
-            &["status", "--porcelain"],
-            temp_dir.path(),
-            fsmonitor,
-        )
-        .await
-        .expect("run fake Git");
-
         assert_eq!(
-            (output.status.code(), output.stdout),
-            (Some(0), b"worktree output\n".to_vec())
+            get_has_changes_from(&git, temp_dir.path()).await,
+            Some(true)
         );
         let disabled_hooks = format!("core.hooksPath={DISABLED_HOOKS_PATH}");
         assert_eq!(
@@ -1005,7 +1071,9 @@ mod tests {
                 "config --null --get core.fsmonitor".to_string(),
                 "config --null --type=bool --fixed-value --get core.fsmonitor /tmp/fsmonitor-helper"
                     .to_string(),
-                format!("-c {disabled_hooks} -c core.fsmonitor=false status --porcelain"),
+                format!(
+                    "-c {disabled_hooks} -c core.fsmonitor=false --no-optional-locks status --porcelain"
+                ),
             ]
         );
     }
@@ -1071,20 +1139,7 @@ mod tests {
             "write local built-in fsmonitor config"
         );
 
-        let fsmonitor = detect_local_fsmonitor_override(&git, repo.as_path()).await;
-        let output = run_git_command_with_timeout_from(
-            &git,
-            &["status", "--porcelain"],
-            repo.as_path(),
-            fsmonitor,
-        )
-        .await
-        .expect("run Git with layered config");
-        assert_eq!(
-            (output.status.code(), output.stdout),
-            (Some(0), b"worktree output\n".to_vec())
-        );
-
+        assert_eq!(get_has_changes_from(&git, repo.as_path()).await, Some(true));
         let actual = std::fs::read_to_string(log).expect("read layered-config Git log");
         let disabled_hooks = format!("core.hooksPath={DISABLED_HOOKS_PATH}");
         assert_eq!(
@@ -1094,6 +1149,112 @@ mod tests {
                 "version --build-options".to_string(),
                 format!("-c {disabled_hooks} -c core.fsmonitor=true status --porcelain"),
             ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn lock_taking_status_is_coalesced_per_checkout() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let repo = temp_dir.path().join("repo");
+        let first_cwd = repo.join("first");
+        let second_cwd = repo.join("second");
+        let other_repo = temp_dir.path().join("other");
+        std::fs::create_dir_all(repo.join(".git")).expect("create Git directory");
+        std::fs::create_dir(&first_cwd).expect("create first working directory");
+        std::fs::create_dir(&second_cwd).expect("create second working directory");
+        std::fs::create_dir_all(other_repo.join(".git")).expect("create other Git directory");
+
+        let git = temp_dir.path().join("git");
+        let starts = git.with_extension("starts");
+        let first_started = git.with_extension("first-started");
+        let release = git.with_extension("release");
+        std::fs::write(
+            &git,
+            "#!/bin/sh\n\
+             case \"$1\" in\n\
+             config) printf 'true\\000'; exit ;;\n\
+             version) printf 'feature: fsmonitor--daemon\\n'; exit ;;\n\
+             esac\n\
+             printf 'start\\n' >>\"$0.starts\"\n\
+             if test ! -e \"$0.first-started\"; then\n\
+               : >\"$0.first-started\"\n\
+               attempts=0\n\
+               while test ! -e \"$0.release\" && test \"$attempts\" -lt 500; do\n\
+                 sleep 0.01\n\
+                 attempts=$((attempts + 1))\n\
+               done\n\
+             fi\n\
+             printf 'worktree output\\n'\n",
+        )
+        .expect("write blocking Git");
+        let mut permissions = std::fs::metadata(&git)
+            .expect("read blocking Git metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&git, permissions).expect("mark blocking Git executable");
+
+        let first_git = git.clone();
+        let first = tokio::spawn(async move { get_has_changes_from(&first_git, &first_cwd).await });
+        timeout(TokioDuration::from_secs(2), async {
+            while !first_started.exists() {
+                tokio::time::sleep(TokioDuration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("wait for first status to start");
+
+        let other = timeout(
+            TokioDuration::from_secs(2),
+            get_has_changes_from(&git, &other_repo),
+        )
+        .await
+        .expect("run status in another checkout");
+        first.abort();
+        let first_result = first.await;
+        let release_for_second = release.clone();
+        let releaser = tokio::spawn(async move {
+            tokio::time::sleep(TokioDuration::from_millis(100)).await;
+            std::fs::write(release_for_second, b"").expect("release first status");
+        });
+        let second = get_has_changes_from(&git, &second_cwd).await;
+        releaser.await.expect("join status releaser");
+        let starts_before_retry = std::fs::read_to_string(&starts).expect("read status starts");
+
+        let third = timeout(TokioDuration::from_secs(2), async {
+            loop {
+                let output = get_has_changes_from(&git, &second_cwd)
+                    .await
+                    .expect("run coalesced status");
+                if std::fs::read_to_string(&starts)
+                    .expect("read status starts after retry")
+                    .lines()
+                    .count()
+                    == 3
+                {
+                    break output;
+                }
+                tokio::time::sleep(TokioDuration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("run status after first status finishes");
+
+        assert!(
+            first_result.is_err_and(|err| err.is_cancelled()),
+            "cancel first status caller"
+        );
+        assert_eq!(
+            starts_before_retry.lines().collect::<Vec<_>>(),
+            vec!["start", "start"]
+        );
+        assert_eq!((other, second, third), (Some(true), Some(true), true));
+        assert_eq!(
+            std::fs::read_to_string(starts)
+                .expect("read final status starts")
+                .lines()
+                .collect::<Vec<_>>(),
+            vec!["start", "start", "start"]
         );
     }
 }
