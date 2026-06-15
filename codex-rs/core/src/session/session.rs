@@ -978,7 +978,6 @@ impl Session {
                 // changing this to use Option or OnceCell, though the current
                 // setup is straightforward enough and performs well.
                 mcp_connection_manager,
-                mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
                 unified_exec_manager: UnifiedExecProcessManager::new(
                     config.background_terminal_max_timeout,
                 ),
@@ -1109,13 +1108,6 @@ impl Session {
             } else {
                 ElicitationCapability::default()
             };
-            let mcp_startup_cancellation_token = {
-                let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
-                cancel_guard.cancel();
-                let cancel_token = CancellationToken::new();
-                *cancel_guard = cancel_token.clone();
-                cancel_token
-            };
             let turn_environment = crate::environment_selection::resolve_environment_selections(
                 sess.services.environment_manager.as_ref(),
                 session_configuration.environment_selections(),
@@ -1147,7 +1139,6 @@ impl Session {
                 &session_configuration.approval_policy,
                 INITIAL_SUBMIT_ID.to_owned(),
                 tx_event.clone(),
-                mcp_startup_cancellation_token,
                 session_configuration.permission_profile(),
                 mcp_runtime_context,
                 config.codex_home.to_path_buf(),

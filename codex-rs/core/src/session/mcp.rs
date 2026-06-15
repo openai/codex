@@ -328,41 +328,27 @@ impl Session {
                 turn_context.cwd.to_path_buf(),
             ),
         };
-        let mcp_startup_cancellation_token = {
-            let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
-            guard.cancel();
-            let cancellation_token = CancellationToken::new();
-            *guard = cancellation_token.clone();
-            cancellation_token
-        };
-        let refreshed_manager = McpConnectionManager::new(
-            &mcp_servers,
-            store_mode,
-            keyring_backend_kind,
-            auth_statuses,
-            &turn_context.approval_policy,
-            turn_context.sub_id.clone(),
-            self.get_tx_event(),
-            mcp_startup_cancellation_token,
-            turn_context.permission_profile(),
-            mcp_runtime_context,
-            config.codex_home.to_path_buf(),
-            codex_apps_tools_cache_key(auth.as_ref()),
-            host_owned_codex_apps_enabled,
-            mcp_config.prefix_mcp_tool_names,
-            mcp_config.client_elicitation_capability,
-            tool_plugin_provenance,
-            auth.as_ref(),
-            elicitation_reviewer,
-        )
-        .await;
-        {
-            let current_manager = self.services.mcp_connection_manager.load_full();
-            refreshed_manager.set_elicitations_auto_deny(current_manager.elicitations_auto_deny());
-        }
         self.services
             .mcp_connection_manager
-            .store(Arc::new(refreshed_manager));
+            .load_full()
+            .refresh(
+                &mcp_servers,
+                store_mode,
+                keyring_backend_kind,
+                auth_statuses,
+                turn_context.sub_id.clone(),
+                self.get_tx_event(),
+                mcp_runtime_context,
+                config.codex_home.to_path_buf(),
+                codex_apps_tools_cache_key(auth.as_ref()),
+                host_owned_codex_apps_enabled,
+                mcp_config.prefix_mcp_tool_names,
+                mcp_config.client_elicitation_capability,
+                tool_plugin_provenance,
+                auth.as_ref(),
+                elicitation_reviewer,
+            )
+            .await;
     }
 
     pub(crate) async fn refresh_mcp_servers_if_requested(
@@ -435,21 +421,8 @@ impl Session {
         .await;
     }
 
-    #[cfg(test)]
-    pub(crate) async fn mcp_startup_cancellation_token(&self) -> CancellationToken {
-        self.services
-            .mcp_startup_cancellation_token
-            .lock()
-            .await
-            .clone()
-    }
-
-    pub(crate) async fn cancel_mcp_startup(&self) {
-        self.services
-            .mcp_startup_cancellation_token
-            .lock()
-            .await
-            .cancel();
+    pub(crate) fn cancel_mcp_startup(&self) {
+        self.services.mcp_connection_manager.load().cancel_startup();
     }
 }
 

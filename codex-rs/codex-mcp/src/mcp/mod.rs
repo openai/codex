@@ -37,7 +37,6 @@ use rmcp::model::ElicitationCapability;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use serde_json::Value;
-use tokio_util::sync::CancellationToken;
 
 use crate::ResolvedMcpCatalog;
 use crate::codex_apps::codex_apps_tools_cache_key;
@@ -288,7 +287,6 @@ pub async fn read_mcp_resource(
     .await;
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
-    let cancel_token = CancellationToken::new();
     let manager = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
@@ -297,7 +295,6 @@ pub async fn read_mcp_resource(
         &config.approval_policy,
         String::new(),
         tx_event,
-        cancel_token.clone(),
         PermissionProfile::default(),
         runtime_context,
         config.codex_home.clone(),
@@ -314,7 +311,7 @@ pub async fn read_mcp_resource(
     let result = manager
         .read_resource(server, ReadResourceRequestParams::new(uri))
         .await;
-    cancel_token.cancel();
+    manager.cancel_startup();
     result
 }
 
@@ -362,7 +359,6 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
-    let cancel_token = CancellationToken::new();
     let mcp_connection_manager = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
@@ -371,7 +367,6 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         &config.approval_policy,
         submit_id,
         tx_event,
-        cancel_token.clone(),
         PermissionProfile::default(),
         runtime_context,
         config.codex_home.clone(),
@@ -393,7 +388,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     )
     .await;
 
-    cancel_token.cancel();
+    mcp_connection_manager.cancel_startup();
 
     snapshot
 }

@@ -3501,7 +3501,7 @@ impl Session {
         let had_active_turn = self.active_turn.lock().await.is_some();
         self.abort_all_tasks(TurnAbortReason::Interrupted).await;
         if !had_active_turn {
-            self.cancel_mcp_startup().await;
+            self.cancel_mcp_startup();
         }
     }
 
