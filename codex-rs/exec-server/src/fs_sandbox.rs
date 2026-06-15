@@ -9,6 +9,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxDirectSpawnTransformRequest;
 use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
@@ -84,7 +85,7 @@ impl FileSystemSandboxRunner {
             &file_system_policy,
             network_policy,
         );
-        let command = self.sandbox_exec_request(&permission_profile, &cwd.uri, sandbox)?;
+        let command = self.sandbox_exec_request(&permission_profile, &cwd, sandbox)?;
         let request_json = serde_json::to_vec(&request).map_err(json_error)?;
         run_command(command, request_json).await
     }
@@ -92,7 +93,7 @@ impl FileSystemSandboxRunner {
     fn sandbox_exec_request(
         &self,
         permission_profile: &PermissionProfile,
-        cwd: &PathUri,
+        cwd: &SandboxCwd,
         sandbox_context: &FileSystemSandboxContext,
     ) -> Result<SandboxExecRequest, JSONRPCErrorError> {
         let helper = &self.runtime_paths.codex_self_exe;
@@ -108,22 +109,31 @@ impl FileSystemSandboxRunner {
         let command = SandboxCommand {
             program: helper.as_path().as_os_str().to_owned(),
             args: vec![CODEX_FS_HELPER_ARG1.to_string()],
-            cwd: cwd.clone(),
+            cwd: cwd.uri.clone(),
             env: self.helper_env.clone(),
             additional_permissions: None,
         };
+        let workspace_roots = if sandbox_context.workspace_roots.is_empty() {
+            std::slice::from_ref(&cwd.native)
+        } else {
+            sandbox_context.workspace_roots.as_slice()
+        };
         sandbox_manager
-            .transform(SandboxTransformRequest {
-                command,
-                permissions: permission_profile,
-                sandbox,
-                enforce_managed_network: false,
-                network: None,
-                sandbox_policy_cwd: cwd,
-                codex_linux_sandbox_exe: self.runtime_paths.codex_linux_sandbox_exe.as_deref(),
-                use_legacy_landlock: sandbox_context.use_legacy_landlock,
-                windows_sandbox_level: sandbox_context.windows_sandbox_level,
-                windows_sandbox_private_desktop: sandbox_context.windows_sandbox_private_desktop,
+            .transform_for_direct_spawn(SandboxDirectSpawnTransformRequest {
+                workspace_roots,
+                transform: SandboxTransformRequest {
+                    command,
+                    permissions: permission_profile,
+                    sandbox,
+                    enforce_managed_network: false,
+                    network: None,
+                    sandbox_policy_cwd: &cwd.uri,
+                    codex_linux_sandbox_exe: self.runtime_paths.codex_linux_sandbox_exe.as_deref(),
+                    use_legacy_landlock: sandbox_context.use_legacy_landlock,
+                    windows_sandbox_level: sandbox_context.windows_sandbox_level,
+                    windows_sandbox_private_desktop: sandbox_context
+                        .windows_sandbox_private_desktop,
+                },
             })
             .map_err(|err| invalid_request(format!("failed to prepare fs sandbox: {err}")))
     }
@@ -516,15 +526,21 @@ mod tests {
         let runner = FileSystemSandboxRunner::new(runtime_paths);
         let native_cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let cwd = PathUri::from_abs_path(&native_cwd);
-        let file_system_policy =
-            restricted_policy(vec![path_entry(native_cwd, FileSystemAccessMode::Write)]);
+        let file_system_policy = restricted_policy(vec![path_entry(
+            native_cwd.clone(),
+            FileSystemAccessMode::Write,
+        )]);
         let network_policy = NetworkSandboxPolicy::Restricted;
         let permission_profile =
             PermissionProfile::from_runtime_permissions(&file_system_policy, network_policy);
         let sandbox_context = sandbox_context_with_cwd(&file_system_policy, cwd.clone());
+        let sandbox_cwd = SandboxCwd {
+            uri: cwd,
+            native: native_cwd,
+        };
 
         let request = runner
-            .sandbox_exec_request(&permission_profile, &cwd, &sandbox_context)
+            .sandbox_exec_request(&permission_profile, &sandbox_cwd, &sandbox_context)
             .expect("sandbox exec request");
 
         assert_eq!(request.env.get(&path_key), Some(&path));

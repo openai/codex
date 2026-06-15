@@ -343,6 +343,7 @@ impl TurnContext {
         FileSystemSandboxContext {
             permissions,
             cwd: Some(cwd.clone()),
+            workspace_roots: self.config.effective_workspace_roots(),
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: self
                 .config

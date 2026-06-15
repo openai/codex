@@ -21,6 +21,9 @@ use std::ffi::OsString;
 use std::io;
 use std::path::Path;
 
+#[cfg(target_os = "windows")]
+const WINDOWS_SANDBOX_WRAPPER_SETUP_ENV_ALLOWLIST: &[&str] = &["USERNAME", "USERPROFILE"];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SandboxType {
     None,
@@ -131,6 +134,16 @@ pub struct SandboxTransformRequest<'a> {
     pub windows_sandbox_private_desktop: bool,
 }
 
+/// Bundled arguments for a sandbox transformation whose result will be spawned
+/// directly from argv.
+///
+/// Direct-spawn callers will not run a later platform-specific launcher, so the
+/// returned command must encode any sandbox wrapper it needs.
+pub struct SandboxDirectSpawnTransformRequest<'a> {
+    pub transform: SandboxTransformRequest<'a>,
+    pub workspace_roots: &'a [AbsolutePathBuf],
+}
+
 #[derive(Debug)]
 pub enum SandboxTransformError {
     InvalidCommandCwd {
@@ -146,6 +159,8 @@ pub enum SandboxTransformError {
     Wsl1UnsupportedForBubblewrap,
     #[cfg(not(target_os = "macos"))]
     SeatbeltUnavailable,
+    #[cfg(target_os = "windows")]
+    WindowsSandboxPreparation(String),
 }
 
 impl std::fmt::Display for SandboxTransformError {
@@ -168,6 +183,10 @@ impl std::fmt::Display for SandboxTransformError {
             Self::Wsl1UnsupportedForBubblewrap => write!(f, "{WSL1_BWRAP_WARNING}"),
             #[cfg(not(target_os = "macos"))]
             Self::SeatbeltUnavailable => write!(f, "seatbelt sandbox is only available on macOS"),
+            #[cfg(target_os = "windows")]
+            Self::WindowsSandboxPreparation(err) => {
+                write!(f, "failed to prepare windows sandbox wrapper: {err}")
+            }
         }
     }
 }
@@ -182,6 +201,8 @@ impl std::error::Error for SandboxTransformError {
             Self::Wsl1UnsupportedForBubblewrap => None,
             #[cfg(not(target_os = "macos"))]
             Self::SeatbeltUnavailable => None,
+            #[cfg(target_os = "windows")]
+            Self::WindowsSandboxPreparation(_) => None,
         }
     }
 }
@@ -335,6 +356,86 @@ impl SandboxManager {
             network_sandbox_policy: effective_network_policy,
             arg0: arg0_override,
         })
+    }
+
+    pub fn transform_for_direct_spawn(
+        &self,
+        request: SandboxDirectSpawnTransformRequest<'_>,
+    ) -> Result<SandboxExecRequest, SandboxTransformError> {
+        let transform = request.transform;
+        #[cfg(target_os = "windows")]
+        let workspace_roots = request.workspace_roots;
+        #[cfg(target_os = "windows")]
+        let mut request = self.transform(transform)?;
+        #[cfg(not(target_os = "windows"))]
+        let request = self.transform(transform)?;
+        #[cfg(target_os = "windows")]
+        if request.sandbox == SandboxType::WindowsRestrictedToken {
+            wrap_windows_sandbox_exec_request_for_direct_spawn(&mut request, workspace_roots)?;
+        }
+        Ok(request)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn wrap_windows_sandbox_exec_request_for_direct_spawn(
+    request: &mut SandboxExecRequest,
+    workspace_roots: &[AbsolutePathBuf],
+) -> Result<(), SandboxTransformError> {
+    let codex_home = codex_utils_home_dir::find_codex_home()
+        .map_err(|err| SandboxTransformError::WindowsSandboxPreparation(err.to_string()))?;
+    let Some(program) = request.command.first_mut() else {
+        return Err(SandboxTransformError::WindowsSandboxPreparation(
+            "sandbox command was empty".to_string(),
+        ));
+    };
+    let source = std::path::PathBuf::from(&program);
+    let helper =
+        codex_windows_sandbox::resolve_exe_for_launch(source.as_path(), codex_home.as_path());
+    *program = helper.to_string_lossy().into_owned();
+
+    let inner_command = std::mem::take(&mut request.command);
+    let mut wrapper_args =
+        codex_windows_sandbox::create_windows_sandbox_command_args_for_permission_profile(
+            inner_command,
+            &request.cwd,
+            workspace_roots,
+            &request.env,
+            &request.permission_profile,
+            request.windows_sandbox_level,
+            request.windows_sandbox_private_desktop,
+            codex_home.as_path(),
+        );
+
+    request.command = Vec::with_capacity(1 + wrapper_args.len());
+    request.command.push(source.to_string_lossy().into_owned());
+    request.command.append(&mut wrapper_args);
+    request.sandbox = SandboxType::None;
+    request.arg0 = None;
+    add_windows_sandbox_wrapper_setup_env(&mut request.env);
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn add_windows_sandbox_wrapper_setup_env(env: &mut HashMap<String, String>) {
+    add_windows_sandbox_wrapper_setup_env_from_vars(env, std::env::vars_os());
+}
+
+#[cfg(target_os = "windows")]
+fn add_windows_sandbox_wrapper_setup_env_from_vars(
+    env: &mut HashMap<String, String>,
+    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) {
+    for (key, value) in vars {
+        let key = key.to_string_lossy().into_owned();
+        if !WINDOWS_SANDBOX_WRAPPER_SETUP_ENV_ALLOWLIST
+            .iter()
+            .any(|allowed| key.eq_ignore_ascii_case(allowed))
+        {
+            continue;
+        }
+        env.retain(|existing, _| !existing.eq_ignore_ascii_case(&key));
+        env.insert(key, value.to_string_lossy().into_owned());
     }
 }
 
