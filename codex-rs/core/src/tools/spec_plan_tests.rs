@@ -966,16 +966,22 @@ async fn request_plugin_install_description_refers_to_recommended_plugins_hint()
     )
     .await;
 
+    let request_spec = plan.visible_spec("request_plugin_install");
     let ToolSpec::Function(ResponsesApiTool {
         description: request_description,
         ..
-    }) = plan.visible_spec("request_plugin_install")
+    }) = request_spec
     else {
         panic!("expected request_plugin_install function spec");
     };
     assert!(request_description.contains("the `<recommended_plugins>` list"));
     assert!(!request_description.contains("list_available_plugins_to_install"));
     assert!(!request_description.contains("github"));
+    assert!(has_parameter(request_spec, "plugin_id"));
+    assert!(has_parameter(request_spec, "suggest_reason"));
+    assert!(!has_parameter(request_spec, "tool_id"));
+    assert!(!has_parameter(request_spec, "tool_type"));
+    assert!(!has_parameter(request_spec, "action_type"));
     plan.assert_visible_lacks(&["list_available_plugins_to_install"]);
     plan.assert_registered_lacks(&["list_available_plugins_to_install"]);
 }
