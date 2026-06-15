@@ -35,6 +35,7 @@ export type { AppsListResponse } from "./AppsListResponse";
 export type { AskForApproval } from "./AskForApproval";
 export type { AttestationGenerateParams } from "./AttestationGenerateParams";
 export type { AttestationGenerateResponse } from "./AttestationGenerateResponse";
+export type { AuthCredentialsStoreMode } from "./AuthCredentialsStoreMode";
 export type { AutoReviewDecisionSource } from "./AutoReviewDecisionSource";
 export type { ByteRange } from "./ByteRange";
 export type { CancelLoginAccountParams } from "./CancelLoginAccountParams";
@@ -117,6 +118,7 @@ export type { ExternalAgentConfigImportResponse } from "./ExternalAgentConfigImp
 export type { ExternalAgentConfigImportTypeResult } from "./ExternalAgentConfigImportTypeResult";
 export type { ExternalAgentConfigMigrationItem } from "./ExternalAgentConfigMigrationItem";
 export type { ExternalAgentConfigMigrationItemType } from "./ExternalAgentConfigMigrationItemType";
+export type { FeedbackRequirements } from "./FeedbackRequirements";
 export type { FeedbackUploadParams } from "./FeedbackUploadParams";
 export type { FeedbackUploadResponse } from "./FeedbackUploadResponse";
 export type { FileChangeApprovalDecision } from "./FileChangeApprovalDecision";
@@ -353,6 +355,9 @@ export type { SendAddCreditsNudgeEmailResponse } from "./SendAddCreditsNudgeEmai
 export type { ServerRequestResolvedNotification } from "./ServerRequestResolvedNotification";
 export type { SessionMigration } from "./SessionMigration";
 export type { SessionSource } from "./SessionSource";
+export type { ShellEnvironmentPolicyInherit } from "./ShellEnvironmentPolicyInherit";
+export type { ShellEnvironmentPolicyRequirements } from "./ShellEnvironmentPolicyRequirements";
+export type { ShellEnvironmentPolicyRule } from "./ShellEnvironmentPolicyRule";
 export type { SkillDependencies } from "./SkillDependencies";
 export type { SkillErrorInfo } from "./SkillErrorInfo";
 export type { SkillInterface } from "./SkillInterface";

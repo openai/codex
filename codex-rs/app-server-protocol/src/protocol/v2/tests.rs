@@ -1643,6 +1643,7 @@ fn config_granular_approval_policy_is_marked_experimental() {
         sandbox_workspace_write: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
+        cli_auth_credentials_store: None,
         web_search: None,
         tools: None,
         instructions: None,
@@ -1676,6 +1677,7 @@ fn config_approvals_reviewer_is_marked_experimental() {
         sandbox_workspace_write: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
+        cli_auth_credentials_store: None,
         web_search: None,
         tools: None,
         instructions: None,
@@ -1705,20 +1707,7 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
                 request_permissions: false,
                 mcp_elicitations: false,
             }]),
-            allowed_approvals_reviewers: None,
-            allowed_sandbox_modes: None,
-            allowed_windows_sandbox_implementations: None,
-            allowed_permission_profiles: None,
-            default_permissions: None,
-            allowed_web_search_modes: None,
-            allow_managed_hooks_only: None,
-            allow_appshots: None,
-            allow_remote_control: None,
-            computer_use: None,
-            feature_requirements: None,
-            hooks: None,
-            enforce_residency: None,
-            network: None,
+            ..Default::default()
         });
 
     assert_eq!(reason, Some("askForApproval.granular"));

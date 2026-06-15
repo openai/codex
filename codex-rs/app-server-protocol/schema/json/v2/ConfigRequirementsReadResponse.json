@@ -1,6 +1,10 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "AbsolutePathBuf": {
+      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+      "type": "string"
+    },
     "ApprovalsReviewer": {
       "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `auto_review` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request. The legacy value `guardian_subagent` is accepted for compatibility.",
       "enum": [
@@ -60,6 +64,39 @@
         }
       ]
     },
+    "AuthCredentialsStoreMode": {
+      "description": "Determines where Codex stores CLI authentication credentials.",
+      "oneOf": [
+        {
+          "description": "Persist credentials in `CODEX_HOME/auth.json`.",
+          "enum": [
+            "file"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Persist credentials in the operating system keyring. Fail if unavailable.",
+          "enum": [
+            "keyring"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Use the operating system keyring when available; otherwise, fall back to `CODEX_HOME/auth.json`.",
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Store credentials in memory only for the current process.",
+          "enum": [
+            "ephemeral"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "ComputerUseRequirements": {
       "properties": {
         "allowLockedComputerUse": {
@@ -74,6 +111,12 @@
     "ConfigRequirements": {
       "properties": {
         "allowAppshots": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "allowLoginShell": {
           "type": [
             "boolean",
             "null"
@@ -97,6 +140,24 @@
           },
           "type": [
             "array",
+            "null"
+          ]
+        },
+        "allowedChatgptWorkspaces": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "allowedLoginMethods": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "type": [
+            "object",
             "null"
           ]
         },
@@ -136,6 +197,28 @@
             "null"
           ]
         },
+        "chatgptBaseUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "checkForUpdateOnStartup": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cliAuthCredentialsStore": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AuthCredentialsStoreMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "computerUse": {
           "anyOf": [
             {
@@ -168,6 +251,66 @@
           },
           "type": [
             "object",
+            "null"
+          ]
+        },
+        "feedback": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FeedbackRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "logDir": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modelCatalogJson": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "otel": {
+          "description": "Lossless config-native OTEL requirements, including exporter headers."
+        },
+        "shellEnvironmentPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ShellEnvironmentPolicyRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Lossless config-native shell environment policy requirements."
+        },
+        "sqliteHome": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "windowsSandboxPrivateDesktop": {
+          "type": [
+            "boolean",
             "null"
           ]
         }
@@ -272,6 +415,17 @@
       "required": [
         "hooks"
       ],
+      "type": "object"
+    },
+    "FeedbackRequirements": {
+      "properties": {
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "ManagedHooksRequirements": {
@@ -496,6 +650,84 @@
         "read-only",
         "workspace-write",
         "danger-full-access"
+      ],
+      "type": "string"
+    },
+    "ShellEnvironmentPolicyInherit": {
+      "oneOf": [
+        {
+          "description": "\"Core\" environment variables for the platform. On UNIX, this would include HOME, LOGNAME, PATH, SHELL, and USER, among others.",
+          "enum": [
+            "core"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Inherits the full environment from the parent process.",
+          "enum": [
+            "all"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Do not inherit any environment variables from the parent process.",
+          "enum": [
+            "none"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ShellEnvironmentPolicyRequirements": {
+      "properties": {
+        "experimental_use_profile": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "ignore_default_excludes": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "inherit": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ShellEnvironmentPolicyInherit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rules": {
+          "additionalProperties": {
+            "$ref": "#/definitions/ShellEnvironmentPolicyRule"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "set": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ShellEnvironmentPolicyRule": {
+      "description": "Assigns a shell environment variable pattern to the include-only or exclude set. Includes do not re-add variables removed by another exclude pattern.",
+      "enum": [
+        "include",
+        "exclude"
       ],
       "type": "string"
     },

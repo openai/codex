@@ -22,6 +22,7 @@ use codex_app_server_protocol::ConfiguredHookHandler;
 use codex_app_server_protocol::ConfiguredHookMatcherGroup;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
+use codex_app_server_protocol::FeedbackRequirements;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ManagedHooksRequirements;
 use codex_app_server_protocol::ModelProviderCapabilitiesReadResponse;
@@ -29,6 +30,7 @@ use codex_app_server_protocol::NetworkDomainPermission;
 use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::NetworkUnixSocketPermission;
 use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::ShellEnvironmentPolicyRequirements;
 use codex_app_server_protocol::WindowsSandboxSetupMode;
 use codex_config::ConfigRequirementsToml;
 use codex_config::HookEventsToml;
@@ -37,6 +39,7 @@ use codex_config::ManagedHooksRequirementsToml;
 use codex_config::MatcherGroup as CoreMatcherGroup;
 use codex_config::ResidencyRequirement as CoreResidencyRequirement;
 use codex_config::SandboxModeRequirement as CoreSandboxModeRequirement;
+use codex_config::ShellEnvironmentPolicyRequirementsToml;
 use codex_core::ThreadManager;
 use codex_features::canonical_feature_for_key;
 use codex_features::feature_for_key;
@@ -325,6 +328,11 @@ impl ConfigRequestProcessor {
 }
 
 fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigRequirements {
+    let windows_sandbox_private_desktop = requirements
+        .windows
+        .as_ref()
+        .and_then(|windows| windows.sandbox_private_desktop);
+
     ConfigRequirements {
         allowed_approval_policies: requirements.allowed_approval_policies.map(|policies| {
             policies
@@ -387,6 +395,42 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             .enforce_residency
             .map(map_residency_requirement_to_api),
         network: requirements.network.map(map_network_requirements_to_api),
+        allowed_login_methods: requirements.allowed_login_methods,
+        allowed_chatgpt_workspaces: requirements.allowed_chatgpt_workspaces,
+        cli_auth_credentials_store: requirements.cli_auth_credentials_store,
+        chatgpt_base_url: requirements.chatgpt_base_url,
+        sqlite_home: requirements.sqlite_home,
+        log_dir: requirements.log_dir,
+        model_catalog_json: requirements.model_catalog_json,
+        check_for_update_on_startup: requirements.check_for_update_on_startup,
+        otel: requirements.otel.map(|otel| json!(otel)),
+        allow_login_shell: requirements.allow_login_shell,
+        shell_environment_policy: requirements
+            .shell_environment_policy
+            .map(map_shell_environment_policy_requirements_to_api),
+        feedback: requirements.feedback.map(|feedback| FeedbackRequirements {
+            enabled: feedback.enabled,
+        }),
+        windows_sandbox_private_desktop,
+    }
+}
+
+fn map_shell_environment_policy_requirements_to_api(
+    policy: ShellEnvironmentPolicyRequirementsToml,
+) -> ShellEnvironmentPolicyRequirements {
+    let ShellEnvironmentPolicyRequirementsToml {
+        inherit,
+        ignore_default_excludes,
+        r#set,
+        rules,
+        experimental_use_profile,
+    } = policy;
+    ShellEnvironmentPolicyRequirements {
+        inherit,
+        ignore_default_excludes,
+        r#set,
+        rules,
+        experimental_use_profile,
     }
 }
 
@@ -577,12 +621,17 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::map_requirements_toml_to_api;
+    use codex_app_server_protocol::ShellEnvironmentPolicyRequirements;
     use codex_app_server_protocol::WindowsSandboxSetupMode;
     use codex_config::ComputerUseRequirementsToml;
     use codex_config::ConfigRequirementsToml;
     use codex_config::WindowsRequirementsToml;
+    use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+    use codex_protocol::config_types::ShellEnvironmentPolicyRule;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use std::collections::BTreeMap;
+    use std::collections::HashMap;
 
     #[test]
     fn requirements_api_includes_allow_managed_hooks_only() {
@@ -665,7 +714,7 @@ mod tests {
                     codex_config::types::WindowsSandboxModeToml::Elevated,
                     codex_config::types::WindowsSandboxModeToml::Unelevated,
                 ]),
-                sandbox_private_desktop: None,
+                sandbox_private_desktop: Some(false),
             }),
             ..ConfigRequirementsToml::default()
         });
@@ -676,6 +725,61 @@ mod tests {
                 WindowsSandboxSetupMode::Elevated,
                 WindowsSandboxSetupMode::Unelevated,
             ])
+        );
+        assert_eq!(mapped.windows_sandbox_private_desktop, Some(false));
+    }
+
+    #[test]
+    fn requirements_api_preserves_otel_headers_and_shell_environment_policy() {
+        let requirements = toml::from_str(
+            r#"
+[otel]
+log_user_prompt = false
+environment = "production"
+exporter = { otlp-http = { endpoint = "https://otel.example.com/v1/logs", headers = { Authorization = "Bearer secret" }, protocol = "json" } }
+
+[otel.span_attributes]
+team = "codex"
+
+[shell_environment_policy]
+inherit = "core"
+ignore_default_excludes = false
+experimental_use_profile = false
+
+[shell_environment_policy.rules]
+"*SECRET*" = "exclude"
+"HOME" = "include"
+"PATH" = "exclude"
+
+[shell_environment_policy.set]
+MANAGED = "true"
+"#,
+        )
+        .expect("valid requirements TOML");
+        let mapped = map_requirements_toml_to_api(requirements);
+
+        assert_eq!(
+            mapped
+                .otel
+                .as_ref()
+                .and_then(|otel| otel.pointer("/exporter/otlp-http/headers")),
+            Some(&json!({"Authorization": "Bearer secret"}))
+        );
+        assert_eq!(
+            mapped.shell_environment_policy,
+            Some(ShellEnvironmentPolicyRequirements {
+                inherit: Some(ShellEnvironmentPolicyInherit::Core),
+                ignore_default_excludes: Some(false),
+                r#set: Some(HashMap::from([
+                    ("MANAGED".to_string(), "true".to_string(),)
+                ])),
+                rules: Some(BTreeMap::from([
+                    ("*SECRET*".to_string(), ShellEnvironmentPolicyRule::Exclude,),
+                    ("HOME".to_string(), ShellEnvironmentPolicyRule::Include,),
+                    ("PATH".to_string(), ShellEnvironmentPolicyRule::Exclude,),
+                ])),
+                experimental_use_profile: Some(false),
+            })
         );
     }
 }

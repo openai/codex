@@ -4,9 +4,12 @@ use super::SandboxMode;
 use super::WindowsSandboxSetupMode;
 use super::shared::default_enabled;
 use codex_experimental_api_macros::ExperimentalApi;
+pub use codex_protocol::config_types::AuthCredentialsStoreMode;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+use codex_protocol::config_types::ShellEnvironmentPolicyRule;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
@@ -257,6 +260,7 @@ pub struct Config {
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
     pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
     pub forced_login_method: Option<ForcedLoginMethod>,
+    pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
     pub web_search: Option<WebSearchMode>,
     pub tools: Option<ToolsV2>,
     pub instructions: Option<String>,
@@ -366,7 +370,9 @@ pub struct ConfigReadResponse {
     pub layers: Option<Vec<ConfigLayer>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConfigRequirements {
@@ -389,6 +395,39 @@ pub struct ConfigRequirements {
     pub enforce_residency: Option<ResidencyRequirement>,
     #[experimental("configRequirements/read.network")]
     pub network: Option<NetworkRequirements>,
+    pub allowed_login_methods: Option<BTreeMap<String, bool>>,
+    pub allowed_chatgpt_workspaces: Option<BTreeMap<String, bool>>,
+    pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
+    pub chatgpt_base_url: Option<String>,
+    pub sqlite_home: Option<AbsolutePathBuf>,
+    pub log_dir: Option<AbsolutePathBuf>,
+    pub model_catalog_json: Option<AbsolutePathBuf>,
+    pub check_for_update_on_startup: Option<bool>,
+    /// Lossless config-native OTEL requirements, including exporter headers.
+    pub otel: Option<JsonValue>,
+    pub allow_login_shell: Option<bool>,
+    /// Lossless config-native shell environment policy requirements.
+    pub shell_environment_policy: Option<ShellEnvironmentPolicyRequirements>,
+    pub feedback: Option<FeedbackRequirements>,
+    pub windows_sandbox_private_desktop: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FeedbackRequirements {
+    pub enabled: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct ShellEnvironmentPolicyRequirements {
+    pub inherit: Option<ShellEnvironmentPolicyInherit>,
+    pub ignore_default_excludes: Option<bool>,
+    pub r#set: Option<HashMap<String, String>>,
+    pub rules: Option<BTreeMap<String, ShellEnvironmentPolicyRule>>,
+    pub experimental_use_profile: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
