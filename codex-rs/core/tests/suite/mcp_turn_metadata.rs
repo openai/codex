@@ -353,7 +353,8 @@ async fn mcp_tool_call_metadata_records_prior_request_user_input_tool() -> Resul
                 "label": "No",
                 "description": "Stop and revisit the approach."
             }]
-        }]
+        }],
+        "isBlocking": true
     })
     .to_string();
     let calendar_args = serde_json::to_string(&json!({

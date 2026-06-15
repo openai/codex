@@ -2463,7 +2463,7 @@ impl Session {
             call_id,
             turn_id: turn_context.sub_id.clone(),
             questions: args.questions,
-            auto_resolution_ms: args.auto_resolution_ms,
+            is_blocking: args.is_blocking,
         });
         turn_context
             .turn_metadata_state

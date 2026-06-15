@@ -68,17 +68,17 @@ fn call_output_content_and_success(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> {
-    request_user_input_round_trip_for_mode(ModeKind::Plan, /*auto_resolution_ms*/ None).await
+    request_user_input_round_trip_for_mode(ModeKind::Plan, /*is_blocking*/ true).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_user_input_round_trip_emits_auto_resolution_ms() -> anyhow::Result<()> {
-    request_user_input_round_trip_for_mode(ModeKind::Plan, Some(60_000)).await
+async fn request_user_input_round_trip_emits_non_blocking() -> anyhow::Result<()> {
+    request_user_input_round_trip_for_mode(ModeKind::Plan, /*is_blocking*/ false).await
 }
 
 async fn request_user_input_round_trip_for_mode(
     mode: ModeKind,
-    auto_resolution_ms: Option<u64>,
+    is_blocking: bool,
 ) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -117,12 +117,10 @@ async fn request_user_input_round_trip_for_mode(
             }]
         }]
     });
-    if let Some(auto_resolution_ms) = auto_resolution_ms {
-        let request_args = request_args
-            .as_object_mut()
-            .expect("request_user_input args should be a JSON object");
-        request_args.insert("autoResolutionMs".to_string(), json!(auto_resolution_ms));
-    }
+    let request_args = request_args
+        .as_object_mut()
+        .expect("request_user_input args should be a JSON object");
+    request_args.insert("isBlocking".to_string(), json!(is_blocking));
     let request_args = request_args.to_string();
 
     let first_response = sse(vec![
@@ -176,7 +174,7 @@ async fn request_user_input_round_trip_for_mode(
     .await;
     assert_eq!(request.call_id, call_id);
     assert_eq!(request.questions.len(), 1);
-    assert_eq!(request.auto_resolution_ms, auto_resolution_ms);
+    assert_eq!(request.is_blocking, is_blocking);
     assert_eq!(request.questions[0].is_other, true);
     assert!(
         timeout(Duration::from_millis(200), async {
@@ -273,7 +271,8 @@ async fn request_user_input_interrupt_emits_deferred_token_count() -> anyhow::Re
                 "label": "No",
                 "description": "Stop and revisit the approach."
             }]
-        }]
+        }],
+        "isBlocking": true
     })
     .to_string();
 
@@ -368,7 +367,8 @@ where
                 "label": "No",
                 "description": "Stop and revisit the approach."
             }]
-        }]
+        }],
+        "isBlocking": true
     })
     .to_string();
 
@@ -451,7 +451,7 @@ async fn request_user_input_rejected_in_default_mode_by_default() -> anyhow::Res
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_user_input_round_trip_in_default_mode_with_feature() -> anyhow::Result<()> {
-    request_user_input_round_trip_for_mode(ModeKind::Default, /*auto_resolution_ms*/ None).await
+    request_user_input_round_trip_for_mode(ModeKind::Default, /*is_blocking*/ true).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

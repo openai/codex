@@ -1471,6 +1471,8 @@ UI guidance for IDEs: surface an approval dialog as soon as the request arrives.
 
 ### request_user_input
 
+`item/tool/requestUserInput` includes `isBlocking`, which is `true` when the agent requires an explicit user answer before continuing and `false` when the client may eventually resolve the prompt without user input.
+
 When the client responds to `item/tool/requestUserInput`, the server emits `serverRequest/resolved` with `{ threadId, requestId }`. If the pending request is cleared by turn start, turn completion, or turn interruption before the client answers, the server emits the same notification for that cleanup.
 
 ### Attestation generation

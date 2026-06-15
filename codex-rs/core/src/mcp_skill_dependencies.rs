@@ -249,7 +249,7 @@ async fn should_install_mcp_dependencies(
     };
     let args = RequestUserInputArgs {
         questions: vec![question],
-        auto_resolution_ms: None,
+        is_blocking: true,
     };
     let sub_id = &turn_context.sub_id;
     let call_id = format!("mcp-deps-{sub_id}");

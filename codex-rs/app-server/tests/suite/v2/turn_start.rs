@@ -1671,6 +1671,8 @@ async fn turn_start_uses_thread_feature_overrides_for_request_user_input_tool_de
 
     let request = response_mock.single_request();
     let payload_text = request.body_json().to_string();
+    assert!(payload_text.contains("In non-Plan modes, always set isBlocking to false."));
+    assert!(!payload_text.contains("In Plan mode, set isBlocking to false"));
     assert!(payload_text.contains("This tool is only available in Default or Plan mode."));
 
     Ok(())

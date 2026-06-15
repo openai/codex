@@ -5,6 +5,10 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
+fn default_is_blocking() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestUserInputQuestionOption {
     pub label: String,
@@ -31,9 +35,9 @@ pub struct RequestUserInputQuestion {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestUserInputArgs {
     pub questions: Vec<RequestUserInputQuestion>,
-    #[serde(rename = "autoResolutionMs", skip_serializing_if = "Option::is_none")]
-    #[schemars(rename = "autoResolutionMs")]
-    pub auto_resolution_ms: Option<u64>,
+    #[serde(rename = "isBlocking", default = "default_is_blocking")]
+    #[schemars(rename = "isBlocking")]
+    pub is_blocking: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -55,7 +59,7 @@ pub struct RequestUserInputEvent {
     #[serde(default)]
     pub turn_id: String,
     pub questions: Vec<RequestUserInputQuestion>,
-    #[serde(rename = "autoResolutionMs", skip_serializing_if = "Option::is_none")]
-    #[schemars(rename = "autoResolutionMs")]
-    pub auto_resolution_ms: Option<u64>,
+    #[serde(rename = "isBlocking", default = "default_is_blocking")]
+    #[schemars(rename = "isBlocking")]
+    pub is_blocking: bool,
 }
