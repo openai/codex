@@ -47,7 +47,10 @@ async fn guardian_session_prewarms_when_root_thread_starts() -> Result<()> {
 
     let test = builder.build_with_websocket_server(&server).await?;
     let (first, second) = tokio::time::timeout(Duration::from_secs(5), async {
-        tokio::join!(server.wait_for_request(0, 0), server.wait_for_request(1, 0))
+        tokio::join!(
+            server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 0),
+            server.wait_for_request(/*connection_index*/ 1, /*request_index*/ 0)
+        )
     })
     .await?;
     let requests = [first.body_json(), second.body_json()];
