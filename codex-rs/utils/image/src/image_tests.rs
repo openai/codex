@@ -99,7 +99,7 @@ async fn returns_original_image_when_within_bounds() {
         assert_eq!(encoded.width, 64);
         assert_eq!(encoded.height, 32);
         assert_eq!(encoded.mime, mime);
-        assert_eq!(encoded.bytes, original_bytes);
+        assert_eq!(encoded.bytes.as_ref(), original_bytes);
     }
 }
 
@@ -225,7 +225,7 @@ async fn preserves_large_image_in_original_mode() {
     assert_eq!(processed.width, 4096);
     assert_eq!(processed.height, 2048);
     assert_eq!(processed.mime, "image/png");
-    assert_eq!(processed.bytes, original_bytes);
+    assert_eq!(processed.bytes.as_ref(), original_bytes);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -242,7 +242,7 @@ async fn data_url_processing_preserves_supported_source_bytes() {
     assert_eq!(processed.width, 64);
     assert_eq!(processed.height, 32);
     assert_eq!(processed.mime, "image/png");
-    assert_eq!(processed.bytes, original_bytes);
+    assert_eq!(processed.bytes.as_ref(), original_bytes);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -338,4 +338,27 @@ async fn reprocesses_updated_file_contents() {
     assert_eq!(second.width, 96);
     assert_eq!(second.height, 48);
     assert_ne!(second.bytes, first.bytes);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bounds_cache_by_encoded_byte_size() {
+    let cache = ImageCache::new(NonZeroUsize::new(4).expect("non-zero cache capacity"));
+    let key = |digest_byte| ImageCacheKey {
+        digest: [digest_byte; 20],
+        mode: PromptImageMode::Original,
+    };
+    let image = |size| EncodedImage {
+        bytes: vec![0; size].into(),
+        mime: "image/png".to_string(),
+        width: 1,
+        height: 1,
+    };
+
+    cache_image(&cache, key(1), image(3), /*byte_capacity*/ 5);
+    cache_image(&cache, key(2), image(3), /*byte_capacity*/ 5);
+    cache_image(&cache, key(3), image(6), /*byte_capacity*/ 5);
+
+    assert!(cache.get(&key(1)).is_none());
+    assert!(cache.get(&key(2)).is_some());
+    assert!(cache.get(&key(3)).is_none());
 }
