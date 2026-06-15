@@ -264,6 +264,15 @@ fn set_web_search_mode(turn: &mut TurnContext, mode: WebSearchMode) {
     });
 }
 
+fn disable_namespace_tools(turn: &mut TurnContext) {
+    let mut provider_info = turn.config.model_provider.clone();
+    provider_info.namespace_tools = Some(false);
+    update_config(turn, |config| {
+        config.model_provider = provider_info.clone();
+    });
+    turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+}
+
 fn use_chatgpt_auth(turn: &mut TurnContext) {
     turn.auth_manager = Some(AuthManager::from_auth_for_testing(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
@@ -732,6 +741,34 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     enabled.assert_registered_contains(&[
         "tool_search",
         &ToolName::namespaced("mcp__searchable", "lookup").to_string(),
+    ]);
+}
+
+#[tokio::test]
+async fn namespace_tools_disabled_flattens_mcp_namespace_into_function() {
+    // Use the runtime namespace shape (`mcp__mini`, no trailing `__`).
+    let probe = probe_with(
+        disable_namespace_tools,
+        ToolPlanInputs {
+            mcp_tools: Some(vec![mcp_tool("mini", "mcp__mini", "record_note")]),
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    // The MCP tool is exposed as a flat function with the canonical `__`
+    // delimiter, not a namespace wrapper and not a delimiter-less concatenation.
+    probe.assert_visible_contains(&["mcp__mini__record_note"]);
+    probe.assert_visible_lacks(&["mcp__minirecord_note"]);
+    assert!(probe.namespace_function_names("mcp__mini").is_empty());
+    assert!(matches!(
+        probe.visible_spec("mcp__mini__record_note"),
+        ToolSpec::Function(_)
+    ));
+
+    // The runtime is still registered under its namespaced identity.
+    probe.assert_registered_contains(&[
+        &ToolName::namespaced("mcp__mini", "record_note").to_string()
     ]);
 }
 

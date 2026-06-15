@@ -178,6 +178,32 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
     );
 }
 
+#[test]
+fn handler_resolves_flat_name_to_namespaced_runtime() {
+    // Runtime namespace shape: `mcp__mini` with no trailing `__`.
+    let namespaced_name = codex_tools::ToolName::namespaced("mcp__mini", "record_note");
+    let handler = Arc::new(TestHandler {
+        tool_name: namespaced_name.clone(),
+    }) as Arc<dyn CoreToolRuntime>;
+    let registry = ToolRegistry::new(HashMap::from([(
+        namespaced_name.clone(),
+        Arc::clone(&handler),
+    )]));
+
+    // The canonical flat name (what flattening emits, and what a proxy produces)
+    // resolves to the namespaced runtime.
+    let canonical = registry.tool(&codex_tools::ToolName::plain("mcp__mini__record_note"));
+    assert!(canonical.as_ref().is_some_and(|h| Arc::ptr_eq(h, &handler)));
+
+    // Exact namespaced lookup still works, and unrelated names do not resolve.
+    assert!(registry.tool(&namespaced_name).is_some());
+    assert!(
+        registry
+            .tool(&codex_tools::ToolName::plain("mcp__other__record_note"))
+            .is_none()
+    );
+}
+
 #[tokio::test]
 async fn function_tools_expose_default_hook_payloads_and_rewrites() -> anyhow::Result<()> {
     let (session, turn) = crate::session::tests::make_session_and_context().await;

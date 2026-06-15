@@ -1531,6 +1531,11 @@
           "description": "Friendly display name.",
           "type": "string"
         },
+        "namespace_tools": {
+          "default": null,
+          "description": "Whether this provider understands Codex's `type: \"namespace\"` tool wrapper. When false, namespace tools are flattened to plain `<namespace>__<tool>` functions. When unset, provider-specific defaults apply: built-in OpenAI, Azure, and Amazon Bedrock providers keep namespaces while other configured providers flatten them.",
+          "type": "boolean"
+        },
         "query_params": {
           "additionalProperties": {
             "type": "string"

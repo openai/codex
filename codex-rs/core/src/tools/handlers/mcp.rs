@@ -4,6 +4,7 @@ use std::time::Instant;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::original_image_detail::can_request_original_image_detail;
+use crate::tools::canonical_flat_tool_name;
 use crate::tools::context::McpToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -27,7 +28,6 @@ use serde_json::Map;
 use serde_json::Value;
 
 const LEGACY_MCP_TOOL_NAME_PREFIX: &str = "mcp__";
-const MCP_TOOL_NAME_DELIMITER: &str = "__";
 
 pub struct McpHandler {
     tool_info: ToolInfo,
@@ -41,18 +41,9 @@ impl McpHandler {
     }
 
     fn hook_tool_name(&self) -> HookToolName {
-        HookToolName::new(ensure_mcp_prefix(&join_tool_name(&self.tool_name())))
-    }
-}
-
-fn join_tool_name(tool_name: &ToolName) -> String {
-    match tool_name.namespace.as_deref() {
-        Some(namespace) => {
-            let namespace = namespace.trim_end_matches('_');
-            let name = tool_name.name.trim_start_matches('_');
-            format!("{namespace}{MCP_TOOL_NAME_DELIMITER}{name}")
-        }
-        None => tool_name.name.clone(),
+        let tool_name = self.tool_name();
+        let canonical = canonical_flat_tool_name(&tool_name);
+        HookToolName::new(ensure_mcp_prefix(&canonical))
     }
 }
 

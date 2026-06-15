@@ -830,6 +830,96 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn stdio_mcp_tool_call_flattens_namespace_when_provider_disables_it() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+
+    let call_id = "flat-mcp-call";
+    let server_name = "rmcp";
+    let flat_tool_name = format!("mcp__{server_name}__echo");
+    let call_mock = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, &flat_tool_name, r#"{"message":"ping"}"#),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let final_mock = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "rmcp flat tool completed successfully."),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
+    let fixture = test_codex()
+        .with_config(move |config| {
+            config.model_provider.namespace_tools = Some(false);
+            insert_mcp_server(
+                config,
+                server_name,
+                stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
+                TestMcpServerOptions {
+                    environment_id: remote_aware_environment_id(),
+                    ..Default::default()
+                },
+            );
+        })
+        .build_with_remote_env(&server)
+        .await?;
+
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
+    fixture
+        .submit_turn_with_permission_profile(
+            "call the flat rmcp echo tool",
+            PermissionProfile::read_only(),
+        )
+        .await?;
+
+    let request = call_mock.single_request();
+    let request_body = request.body_json();
+    let tools = request_body
+        .get("tools")
+        .and_then(Value::as_array)
+        .expect("Responses request should include tools");
+    assert!(
+        tools.iter().any(|tool| {
+            tool.get("type").and_then(Value::as_str) == Some("function")
+                && tool.get("name").and_then(Value::as_str) == Some(flat_tool_name.as_str())
+        }),
+        "MCP tool should be sent as a flat function: {:?}",
+        request_body
+    );
+    assert!(
+        tools.iter().all(|tool| {
+            tool.get("type").and_then(Value::as_str) != Some("namespace")
+                || tool.get("name").and_then(Value::as_str) != Some("mcp__rmcp")
+        }),
+        "MCP namespace wrapper should be omitted: {:?}",
+        request_body
+    );
+
+    let output = final_mock
+        .single_request()
+        .function_call_output_text(call_id)
+        .expect("function_call_output should be present for flat MCP call");
+    assert!(
+        output.contains("ECHOING: ping"),
+        "flat MCP call should execute against the namespaced runtime: {output}"
+    );
+
+    server.verify().await;
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
