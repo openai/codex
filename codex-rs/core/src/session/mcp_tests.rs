@@ -154,6 +154,59 @@ fn plugin_install_elicitation_telemetry_metadata_requires_install_tool_suggestio
 }
 
 #[test]
+fn plugin_install_elicitation_telemetry_metadata_supports_picker_entries() {
+    let event = |picker_meta| {
+        EventMsg::ElicitationRequest(ElicitationRequestEvent {
+            turn_id: Some("turn-1".to_string()),
+            server_name: "codex_apps".to_string(),
+            id: codex_protocol::mcp::RequestId::String("request-1".to_string()),
+            request: codex_protocol::approvals::ElicitationRequest::Form {
+                meta: Some(picker_meta),
+                message: "Choose integrations".to_string(),
+                requested_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                }),
+            },
+        })
+    };
+    let expected = Some(PluginInstallElicitationTelemetryMetadata {
+        tool_type: "plugin".to_string(),
+        tool_id: "slack@openai-curated".to_string(),
+        tool_name: "Slack".to_string(),
+    });
+
+    for picker_meta in [
+        json!({
+            "codex_approval_kind": "tool_suggestion",
+            "suggest_type": "install",
+            "entries": [{
+                "tool_type": "plugin",
+                "tool_id": "slack@openai-curated",
+                "tool_name": "Slack",
+            }],
+        }),
+        json!({
+            "codex_approval_kind": "tool_suggestion",
+            "suggest_type": "install",
+            "categories": [{
+                "title": "Messaging",
+                "entries": [{
+                    "tool_type": "plugin",
+                    "tool_id": "slack@openai-curated",
+                    "tool_name": "Slack",
+                }],
+            }],
+        }),
+    ] {
+        assert_eq!(
+            plugin_install_elicitation_telemetry_metadata(&event(picker_meta)),
+            expected
+        );
+    }
+}
+
+#[test]
 fn guardian_elicitation_review_request_requires_opt_in() {
     let request = form_request(meta(json!({
         "codex_approval_kind": "mcp_tool_call",

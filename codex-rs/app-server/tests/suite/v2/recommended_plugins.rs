@@ -159,7 +159,7 @@ async fn first_turn_after_external_login_waits_for_recommended_plugins() -> Resu
         .flatten()
         .filter_map(|tool| tool.get("name").and_then(Value::as_str))
         .collect::<Vec<_>>();
-    assert!(tool_names.contains(&"request_plugin_install"));
+    assert!(tool_names.contains(&"request_plugin_installs"));
     assert!(!tool_names.contains(&"list_available_plugins_to_install"));
     Ok(())
 }

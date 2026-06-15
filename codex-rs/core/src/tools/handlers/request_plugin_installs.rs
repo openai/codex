@@ -10,21 +10,18 @@ use codex_rmcp_client::ElicitationResponse;
 use codex_tools::DiscoverableTool;
 use codex_tools::DiscoverableToolAction;
 use codex_tools::DiscoverableToolType;
-use codex_tools::LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME;
 use codex_tools::REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE;
 use codex_tools::REQUEST_PLUGIN_INSTALL_PERSIST_KEY;
-use codex_tools::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
-use codex_tools::RequestPluginInstallArgs;
+use codex_tools::REQUEST_PLUGIN_INSTALLS_TOOL_NAME;
 use codex_tools::RequestPluginInstallEntryResult;
 use codex_tools::RequestPluginInstallInstalledEntry;
-use codex_tools::RequestPluginInstallPickerCategory;
-use codex_tools::RequestPluginInstallPickerEntry;
 use codex_tools::RequestPluginInstallResolvedPickerEntry;
-use codex_tools::RequestPluginInstallResult;
+use codex_tools::RequestPluginInstallsArgs;
+use codex_tools::RequestPluginInstallsResult;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::all_requested_connectors_picked_up;
-use codex_tools::build_request_plugin_install_elicitation_request;
+use codex_tools::build_request_plugin_installs_elicitation_request;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
 use codex_tools::verified_connector_install_completed;
 use rmcp::model::RequestId;
@@ -41,17 +38,21 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::handlers::request_plugin_install_spec::create_request_plugin_install_tool;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::router::ToolSuggestPresentation;
+use codex_tools::ToolSuggestPresentation;
+use codex_tools::create_request_plugin_installs_tool;
+use codex_tools::create_request_plugin_installs_tool_for_tui;
+use codex_tools::request_plugin_install_picker_completed;
+use codex_tools::validate_request_plugin_install_picker_args;
 
-pub struct RequestPluginInstallHandler {
+pub struct RequestPluginInstallsHandler {
     discoverable_tools: Vec<DiscoverableTool>,
     presentation: ToolSuggestPresentation,
+    mode: RequestPluginInstallsMode,
 }
 
-impl RequestPluginInstallHandler {
+impl RequestPluginInstallsHandler {
     pub(crate) fn new(
         discoverable_tools: Vec<DiscoverableTool>,
         presentation: ToolSuggestPresentation,
@@ -59,21 +60,42 @@ impl RequestPluginInstallHandler {
         Self {
             discoverable_tools,
             presentation,
+            mode: RequestPluginInstallsMode::MultipleEntries,
+        }
+    }
+
+    pub(crate) fn single_entry(
+        discoverable_tools: Vec<DiscoverableTool>,
+        presentation: ToolSuggestPresentation,
+    ) -> Self {
+        Self {
+            discoverable_tools,
+            presentation,
+            mode: RequestPluginInstallsMode::SingleEntry,
         }
     }
 }
 
-impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
+#[derive(Clone, Copy)]
+enum RequestPluginInstallsMode {
+    SingleEntry,
+    MultipleEntries,
+}
+
+impl ToolExecutor<ToolInvocation> for RequestPluginInstallsHandler {
     fn tool_name(&self) -> ToolName {
-        ToolName::plain(REQUEST_PLUGIN_INSTALL_TOOL_NAME)
+        ToolName::plain(REQUEST_PLUGIN_INSTALLS_TOOL_NAME)
     }
 
     fn spec(&self) -> ToolSpec {
-        create_request_plugin_install_tool(self.presentation)
-    }
-
-    fn supports_parallel_tool_calls(&self) -> bool {
-        true
+        match self.mode {
+            RequestPluginInstallsMode::SingleEntry => {
+                create_request_plugin_installs_tool_for_tui(self.presentation)
+            }
+            RequestPluginInstallsMode::MultipleEntries => {
+                create_request_plugin_installs_tool(self.presentation)
+            }
+        }
     }
 
     fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
@@ -81,7 +103,7 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
     }
 }
 
-impl RequestPluginInstallHandler {
+impl RequestPluginInstallsHandler {
     async fn handle_call(
         &self,
         invocation: ToolInvocation,
@@ -98,12 +120,12 @@ impl RequestPluginInstallHandler {
             ToolPayload::Function { arguments } => arguments,
             _ => {
                 return Err(FunctionCallError::Fatal(format!(
-                    "{REQUEST_PLUGIN_INSTALL_TOOL_NAME} handler received unsupported payload"
+                    "{REQUEST_PLUGIN_INSTALLS_TOOL_NAME} handler received unsupported payload"
                 )));
             }
         };
 
-        let args: RequestPluginInstallArgs = parse_arguments(&arguments)?;
+        let args: RequestPluginInstallsArgs = parse_arguments(&arguments)?;
         if args.action_type != DiscoverableToolAction::Install {
             return Err(FunctionCallError::RespondToModel(
                 "plugin install requests currently support only action_type=\"install\""
@@ -124,7 +146,7 @@ impl RequestPluginInstallHandler {
         session: Arc<crate::session::session::Session>,
         turn: Arc<crate::session::turn_context::TurnContext>,
         call_id: String,
-        args: RequestPluginInstallArgs,
+        args: RequestPluginInstallsArgs,
         discoverable_tools: Vec<DiscoverableTool>,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let action_type = args.action_type;
@@ -136,8 +158,8 @@ impl RequestPluginInstallHandler {
         )?;
         let requested_entries = requested_picker_install_entries(&resolved_entries);
 
-        let request_id = RequestId::String(format!("request_plugin_install_{call_id}").into());
-        let params = build_request_plugin_install_elicitation_request(
+        let request_id = RequestId::String(format!("request_plugin_installs_{call_id}").into());
+        let params = build_request_plugin_installs_elicitation_request(
             CODEX_APPS_MCP_SERVER_NAME,
             session.thread_id.to_string(),
             turn.sub_id.clone(),
@@ -216,7 +238,7 @@ impl RequestPluginInstallHandler {
         }
 
         let completed = user_confirmed && request_plugin_install_picker_completed(&entries);
-        let content = serde_json::to_string(&RequestPluginInstallResult {
+        let content = serde_json::to_string(&RequestPluginInstallsResult {
             completed,
             user_confirmed,
             action_type,
@@ -224,7 +246,7 @@ impl RequestPluginInstallHandler {
         })
         .map_err(|err| {
             FunctionCallError::Fatal(format!(
-                "failed to serialize {REQUEST_PLUGIN_INSTALL_TOOL_NAME} response: {err}"
+                "failed to serialize {REQUEST_PLUGIN_INSTALLS_TOOL_NAME} response: {err}"
             ))
         })?;
 
@@ -235,7 +257,7 @@ impl RequestPluginInstallHandler {
     }
 }
 
-impl CoreToolRuntime for RequestPluginInstallHandler {}
+impl CoreToolRuntime for RequestPluginInstallsHandler {}
 
 #[derive(Clone)]
 struct RequestedPickerInstallEntry {
@@ -259,156 +281,6 @@ struct RequestPluginInstallPickerResponseContent {
     installed_entries: Vec<RequestPluginInstallInstalledEntry>,
 }
 
-fn validate_request_plugin_install_picker_args<'a>(
-    args: &'a RequestPluginInstallArgs,
-    discoverable_tools: &'a [DiscoverableTool],
-    app_server_client_name: Option<&str>,
-    presentation: ToolSuggestPresentation,
-) -> Result<Vec<RequestPluginInstallResolvedPickerEntry<'a>>, FunctionCallError> {
-    if app_server_client_name == Some("codex-tui")
-        && (args.categories.is_some()
-            || args
-                .entries
-                .as_ref()
-                .is_some_and(|entries| entries.len() != 1))
-    {
-        return Err(FunctionCallError::RespondToModel(
-            "multi-tool install requests are not available in codex-tui yet".to_string(),
-        ));
-    }
-
-    let mut resolved_entries = Vec::new();
-    let mut seen_tools = HashSet::new();
-
-    match (&args.entries, &args.categories) {
-        (Some(entries), None) => {
-            for entry in entries {
-                resolved_entries.push(validate_request_plugin_install_picker_entry(
-                    /*category_index*/ None,
-                    entry,
-                    discoverable_tools,
-                    app_server_client_name,
-                    presentation,
-                    &mut seen_tools,
-                )?);
-            }
-            if resolved_entries.is_empty() {
-                return Err(FunctionCallError::RespondToModel(
-                    "picker install requests must include at least one entry".to_string(),
-                ));
-            }
-        }
-        (None, Some(categories)) => {
-            validate_request_plugin_install_picker_categories(
-                categories,
-                discoverable_tools,
-                app_server_client_name,
-                presentation,
-                &mut seen_tools,
-                &mut resolved_entries,
-            )?;
-        }
-        _ => {
-            return Err(FunctionCallError::RespondToModel(
-                "picker install requests must include exactly one of entries or categories"
-                    .to_string(),
-            ));
-        }
-    }
-
-    Ok(resolved_entries)
-}
-
-fn validate_request_plugin_install_picker_categories<'a>(
-    categories: &'a [RequestPluginInstallPickerCategory],
-    discoverable_tools: &'a [DiscoverableTool],
-    app_server_client_name: Option<&str>,
-    presentation: ToolSuggestPresentation,
-    seen_tools: &mut HashSet<(DiscoverableToolType, String)>,
-    resolved_entries: &mut Vec<RequestPluginInstallResolvedPickerEntry<'a>>,
-) -> Result<(), FunctionCallError> {
-    if categories.is_empty() {
-        return Err(FunctionCallError::RespondToModel(
-            "picker install requests must include at least one category".to_string(),
-        ));
-    }
-
-    for (category_index, category) in categories.iter().enumerate() {
-        if category.title.trim().is_empty() {
-            return Err(FunctionCallError::RespondToModel(
-                "categories[].title must not be empty".to_string(),
-            ));
-        }
-        if category.entries.is_empty() {
-            return Err(FunctionCallError::RespondToModel(
-                "categories[].entries must include at least one install candidate".to_string(),
-            ));
-        }
-        for entry in &category.entries {
-            resolved_entries.push(validate_request_plugin_install_picker_entry(
-                Some(category_index),
-                entry,
-                discoverable_tools,
-                app_server_client_name,
-                presentation,
-                seen_tools,
-            )?);
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_request_plugin_install_picker_entry<'a>(
-    category_index: Option<usize>,
-    entry: &'a RequestPluginInstallPickerEntry,
-    discoverable_tools: &'a [DiscoverableTool],
-    app_server_client_name: Option<&str>,
-    presentation: ToolSuggestPresentation,
-    seen_tools: &mut HashSet<(DiscoverableToolType, String)>,
-) -> Result<RequestPluginInstallResolvedPickerEntry<'a>, FunctionCallError> {
-    if entry.tool_id.trim().is_empty() {
-        return Err(FunctionCallError::RespondToModel(
-            "entries[].tool_id must not be empty".to_string(),
-        ));
-    }
-    if entry.tool_type == DiscoverableToolType::Plugin
-        && app_server_client_name == Some("codex-tui")
-    {
-        return Err(FunctionCallError::RespondToModel(
-            "plugin install requests are not available in codex-tui yet".to_string(),
-        ));
-    }
-
-    if !seen_tools.insert((entry.tool_type, entry.tool_id.clone())) {
-        return Err(FunctionCallError::RespondToModel(
-            "picker install requests must not repeat a tool_type/tool_id pair".to_string(),
-        ));
-    }
-
-    let tool = discoverable_tools
-        .iter()
-        .find(|tool| tool.tool_type() == entry.tool_type && tool.id() == entry.tool_id)
-        .ok_or_else(|| {
-            let source = match presentation {
-                ToolSuggestPresentation::ListTool => format!(
-                    "the discoverable tools returned by {LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}"
-                ),
-                ToolSuggestPresentation::DeveloperContext => {
-                    "the developer recommendations".to_string()
-                }
-            };
-            FunctionCallError::RespondToModel(format!(
-                "entries[].tool_id must match one of {source}"
-            ))
-    })?;
-
-    Ok(RequestPluginInstallResolvedPickerEntry {
-        category_index,
-        tool,
-    })
-}
-
 fn requested_picker_install_entries(
     resolved_entries: &[RequestPluginInstallResolvedPickerEntry<'_>],
 ) -> Vec<RequestedPickerInstallEntry> {
@@ -430,7 +302,7 @@ fn request_plugin_install_picker_response_entries(
     match serde_json::from_value::<RequestPluginInstallPickerResponseContent>(content.clone()) {
         Ok(content) => content.installed_entries,
         Err(err) => {
-            warn!("failed to parse request_plugin_install picker response content: {err:#}");
+            warn!("failed to parse request_plugin_installs picker response content: {err:#}");
             Vec::new()
         }
     }
@@ -462,7 +334,7 @@ async fn maybe_persist_disabled_install_requests(
     session.reload_user_config_layer().await;
 }
 
-fn request_plugin_install_response_requests_persistent_disable(
+pub(super) fn request_plugin_install_response_requests_persistent_disable(
     response: &ElicitationResponse,
 ) -> bool {
     if response.action != ElicitationAction::Decline {
@@ -478,7 +350,7 @@ fn request_plugin_install_response_requests_persistent_disable(
         == Some(REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE)
 }
 
-async fn persist_disabled_install_request(
+pub(super) async fn persist_disabled_install_request(
     codex_home: &codex_utils_absolute_path::AbsolutePathBuf,
     tool: &DiscoverableTool,
 ) -> anyhow::Result<()> {
@@ -530,7 +402,7 @@ async fn verify_request_plugin_install_picker_completed(
             turn,
             auth,
             &expected_connector_ids,
-            REQUEST_PLUGIN_INSTALL_TOOL_NAME,
+            REQUEST_PLUGIN_INSTALLS_TOOL_NAME,
         )
         .await
     };
@@ -579,30 +451,29 @@ fn response_reports_picker_entry_completed(
     response_installed_entries: &[RequestPluginInstallInstalledEntry],
     requested_entry: &RequestedPickerInstallEntry,
 ) -> bool {
-    response_installed_entries.iter().any(|installed_entry| {
-        installed_entry.tool_id == requested_entry.tool.id()
-            && installed_entry.tool_type == requested_entry.tool.tool_type()
-    })
+    match &requested_entry.tool {
+        DiscoverableTool::Connector(_) => false,
+        DiscoverableTool::Plugin(_) => response_installed_entries.iter().any(|installed_entry| {
+            installed_entry.tool_id == requested_entry.tool.id()
+                && installed_entry.tool_type == requested_entry.tool.tool_type()
+        }),
+    }
 }
 
-fn request_plugin_install_picker_completed(entries: &[RequestPluginInstallEntryResult]) -> bool {
-    entries.iter().any(|entry| entry.completed)
-}
-
-fn tool_type_str(tool_type: DiscoverableToolType) -> &'static str {
+pub(super) fn tool_type_str(tool_type: DiscoverableToolType) -> &'static str {
     match tool_type {
         DiscoverableToolType::Connector => "connector",
         DiscoverableToolType::Plugin => "plugin",
     }
 }
 
-fn is_remote_plugin_install_suggestion(plugin_id: &str) -> bool {
+pub(super) fn is_remote_plugin_install_suggestion(plugin_id: &str) -> bool {
     plugin_id
         .rsplit_once('@')
         .is_some_and(|(_, marketplace_name)| marketplace_name == REMOTE_GLOBAL_MARKETPLACE_NAME)
 }
 
-async fn refresh_missing_requested_connectors(
+pub(super) async fn refresh_missing_requested_connectors(
     session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,
     auth: Option<&codex_login::CodexAuth>,
@@ -645,7 +516,7 @@ async fn refresh_missing_requested_connectors(
     }
 }
 
-fn verified_plugin_install_completed(
+pub(super) fn verified_plugin_install_completed(
     tool_id: &str,
     config: &crate::config::Config,
     plugins_manager: &codex_core_plugins::PluginsManager,

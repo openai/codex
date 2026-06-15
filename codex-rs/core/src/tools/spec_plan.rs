@@ -19,7 +19,7 @@ use crate::tools::handlers::NewContextWindowHandler;
 use crate::tools::handlers::PlanHandler;
 use crate::tools::handlers::ReadMcpResourceHandler;
 use crate::tools::handlers::RequestPermissionsHandler;
-use crate::tools::handlers::RequestPluginInstallHandler;
+use crate::tools::handlers::RequestPluginInstallsHandler;
 use crate::tools::handlers::RequestUserInputHandler;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
@@ -695,10 +695,16 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
                 collect_request_plugin_install_entries(&candidates.tools),
             ));
         }
-        planned_tools.add(RequestPluginInstallHandler::new(
-            candidates.tools.clone(),
-            candidates.presentation,
-        ));
+        let request_plugin_installs_handler =
+            if turn_context.app_server_client_name.as_deref() == Some("codex-tui") {
+                RequestPluginInstallsHandler::single_entry(
+                    candidates.tools.clone(),
+                    candidates.presentation,
+                )
+            } else {
+                RequestPluginInstallsHandler::new(candidates.tools.clone(), candidates.presentation)
+            };
+        planned_tools.add(request_plugin_installs_handler);
     }
 
     if environment_mode.has_environment() && turn_context.model_info.apply_patch_tool_type.is_some()

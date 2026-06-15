@@ -14,6 +14,9 @@ use codex_core_plugins::PluginsManager;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
 use codex_rmcp_client::ElicitationResponse;
 use codex_tools::DiscoverablePluginInfo;
+use codex_tools::MAX_REQUEST_PLUGIN_INSTALLS_ENTRIES;
+use codex_tools::RequestPluginInstallPickerCategory;
+use codex_tools::RequestPluginInstallPickerEntry;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
@@ -106,7 +109,7 @@ fn request_plugin_install_response_persists_only_decline_always_mode() {
 
 #[test]
 fn validate_request_plugin_install_picker_args_supports_categories() {
-    let args = RequestPluginInstallArgs {
+    let args = RequestPluginInstallsArgs {
         action_type: DiscoverableToolAction::Install,
         entries: None,
         categories: Some(vec![RequestPluginInstallPickerCategory {
@@ -138,7 +141,7 @@ fn validate_request_plugin_install_picker_args_rejects_mixed_sources() {
         tool_id: "connector_calendar".to_string(),
         tool_type: DiscoverableToolType::Connector,
     };
-    let args = RequestPluginInstallArgs {
+    let args = RequestPluginInstallsArgs {
         action_type: DiscoverableToolAction::Install,
         entries: Some(vec![entry]),
         categories: Some(vec![RequestPluginInstallPickerCategory {
@@ -171,7 +174,7 @@ fn validate_request_plugin_install_picker_args_rejects_duplicate_tools() {
         tool_id: "connector_calendar".to_string(),
         tool_type: DiscoverableToolType::Connector,
     };
-    let args = RequestPluginInstallArgs {
+    let args = RequestPluginInstallsArgs {
         action_type: DiscoverableToolAction::Install,
         entries: None,
         categories: Some(vec![
@@ -206,7 +209,7 @@ fn validate_request_plugin_install_picker_args_rejects_duplicate_tools() {
 
 #[test]
 fn validate_request_plugin_install_picker_args_rejects_multi_tool_tui_requests() {
-    let args = RequestPluginInstallArgs {
+    let args = RequestPluginInstallsArgs {
         action_type: DiscoverableToolAction::Install,
         entries: Some(vec![
             RequestPluginInstallPickerEntry {
@@ -232,10 +235,87 @@ fn validate_request_plugin_install_picker_args_rejects_multi_tool_tui_requests()
             Some("codex-tui"),
             ToolSuggestPresentation::ListTool,
         )
-            .expect_err("multi-tool TUI request"),
+        .expect_err("multi-tool TUI request"),
         FunctionCallError::RespondToModel(
             "multi-tool install requests are not available in codex-tui yet".to_string(),
         ),
+    );
+}
+
+#[test]
+fn validate_request_plugin_install_picker_args_caps_entries() {
+    let entries = || {
+        (0..=MAX_REQUEST_PLUGIN_INSTALLS_ENTRIES)
+            .map(|index| RequestPluginInstallPickerEntry {
+                tool_id: format!("connector_{index}"),
+                tool_type: DiscoverableToolType::Connector,
+            })
+            .collect()
+    };
+
+    for args in [
+        RequestPluginInstallsArgs {
+            action_type: DiscoverableToolAction::Install,
+            entries: Some(entries()),
+            categories: None,
+        },
+        RequestPluginInstallsArgs {
+            action_type: DiscoverableToolAction::Install,
+            entries: None,
+            categories: Some(vec![RequestPluginInstallPickerCategory {
+                title: "Connectors".to_string(),
+                entries: entries(),
+            }]),
+        },
+    ] {
+        assert_eq!(
+            validate_request_plugin_install_picker_args(
+                &args,
+                &[],
+                /*app_server_client_name*/ None,
+                ToolSuggestPresentation::ListTool,
+            )
+            .expect_err("oversized picker args"),
+            FunctionCallError::RespondToModel(format!(
+                "picker install requests support at most {MAX_REQUEST_PLUGIN_INSTALLS_ENTRIES} entries"
+            )),
+        );
+    }
+}
+
+#[test]
+fn picker_response_acknowledgements_apply_only_to_plugins() {
+    let connector = RequestedPickerInstallEntry {
+        tool: connector_tool("connector_calendar", "Google Calendar"),
+    };
+    let plugin = RequestedPickerInstallEntry {
+        tool: DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
+            id: "slack@openai-curated-remote".to_string(),
+            remote_plugin_id: Some("plugins~Plugin_slack".to_string()),
+            name: "Slack".to_string(),
+            description: None,
+            has_skills: true,
+            mcp_server_names: Vec::new(),
+            app_connector_ids: Vec::new(),
+        })),
+    };
+    let installed_entries = vec![
+        RequestPluginInstallInstalledEntry {
+            tool_id: "connector_calendar".to_string(),
+            tool_type: DiscoverableToolType::Connector,
+        },
+        RequestPluginInstallInstalledEntry {
+            tool_id: "slack@openai-curated-remote".to_string(),
+            tool_type: DiscoverableToolType::Plugin,
+        },
+    ];
+
+    assert_eq!(
+        (
+            response_reports_picker_entry_completed(&installed_entries, &connector),
+            response_reports_picker_entry_completed(&installed_entries, &plugin),
+        ),
+        (false, true),
     );
 }
 
