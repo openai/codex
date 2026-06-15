@@ -198,6 +198,31 @@ fn recommended_plugins_are_validated_deduplicated_sorted_and_capped() {
 }
 
 #[test]
+fn recommended_plugins_bound_model_visible_fields() {
+    let overlong_name = "n".repeat(MAX_RECOMMENDED_PLUGIN_NAME_LEN + 1);
+    let overlong_display_name = "D".repeat(MAX_RECOMMENDED_PLUGIN_DISPLAY_NAME_LEN + 1);
+    let mode = recommended_plugins_mode(RecommendedPluginsResponse {
+        enabled: Some(true),
+        plugins: vec![
+            item(&overlong_name, "Ignored"),
+            item("bounded", &overlong_display_name),
+        ],
+    });
+
+    assert_eq!(
+        mode,
+        RecommendedPluginsMode::Endpoint {
+            plugins: vec![RecommendedPlugin {
+                config_id: "bounded@openai-curated-remote".to_string(),
+                remote_plugin_id: "plugin_bounded".to_string(),
+                display_name: "D".repeat(MAX_RECOMMENDED_PLUGIN_DISPLAY_NAME_LEN),
+                app_connector_ids: Vec::new(),
+            }],
+        }
+    );
+}
+
+#[test]
 fn recommended_plugins_preserve_install_identity_and_normalize_app_ids() {
     let mode = recommended_plugins_mode(RecommendedPluginsResponse {
         enabled: Some(true),

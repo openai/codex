@@ -3706,7 +3706,7 @@ plugins = true
 }
 
 #[tokio::test]
-async fn remote_installed_plugins_refresh_warms_recommended_plugins_cache() {
+async fn remote_plugin_caches_refresh_warms_recommended_plugins_cache() {
     let tmp = tempfile::tempdir().unwrap();
     write_file(
         &tmp.path().join(CONFIG_TOML_FILE),
@@ -3734,7 +3734,7 @@ remote_plugin = true
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let cache_key = recommended_plugins_cache_key(&config, Some(&auth));
 
-    manager.maybe_start_remote_installed_plugins_cache_refresh(
+    manager.maybe_start_remote_plugin_caches_refresh(
         &config,
         Some(auth.clone()),
         /*on_effective_plugins_changed*/ None,

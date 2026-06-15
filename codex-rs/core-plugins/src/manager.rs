@@ -223,6 +223,8 @@ fn recommended_plugins_cache_key(
     config: &PluginsConfigInput,
     auth: Option<&CodexAuth>,
 ) -> RecommendedPluginsCacheKey {
+    // Account changes start a warmup but do not clear process-local entries. Keep install
+    // identities scoped to the auth that fetched them, including while a new warmup is in flight.
     RecommendedPluginsCacheKey {
         chatgpt_base_url: config.chatgpt_base_url.clone(),
         account_id: auth.and_then(CodexAuth::get_account_id),
@@ -726,7 +728,7 @@ impl PluginsManager {
         true
     }
 
-    pub fn maybe_start_remote_installed_plugins_cache_refresh(
+    pub fn maybe_start_remote_plugin_caches_refresh(
         self: &Arc<Self>,
         config: &PluginsConfigInput,
         auth: Option<CodexAuth>,
@@ -839,7 +841,7 @@ impl PluginsManager {
         if options.refresh_global_remote_catalog_cache {
             self.maybe_start_global_remote_catalog_cache_refresh(config, auth.clone());
         }
-        self.maybe_start_remote_installed_plugins_cache_refresh(
+        self.maybe_start_remote_plugin_caches_refresh(
             config,
             auth.clone(),
             on_effective_plugins_changed.clone(),
@@ -1535,7 +1537,7 @@ impl PluginsManager {
             let on_effective_plugins_changed = on_effective_plugins_changed.clone();
             tokio::spawn(async move {
                 let auth = auth_manager_for_remote_sync.auth().await;
-                manager.maybe_start_remote_installed_plugins_cache_refresh(
+                manager.maybe_start_remote_plugin_caches_refresh(
                     &config_for_remote_sync,
                     auth.clone(),
                     on_effective_plugins_changed.clone(),

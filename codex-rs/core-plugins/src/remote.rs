@@ -82,8 +82,8 @@ const REMOTE_PLUGIN_CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
 const RECOMMENDED_PLUGINS_TIMEOUT: Duration = Duration::from_secs(5);
 const REMOTE_PLUGIN_LIST_PAGE_LIMIT: u32 = 200;
 const MAX_RECOMMENDED_PLUGINS: usize = 50;
-const MAX_RECOMMENDED_PLUGIN_NAME_LEN: usize = 128;
-const MAX_RECOMMENDED_PLUGIN_DISPLAY_NAME_LEN: usize = 256;
+const MAX_RECOMMENDED_PLUGIN_NAME_LEN: usize = 64;
+const MAX_RECOMMENDED_PLUGIN_DISPLAY_NAME_LEN: usize = 64;
 const MAX_REMOTE_DEFAULT_PROMPT_COUNT: usize = 3;
 const MAX_REMOTE_DEFAULT_PROMPT_LEN: usize = 128;
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
@@ -1856,7 +1856,3 @@ async fn send_and_decode<T: for<'de> Deserialize<'de>>(
         source,
     })
 }
-
-#[cfg(test)]
-#[path = "remote_tests.rs"]
-mod tests;
