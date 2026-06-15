@@ -106,7 +106,7 @@ impl Renderable for RequestUserInputOverlay {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.render_ui(area, buf);
+        self.render_ui_at(area, buf, Instant::now());
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -243,11 +243,6 @@ impl RequestUserInputOverlay {
                 buf,
             );
         }
-    }
-
-    /// Render the full request-user-input overlay.
-    pub(super) fn render_ui(&self, area: Rect, buf: &mut Buffer) {
-        self.render_ui_at(area, buf, Instant::now());
     }
 
     pub(super) fn render_ui_at(&self, area: Rect, buf: &mut Buffer, now: Instant) {
