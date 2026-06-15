@@ -8,6 +8,7 @@ use codex_app_server_protocol::PluginShareTargetRole;
 use codex_config::types::McpServerConfig;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginListBackgroundTaskOptions;
+use codex_core_plugins::apps_route_available;
 use codex_core_plugins::remote::REMOTE_CREATED_BY_ME_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_WORKSPACE_MARKETPLACE_NAME;
@@ -990,6 +991,8 @@ impl PluginRequestProcessor {
         let plugins_input = config.plugins_config_input();
         let auth = self.auth_manager.auth().await;
         plugins_manager.set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
+        let app_summaries_available =
+            apps_route_available(auth.as_ref().map(CodexAuth::api_auth_mode));
 
         let plugin = match read_source {
             Ok(marketplace_path) => {
@@ -1054,8 +1057,7 @@ impl PluginRequestProcessor {
                     }
                     None => None,
                 };
-                let app_summaries = if plugin_details_app_summaries_enabled(&config, auth.as_ref())
-                {
+                let app_summaries = if app_summaries_available {
                     load_plugin_app_summaries(
                         &config,
                         &outcome.plugin.apps,
@@ -1134,8 +1136,7 @@ impl PluginRequestProcessor {
                 .map_err(|err| {
                     remote_plugin_catalog_error_to_jsonrpc(err, "read remote plugin details")
                 })?;
-                let app_summaries = if plugin_details_app_summaries_enabled(&config, auth.as_ref())
-                {
+                let app_summaries = if app_summaries_available {
                     let plugin_apps = remote_detail
                         .app_ids
                         .iter()
@@ -1978,13 +1979,6 @@ async fn load_plugin_app_summaries(
             }
         })
         .collect()
-}
-
-fn plugin_details_app_summaries_enabled(config: &Config, auth: Option<&CodexAuth>) -> bool {
-    // Plugin details can be requested before auth has been loaded in local/test flows.
-    // Preserve the historical details response unless a known auth mode disables apps.
-    let apps_route_available = auth.is_none_or(CodexAuth::uses_codex_backend);
-    config.features.apps_enabled_for_auth(apps_route_available)
 }
 
 fn plugin_app_category_by_id_from_value(value: &serde_json::Value) -> HashMap<String, String> {
