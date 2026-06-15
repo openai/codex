@@ -8,6 +8,7 @@ use base64::engine::general_purpose::STANDARD;
 use codex_mcp::FileInputSpec;
 use codex_mcp::PrepareUploadParams;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::permissions::ReadDenyMatcher;
 use serde_json::Value as JsonValue;
 use url::Url;
 
@@ -287,6 +288,17 @@ async fn rewrite_single_file(
         /*additional_permissions*/ None,
         turn_environment.cwd_uri(),
     );
+    if let (Ok(native_path), Some(native_cwd)) = (
+        path.to_abs_path(),
+        sandbox.cwd.as_ref().and_then(|cwd| cwd.to_abs_path().ok()),
+    ) {
+        let file_system_policy = sandbox.permissions.file_system_sandbox_policy();
+        if ReadDenyMatcher::new(&file_system_policy, native_cwd.as_path())
+            .is_some_and(|matcher| matcher.is_read_denied(native_path.as_path()))
+        {
+            return Err(format!("failed to read `{path_display}`: access denied"));
+        }
+    }
     let fs = turn_environment.environment.get_filesystem();
     let metadata = fs
         .get_metadata(&path, Some(&sandbox))
