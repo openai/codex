@@ -7,6 +7,7 @@ use super::RouteFailureClass;
 use super::SystemProxyDecision;
 use super::no_proxy_matches_origin;
 use super::parse_proxy_list;
+use crate::route_diagnostics::RouteDecisionSource;
 use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
 use windows_sys::Win32::Foundation::FALSE;
 use windows_sys::Win32::Foundation::GetLastError;
@@ -56,7 +57,10 @@ pub(super) fn resolve(
     let ie_config = match current_user_ie_proxy_config() {
         Ok(config) => config,
         Err(failure) => {
-            return SystemProxyDecision::Unavailable { failure };
+            return SystemProxyDecision::Unavailable {
+                source: RouteDecisionSource::ResolutionError,
+                failure,
+            };
         }
     };
 
@@ -80,17 +84,22 @@ pub(super) fn resolve(
             .as_deref()
             .is_some_and(|bypass| proxy_bypass_matches_origin(bypass, origin))
         {
-            return SystemProxyDecision::Direct;
+            return SystemProxyDecision::Direct {
+                source: RouteDecisionSource::WindowsStatic,
+            };
         }
-        return proxy_list_decision(proxy, origin);
+        return proxy_list_decision(proxy, origin, RouteDecisionSource::WindowsStatic);
     }
 
     if ie_config.auto_config_url.is_some() || (include_auto_detect && ie_config.auto_detect) {
         SystemProxyDecision::Unavailable {
+            source: RouteDecisionSource::WindowsWinHttpPac,
             failure: RouteFailureClass::ProxyResolutionUnavailable,
         }
     } else {
-        SystemProxyDecision::Direct
+        SystemProxyDecision::Direct {
+            source: RouteDecisionSource::Direct,
+        }
     }
 }
 
@@ -130,6 +139,7 @@ fn resolve_with_winhttp_options(
 ) -> SystemProxyDecision {
     let Some(session) = WinHttpSession::open() else {
         return SystemProxyDecision::Unavailable {
+            source: RouteDecisionSource::WindowsWinHttpPac,
             failure: classify_winhttp_error(last_error()),
         };
     };
@@ -150,35 +160,46 @@ fn resolve_with_winhttp_options(
     };
     if ok == FALSE {
         return SystemProxyDecision::Unavailable {
+            source: RouteDecisionSource::WindowsWinHttpPac,
             failure: classify_winhttp_error(last_error()),
         };
     }
 
     let proxy_info = ProxyInfo::from_raw(proxy_info);
     if proxy_info.access_type == WINHTTP_ACCESS_TYPE_NO_PROXY {
-        return SystemProxyDecision::Direct;
+        return SystemProxyDecision::Direct {
+            source: RouteDecisionSource::WindowsWinHttpPac,
+        };
     }
     if proxy_info.access_type != WINHTTP_ACCESS_TYPE_NAMED_PROXY {
         return SystemProxyDecision::Unavailable {
+            source: RouteDecisionSource::WindowsWinHttpPac,
             failure: RouteFailureClass::ProxyResolutionUnavailable,
         };
     }
     let Some(proxy) = proxy_info.proxy.as_deref() else {
         return SystemProxyDecision::Unavailable {
+            source: RouteDecisionSource::WindowsWinHttpPac,
             failure: RouteFailureClass::ProxyResolutionUnavailable,
         };
     };
-    proxy_list_decision(proxy, origin)
+    proxy_list_decision(proxy, origin, RouteDecisionSource::WindowsWinHttpPac)
 }
 
-fn proxy_list_decision(proxy_list: &str, origin: &RequestOrigin) -> SystemProxyDecision {
+fn proxy_list_decision(
+    proxy_list: &str,
+    origin: &RequestOrigin,
+    source: RouteDecisionSource,
+) -> SystemProxyDecision {
     match parse_proxy_list(proxy_list, &origin.scheme) {
-        ParsedProxyListDecision::Direct => SystemProxyDecision::Direct,
-        ParsedProxyListDecision::Proxy(url) => SystemProxyDecision::Proxy { url },
+        ParsedProxyListDecision::Direct => SystemProxyDecision::Direct { source },
+        ParsedProxyListDecision::Proxy(url) => SystemProxyDecision::Proxy { source, url },
         ParsedProxyListDecision::UnsupportedScheme => SystemProxyDecision::Unavailable {
+            source,
             failure: RouteFailureClass::UnsupportedProxyScheme,
         },
         ParsedProxyListDecision::Unavailable => SystemProxyDecision::Unavailable {
+            source,
             failure: RouteFailureClass::ProxyResolutionUnavailable,
         },
     }

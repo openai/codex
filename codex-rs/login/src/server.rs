@@ -39,6 +39,9 @@ use crate::token_data::parse_chatgpt_jwt_claims;
 use base64::Engine;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
+use codex_client::emit_auth_http_status;
+use codex_client::emit_auth_network_environment_snapshot;
+use codex_client::emit_auth_transport_failure;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_utils_template::Template;
 use rand::RngCore;
@@ -748,6 +751,7 @@ pub(crate) async fn exchange_code_for_tokens(
     }
 
     let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
+    emit_auth_network_environment_snapshot("oauth_token_exchange");
     let client =
         build_auth_reqwest_client_with_auth_route_config(&token_endpoint, auth_route_config)?;
     info!(
@@ -771,6 +775,7 @@ pub(crate) async fn exchange_code_for_tokens(
     let resp = match resp {
         Ok(resp) => resp,
         Err(error) => {
+            emit_auth_transport_failure("oauth_token_exchange", &error);
             let error = redact_sensitive_error_url(error);
             error!(
                 is_timeout = error.is_timeout(),
@@ -785,6 +790,7 @@ pub(crate) async fn exchange_code_for_tokens(
 
     let status = resp.status();
     if !status.is_success() {
+        emit_auth_http_status("oauth_token_exchange", status);
         let body = resp.text().await.map_err(io::Error::other)?;
         let detail = parse_token_endpoint_error(&body);
         warn!(
@@ -1172,6 +1178,7 @@ pub(crate) async fn obtain_api_key(
         access_token: String,
     }
     let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
+    emit_auth_network_environment_snapshot("api_key_exchange");
     let client =
         build_auth_reqwest_client_with_auth_route_config(&token_endpoint, auth_route_config)?;
     let resp = client
@@ -1189,9 +1196,13 @@ pub(crate) async fn obtain_api_key(
         .await;
     let resp = match resp {
         Ok(resp) => resp,
-        Err(error) => return Err(io::Error::other(error)),
+        Err(error) => {
+            emit_auth_transport_failure("api_key_exchange", &error);
+            return Err(io::Error::other(error));
+        }
     };
     if !resp.status().is_success() {
+        emit_auth_http_status("api_key_exchange", resp.status());
         return Err(io::Error::other(format!(
             "api key exchange failed with status {}",
             resp.status()

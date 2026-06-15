@@ -6,6 +6,7 @@ use std::time::Instant;
 use super::RequestOrigin;
 use super::RouteFailureClass;
 use super::SystemProxyDecision;
+use crate::route_diagnostics::RouteDecisionSource;
 use system_configuration::core_foundation::array::CFArray;
 use system_configuration::core_foundation::array::CFArrayRef;
 use system_configuration::core_foundation::base::CFEqual;
@@ -87,23 +88,31 @@ pub(super) fn resolve(
 ) -> SystemProxyDecision {
     let Some(target_url) = cf_url(request_url) else {
         return SystemProxyDecision::Unavailable {
+            source: RouteDecisionSource::ResolutionError,
             failure: RouteFailureClass::InvalidProxyConfig,
         };
     };
 
     let Some(settings) = system_proxy_settings(include_auto_detect) else {
         return SystemProxyDecision::Unavailable {
+            source: RouteDecisionSource::ResolutionError,
             failure: RouteFailureClass::ProxyResolutionUnavailable,
         };
     };
 
     let Some(proxies) = copy_proxies_for_url(&target_url, &settings) else {
         return SystemProxyDecision::Unavailable {
+            source: RouteDecisionSource::ResolutionError,
             failure: RouteFailureClass::ProxyResolutionUnavailable,
         };
     };
 
-    proxy_array_decision(&proxies, &target_url, origin)
+    proxy_array_decision(
+        &proxies,
+        &target_url,
+        origin,
+        RouteDecisionSource::MacOsSystem,
+    )
 }
 
 fn system_proxy_settings(include_auto_detect: bool) -> Option<CFDictionary<CFString, CFType>> {
@@ -146,14 +155,19 @@ fn proxy_array_decision(
     proxies: &ProxyArray,
     target_url: &CFURL,
     origin: &RequestOrigin,
+    source: RouteDecisionSource,
 ) -> SystemProxyDecision {
     let mut saw_unsupported = false;
     let mut saw_unavailable = false;
 
     for proxy in proxies {
-        match proxy_entry_decision(&proxy, target_url, origin) {
-            ProxyEntryDecision::Direct => return SystemProxyDecision::Direct,
-            ProxyEntryDecision::Proxy { url } => return SystemProxyDecision::Proxy { url },
+        match proxy_entry_decision(&proxy, target_url, origin, source) {
+            ProxyEntryDecision::Direct { source } => {
+                return SystemProxyDecision::Direct { source };
+            }
+            ProxyEntryDecision::Proxy { source, url } => {
+                return SystemProxyDecision::Proxy { source, url };
+            }
             ProxyEntryDecision::UnsupportedScheme => saw_unsupported = true,
             ProxyEntryDecision::Unavailable => saw_unavailable = true,
         }
@@ -161,14 +175,16 @@ fn proxy_array_decision(
 
     if saw_unsupported {
         SystemProxyDecision::Unavailable {
+            source,
             failure: RouteFailureClass::UnsupportedProxyScheme,
         }
     } else if saw_unavailable {
         SystemProxyDecision::Unavailable {
+            source,
             failure: RouteFailureClass::ProxyResolutionUnavailable,
         }
     } else {
-        SystemProxyDecision::Direct
+        SystemProxyDecision::Direct { source }
     }
 }
 
@@ -176,23 +192,24 @@ fn proxy_entry_decision(
     proxy: &ProxyDictionary,
     target_url: &CFURL,
     origin: &RequestOrigin,
+    source: RouteDecisionSource,
 ) -> ProxyEntryDecision {
     let Some(proxy_type) = cf_string_value(proxy, unsafe { kCFProxyTypeKey }) else {
         return ProxyEntryDecision::Unavailable;
     };
 
     if cf_string_equals(&proxy_type, unsafe { kCFProxyTypeNone }) {
-        return ProxyEntryDecision::Direct;
+        return ProxyEntryDecision::Direct { source };
     }
 
     if cf_string_equals(&proxy_type, unsafe { kCFProxyTypeHTTP }) {
-        return concrete_proxy_entry(proxy, "http");
+        return concrete_proxy_entry(proxy, "http", source);
     }
 
     if cf_string_equals(&proxy_type, unsafe { kCFProxyTypeHTTPS }) {
         // CFNetwork's HTTPS proxy type is a tunneling proxy for HTTPS destinations; it does not
         // preserve an explicit TLS-to-proxy transport. See https://developer.apple.com/documentation/cfnetwork/kcfproxytypehttps.
-        return concrete_proxy_entry(proxy, "http");
+        return concrete_proxy_entry(proxy, "http", source);
     }
 
     if cf_string_equals(&proxy_type, unsafe { kCFProxyTypeSOCKS }) {
@@ -233,13 +250,19 @@ fn pac_decision(
         Err(_) => return ProxyEntryDecision::Unavailable,
     };
 
-    match proxy_array_decision(&proxies, target_url, origin) {
-        SystemProxyDecision::Direct => ProxyEntryDecision::Direct,
-        SystemProxyDecision::Proxy { url } => ProxyEntryDecision::Proxy { url },
+    match proxy_array_decision(
+        &proxies,
+        target_url,
+        origin,
+        RouteDecisionSource::MacOsCfNetworkPac,
+    ) {
+        SystemProxyDecision::Direct { source } => ProxyEntryDecision::Direct { source },
+        SystemProxyDecision::Proxy { source, url } => ProxyEntryDecision::Proxy { source, url },
         SystemProxyDecision::Unavailable {
             failure: RouteFailureClass::UnsupportedProxyScheme,
+            ..
         } => ProxyEntryDecision::UnsupportedScheme,
-        SystemProxyDecision::Unavailable { failure: _ } => ProxyEntryDecision::Unavailable,
+        SystemProxyDecision::Unavailable { .. } => ProxyEntryDecision::Unavailable,
     }
 }
 
@@ -325,7 +348,11 @@ struct PacRunLoopState {
     result: Option<Result<ProxyArray, RouteFailureClass>>,
 }
 
-fn concrete_proxy_entry(proxy: &ProxyDictionary, proxy_scheme: &str) -> ProxyEntryDecision {
+fn concrete_proxy_entry(
+    proxy: &ProxyDictionary,
+    proxy_scheme: &str,
+    source: RouteDecisionSource,
+) -> ProxyEntryDecision {
     let Some(host) = cf_string_value(proxy, unsafe { kCFProxyHostNameKey })
         .map(|host| host.to_string())
         .filter(|host| !host.is_empty())
@@ -338,7 +365,7 @@ fn concrete_proxy_entry(proxy: &ProxyDictionary, proxy_scheme: &str) -> ProxyEnt
         Some(port) if port > 0 => format!("{proxy_scheme}://{host}:{port}"),
         _ => format!("{proxy_scheme}://{host}"),
     };
-    ProxyEntryDecision::Proxy { url }
+    ProxyEntryDecision::Proxy { source, url }
 }
 
 fn bracket_ipv6_host(host: &str) -> String {
@@ -395,8 +422,13 @@ fn cf_url(value: &str) -> Option<CFURL> {
 }
 
 enum ProxyEntryDecision {
-    Direct,
-    Proxy { url: String },
+    Direct {
+        source: RouteDecisionSource,
+    },
+    Proxy {
+        source: RouteDecisionSource,
+        url: String,
+    },
     UnsupportedScheme,
     Unavailable,
 }
