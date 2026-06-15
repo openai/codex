@@ -3,6 +3,7 @@ mod backfill_state;
 mod graph;
 mod log;
 mod memories;
+mod queued_item;
 mod thread_goal;
 mod thread_metadata;
 
@@ -24,6 +25,9 @@ pub use memories::Stage1JobClaim;
 pub use memories::Stage1JobClaimOutcome;
 pub use memories::Stage1Output;
 pub use memories::Stage1StartupClaimParams;
+pub use queued_item::QueuedItemClaim;
+pub use queued_item::QueuedItemRecord;
+pub use queued_item::QueuedItemState;
 pub use thread_goal::ThreadGoal;
 pub use thread_goal::ThreadGoalStatus;
 pub use thread_metadata::Anchor;
@@ -37,6 +41,7 @@ pub use thread_metadata::ThreadsPage;
 
 pub(crate) use agent_job::AgentJobItemRow;
 pub(crate) use agent_job::AgentJobRow;
+pub(crate) use queued_item::QueuedItemRow;
 pub(crate) use thread_goal::ThreadGoalRow;
 pub(crate) use thread_metadata::ThreadRow;
 pub(crate) use thread_metadata::anchor_from_item;
