@@ -2164,7 +2164,10 @@ mod tests {
         assert!(event_requires_delivery(
             &InProcessServerEvent::ServerNotification(
                 codex_app_server_protocol::ServerNotification::ExternalAgentConfigImportCompleted(
-                    codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification {},
+                    codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification {
+                        import_id: "import".to_string(),
+                        item_type_results: Vec::new(),
+                    },
                 )
             )
         ));
