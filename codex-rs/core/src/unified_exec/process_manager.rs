@@ -935,6 +935,7 @@ impl UnifiedExecProcessManager {
                         request.command.clone(),
                         request.cwd.as_path(),
                         request.env.clone(),
+                        request.network.is_some(),
                         None,
                         elevated_read_roots_override.as_deref(),
                         elevated_read_roots_include_platform_defaults,

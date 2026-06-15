@@ -30,6 +30,7 @@ pub struct WindowsSandboxSessionRequest<'a> {
     pub cwd: &'a Path,
     pub env_map: HashMap<String, String>,
     pub windows_sandbox_level: WindowsSandboxLevel,
+    pub proxy_enforced: bool,
     pub timeout_ms: Option<u64>,
     pub read_roots_override: Option<&'a [PathBuf]>,
     pub read_roots_include_platform_defaults: bool,
@@ -44,44 +45,44 @@ pub struct WindowsSandboxSessionRequest<'a> {
 pub async fn spawn_windows_sandbox_session_for_level(
     request: WindowsSandboxSessionRequest<'_>,
 ) -> Result<SpawnedProcess> {
-    match request.windows_sandbox_level {
-        WindowsSandboxLevel::Elevated => {
-            spawn_windows_sandbox_session_elevated_for_permission_profile(
-                request.permission_profile,
-                request.workspace_roots,
-                request.codex_home,
-                request.command,
-                request.cwd,
-                request.env_map,
-                request.timeout_ms,
-                request.read_roots_override,
-                request.read_roots_include_platform_defaults,
-                request.write_roots_override,
-                request.deny_read_paths_override,
-                request.deny_write_paths_override,
-                request.tty,
-                request.stdin_open,
-                request.use_private_desktop,
-            )
-            .await
-        }
-        WindowsSandboxLevel::RestrictedToken | WindowsSandboxLevel::Disabled => {
-            spawn_windows_sandbox_session_legacy(
-                request.permission_profile,
-                request.workspace_roots,
-                request.codex_home,
-                request.command,
-                request.cwd,
-                request.env_map,
-                request.timeout_ms,
-                request.deny_read_paths_override,
-                request.deny_write_paths_override,
-                request.tty,
-                request.stdin_open,
-                request.use_private_desktop,
-            )
-            .await
-        }
+    if request.proxy_enforced
+        || matches!(request.windows_sandbox_level, WindowsSandboxLevel::Elevated)
+    {
+        spawn_windows_sandbox_session_elevated_for_permission_profile(
+            request.permission_profile,
+            request.workspace_roots,
+            request.codex_home,
+            request.command,
+            request.cwd,
+            request.env_map,
+            request.proxy_enforced,
+            request.timeout_ms,
+            request.read_roots_override,
+            request.read_roots_include_platform_defaults,
+            request.write_roots_override,
+            request.deny_read_paths_override,
+            request.deny_write_paths_override,
+            request.tty,
+            request.stdin_open,
+            request.use_private_desktop,
+        )
+        .await
+    } else {
+        spawn_windows_sandbox_session_legacy(
+            request.permission_profile,
+            request.workspace_roots,
+            request.codex_home,
+            request.command,
+            request.cwd,
+            request.env_map,
+            request.timeout_ms,
+            request.deny_read_paths_override,
+            request.deny_write_paths_override,
+            request.tty,
+            request.stdin_open,
+            request.use_private_desktop,
+        )
+        .await
     }
 }
 
@@ -125,6 +126,7 @@ pub async fn spawn_windows_sandbox_session_elevated_for_permission_profile(
     command: Vec<String>,
     cwd: &Path,
     env_map: HashMap<String, String>,
+    proxy_enforced: bool,
     timeout_ms: Option<u64>,
     read_roots_override: Option<&[PathBuf]>,
     read_roots_include_platform_defaults: bool,
@@ -142,6 +144,7 @@ pub async fn spawn_windows_sandbox_session_elevated_for_permission_profile(
         command,
         cwd,
         env_map,
+        proxy_enforced,
         timeout_ms,
         read_roots_override,
         read_roots_include_platform_defaults,
