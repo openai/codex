@@ -138,7 +138,7 @@ async fn read_session_cwd(
     if let Some(path) = path {
         match read_rollout_resume_state(path).await {
             Ok(state) => {
-                if state.cwd.is_some() {
+                if state.thread_id == Some(thread_id) && state.cwd.is_some() {
                     return state.cwd;
                 }
             }
