@@ -259,10 +259,6 @@ impl RequestUserInputOverlay {
         self.request.questions.len()
     }
 
-    fn advance_queue_or_complete(&mut self) {
-        self.advance_queue_or_complete_at(Instant::now());
-    }
-
     fn advance_queue_or_complete_at(&mut self, now: Instant) {
         if let Some(next) = self.queue.pop_front() {
             self.request = next;
@@ -927,7 +923,7 @@ impl RequestUserInputOverlay {
                 interrupted: false,
             },
         )));
-        self.advance_queue_or_complete();
+        self.advance_queue_or_complete_at(Instant::now());
     }
 
     fn submit_empty_auto_resolution(&mut self, now: Instant) {
@@ -958,7 +954,7 @@ impl RequestUserInputOverlay {
         self.queue
             .retain(|queued_request| queued_request.item_id != *call_id);
         if self.request.item_id == *call_id {
-            self.advance_queue_or_complete();
+            self.advance_queue_or_complete_at(Instant::now());
             return true;
         }
 
