@@ -1,4 +1,4 @@
-use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditCode;
+use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditOutcome;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
 use codex_app_server_protocol::RateLimitResetCreditsSummary;
 use uuid::Uuid;
@@ -176,9 +176,9 @@ impl ChatWidget {
         match result {
             Ok(response)
                 if matches!(
-                    response.code,
-                    ConsumeAccountRateLimitResetCreditCode::Reset
-                        | ConsumeAccountRateLimitResetCreditCode::AlreadyRedeemed
+                    response.outcome,
+                    ConsumeAccountRateLimitResetCreditOutcome::Reset
+                        | ConsumeAccountRateLimitResetCreditOutcome::AlreadyRedeemed
                 ) =>
             {
                 self.replace_rate_limit_reset_popup(Self::rate_limit_reset_success_loading_params());
@@ -186,15 +186,15 @@ impl ChatWidget {
             }
             Ok(response) => {
                 self.pending_rate_limit_reset_request_id = None;
-                let message = match response.code {
-                    ConsumeAccountRateLimitResetCreditCode::NothingToReset => {
+                let message = match response.outcome {
+                    ConsumeAccountRateLimitResetCreditOutcome::NothingToReset => {
                         "Your usage does not need a reset right now."
                     }
-                    ConsumeAccountRateLimitResetCreditCode::NoCredit => {
+                    ConsumeAccountRateLimitResetCreditOutcome::NoCredit => {
                         "No rate-limit resets are available."
                     }
-                    ConsumeAccountRateLimitResetCreditCode::Reset
-                    | ConsumeAccountRateLimitResetCreditCode::AlreadyRedeemed => unreachable!(),
+                    ConsumeAccountRateLimitResetCreditOutcome::Reset
+                    | ConsumeAccountRateLimitResetCreditOutcome::AlreadyRedeemed => unreachable!(),
                 };
                 self.replace_rate_limit_reset_popup(Self::rate_limit_reset_message_params(message));
                 false

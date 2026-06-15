@@ -1,5 +1,5 @@
 use super::*;
-use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditCode;
+use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditOutcome;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
 use codex_app_server_protocol::RateLimitResetCreditsSummary;
 
@@ -90,31 +90,31 @@ async fn rate_limit_reset_popup_states_snapshot() {
 
     dismiss_popup(&mut chat);
     let nothing_request_id = chat.show_rate_limit_reset_consuming_popup();
-    assert!(!finish_reset_consume_code(
+    assert!(!finish_reset_consume_outcome(
         &mut chat,
         nothing_request_id,
         "redeem-2",
-        ConsumeAccountRateLimitResetCreditCode::NothingToReset,
+        ConsumeAccountRateLimitResetCreditOutcome::NothingToReset,
     ));
     record_popup(&chat, &mut states);
 
     dismiss_popup(&mut chat);
     let no_credit_request_id = chat.show_rate_limit_reset_consuming_popup();
-    assert!(!finish_reset_consume_code(
+    assert!(!finish_reset_consume_outcome(
         &mut chat,
         no_credit_request_id,
         "redeem-3",
-        ConsumeAccountRateLimitResetCreditCode::NoCredit,
+        ConsumeAccountRateLimitResetCreditOutcome::NoCredit,
     ));
     record_popup(&chat, &mut states);
 
     dismiss_popup(&mut chat);
     let success_request_id = chat.show_rate_limit_reset_consuming_popup();
-    assert!(finish_reset_consume_code(
+    assert!(finish_reset_consume_outcome(
         &mut chat,
         success_request_id,
         "redeem-4",
-        ConsumeAccountRateLimitResetCreditCode::Reset,
+        ConsumeAccountRateLimitResetCreditOutcome::Reset,
     ));
     record_popup(&chat, &mut states);
     assert!(chat.finish_post_consume_reset_credits_refresh(
@@ -154,11 +154,11 @@ async fn rate_limit_reset_redemption_cannot_be_dismissed_while_in_flight() {
     dismiss_popup(&mut chat);
     assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Using a reset..."));
 
-    assert!(finish_reset_consume_code(
+    assert!(finish_reset_consume_outcome(
         &mut chat,
         request_id,
         "redeem-123",
-        ConsumeAccountRateLimitResetCreditCode::Reset,
+        ConsumeAccountRateLimitResetCreditOutcome::Reset,
     ));
     dismiss_popup(&mut chat);
     assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Refreshing..."));
@@ -187,11 +187,11 @@ async fn already_redeemed_is_an_idempotent_success() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let request_id = chat.show_rate_limit_reset_consuming_popup();
 
-    assert!(finish_reset_consume_code(
+    assert!(finish_reset_consume_outcome(
         &mut chat,
         request_id,
         "stable-redeem-id",
-        ConsumeAccountRateLimitResetCreditCode::AlreadyRedeemed,
+        ConsumeAccountRateLimitResetCreditOutcome::AlreadyRedeemed,
     ));
     assert!(chat.finish_post_consume_reset_credits_refresh(
         request_id,
@@ -236,11 +236,11 @@ async fn clearing_pending_reset_hint_preserves_in_flight_redemption() {
     chat.clear_pending_rate_limit_reset_hint();
 
     assert!(chat.pending_rate_limit_reset_hint().is_none());
-    assert!(finish_reset_consume_code(
+    assert!(finish_reset_consume_outcome(
         &mut chat,
         consume_request_id,
         "redeem-after-rollback",
-        ConsumeAccountRateLimitResetCreditCode::Reset,
+        ConsumeAccountRateLimitResetCreditOutcome::Reset,
     ));
 }
 
@@ -272,11 +272,11 @@ async fn rate_limit_reset_success_updates_popup_beneath_overlay() {
     let request_id = chat.show_rate_limit_reset_consuming_popup();
     show_usage_test_overlay(&mut chat);
 
-    assert!(finish_reset_consume_code(
+    assert!(finish_reset_consume_outcome(
         &mut chat,
         request_id,
         "redeem-covered",
-        ConsumeAccountRateLimitResetCreditCode::Reset,
+        ConsumeAccountRateLimitResetCreditOutcome::Reset,
     ));
     assert!(chat.finish_post_consume_reset_credits_refresh(
         request_id,
@@ -433,24 +433,24 @@ async fn usage_limit_without_known_limit_type_does_not_check_reset_credits() {
 }
 
 fn consume_response(
-    code: ConsumeAccountRateLimitResetCreditCode,
+    outcome: ConsumeAccountRateLimitResetCreditOutcome,
 ) -> ConsumeAccountRateLimitResetCreditResponse {
     ConsumeAccountRateLimitResetCreditResponse {
-        code,
+        outcome,
         windows_reset: 0,
     }
 }
 
-fn finish_reset_consume_code(
+fn finish_reset_consume_outcome(
     chat: &mut ChatWidget,
     request_id: u64,
     idempotency_key: &str,
-    code: ConsumeAccountRateLimitResetCreditCode,
+    outcome: ConsumeAccountRateLimitResetCreditOutcome,
 ) -> bool {
     chat.finish_rate_limit_reset_consume(
         request_id,
         idempotency_key.to_string(),
-        Ok(consume_response(code)),
+        Ok(consume_response(outcome)),
     )
 }
 
