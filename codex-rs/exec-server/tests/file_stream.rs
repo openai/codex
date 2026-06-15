@@ -22,8 +22,10 @@ use codex_utils_path_uri::PathUri;
 use futures::TryStreamExt;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
+#[cfg(unix)]
 use std::time::Duration;
 use tempfile::TempDir;
+#[cfg(unix)]
 use tokio::time::timeout;
 use uuid::Uuid;
 
