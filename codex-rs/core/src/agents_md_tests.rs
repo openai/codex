@@ -1,6 +1,6 @@
 use super::*;
 use crate::config::ConfigBuilder;
-use crate::environment_selection::TurnEnvironmentsSnapshot;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::turn_context::TurnEnvironment;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
@@ -254,8 +254,8 @@ async fn agents_md_paths(config: &TestConfig) -> std::io::Result<Vec<AbsolutePat
 
 fn resolved_local_environments<const N: usize>(
     environments: [(&str, AbsolutePathBuf); N],
-) -> TurnEnvironmentsSnapshot {
-    TurnEnvironmentsSnapshot {
+) -> TurnEnvironmentSnapshot {
+    TurnEnvironmentSnapshot {
         turn_environments: environments
             .into_iter()
             .map(|(environment_id, cwd)| {

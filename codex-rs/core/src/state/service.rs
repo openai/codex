@@ -7,7 +7,7 @@ use crate::attestation::AttestationProvider;
 use crate::client::ModelClient;
 use crate::config::NetworkProxyAuditMetadata;
 use crate::config::StartedNetworkProxy;
-use crate::environment_selection::TurnEnvironments;
+use crate::environment_selection::ThreadEnvironments;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
 use crate::guardian::GuardianRejectionCircuitBreaker;
@@ -83,7 +83,7 @@ pub(crate) struct SessionServices {
     pub(crate) model_client: ModelClient,
     pub(crate) code_mode_service: CodeModeService,
     pub(crate) tool_search_handler_cache: ToolSearchHandlerCache,
-    pub(crate) turn_environments: Arc<TurnEnvironments>,
+    pub(crate) turn_environments: Arc<ThreadEnvironments>,
 }
 
 impl SessionServices {

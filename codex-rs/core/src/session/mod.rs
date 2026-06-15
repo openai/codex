@@ -31,7 +31,7 @@ use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
-use crate::environment_selection::TurnEnvironments;
+use crate::environment_selection::ThreadEnvironments;
 use crate::exec_policy::ExecPolicyManager;
 use crate::image_preparation::prepare_response_items;
 use crate::parse_turn_item;
@@ -519,8 +519,10 @@ impl Codex {
             attestation_provider,
             inherited_multi_agent_version,
         } = args;
-        let turn_environments =
-            TurnEnvironments::resolve(environment_manager, &environment_selections).await;
+        let turn_environments = Arc::new(ThreadEnvironments::new(environment_manager));
+        turn_environments
+            .update_selections(&environment_selections)
+            .await;
         let resolved_environments = turn_environments.snapshot().await;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();

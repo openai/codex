@@ -4034,12 +4034,14 @@ async fn emit_subagent_session_started_includes_fork_lineage_from_session_config
 
 async fn turn_environments_for_configuration(
     session_configuration: &SessionConfiguration,
-) -> Arc<TurnEnvironments> {
-    TurnEnvironments::resolve(
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        session_configuration.environment_selections(),
-    )
-    .await
+) -> Arc<ThreadEnvironments> {
+    let turn_environments = Arc::new(ThreadEnvironments::new(Arc::new(
+        codex_exec_server::EnvironmentManager::default_for_tests(),
+    )));
+    turn_environments
+        .update_selections(session_configuration.environment_selections())
+        .await;
+    turn_environments
 }
 
 #[tokio::test]

@@ -18,7 +18,7 @@
 use crate::config::Config;
 use crate::context::ContextualUserFragment;
 use crate::context::UserInstructions as ContextUserInstructions;
-use crate::environment_selection::TurnEnvironmentsSnapshot;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::default_project_root_markers;
@@ -48,7 +48,7 @@ const AGENTS_MD_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 pub(crate) async fn load_project_instructions(
     config: &mut Config,
     user_instructions: Option<UserInstructions>,
-    environments: &TurnEnvironmentsSnapshot,
+    environments: &TurnEnvironmentSnapshot,
 ) -> Option<LoadedAgentsMd> {
     let mut loaded = LoadedAgentsMd::from_user_instructions(user_instructions);
     for turn_environment in &environments.turn_environments {

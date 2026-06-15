@@ -28,22 +28,17 @@ pub(crate) fn default_thread_environment_selections(
 }
 
 #[derive(Debug)]
-pub(crate) struct TurnEnvironments {
+pub(crate) struct ThreadEnvironments {
     environment_manager: Arc<EnvironmentManager>,
-    snapshot: Mutex<TurnEnvironmentsSnapshot>,
+    snapshot: Mutex<TurnEnvironmentSnapshot>,
 }
 
-impl TurnEnvironments {
-    pub(crate) async fn resolve(
-        environment_manager: Arc<EnvironmentManager>,
-        environments: &[TurnEnvironmentSelection],
-    ) -> Arc<Self> {
-        let resolved = Arc::new(Self {
+impl ThreadEnvironments {
+    pub(crate) fn new(environment_manager: Arc<EnvironmentManager>) -> Self {
+        Self {
             environment_manager,
-            snapshot: Mutex::new(TurnEnvironmentsSnapshot::default()),
-        });
-        resolved.update_selections(environments).await;
-        resolved
+            snapshot: Mutex::new(TurnEnvironmentSnapshot::default()),
+        }
     }
 
     pub(crate) async fn update_selections(&self, environments: &[TurnEnvironmentSelection]) {
@@ -72,7 +67,7 @@ impl TurnEnvironments {
             };
             turn_environments.push(turn_environment);
         }
-        *self.snapshot.lock().await = TurnEnvironmentsSnapshot { turn_environments };
+        *self.snapshot.lock().await = TurnEnvironmentSnapshot { turn_environments };
     }
 
     async fn resolve_selection(
@@ -114,7 +109,7 @@ impl TurnEnvironments {
         ))
     }
 
-    pub(crate) async fn snapshot(&self) -> TurnEnvironmentsSnapshot {
+    pub(crate) async fn snapshot(&self) -> TurnEnvironmentSnapshot {
         self.snapshot.lock().await.clone()
     }
 
@@ -124,11 +119,11 @@ impl TurnEnvironments {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct TurnEnvironmentsSnapshot {
+pub(crate) struct TurnEnvironmentSnapshot {
     pub(crate) turn_environments: Vec<TurnEnvironment>,
 }
 
-impl TurnEnvironmentsSnapshot {
+impl TurnEnvironmentSnapshot {
     pub(crate) fn primary(&self) -> Option<&TurnEnvironment> {
         self.turn_environments.first()
     }
@@ -172,6 +167,15 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    async fn resolve_turn_environments(
+        environment_manager: Arc<EnvironmentManager>,
+        selections: &[TurnEnvironmentSelection],
+    ) -> Arc<ThreadEnvironments> {
+        let turn_environments = Arc::new(ThreadEnvironments::new(environment_manager));
+        turn_environments.update_selections(selections).await;
+        turn_environments
+    }
 
     fn test_runtime_paths() -> ExecServerRuntimePaths {
         ExecServerRuntimePaths::new(
@@ -255,7 +259,7 @@ url = "ws://127.0.0.1:8765"
             cwd: cwd_uri.clone(),
         };
 
-        let resolved = TurnEnvironments::resolve(
+        let resolved = resolve_turn_environments(
             manager,
             &[
                 first.clone(),
@@ -277,7 +281,7 @@ url = "ws://127.0.0.1:8765"
         let selected_cwd_uri = PathUri::from_abs_path(&selected_cwd);
         let manager = Arc::new(EnvironmentManager::default_for_tests());
 
-        let resolved = TurnEnvironments::resolve(
+        let resolved = resolve_turn_environments(
             Arc::clone(&manager),
             &[TurnEnvironmentSelection {
                 environment_id: "local".to_string(),
@@ -321,7 +325,7 @@ url = "ws://127.0.0.1:8765"
             cwd: cwd_uri.clone(),
         };
 
-        let resolved = TurnEnvironments::resolve(
+        let resolved = resolve_turn_environments(
             manager,
             &[
                 TurnEnvironmentSelection {
@@ -351,7 +355,7 @@ url = "ws://127.0.0.1:8765"
             cwd: PathUri::from_abs_path(&cwd),
         };
         let initial =
-            TurnEnvironments::resolve(Arc::clone(&manager), std::slice::from_ref(&selection)).await;
+            resolve_turn_environments(Arc::clone(&manager), std::slice::from_ref(&selection)).await;
         manager
             .upsert_environment(
                 REMOTE_ENVIRONMENT_ID.to_string(),
@@ -399,7 +403,7 @@ url = "ws://127.0.0.1:8765"
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let cwd_uri = PathUri::from_abs_path(&cwd);
         let local_manager = Arc::new(EnvironmentManager::default_for_tests());
-        let local = TurnEnvironments::resolve(
+        let local = resolve_turn_environments(
             Arc::clone(&local_manager),
             &[TurnEnvironmentSelection {
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
@@ -412,7 +416,7 @@ url = "ws://127.0.0.1:8765"
             Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
                 .expect("remote environment"),
         );
-        let remote = TurnEnvironmentsSnapshot {
+        let remote = TurnEnvironmentSnapshot {
             turn_environments: vec![TurnEnvironment::new(
                 REMOTE_ENVIRONMENT_ID.to_string(),
                 remote_environment.clone(),
@@ -420,7 +424,7 @@ url = "ws://127.0.0.1:8765"
                 /*shell*/ None,
             )],
         };
-        let multiple = TurnEnvironmentsSnapshot {
+        let multiple = TurnEnvironmentSnapshot {
             turn_environments: vec![
                 local.primary().expect("local environment").clone(),
                 TurnEnvironment::new(

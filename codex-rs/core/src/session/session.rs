@@ -2,7 +2,7 @@ use super::input_queue::InputQueue;
 use super::*;
 use crate::agents_md::LoadedAgentsMd;
 use crate::config::ConstraintError;
-use crate::environment_selection::TurnEnvironmentsSnapshot;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
 use codex_extension_api::ExtensionDataInit;
@@ -438,7 +438,7 @@ async fn warm_plugins_and_skills_for_session_init(
     config: Arc<Config>,
     plugins_manager: Arc<PluginsManager>,
     skills_manager: Arc<SkillsManager>,
-    turn_environments: TurnEnvironmentsSnapshot,
+    turn_environments: TurnEnvironmentSnapshot,
 ) -> Vec<SkillError> {
     let fs = turn_environments.primary_filesystem();
     let plugins_input = config.plugins_config_input();
@@ -481,7 +481,7 @@ impl Session {
         extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
         thread_extension_init: ExtensionDataInit,
         agent_control: AgentControl,
-        turn_environments: Arc<TurnEnvironments>,
+        turn_environments: Arc<ThreadEnvironments>,
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
