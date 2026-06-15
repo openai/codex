@@ -14,6 +14,7 @@ use crate::sandbox_tags::permission_profile_policy_tag;
 use crate::sandbox_tags::permission_profile_sandbox_tag;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -594,6 +595,18 @@ impl ToolRegistry {
         } else {
             None
         };
+        let code_mode_post_tool_use_error =
+            if matches!(&invocation.source, ToolCallSource::CodeMode { .. }) {
+                post_tool_use_outcome.as_ref().and_then(|outcome| {
+                    outcome.should_block.then(|| {
+                        outcome.feedback_message.clone().unwrap_or_else(|| {
+                            "PostToolUse hook blocked the tool result".to_string()
+                        })
+                    })
+                })
+            } else {
+                None
+            };
 
         if let Some(outcome) = &post_tool_use_outcome {
             record_additional_contexts(
@@ -602,24 +615,13 @@ impl ToolRegistry {
                 outcome.additional_contexts.clone(),
             )
             .await;
-            let replacement_text = if outcome.should_stop {
-                Some(
-                    outcome
-                        .feedback_message
-                        .clone()
-                        .or_else(|| outcome.stop_reason.clone())
-                        .unwrap_or_else(|| "PostToolUse hook stopped execution".to_string()),
-                )
-            } else {
-                outcome.feedback_message.clone()
-            };
-            if let Some(replacement_text) = replacement_text {
+            if let Some(feedback_message) = &outcome.feedback_message {
                 let mut guard = response_cell.lock().await;
                 if let Some(mut result) = guard.take() {
                     result.result = Box::new(PostToolUseFeedbackOutput {
                         original: result.result,
                         model_visible: FunctionToolOutput::from_text(
-                            replacement_text,
+                            feedback_message.clone(),
                             /*success*/ None,
                         ),
                     });
@@ -628,6 +630,9 @@ impl ToolRegistry {
             }
         }
 
+        // A blocking PostToolUse hook rejects only the caller-facing code-mode dispatch. The
+        // underlying handler still completed, so lifecycle contributors observe that completion;
+        // the dispatch trace records the caller-facing failure below.
         let lifecycle_outcome = match &result {
             Ok(_) => {
                 let guard = response_cell.lock().await;
@@ -653,6 +658,11 @@ impl ToolRegistry {
 
         match result {
             Ok(_) => {
+                if let Some(message) = code_mode_post_tool_use_error {
+                    let err = FunctionCallError::RespondToModel(message);
+                    dispatch_trace.record_failed(&err);
+                    return Err(err);
+                }
                 let mut guard = response_cell.lock().await;
                 let result = guard.take().ok_or_else(|| {
                     FunctionCallError::Fatal("tool produced no output".to_string())
