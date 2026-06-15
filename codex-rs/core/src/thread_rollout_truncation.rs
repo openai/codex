@@ -3,8 +3,8 @@
 //! In core, "user turns" are detected by scanning `ResponseItem::Message` items and
 //! interpreting them via `event_mapping::parse_turn_item(...)`.
 
-use crate::context_manager::is_user_turn_boundary;
 use crate::event_mapping;
+use crate::rollout_history::is_user_turn_boundary;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;

@@ -1,6 +1,6 @@
 use super::*;
 use crate::context::world_state::WorldStateSnapshot;
-use crate::context_manager::is_user_turn_boundary;
+use crate::rollout_history::is_user_turn_boundary;
 use codex_protocol::protocol::SessionContextWindow;
 use uuid::Uuid;
 
