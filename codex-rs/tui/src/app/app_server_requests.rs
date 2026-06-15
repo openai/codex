@@ -421,6 +421,7 @@ mod tests {
     use codex_protocol::models::NetworkPermissions;
     use codex_protocol::request_permissions::RequestPermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_path_uri::ApiPathString;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -544,19 +545,23 @@ mod tests {
                         enabled: Some(true),
                     }),
                     file_system: Some(AdditionalFileSystemPermissions {
-                        read: Some(vec![absolute_path(read_path)]),
-                        write: Some(vec![absolute_path(write_path)]),
+                        read: Some(vec![ApiPathString::from_abs_path(&absolute_path(
+                            read_path
+                        ))]),
+                        write: Some(vec![ApiPathString::from_abs_path(&absolute_path(
+                            write_path
+                        ))]),
                         glob_scan_max_depth: None,
                         entries: Some(vec![
                             codex_app_server_protocol::FileSystemSandboxEntry {
                                 path: codex_app_server_protocol::FileSystemPath::Path {
-                                    path: absolute_path(read_path),
+                                    path: ApiPathString::from_abs_path(&absolute_path(read_path)),
                                 },
                                 access: codex_app_server_protocol::FileSystemAccessMode::Read,
                             },
                             codex_app_server_protocol::FileSystemSandboxEntry {
                                 path: codex_app_server_protocol::FileSystemPath::Path {
-                                    path: absolute_path(write_path),
+                                    path: ApiPathString::from_abs_path(&absolute_path(write_path)),
                                 },
                                 access: codex_app_server_protocol::FileSystemAccessMode::Write,
                             },
