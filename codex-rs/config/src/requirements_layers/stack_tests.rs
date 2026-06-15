@@ -949,3 +949,45 @@ fn parse_error_names_layer() {
     assert!(err.to_string().contains("Bad layer (req_bad)"));
     assert!(err.to_string().contains("allowed_approval_policies"));
 }
+
+#[test]
+fn managed_config_table_is_composed_and_sourced() {
+    let high_source = RequirementSource::EnterpriseManaged {
+        id: "req_high".to_string(),
+        name: "High".to_string(),
+    };
+    let low_source = RequirementSource::EnterpriseManaged {
+        id: "req_low".to_string(),
+        name: "Low".to_string(),
+    };
+    let composed = compose_requirements_for_hostname(
+        vec![
+            RequirementsLayerEntry::from_toml(
+                low_source.clone(),
+                r#"
+[allowed_login_methods]
+chatgpt = true
+api = true
+"#,
+            ),
+            RequirementsLayerEntry::from_toml(
+                high_source.clone(),
+                r#"
+[allowed_login_methods]
+api = false
+"#,
+            ),
+        ],
+        /*hostname*/ None,
+    )
+    .expect("compose requirements")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed.allowed_login_methods,
+        Some(Sourced::new(
+            BTreeMap::from([("api".to_string(), false), ("chatgpt".to_string(), true),]),
+            RequirementSource::composite([high_source, low_source]),
+        ))
+    );
+}

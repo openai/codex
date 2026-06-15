@@ -20,6 +20,7 @@ use crate::ConstraintError;
 use crate::ManagedHooksRequirementsToml;
 use crate::mcp_types::AppToolApproval;
 use crate::permissions_toml::PermissionProfileToml;
+use crate::types::AuthCredentialsStoreMode;
 use crate::types::FeedbackConfigToml;
 use crate::types::WindowsSandboxModeToml;
 
@@ -143,6 +144,10 @@ impl<T> std::ops::DerefMut for ConstrainedWithSource<T> {
 /// normalization.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigRequirements {
+    pub allowed_login_methods: Option<Sourced<BTreeMap<String, bool>>>,
+    pub allowed_chatgpt_workspaces: Option<Sourced<BTreeMap<String, bool>>>,
+    pub cli_auth_credentials_store: Option<Sourced<AuthCredentialsStoreMode>>,
+    pub chatgpt_base_url: Option<Sourced<String>>,
     pub sqlite_home: Option<Sourced<AbsolutePathBuf>>,
     pub log_dir: Option<Sourced<AbsolutePathBuf>>,
     pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
@@ -176,6 +181,10 @@ pub struct ConfigRequirements {
 impl Default for ConfigRequirements {
     fn default() -> Self {
         Self {
+            allowed_login_methods: None,
+            allowed_chatgpt_workspaces: None,
+            cli_auth_credentials_store: None,
+            chatgpt_base_url: None,
             sqlite_home: None,
             log_dir: None,
             model_catalog_json: None,
@@ -837,6 +846,10 @@ pub(crate) fn merge_app_requirements_descending(
 /// Base config deserialized from system `requirements.toml` or MDM.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
+    pub allowed_login_methods: Option<BTreeMap<String, bool>>,
+    pub allowed_chatgpt_workspaces: Option<BTreeMap<String, bool>>,
+    pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
+    pub chatgpt_base_url: Option<String>,
     pub sqlite_home: Option<AbsolutePathBuf>,
     pub log_dir: Option<AbsolutePathBuf>,
     pub model_catalog_json: Option<AbsolutePathBuf>,
@@ -899,6 +912,10 @@ impl<T> std::ops::Deref for Sourced<T> {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsWithSources {
+    pub allowed_login_methods: Option<Sourced<BTreeMap<String, bool>>>,
+    pub allowed_chatgpt_workspaces: Option<Sourced<BTreeMap<String, bool>>>,
+    pub cli_auth_credentials_store: Option<Sourced<AuthCredentialsStoreMode>>,
+    pub chatgpt_base_url: Option<Sourced<String>>,
     pub sqlite_home: Option<Sourced<AbsolutePathBuf>>,
     pub log_dir: Option<Sourced<AbsolutePathBuf>>,
     pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
@@ -947,6 +964,10 @@ impl ConfigRequirementsWithSources {
         // Destructure without `..` so adding fields to `ConfigRequirementsToml`
         // forces this merge logic to be updated.
         let ConfigRequirementsToml {
+            allowed_login_methods: _,
+            allowed_chatgpt_workspaces: _,
+            cli_auth_credentials_store: _,
+            chatgpt_base_url: _,
             sqlite_home: _,
             log_dir: _,
             model_catalog_json: _,
@@ -990,6 +1011,10 @@ impl ConfigRequirementsWithSources {
             other,
             source,
             {
+                allowed_login_methods,
+                allowed_chatgpt_workspaces,
+                cli_auth_credentials_store,
+                chatgpt_base_url,
                 sqlite_home,
                 log_dir,
                 model_catalog_json,
@@ -1030,6 +1055,10 @@ impl ConfigRequirementsWithSources {
 
     pub fn into_toml(self) -> ConfigRequirementsToml {
         let ConfigRequirementsWithSources {
+            allowed_login_methods,
+            allowed_chatgpt_workspaces,
+            cli_auth_credentials_store,
+            chatgpt_base_url,
             sqlite_home,
             log_dir,
             model_catalog_json,
@@ -1059,6 +1088,10 @@ impl ConfigRequirementsWithSources {
             guardian_policy_config,
         } = self;
         ConfigRequirementsToml {
+            allowed_login_methods: allowed_login_methods.map(|sourced| sourced.value),
+            allowed_chatgpt_workspaces: allowed_chatgpt_workspaces.map(|sourced| sourced.value),
+            cli_auth_credentials_store: cli_auth_credentials_store.map(|sourced| sourced.value),
+            chatgpt_base_url: chatgpt_base_url.map(|sourced| sourced.value),
             sqlite_home: sqlite_home.map(|sourced| sourced.value),
             log_dir: log_dir.map(|sourced| sourced.value),
             model_catalog_json: model_catalog_json.map(|sourced| sourced.value),
@@ -1155,7 +1188,11 @@ impl ConfigRequirementsToml {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.sqlite_home.is_none()
+        self.allowed_login_methods.is_none()
+            && self.allowed_chatgpt_workspaces.is_none()
+            && self.cli_auth_credentials_store.is_none()
+            && self.chatgpt_base_url.is_none()
+            && self.sqlite_home.is_none()
             && self.log_dir.is_none()
             && self.model_catalog_json.is_none()
             && self.check_for_update_on_startup.is_none()
@@ -1218,6 +1255,10 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         // config loading and requirements API projection. The normalized
         // constraints below only need the compiled PermissionProfile envelope.
         let ConfigRequirementsWithSources {
+            allowed_login_methods,
+            allowed_chatgpt_workspaces,
+            cli_auth_credentials_store,
+            chatgpt_base_url,
             sqlite_home,
             log_dir,
             model_catalog_json,
@@ -1246,6 +1287,37 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             permissions,
             guardian_policy_config,
         } = toml;
+
+        if let Some(Sourced {
+            value: methods,
+            source,
+        }) = &allowed_login_methods
+            && let Some(unknown) = methods
+                .keys()
+                .find(|method| method.as_str() != "api" && method.as_str() != "chatgpt")
+        {
+            return Err(ConstraintError::InvalidValue {
+                field_name: "allowed_login_methods",
+                candidate: unknown.clone(),
+                allowed: "[\"api\", \"chatgpt\"]".to_string(),
+                requirement_source: source.clone(),
+            });
+        }
+        if let Some(Sourced {
+            value: workspaces,
+            source,
+        }) = &allowed_chatgpt_workspaces
+            && let Some(empty) = workspaces
+                .keys()
+                .find(|workspace| workspace.trim().is_empty())
+        {
+            return Err(ConstraintError::InvalidValue {
+                field_name: "allowed_chatgpt_workspaces",
+                candidate: empty.clone(),
+                allowed: "non-empty workspace identifiers".to_string(),
+                requirement_source: source.clone(),
+            });
+        }
 
         let approval_policy = match allowed_approval_policies {
             Some(Sourced {
@@ -1522,6 +1594,10 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         });
         let guardian_policy_config_source = guardian_policy_config.map(|sourced| sourced.source);
         Ok(ConfigRequirements {
+            allowed_login_methods,
+            allowed_chatgpt_workspaces,
+            cli_auth_credentials_store,
+            chatgpt_base_url,
             sqlite_home,
             log_dir,
             model_catalog_json,
@@ -1619,6 +1695,10 @@ mod tests {
 
     fn with_unknown_source(toml: ConfigRequirementsToml) -> ConfigRequirementsWithSources {
         let ConfigRequirementsToml {
+            allowed_login_methods,
+            allowed_chatgpt_workspaces,
+            cli_auth_credentials_store,
+            chatgpt_base_url,
             sqlite_home,
             log_dir,
             model_catalog_json,
@@ -1649,6 +1729,14 @@ mod tests {
             guardian_policy_config,
         } = toml;
         ConfigRequirementsWithSources {
+            allowed_login_methods: allowed_login_methods
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allowed_chatgpt_workspaces: allowed_chatgpt_workspaces
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            cli_auth_credentials_store: cli_auth_credentials_store
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            chatgpt_base_url: chatgpt_base_url
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             sqlite_home: sqlite_home.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             log_dir: log_dir.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             model_catalog_json: model_catalog_json
@@ -3626,6 +3714,48 @@ command = "python3 /enterprise/hooks/pre.py"
             }
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_rejects_unknown_login_method() -> Result<()> {
+        let source = RequirementSource::Unknown;
+        let mut requirements = ConfigRequirementsWithSources::default();
+        requirements.allowed_login_methods = Some(Sourced::new(
+            BTreeMap::from([("sso".to_string(), true)]),
+            source.clone(),
+        ));
+
+        assert_eq!(
+            ConfigRequirements::try_from(requirements),
+            Err(ConstraintError::InvalidValue {
+                field_name: "allowed_login_methods",
+                candidate: "sso".to_string(),
+                allowed: "[\"api\", \"chatgpt\"]".to_string(),
+                requirement_source: source,
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_rejects_blank_chatgpt_workspace_id() -> Result<()> {
+        let source = RequirementSource::Unknown;
+        let mut requirements = ConfigRequirementsWithSources::default();
+        requirements.allowed_chatgpt_workspaces = Some(Sourced::new(
+            BTreeMap::from([(" ".to_string(), true)]),
+            source.clone(),
+        ));
+
+        assert_eq!(
+            ConfigRequirements::try_from(requirements),
+            Err(ConstraintError::InvalidValue {
+                field_name: "allowed_chatgpt_workspaces",
+                candidate: " ".to_string(),
+                allowed: "non-empty workspace identifiers".to_string(),
+                requirement_source: source,
+            })
+        );
         Ok(())
     }
 }

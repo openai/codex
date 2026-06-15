@@ -1738,6 +1738,26 @@ pub async fn load_config_toml_with_layer_stack(
     })
 }
 
+/// Load the bootstrap config together with its layer stack, applying exact
+/// auth requirements needed before cloud requirements can be fetched.
+pub async fn load_bootstrap_config_toml_with_layer_stack(
+    codex_home: &Path,
+    cwd: Option<&AbsolutePathBuf>,
+    cli_overrides: Vec<(String, TomlValue)>,
+    options: impl Into<ConfigLoadOptions>,
+) -> std::io::Result<ConfigTomlLoadResult> {
+    let mut result =
+        load_config_toml_with_layer_stack(codex_home, cwd, cli_overrides, options).await?;
+    let requirements = result.config_layer_stack.requirements_toml();
+    if let Some(required) = requirements.cli_auth_credentials_store {
+        result.config_toml.cli_auth_credentials_store = Some(required);
+    }
+    if let Some(required) = requirements.chatgpt_base_url.as_ref() {
+        result.config_toml.chatgpt_base_url = Some(required.clone());
+    }
+    Ok(result)
+}
+
 pub fn deserialize_config_toml_with_base(
     root_value: TomlValue,
     config_base_dir: &Path,
@@ -2663,7 +2683,11 @@ impl Config {
             .startup_warnings()
             .unwrap_or_default()
             .to_vec();
-        requirements::apply_to_config(
+        let requirements::AppliedConfigRequirements {
+            cli_auth_credentials_store_mode,
+            forced_login_method,
+            forced_chatgpt_workspace_id,
+        } = requirements::apply_to_config(
             &mut cfg,
             config_layer_stack.requirements(),
             &mut startup_warnings,
@@ -2672,6 +2696,10 @@ impl Config {
         // Destructure every field to ensure ConfigRequirements additions are
         // either applied above or handled while constructing the final Config.
         let ConfigRequirements {
+            allowed_login_methods: _,
+            allowed_chatgpt_workspaces: _,
+            cli_auth_credentials_store: _,
+            chatgpt_base_url: _,
             sqlite_home: _,
             log_dir: _,
             model_catalog_json: _,
@@ -3274,21 +3302,6 @@ impl Config {
 
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
 
-        let forced_chatgpt_workspace_id = cfg
-            .forced_chatgpt_workspace_id
-            .clone()
-            .map(codex_config::config_toml::ForcedChatgptWorkspaceIds::into_vec)
-            .map(|values| {
-                values
-                    .into_iter()
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .filter(|values| !values.is_empty());
-
-        let forced_login_method = cfg.forced_login_method;
-
         let model = model.or(cfg.model);
         let notices = cfg.notice.unwrap_or_default();
         let service_tier = match service_tier_override {
@@ -3547,10 +3560,7 @@ impl Config {
             include_environment_context,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
-            cli_auth_credentials_store_mode: resolve_cli_auth_credentials_store_mode(
-                cfg.cli_auth_credentials_store.unwrap_or_default(),
-                env!("CARGO_PKG_VERSION"),
-            ),
+            cli_auth_credentials_store_mode,
             mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
