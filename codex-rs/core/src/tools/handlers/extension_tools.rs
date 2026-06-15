@@ -128,6 +128,8 @@ async fn to_extension_call(
         )
         .await
         .additional_permissions;
+        // TODO(anp): Convert ToolEnvironment to carry a PathUri sandbox context and remove this
+        // conversion back to absolute paths.
         let file_system_sandbox_context: codex_file_system::FileSystemSandboxContext = invocation
             .turn
             .file_system_sandbox_context(additional_permissions, environment.cwd_uri())
