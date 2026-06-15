@@ -43,6 +43,12 @@ use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
+#[cfg(target_os = "windows")]
+use codex_shell_command::powershell::UTF8_OUTPUT_PREFIX;
+#[cfg(target_os = "windows")]
+use codex_shell_command::powershell::extract_powershell_command;
+#[cfg(target_os = "windows")]
+use codex_shell_command::powershell::parse_powershell_command_into_plain_commands;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
@@ -590,6 +596,139 @@ fn record_windows_sandbox_spawn_failure(
 }
 
 #[cfg(target_os = "windows")]
+fn env_var_case_insensitive<'a>(env: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
+    env.iter()
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(key))
+        .map(|(_, value)| value.as_str())
+}
+
+#[cfg(target_os = "windows")]
+fn looks_like_windows_command_not_found(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    lower.contains("is not recognized as the name of a cmdlet")
+        || lower.contains("is not recognized as an internal or external command")
+        || lower.contains("could not be found")
+}
+
+#[cfg(target_os = "windows")]
+fn is_simple_windows_lookup_target(program: &str) -> bool {
+    !program.is_empty()
+        && !program.contains(['\\', '/', ':'])
+        && !program.contains(|c: char| c.is_whitespace())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_shell_lookup_target(command: &[String]) -> Option<String> {
+    let (_, script) = extract_powershell_command(command)?;
+    let script = script.strip_prefix(UTF8_OUTPUT_PREFIX).unwrap_or(script);
+    let plain_commands = parse_powershell_command_into_plain_commands(&[
+        command[0].clone(),
+        "-Command".to_string(),
+        script.to_string(),
+    ])?;
+    plain_commands
+        .into_iter()
+        .find_map(|plain_command| plain_command.into_iter().next())
+        .filter(|program| is_simple_windows_lookup_target(program))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_path_probe_names(program: &str, env: &HashMap<String, String>) -> Vec<String> {
+    if Path::new(program).extension().is_some() {
+        return vec![program.to_string()];
+    }
+
+    let probe_names = env_var_case_insensitive(env, "PATHEXT")
+        .unwrap_or(".COM;.EXE;.BAT;.CMD")
+        .split(';')
+        .filter_map(|ext| {
+            let ext = ext.trim();
+            (!ext.is_empty()).then(|| format!("{program}{ext}"))
+        })
+        .collect::<Vec<_>>();
+
+    if probe_names.is_empty() {
+        vec![format!("{program}.exe")]
+    } else {
+        probe_names
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn find_windows_sandbox_blocked_path_binary(
+    command: &[String],
+    permission_profile: &PermissionProfile,
+    windows_sandbox_workspace_roots: &[AbsolutePathBuf],
+    cwd: &AbsolutePathBuf,
+    env: &HashMap<String, String>,
+) -> Option<PathBuf> {
+    let program = windows_shell_lookup_target(command)?;
+    let path_value = env_var_case_insensitive(env, "PATH")?;
+    let permissions =
+        codex_windows_sandbox::ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+            permission_profile,
+            windows_sandbox_workspace_roots,
+        )
+        .ok()?;
+    let probe_names = windows_path_probe_names(&program, env);
+    let mut blocked_candidate: Option<PathBuf> = None;
+
+    for entry in path_value
+        .split(';')
+        .filter(|entry| !entry.trim().is_empty())
+    {
+        let dir = PathBuf::from(entry.trim_matches('"'));
+        for candidate_name in &probe_names {
+            let candidate = dir.join(candidate_name);
+            if !candidate.is_file() {
+                continue;
+            }
+            if permissions.can_read_path_with_cwd(candidate.as_path(), cwd.as_path()) {
+                return None;
+            }
+            blocked_candidate.get_or_insert(candidate);
+        }
+    }
+
+    blocked_candidate
+}
+
+#[cfg(target_os = "windows")]
+fn maybe_append_windows_sandbox_path_hint(
+    command: &[String],
+    permission_profile: &PermissionProfile,
+    windows_sandbox_workspace_roots: &[AbsolutePathBuf],
+    cwd: &AbsolutePathBuf,
+    env: &HashMap<String, String>,
+    stdout: &str,
+    stderr: &mut String,
+) {
+    if !looks_like_windows_command_not_found(stdout)
+        && !looks_like_windows_command_not_found(stderr)
+    {
+        return;
+    }
+
+    let Some(candidate) = find_windows_sandbox_blocked_path_binary(
+        command,
+        permission_profile,
+        windows_sandbox_workspace_roots,
+        cwd,
+        env,
+    ) else {
+        return;
+    };
+
+    let note = format!(
+        "\nCodex note: a matching executable exists on PATH at `{}`, but the Windows sandbox likely cannot read or launch it from that location. Try approving the command outside the sandbox or moving the toolchain under an allowed root.\n",
+        candidate.display()
+    );
+    if !stderr.contains(&note) {
+        stderr.push_str(&note);
+    }
+}
+
+#[cfg(target_os = "windows")]
 async fn exec_windows_sandbox(
     params: ExecParams,
     permission_profile: &PermissionProfile,
@@ -727,6 +866,15 @@ async fn exec_windows_sandbox(
     {
         stderr_text.truncate(max_bytes);
     }
+    maybe_append_windows_sandbox_path_hint(
+        &command,
+        &permission_profile,
+        workspace_roots.as_slice(),
+        &cwd,
+        &env,
+        &stdout_text,
+        &mut stderr_text,
+    );
     let stdout = StreamOutput {
         text: stdout_text,
         truncated_after_lines: None,

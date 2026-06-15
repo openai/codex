@@ -2,11 +2,15 @@ use super::*;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxType;
+#[cfg(target_os = "windows")]
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::time::Duration;
+#[cfg(target_os = "windows")]
+use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 
@@ -94,6 +98,82 @@ fn sandbox_detection_ignores_network_policy_text_with_zero_exit_code() {
         SandboxType::LinuxSeccomp,
         &output
     ));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_sandbox_path_hint_detects_blocked_path_binary() {
+    let tmp = TempDir::new().expect("tempdir");
+    let workspace = tmp.path().join("workspace");
+    let blocked_bin = tmp.path().join("blocked-bin");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    std::fs::create_dir_all(&blocked_bin).expect("blocked bin");
+    std::fs::write(blocked_bin.join("go.exe"), b"fake-binary").expect("write go.exe");
+
+    let workspace_abs = AbsolutePathBuf::try_from(workspace.as_path()).expect("workspace abs");
+    let permission_profile = PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Restricted,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    );
+    let workspace_roots = vec![workspace_abs.clone()];
+    let mut env = HashMap::new();
+    env.insert("PATH".to_string(), blocked_bin.display().to_string());
+    env.insert("PATHEXT".to_string(), ".EXE;.CMD".to_string());
+
+    let blocked = find_windows_sandbox_blocked_path_binary(
+        &[
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            format!("{UTF8_OUTPUT_PREFIX}go version"),
+        ],
+        &permission_profile,
+        workspace_roots.as_slice(),
+        &workspace_abs,
+        &env,
+    )
+    .expect("blocked binary should be detected");
+
+    assert_eq!(blocked, blocked_bin.join("go.exe"));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_sandbox_path_hint_skips_readable_path_binary() {
+    let tmp = TempDir::new().expect("tempdir");
+    let workspace = tmp.path().join("workspace");
+    let readable_bin = workspace.join("bin");
+    std::fs::create_dir_all(&readable_bin).expect("readable bin");
+    std::fs::write(readable_bin.join("go.exe"), b"fake-binary").expect("write go.exe");
+
+    let workspace_abs = AbsolutePathBuf::try_from(workspace.as_path()).expect("workspace abs");
+    let permission_profile = PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Restricted,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    );
+    let workspace_roots = vec![workspace_abs.clone()];
+    let mut env = HashMap::new();
+    env.insert("PATH".to_string(), readable_bin.display().to_string());
+    env.insert("PATHEXT".to_string(), ".EXE".to_string());
+
+    let blocked = find_windows_sandbox_blocked_path_binary(
+        &[
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            format!("{UTF8_OUTPUT_PREFIX}go version"),
+        ],
+        &permission_profile,
+        workspace_roots.as_slice(),
+        &workspace_abs,
+        &env,
+    );
+
+    assert!(blocked.is_none(), "readable binaries should not be hinted");
 }
 
 #[tokio::test]

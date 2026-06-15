@@ -118,6 +118,10 @@ impl ResolvedWindowsSandboxPermissions {
             .collect()
     }
 
+    pub fn can_read_path_with_cwd(&self, path: &Path, cwd: &Path) -> bool {
+        self.file_system.can_read_path_with_cwd(path, cwd)
+    }
+
     pub(crate) fn uses_write_capabilities_for_cwd(
         &self,
         cwd: &Path,
