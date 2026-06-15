@@ -2925,42 +2925,14 @@ try {{
     Ok(())
 }
 
-#[derive(Clone, Copy)]
-enum CodeModePostToolUseBlockMode {
-    DecisionBlock,
-    ExitTwo,
-}
-
-impl CodeModePostToolUseBlockMode {
-    fn hook_mode(self) -> &'static str {
-        match self {
-            Self::DecisionBlock => "decision_block",
-            Self::ExitTwo => "exit_2",
-        }
-    }
-
-    fn slug(self) -> &'static str {
-        match self {
-            Self::DecisionBlock => "decision-block",
-            Self::ExitTwo => "exit-two",
-        }
-    }
-
-    fn reason(self) -> &'static str {
-        match self {
-            Self::DecisionBlock => "blocked nested result by decision",
-            Self::ExitTwo => "blocked nested result by exit two",
-        }
-    }
-}
-
 async fn assert_post_tool_use_blocks_code_mode_tool_result(
-    mode: CodeModePostToolUseBlockMode,
+    hook_mode: &'static str,
+    reason: &'static str,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let slug = mode.slug();
+    let slug = hook_mode.replace('_', "-");
     let call_id = format!("posttooluse-code-mode-{slug}");
     let marker = std::env::temp_dir().join(format!("posttooluse-code-mode-{slug}-marker"));
     let command = format!(
@@ -2995,8 +2967,6 @@ try {{
     )
     .await;
 
-    let hook_mode = mode.hook_mode();
-    let reason = mode.reason();
     let mut builder = test_codex()
         .with_model("test-gpt-5.1-codex")
         .with_pre_build_hook(move |home| {
@@ -3050,13 +3020,17 @@ try {{
 
 #[tokio::test]
 async fn post_tool_use_block_decision_rejects_code_mode_tool_promise() -> Result<()> {
-    assert_post_tool_use_blocks_code_mode_tool_result(CodeModePostToolUseBlockMode::DecisionBlock)
-        .await
+    assert_post_tool_use_blocks_code_mode_tool_result(
+        "decision_block",
+        "blocked nested result by decision",
+    )
+    .await
 }
 
 #[tokio::test]
 async fn post_tool_use_exit_two_rejects_code_mode_tool_promise() -> Result<()> {
-    assert_post_tool_use_blocks_code_mode_tool_result(CodeModePostToolUseBlockMode::ExitTwo).await
+    assert_post_tool_use_blocks_code_mode_tool_result("exit_2", "blocked nested result by exit two")
+        .await
 }
 
 #[tokio::test]
