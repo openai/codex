@@ -429,7 +429,7 @@ async fn user_shell_command_routes_to_explicit_remote_environment() -> Result<()
         .await?;
     let remote_selection = TurnEnvironmentSelection {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-        cwd: remote_cwd.clone(),
+        cwd: remote_cwd_uri.clone(),
     };
 
     let _select_env_mock = mount_sse_sequence(
