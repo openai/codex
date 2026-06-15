@@ -9453,7 +9453,7 @@ sandbox_private_desktop = false
         ])
     );
     assert!(config.startup_warnings.iter().any(|warning| {
-        warning.contains("Configured leaves under `shell_environment_policy` are overridden")
+        warning.contains("Configured values under `shell_environment_policy` are overridden")
     }));
     Ok(())
 }

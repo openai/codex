@@ -7,7 +7,6 @@ use crate::error_code::invalid_request;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_analytics::AnalyticsEventsClient;
-use codex_app_server_protocol::AuthCredentialsStoreMode as ApiAuthCredentialsStoreMode;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ComputerUseRequirements;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -38,7 +37,6 @@ use codex_config::ManagedHooksRequirementsToml;
 use codex_config::MatcherGroup as CoreMatcherGroup;
 use codex_config::ResidencyRequirement as CoreResidencyRequirement;
 use codex_config::SandboxModeRequirement as CoreSandboxModeRequirement;
-use codex_config::types::AuthCredentialsStoreMode as CoreAuthCredentialsStoreMode;
 use codex_core::ThreadManager;
 use codex_features::canonical_feature_for_key;
 use codex_features::feature_for_key;
@@ -386,14 +384,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         network: requirements.network.map(map_network_requirements_to_api),
         allowed_login_methods: requirements.allowed_login_methods,
         allowed_chatgpt_workspaces: requirements.allowed_chatgpt_workspaces,
-        cli_auth_credentials_store: requirements.cli_auth_credentials_store.map(
-            |mode| match mode {
-                CoreAuthCredentialsStoreMode::File => ApiAuthCredentialsStoreMode::File,
-                CoreAuthCredentialsStoreMode::Keyring => ApiAuthCredentialsStoreMode::Keyring,
-                CoreAuthCredentialsStoreMode::Auto => ApiAuthCredentialsStoreMode::Auto,
-                CoreAuthCredentialsStoreMode::Ephemeral => ApiAuthCredentialsStoreMode::Ephemeral,
-            },
-        ),
+        cli_auth_credentials_store: requirements.cli_auth_credentials_store,
         chatgpt_base_url: requirements.chatgpt_base_url,
         sqlite_home: requirements.sqlite_home,
         log_dir: requirements.log_dir,

@@ -65,13 +65,37 @@
       ]
     },
     "AuthCredentialsStoreMode": {
-      "enum": [
-        "file",
-        "keyring",
-        "auto",
-        "ephemeral"
-      ],
-      "type": "string"
+      "description": "Determines where Codex stores CLI authentication credentials.",
+      "oneOf": [
+        {
+          "description": "Persist credentials in `CODEX_HOME/auth.json`.",
+          "enum": [
+            "file"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Persist credentials in the operating system keyring. Fail if unavailable.",
+          "enum": [
+            "keyring"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Use the operating system keyring when available; otherwise, fall back to `CODEX_HOME/auth.json`.",
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Store credentials in memory only for the current process.",
+          "enum": [
+            "ephemeral"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ComputerUseRequirements": {
       "properties": {

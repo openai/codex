@@ -4,6 +4,7 @@ use super::SandboxMode;
 use super::WindowsSandboxSetupMode;
 use super::shared::default_enabled;
 use codex_experimental_api_macros::ExperimentalApi;
+pub use codex_protocol::config_types::AuthCredentialsStoreMode;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
@@ -257,6 +258,7 @@ pub struct Config {
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
     pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
     pub forced_login_method: Option<ForcedLoginMethod>,
+    pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
     pub web_search: Option<WebSearchMode>,
     pub tools: Option<ToolsV2>,
     pub instructions: Option<String>,
@@ -406,16 +408,6 @@ pub struct ConfigRequirements {
     pub shell_environment_policy: Option<JsonValue>,
     pub feedback: Option<FeedbackRequirements>,
     pub windows_sandbox_private_desktop: Option<bool>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "lowercase")]
-#[ts(export_to = "v2/")]
-pub enum AuthCredentialsStoreMode {
-    File,
-    Keyring,
-    Auto,
-    Ephemeral,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

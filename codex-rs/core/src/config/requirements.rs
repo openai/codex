@@ -9,12 +9,23 @@ use codex_protocol::config_types::ForcedLoginMethod;
 
 use super::otel;
 
+/// Runtime values that cannot be applied by mutating [`ConfigToml`] alone.
+///
+/// Other managed settings are written back into `ConfigToml`. These values need
+/// additional credential-store compatibility handling or intersection with the
+/// configured authentication restrictions before constructing the final config.
 pub(super) struct AppliedConfigRequirements {
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
 }
 
+/// Applies managed requirements to regular config before final config construction.
+///
+/// Managed values replace or merge with their configured counterparts, and
+/// conflicts produce source-aware startup warnings. Effective authentication
+/// values that need additional resolution are returned separately. Invalid or
+/// conflicting requirements return an error.
 pub(super) fn apply_to_config(
     config: &mut ConfigToml,
     requirements: &ConfigRequirements,
@@ -163,7 +174,7 @@ fn apply_shell_environment_policy_requirement(
         configured_set.extend(required.clone());
     }
 
-    push_leaf_override_warning(
+    push_structured_requirement_override_warning(
         "shell_environment_policy",
         conflict,
         source,
@@ -182,10 +193,12 @@ fn apply_feedback_requirement(
     let FeedbackConfigToml { enabled } = value;
     let configured = configured.get_or_insert_default();
     let conflict = replace_required_leaf(&mut configured.enabled, enabled);
-    push_leaf_override_warning("feedback", conflict, source, startup_warnings);
+    push_structured_requirement_override_warning("feedback", conflict, source, startup_warnings);
 }
 
-pub(super) fn push_leaf_override_warning(
+/// Emits one source-aware warning when a structured requirement replaces one
+/// or more configured values.
+pub(super) fn push_structured_requirement_override_warning(
     field_name: &str,
     conflict: bool,
     source: &RequirementSource,
@@ -196,10 +209,10 @@ pub(super) fn push_leaf_override_warning(
     }
     tracing::warn!(
         ?source,
-        "configured value contains leaves overridden by exact requirements for {field_name}"
+        "configured values are overridden by requirements for {field_name}"
     );
     startup_warnings.push(format!(
-        "Configured leaves under `{field_name}` are overridden by requirements from {source}."
+        "Configured values under `{field_name}` are overridden by requirements from {source}."
     ));
 }
 

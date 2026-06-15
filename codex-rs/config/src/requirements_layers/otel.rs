@@ -5,9 +5,11 @@ use std::collections::BTreeMap;
 
 /// Merges one OTEL requirements layer into an output assembled high-to-low.
 ///
-/// Exporters and scalar settings are exact leaves, while trace metadata is
-/// recursively merged by key. Keeping this policy typed prevents exporter
-/// variants, credentials, and TLS settings from being combined field by field.
+/// `log_user_prompt` and `environment` use the first value supplied by a
+/// higher-priority layer. Each exporter is also selected as a complete value:
+/// for example, the endpoint from one layer is never combined with the headers
+/// or TLS settings from another. Span attributes and tracestate are merged by
+/// key instead.
 pub(super) fn merge(
     output: &mut Option<Sourced<OtelConfigToml>>,
     incoming: Option<OtelConfigToml>,

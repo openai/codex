@@ -21,6 +21,23 @@ use wildmatch::WildMatchPattern;
 
 use crate::openai_models::ReasoningEffort;
 
+/// Determines where Codex stores CLI authentication credentials.
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum AuthCredentialsStoreMode {
+    /// Persist credentials in `CODEX_HOME/auth.json`.
+    #[default]
+    File,
+    /// Persist credentials in the operating system keyring. Fail if unavailable.
+    Keyring,
+    /// Use the operating system keyring when available; otherwise, fall back to
+    /// `CODEX_HOME/auth.json`.
+    Auto,
+    /// Store credentials in memory only for the current process.
+    Ephemeral,
+}
+
 /// Selects which part of the active context is charged against
 /// `model_auto_compact_token_limit`.
 #[derive(

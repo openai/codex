@@ -9,6 +9,7 @@ use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AppsConfig;
 use codex_app_server_protocol::AppsDefaultConfig;
 use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::AuthCredentialsStoreMode;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -83,6 +84,7 @@ async fn config_read_returns_effective_and_layers() -> Result<()> {
         r#"
 model = "gpt-user"
 sandbox_mode = "workspace-write"
+cli_auth_credentials_store = "keyring"
 "#,
     )?;
     let codex_home_path = codex_home.path().canonicalize()?;
@@ -109,6 +111,10 @@ sandbox_mode = "workspace-write"
     } = to_response(resp)?;
 
     assert_eq!(config.model.as_deref(), Some("gpt-user"));
+    assert_eq!(
+        config.cli_auth_credentials_store,
+        Some(AuthCredentialsStoreMode::Keyring)
+    );
     assert_eq!(
         origins.get("model").expect("origin").name,
         ConfigLayerSource::User {

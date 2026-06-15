@@ -38,6 +38,12 @@ pub(crate) fn resolve_config(
     }
 }
 
+/// Applies required OTEL settings to user-configured OTEL settings.
+///
+/// Required settings and complete exporters replace their configured values,
+/// while span attributes and tracestate are merged by key. Invalid required
+/// trace metadata returns an error; configured conflicts produce startup
+/// warnings.
 pub(super) fn apply_requirement(
     configured: &mut Option<OtelConfigToml>,
     requirement: &Sourced<OtelConfigToml>,
@@ -103,7 +109,12 @@ pub(super) fn apply_requirement(
         ));
     }
 
-    super::requirements::push_leaf_override_warning("otel", conflict, source, startup_warnings);
+    super::requirements::push_structured_requirement_override_warning(
+        "otel",
+        conflict,
+        source,
+        startup_warnings,
+    );
     Ok(())
 }
 

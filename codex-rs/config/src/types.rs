@@ -13,6 +13,7 @@ pub use crate::mcp_types::McpServerTransportConfig;
 pub use crate::mcp_types::RawMcpServerConfig;
 pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ApprovalsReviewer;
+pub use codex_protocol::config_types::AuthCredentialsStoreMode;
 use codex_protocol::config_types::EnvironmentVariablePattern;
 pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
@@ -81,21 +82,6 @@ impl fmt::Display for SessionPickerViewMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
-}
-
-/// Determine where Codex should store CLI auth credentials.
-#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum AuthCredentialsStoreMode {
-    #[default]
-    /// Persist credentials in CODEX_HOME/auth.json.
-    File,
-    /// Persist credentials in the keyring. Fail if unavailable.
-    Keyring,
-    /// Use keyring when available; otherwise, fall back to a file in CODEX_HOME.
-    Auto,
-    /// Store credentials in memory only for the current process.
-    Ephemeral,
 }
 
 /// Determine where Codex should store and read MCP credentials.

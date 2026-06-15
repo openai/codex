@@ -1008,13 +1008,37 @@
       ]
     },
     "AuthCredentialsStoreMode": {
-      "enum": [
-        "file",
-        "keyring",
-        "auto",
-        "ephemeral"
-      ],
-      "type": "string"
+      "description": "Determines where Codex stores CLI authentication credentials.",
+      "oneOf": [
+        {
+          "description": "Persist credentials in `CODEX_HOME/auth.json`.",
+          "enum": [
+            "file"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Persist credentials in the operating system keyring. Fail if unavailable.",
+          "enum": [
+            "keyring"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Use the operating system keyring when available; otherwise, fall back to `CODEX_HOME/auth.json`.",
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Store credentials in memory only for the current process.",
+          "enum": [
+            "ephemeral"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "AuthMode": {
       "description": "Authentication mode for OpenAI-backed providers.",
@@ -3956,6 +3980,16 @@
             }
           ],
           "description": "[UNSTABLE] Optional default for where approval requests are routed for review."
+        },
+        "cli_auth_credentials_store": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AuthCredentialsStoreMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "compact_prompt": {
           "type": [
