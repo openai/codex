@@ -129,6 +129,11 @@ pub(crate) async fn execute_user_shell_command(
     // We do not source rc files or otherwise reformat the script.
     let use_login_shell = true;
     let session_shell = session.user_shell();
+    let shell_snapshot = session.services.shell_snapshot.load_full();
+    #[allow(deprecated)]
+    let shell_snapshot_location = shell_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.location(&turn_context.cwd));
     let display_command = session_shell.derive_exec_args(&command, use_login_shell);
     let mut exec_env_map = create_env(
         &turn_context.shell_environment_policy,
@@ -140,8 +145,7 @@ pub(crate) async fn execute_user_shell_command(
     let exec_command = prepare_user_shell_exec_command(
         &display_command,
         session_shell.as_ref(),
-        #[allow(deprecated)]
-        &turn_context.cwd,
+        shell_snapshot_location.as_ref(),
         &turn_context.shell_environment_policy.r#set,
         &mut exec_env_map,
     );
@@ -337,7 +341,7 @@ pub(crate) async fn execute_user_shell_command(
 fn prepare_user_shell_exec_command(
     display_command: &[String],
     session_shell: &Shell,
-    cwd: &AbsolutePathBuf,
+    shell_snapshot: Option<&AbsolutePathBuf>,
     shell_environment_set: &HashMap<String, String>,
     exec_env_map: &mut HashMap<String, String>,
 ) -> Vec<String> {
@@ -346,7 +350,7 @@ fn prepare_user_shell_exec_command(
         prepare_user_shell_exec_command_with_path_prepend(
             display_command,
             session_shell,
-            cwd,
+            shell_snapshot,
             shell_environment_set,
             exec_env_map,
             apply_package_path_prepend,
@@ -358,7 +362,7 @@ fn prepare_user_shell_exec_command(
         maybe_wrap_shell_lc_with_snapshot(
             display_command,
             session_shell,
-            cwd,
+            shell_snapshot,
             shell_environment_set,
             exec_env_map,
             // On non-Unix targets, arg0 has already prepended the package path
@@ -378,7 +382,7 @@ fn prepare_user_shell_exec_command(
 fn prepare_user_shell_exec_command_with_path_prepend(
     display_command: &[String],
     session_shell: &Shell,
-    cwd: &AbsolutePathBuf,
+    shell_snapshot: Option<&AbsolutePathBuf>,
     shell_environment_set: &HashMap<String, String>,
     exec_env_map: &mut HashMap<String, String>,
     prepend_runtime_path: impl FnOnce(&mut HashMap<String, String>, &mut RuntimePathPrepends),
@@ -389,7 +393,7 @@ fn prepare_user_shell_exec_command_with_path_prepend(
     maybe_wrap_shell_lc_with_snapshot(
         display_command,
         session_shell,
-        cwd,
+        shell_snapshot,
         &explicit_env_overrides,
         exec_env_map,
         &runtime_path_prepends,

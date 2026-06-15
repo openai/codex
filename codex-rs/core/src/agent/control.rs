@@ -532,7 +532,13 @@ impl AgentControl {
         };
 
         let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
-        parent_thread.codex.session.user_shell().shell_snapshot()
+        let snapshot = parent_thread
+            .codex
+            .session
+            .services
+            .shell_snapshot
+            .load_full()?;
+        (!snapshot.is_failed()).then_some(snapshot)
     }
 
     async fn inherited_exec_policy_for_source(

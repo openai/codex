@@ -240,6 +240,10 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
         let session_shell = ctx.session.user_shell();
+        let shell_snapshot = ctx.session.services.shell_snapshot.load_full();
+        let shell_snapshot_location = shell_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.location(&req.cwd));
         let (file_system_sandbox_policy, _) = attempt.permissions.to_runtime_permissions();
         let sandbox_permissions = sandbox_permissions_preserving_denied_reads(
             req.sandbox_permissions,
@@ -269,7 +273,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let command = maybe_wrap_shell_lc_with_snapshot(
             &req.command,
             session_shell.as_ref(),
-            &req.cwd,
+            shell_snapshot_location.as_ref(),
             &explicit_env_overrides,
             &env,
             &runtime_path_prepends,
