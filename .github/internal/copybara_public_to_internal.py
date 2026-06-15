@@ -16,6 +16,7 @@ SYNC_BRANCH = os.environ.get("SYNC_BRANCH", "copybara/public-to-internal")
 TRAILER = "Codex-Public-RevId"
 CARGO_LOCKFILE = Path("codex-rs/Cargo.lock")
 EMPTY_IMPORT_MARKER_FILE = Path(".github/internal/last_empty_public_import.txt")
+GENERATED_SYNC_PATHS = {CARGO_LOCKFILE, EMPTY_IMPORT_MARKER_FILE}
 
 
 @dataclass(frozen=True)
@@ -323,7 +324,6 @@ def migrate_change(
             "public_to_internal",
             change.rev,
             f"--last-rev={last_public_rev}",
-            "--iterative-limit-changes=1",
             "--git-destination-non-fast-forward",
         ]
     )
@@ -421,6 +421,8 @@ def open_or_update_pr(change: PublicChange, body_file: Path, message_file: Path)
         if ahead_count == 0:
             raise RuntimeError(f"Copybara produced no commits on {SYNC_BRANCH}.")
 
+    validate_sync_branch_paths(change.rev)
+
     pr_number = find_open_pr()
     if pr_number is None:
         run(
@@ -456,6 +458,33 @@ def open_or_update_pr(change: PublicChange, body_file: Path, message_file: Path)
     if pr_number is None:
         raise RuntimeError("Unable to determine sync PR number.")
     return pr_number
+
+
+def validate_sync_branch_paths(public_change_rev: str) -> None:
+    allowed_paths = (
+        set(public_change_touched_paths(public_change_rev)) | GENERATED_SYNC_PATHS
+    )
+    changed_paths = {
+        Path(path)
+        for path in output(
+            [
+                "git",
+                "diff",
+                "--name-only",
+                "origin/main",
+                f"origin/{SYNC_BRANCH}",
+            ]
+        ).splitlines()
+    }
+    unexpected_paths = sorted(changed_paths - allowed_paths)
+    if unexpected_paths:
+        formatted_paths = "\n".join(
+            f"  - {path.as_posix()}" for path in unexpected_paths
+        )
+        raise RuntimeError(
+            f"Copybara changed paths not touched by public commit {public_change_rev}:\n"
+            f"{formatted_paths}"
+        )
 
 
 def create_empty_import_marker_commit_if_unchanged(

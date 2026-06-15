@@ -88,7 +88,7 @@ core.workflow(
     origin_files = glob(["**"]),
     destination_files = PUBLIC_FILES,
     authoring = authoring.pass_thru(SYNC_AUTHOR),
-    mode = "ITERATIVE",
+    mode = "SQUASH",
     custom_rev_id = "Codex-Public-RevId",
     merge_import = core.merge_import_config(
         package_path = "",

@@ -1957,6 +1957,7 @@ dependencies = [
  "codex-home",
  "codex-hooks",
  "codex-image-generation-extension",
+ "codex-internal-persistent-mode",
  "codex-login",
  "codex-mcp",
  "codex-mcp-extension",
@@ -3139,6 +3140,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-internal-extra-config"
+version = "0.0.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "codex-internal-persistent-mode"
+version = "0.0.0"
+dependencies = [
+ "codex-core",
+ "codex-exec-server",
+ "codex-extension-api",
+ "codex-login",
+ "codex-protocol",
+ "core_test_support",
+ "pretty_assertions",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "codex-keyring-store"
 version = "0.0.0"
 dependencies = [
@@ -3911,6 +3937,7 @@ dependencies = [
  "chrono",
  "codex-git-utils",
  "codex-install-context",
+ "codex-internal-extra-config",
  "codex-protocol",
  "codex-rollout",
  "codex-state",
