@@ -1330,7 +1330,7 @@ impl PluginsManager {
                 app_category_by_id.insert(app.connector_id.0.clone(), category.clone());
             }
         }
-        let mut mcp_server_names = load_plugin_mcp_servers(source_path.as_path())
+        let mut mcp_server_names = load_plugin_mcp_servers(source_path.as_path(), self.auth_mode())
             .await
             .into_keys()
             .collect::<Vec<_>>();

@@ -1436,7 +1436,11 @@ impl PluginRequestProcessor {
 
         self.on_effective_plugins_changed();
 
-        let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path()).await;
+        let plugin_mcp_servers = load_plugin_mcp_servers(
+            result.installed_path.as_path(),
+            auth.as_ref().map(CodexAuth::auth_mode),
+        )
+        .await;
         if !plugin_mcp_servers.is_empty() {
             self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
                 .await;
@@ -1445,7 +1449,6 @@ impl PluginRequestProcessor {
         let plugin_app_declarations = load_plugin_apps(result.installed_path.as_path()).await;
         let plugin_apps =
             codex_plugin::app_connector_ids_from_declarations(&plugin_app_declarations);
-        let auth = self.auth_manager.auth().await;
         let apps_needing_auth = self
             .plugin_apps_needing_auth_for_install(
                 &config,
@@ -1554,7 +1557,11 @@ impl PluginRequestProcessor {
         self.analytics_events_client
             .track_plugin_installed(plugin_metadata);
 
-        let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path()).await;
+        let plugin_mcp_servers = load_plugin_mcp_servers(
+            result.installed_path.as_path(),
+            auth.as_ref().map(CodexAuth::auth_mode),
+        )
+        .await;
         if !plugin_mcp_servers.is_empty() {
             self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
                 .await;
@@ -1578,7 +1585,7 @@ impl PluginRequestProcessor {
                     .as_ref()
                     .map(plugin_app_category_by_id_from_value)
                     .unwrap_or_default();
-                let all_connectors = connectors::list_cached_all_connectors(&config)
+                let all_connectors = connectors::list_cached_all_connectors(&config, &[])
                     .await
                     .unwrap_or_default();
                 connectors::connectors_for_plugin_apps(all_connectors, &plugin_apps)
@@ -1630,7 +1637,7 @@ impl PluginRequestProcessor {
 
         let environment_manager = self.thread_manager.environment_manager();
         let (all_connectors_result, accessible_connectors_result) = tokio::join!(
-            connectors::list_all_connectors_with_options(config, /*force_refetch*/ false),
+            connectors::list_all_connectors_with_options(config, /*force_refetch*/ false, &[]),
             connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
                 config,
                 /*force_refetch*/ true,
@@ -1646,7 +1653,7 @@ impl PluginRequestProcessor {
                     plugin = plugin_id,
                     "failed to load app metadata after plugin install: {err:#}"
                 );
-                connectors::list_cached_all_connectors(config)
+                connectors::list_cached_all_connectors(config, &[])
                     .await
                     .unwrap_or_default()
             }
@@ -1910,16 +1917,21 @@ async fn load_plugin_app_summaries(
         return Vec::new();
     }
 
-    let connectors =
-        match connectors::list_all_connectors_with_options(config, /*force_refetch*/ false).await {
-            Ok(connectors) => connectors,
-            Err(err) => {
-                warn!("failed to load app metadata for plugin/read: {err:#}");
-                connectors::list_cached_all_connectors(config)
-                    .await
-                    .unwrap_or_default()
-            }
-        };
+    let connectors = match connectors::list_all_connectors_with_options(
+        config,
+        /*force_refetch*/ false,
+        &[],
+    )
+    .await
+    {
+        Ok(connectors) => connectors,
+        Err(err) => {
+            warn!("failed to load app metadata for plugin/read: {err:#}");
+            connectors::list_cached_all_connectors(config, &[])
+                .await
+                .unwrap_or_default()
+        }
+    };
 
     let plugin_connectors = connectors::connectors_for_plugin_apps(connectors, plugin_apps);
 
