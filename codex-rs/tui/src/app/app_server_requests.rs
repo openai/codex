@@ -104,8 +104,11 @@ impl PendingAppServerRequests {
                 None
             }
             ServerRequest::PermissionsRequestApproval { request_id, params } => {
-                // TODO(anp): Remove this validation conversion once core permission paths remain
-                // PathUri after crossing the app-server boundary.
+                // TODO(anp): Remove this duplicate validation once core permission paths remain
+                // PathUri after crossing the app-server boundary. Native permission paths do not
+                // yet have an ingress validation step, so validate them here before recording the
+                // request as pending. Discovering an invalid path later in a UI delivery path
+                // would leave the app-server RPC waiting without a clean rejection path.
                 if let Err(err) = CoreRequestPermissionProfile::try_from(params.permissions.clone())
                 {
                     return Some(UnsupportedAppServerRequest {
