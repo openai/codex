@@ -53,10 +53,7 @@ impl ToolExecutor<ToolInvocation> for ExtensionToolAdapter {
     }
 
     fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
-        Box::pin(async move {
-            let extension_call = to_extension_call(&invocation).await?;
-            self.0.handle(extension_call).await
-        })
+        Box::pin(async move { self.0.handle(to_extension_call(&invocation).await).await })
     }
 }
 
@@ -112,9 +109,7 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
     }
 }
 
-async fn to_extension_call(
-    invocation: &ToolInvocation,
-) -> Result<ExtensionToolCall, codex_tools::FunctionCallError> {
+async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
     let conversation_history =
         ConversationHistory::new(invocation.session.clone_history().await.into_raw_items());
     let mut environments = Vec::with_capacity(invocation.turn.environments.turn_environments.len());
@@ -128,17 +123,9 @@ async fn to_extension_call(
         )
         .await
         .additional_permissions;
-        // TODO(anp): Convert ToolEnvironment to carry a PathUri sandbox context and remove this
-        // conversion back to absolute paths.
-        let file_system_sandbox_context: codex_file_system::FileSystemSandboxContext = invocation
+        let file_system_sandbox_context = invocation
             .turn
-            .file_system_sandbox_context(additional_permissions, environment.cwd_uri())
-            .try_into()
-            .map_err(|err| {
-                codex_tools::FunctionCallError::Fatal(format!(
-                    "turn sandbox context contains a non-native path URI: {err}"
-                ))
-            })?;
+            .file_system_sandbox_context(additional_permissions, environment.cwd_uri());
         environments.push(ToolEnvironment {
             environment_id: environment.environment_id.clone(),
             cwd: environment.cwd().clone(),
@@ -146,7 +133,7 @@ async fn to_extension_call(
             file_system_sandbox_context,
         });
     }
-    Ok(ExtensionToolCall {
+    ExtensionToolCall {
         turn_id: invocation.turn.sub_id.clone(),
         call_id: invocation.call_id.clone(),
         tool_name: invocation.tool_name.clone(),
@@ -159,7 +146,7 @@ async fn to_extension_call(
         }),
         environments,
         payload: invocation.payload.clone(),
-    })
+    }
 }
 
 #[cfg(test)]

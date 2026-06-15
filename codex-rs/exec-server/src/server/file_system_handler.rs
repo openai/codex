@@ -213,7 +213,6 @@ mod tests {
                 sandbox_cwd.clone(),
             )
             .expect("sandbox context")
-            .into()
         };
 
         for (file_name, sandbox_policy) in [

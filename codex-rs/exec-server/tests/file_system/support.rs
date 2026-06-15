@@ -14,7 +14,6 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_path_uri::PathUri;
 
 use crate::common::exec_server::ExecServerHarness;
 use crate::common::exec_server::TestCodexHelperPaths;
@@ -83,9 +82,7 @@ pub(crate) fn absolute_path(path: std::path::PathBuf) -> AbsolutePathBuf {
     }
 }
 
-pub(crate) fn read_only_sandbox(
-    readable_root: std::path::PathBuf,
-) -> FileSystemSandboxContext<PathUri> {
+pub(crate) fn read_only_sandbox(readable_root: std::path::PathBuf) -> FileSystemSandboxContext {
     let readable_root = absolute_path(readable_root);
     sandbox_context(vec![FileSystemSandboxEntry {
         path: FileSystemPath::Path {
@@ -97,7 +94,7 @@ pub(crate) fn read_only_sandbox(
 
 pub(crate) fn workspace_write_sandbox(
     writable_root: std::path::PathBuf,
-) -> FileSystemSandboxContext<PathUri> {
+) -> FileSystemSandboxContext {
     let writable_root = absolute_path(writable_root);
     sandbox_context(vec![FileSystemSandboxEntry {
         path: FileSystemPath::Path {
@@ -107,12 +104,11 @@ pub(crate) fn workspace_write_sandbox(
     }])
 }
 
-fn sandbox_context(entries: Vec<FileSystemSandboxEntry>) -> FileSystemSandboxContext<PathUri> {
+fn sandbox_context(entries: Vec<FileSystemSandboxEntry>) -> FileSystemSandboxContext {
     codex_file_system::FileSystemSandboxContext::from_permission_profile(
         PermissionProfile::from_runtime_permissions(
             &FileSystemSandboxPolicy::restricted(entries),
             NetworkSandboxPolicy::Restricted,
         ),
     )
-    .into()
 }

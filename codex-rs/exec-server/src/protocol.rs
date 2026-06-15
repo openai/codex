@@ -201,7 +201,7 @@ pub struct TerminateResponse {
 #[serde(rename_all = "camelCase")]
 pub struct FsReadFileParams {
     pub path: PathUri,
-    pub sandbox: Option<FileSystemSandboxContext<PathUri>>,
+    pub sandbox: Option<FileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -215,7 +215,7 @@ pub struct FsReadFileResponse {
 pub struct FsWriteFileParams {
     pub path: PathUri,
     pub data_base64: String,
-    pub sandbox: Option<FileSystemSandboxContext<PathUri>>,
+    pub sandbox: Option<FileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,7 +227,7 @@ pub struct FsWriteFileResponse {}
 pub struct FsCreateDirectoryParams {
     pub path: PathUri,
     pub recursive: Option<bool>,
-    pub sandbox: Option<FileSystemSandboxContext<PathUri>>,
+    pub sandbox: Option<FileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -238,7 +238,7 @@ pub struct FsCreateDirectoryResponse {}
 #[serde(rename_all = "camelCase")]
 pub struct FsGetMetadataParams {
     pub path: PathUri,
-    pub sandbox: Option<FileSystemSandboxContext<PathUri>>,
+    pub sandbox: Option<FileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -256,7 +256,7 @@ pub struct FsGetMetadataResponse {
 #[serde(rename_all = "camelCase")]
 pub struct FsCanonicalizeParams {
     pub path: PathUri,
-    pub sandbox: Option<FileSystemSandboxContext<PathUri>>,
+    pub sandbox: Option<FileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -269,7 +269,7 @@ pub struct FsCanonicalizeResponse {
 #[serde(rename_all = "camelCase")]
 pub struct FsReadDirectoryParams {
     pub path: PathUri,
-    pub sandbox: Option<FileSystemSandboxContext<PathUri>>,
+    pub sandbox: Option<FileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -292,7 +292,7 @@ pub struct FsRemoveParams {
     pub path: PathUri,
     pub recursive: Option<bool>,
     pub force: Option<bool>,
-    pub sandbox: Option<FileSystemSandboxContext<PathUri>>,
+    pub sandbox: Option<FileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -305,7 +305,7 @@ pub struct FsCopyParams {
     pub source_path: PathUri,
     pub destination_path: PathUri,
     pub recursive: bool,
-    pub sandbox: Option<FileSystemSandboxContext<PathUri>>,
+    pub sandbox: Option<FileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -477,7 +477,7 @@ mod tests {
             "sandbox": legacy_sandbox,
         }))
         .expect("legacy absolute path should deserialize");
-        let expected_sandbox: FileSystemSandboxContext<PathUri> = native_sandbox.into();
+        let expected_sandbox = native_sandbox;
         let expected = FsReadFileParams {
             path: PathUri::from_path(legacy_path).expect("path URI"),
             sandbox: Some(expected_sandbox.clone()),

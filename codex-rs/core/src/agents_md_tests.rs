@@ -47,7 +47,7 @@ impl FailingFileSystem {
     async fn canonicalize(
         &self,
         _path: &PathUri,
-        _sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+        _sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<PathUri> {
         unreachable!("canonicalize should not be called")
     }
@@ -55,7 +55,7 @@ impl FailingFileSystem {
     async fn read_file(
         &self,
         path: &PathUri,
-        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<Vec<u8>> {
         if path.to_abs_path()? == self.path
             && let InjectedFailure::Read(kind) = self.failure
@@ -69,7 +69,7 @@ impl FailingFileSystem {
         &self,
         _path: &PathUri,
         _contents: Vec<u8>,
-        _sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+        _sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<()> {
         unreachable!("write_file should not be called")
     }
@@ -78,7 +78,7 @@ impl FailingFileSystem {
         &self,
         _path: &PathUri,
         _create_directory_options: CreateDirectoryOptions,
-        _sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+        _sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<()> {
         unreachable!("create_directory should not be called")
     }
@@ -86,7 +86,7 @@ impl FailingFileSystem {
     async fn get_metadata(
         &self,
         path: &PathUri,
-        sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<FileMetadata> {
         if path.to_abs_path()? == self.path
             && let InjectedFailure::Metadata(kind) = self.failure
@@ -99,7 +99,7 @@ impl FailingFileSystem {
     async fn read_directory(
         &self,
         _path: &PathUri,
-        _sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+        _sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<Vec<ReadDirectoryEntry>> {
         unreachable!("read_directory should not be called")
     }
@@ -108,7 +108,7 @@ impl FailingFileSystem {
         &self,
         _path: &PathUri,
         _remove_options: RemoveOptions,
-        _sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+        _sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<()> {
         unreachable!("remove should not be called")
     }
@@ -118,7 +118,7 @@ impl FailingFileSystem {
         _source_path: &PathUri,
         _destination_path: &PathUri,
         _copy_options: CopyOptions,
-        _sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+        _sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<()> {
         unreachable!("copy should not be called")
     }
@@ -128,7 +128,7 @@ impl ExecutorFileSystem for FailingFileSystem {
     fn canonicalize<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, PathUri> {
         Box::pin(FailingFileSystem::canonicalize(self, path, sandbox))
     }
@@ -136,7 +136,7 @@ impl ExecutorFileSystem for FailingFileSystem {
     fn read_file<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
         Box::pin(FailingFileSystem::read_file(self, path, sandbox))
     }
@@ -145,7 +145,7 @@ impl ExecutorFileSystem for FailingFileSystem {
         &'a self,
         path: &'a PathUri,
         contents: Vec<u8>,
-        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(FailingFileSystem::write_file(self, path, contents, sandbox))
     }
@@ -154,7 +154,7 @@ impl ExecutorFileSystem for FailingFileSystem {
         &'a self,
         path: &'a PathUri,
         options: CreateDirectoryOptions,
-        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(FailingFileSystem::create_directory(
             self, path, options, sandbox,
@@ -164,7 +164,7 @@ impl ExecutorFileSystem for FailingFileSystem {
     fn get_metadata<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(FailingFileSystem::get_metadata(self, path, sandbox))
     }
@@ -172,7 +172,7 @@ impl ExecutorFileSystem for FailingFileSystem {
     fn read_directory<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
         Box::pin(FailingFileSystem::read_directory(self, path, sandbox))
     }
@@ -181,7 +181,7 @@ impl ExecutorFileSystem for FailingFileSystem {
         &'a self,
         path: &'a PathUri,
         options: RemoveOptions,
-        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(FailingFileSystem::remove(self, path, options, sandbox))
     }
@@ -191,7 +191,7 @@ impl ExecutorFileSystem for FailingFileSystem {
         source_path: &'a PathUri,
         destination_path: &'a PathUri,
         options: CopyOptions,
-        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(FailingFileSystem::copy(
             self,

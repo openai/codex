@@ -280,7 +280,7 @@ pub async fn apply_patch(
     stdout: &mut impl std::io::Write,
     stderr: &mut impl std::io::Write,
     fs: &dyn ExecutorFileSystem,
-    sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+    sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<AppliedPatchDelta, ApplyPatchFailure> {
     let hunks = match parse_patch(patch) {
         Ok(source) => source.hunks,
@@ -319,7 +319,7 @@ pub async fn apply_hunks(
     stdout: &mut impl std::io::Write,
     stderr: &mut impl std::io::Write,
     fs: &dyn ExecutorFileSystem,
-    sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+    sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<AppliedPatchDelta, ApplyPatchFailure> {
     let mut delta = AppliedPatchDelta::empty();
     match apply_hunks_to_files(hunks, cwd, fs, sandbox, &mut delta).await {
@@ -363,7 +363,7 @@ async fn apply_hunks_to_files(
     hunks: &[Hunk],
     cwd: &AbsolutePathBuf,
     fs: &dyn ExecutorFileSystem,
-    sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+    sandbox: Option<&FileSystemSandboxContext>,
     delta: &mut AppliedPatchDelta,
 ) -> anyhow::Result<AffectedPaths> {
     if hunks.is_empty() {
@@ -554,7 +554,7 @@ async fn apply_hunks_to_files(
 async fn ensure_not_directory(
     path: &AbsolutePathBuf,
     fs: &dyn ExecutorFileSystem,
-    sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+    sandbox: Option<&FileSystemSandboxContext>,
 ) -> io::Result<()> {
     let path_uri = PathUri::from_abs_path(path);
     let metadata = fs.get_metadata(&path_uri, sandbox).await?;
@@ -571,7 +571,7 @@ async fn remove_failure_was_side_effect_free(
     path: &AbsolutePathBuf,
     expected_content: Option<&str>,
     fs: &dyn ExecutorFileSystem,
-    sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+    sandbox: Option<&FileSystemSandboxContext>,
 ) -> bool {
     let path_uri = PathUri::from_abs_path(path);
     match expected_content {
@@ -586,7 +586,7 @@ async fn remove_failure_was_side_effect_free(
 async fn read_optional_file_text_for_delta(
     path: &AbsolutePathBuf,
     fs: &dyn ExecutorFileSystem,
-    sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+    sandbox: Option<&FileSystemSandboxContext>,
     exact: &mut bool,
 ) -> Option<String> {
     note_existing_path_delta_support(path, fs, sandbox, exact).await;
@@ -604,7 +604,7 @@ async fn read_optional_file_text_for_delta(
 async fn note_existing_path_delta_support(
     path: &AbsolutePathBuf,
     fs: &dyn ExecutorFileSystem,
-    sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+    sandbox: Option<&FileSystemSandboxContext>,
     exact: &mut bool,
 ) {
     let path_uri = PathUri::from_abs_path(path);
@@ -620,7 +620,7 @@ async fn write_file_with_missing_parent_retry(
     fs: &dyn ExecutorFileSystem,
     path_abs: &AbsolutePathBuf,
     contents: Vec<u8>,
-    sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+    sandbox: Option<&FileSystemSandboxContext>,
 ) -> anyhow::Result<()> {
     let path_uri = PathUri::from_abs_path(path_abs);
     match fs.write_file(&path_uri, contents.clone(), sandbox).await {
@@ -663,7 +663,7 @@ async fn derive_new_contents_from_chunks(
     path_abs: &AbsolutePathBuf,
     chunks: &[UpdateFileChunk],
     fs: &dyn ExecutorFileSystem,
-    sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+    sandbox: Option<&FileSystemSandboxContext>,
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
     let path_uri = PathUri::from_abs_path(path_abs);
     let original_contents = fs.read_file_text(&path_uri, sandbox).await.map_err(|err| {
@@ -827,7 +827,7 @@ pub async fn unified_diff_from_chunks(
     path_abs: &AbsolutePathBuf,
     chunks: &[UpdateFileChunk],
     fs: &dyn ExecutorFileSystem,
-    sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+    sandbox: Option<&FileSystemSandboxContext>,
 ) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
     unified_diff_from_chunks_with_context(path_abs, chunks, /*context*/ 1, fs, sandbox).await
 }
@@ -837,7 +837,7 @@ pub async fn unified_diff_from_chunks_with_context(
     chunks: &[UpdateFileChunk],
     context: usize,
     fs: &dyn ExecutorFileSystem,
-    sandbox: Option<&FileSystemSandboxContext<PathUri>>,
+    sandbox: Option<&FileSystemSandboxContext>,
 ) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
     let AppliedPatch {
         original_contents,

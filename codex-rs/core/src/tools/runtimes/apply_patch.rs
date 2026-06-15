@@ -33,7 +33,6 @@ use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -90,23 +89,20 @@ impl ApplyPatchRuntime {
     fn file_system_sandbox_context_for_attempt(
         req: &ApplyPatchRequest,
         attempt: &SandboxAttempt<'_>,
-    ) -> Option<FileSystemSandboxContext<PathUri>> {
+    ) -> Option<FileSystemSandboxContext> {
         if attempt.sandbox == SandboxType::None {
             return None;
         }
 
         let permissions =
             effective_permission_profile(attempt.permissions, req.additional_permissions.as_ref());
-        Some(
-            FileSystemSandboxContext::<AbsolutePathBuf> {
-                permissions,
-                cwd: Some(attempt.sandbox_cwd.clone()),
-                windows_sandbox_level: attempt.windows_sandbox_level,
-                windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
-                use_legacy_landlock: attempt.use_legacy_landlock,
-            }
-            .into(),
-        )
+        Some(FileSystemSandboxContext {
+            permissions: permissions.into(),
+            cwd: Some(attempt.sandbox_cwd.clone()),
+            windows_sandbox_level: attempt.windows_sandbox_level,
+            windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
+            use_legacy_landlock: attempt.use_legacy_landlock,
+        })
     }
 }
 

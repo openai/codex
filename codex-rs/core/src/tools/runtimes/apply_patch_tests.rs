@@ -233,9 +233,12 @@ async fn file_system_sandbox_context_uses_active_attempt() {
     );
     let expected_permissions =
         PermissionProfile::from_runtime_permissions(&file_system_policy, network_policy);
-    let native_sandbox: FileSystemSandboxContext<AbsolutePathBuf> =
-        sandbox.clone().try_into().expect("native sandbox context");
-    assert_eq!(native_sandbox.permissions, expected_permissions);
+    let native_permissions: PermissionProfile = sandbox
+        .permissions
+        .clone()
+        .try_into()
+        .expect("native sandbox permissions");
+    assert_eq!(native_permissions, expected_permissions);
     assert_eq!(
         sandbox.cwd,
         Some(codex_utils_path_uri::PathUri::from_abs_path(&path))

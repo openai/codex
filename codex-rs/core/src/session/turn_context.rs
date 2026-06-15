@@ -325,7 +325,7 @@ impl TurnContext {
         &self,
         additional_permissions: Option<AdditionalPermissionProfile>,
         cwd: &PathUri,
-    ) -> FileSystemSandboxContext<PathUri> {
+    ) -> FileSystemSandboxContext {
         let (base_file_system_sandbox_policy, base_network_sandbox_policy) =
             self.permission_profile.to_runtime_permissions();
         let file_system_sandbox_policy = effective_file_system_sandbox_policy(
@@ -341,8 +341,8 @@ impl TurnContext {
             &file_system_sandbox_policy,
             network_sandbox_policy,
         );
-        FileSystemSandboxContext::<AbsolutePathBuf> {
-            permissions,
+        FileSystemSandboxContext {
+            permissions: permissions.into(),
             cwd: Some(cwd.clone()),
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: self
@@ -351,7 +351,6 @@ impl TurnContext {
                 .windows_sandbox_private_desktop,
             use_legacy_landlock: self.features.use_legacy_landlock(),
         }
-        .into()
     }
 
     fn non_legacy_file_system_sandbox_policy(&self) -> Option<FileSystemSandboxPolicy> {

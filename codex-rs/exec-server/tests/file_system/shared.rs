@@ -3,7 +3,6 @@ use anyhow::Result;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::FileMetadata;
-use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -11,7 +10,6 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use std::path::Path;
@@ -32,8 +30,8 @@ fn sandbox_context_from_profile_preserves_workspace_write_read_only_subpaths() -
     std::fs::create_dir_all(&git_dir)?;
 
     let sandbox = workspace_write_sandbox(writable_dir.clone());
-    let sandbox: FileSystemSandboxContext<AbsolutePathBuf> = sandbox.try_into()?;
-    let policy = sandbox.permissions.file_system_sandbox_policy();
+    let permissions: PermissionProfile = sandbox.permissions.try_into()?;
+    let policy = permissions.file_system_sandbox_policy();
     let cwd = absolute_path(writable_dir.clone());
     let writable_roots = policy.get_writable_roots_with_cwd(cwd.as_path());
     let writable_dir = absolute_path(std::fs::canonicalize(writable_dir)?);
@@ -529,8 +527,7 @@ async fn file_system_sandboxed_write_allows_additional_write_root(
     std::fs::create_dir_all(&readable_dir)?;
     std::fs::create_dir_all(&writable_dir)?;
 
-    let mut sandbox: FileSystemSandboxContext<AbsolutePathBuf> =
-        read_only_sandbox(readable_dir).try_into()?;
+    let mut sandbox = read_only_sandbox(readable_dir);
     let additional_permissions = AdditionalPermissionProfile {
         network: None,
         file_system: Some(FileSystemPermissions::from_read_write_roots(
@@ -538,20 +535,21 @@ async fn file_system_sandboxed_write_allows_additional_write_root(
             Some(vec![absolute_path(writable_dir)]),
         )),
     };
+    let native_permissions: PermissionProfile = sandbox.permissions.clone().try_into()?;
     let file_system_policy = effective_file_system_sandbox_policy(
-        &sandbox.permissions.file_system_sandbox_policy(),
+        &native_permissions.file_system_sandbox_policy(),
         Some(&additional_permissions),
     );
     let network_policy = effective_network_sandbox_policy(
-        sandbox.permissions.network_sandbox_policy(),
+        native_permissions.network_sandbox_policy(),
         Some(&additional_permissions),
     );
     sandbox.permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
-        sandbox.permissions.enforcement(),
+        native_permissions.enforcement(),
         &file_system_policy,
         network_policy,
-    );
-    let sandbox = sandbox.into();
+    )
+    .into();
 
     file_system
         .write_file(

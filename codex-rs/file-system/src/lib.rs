@@ -51,8 +51,8 @@ pub struct ReadDirectoryEntry {
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FileSystemSandboxContext<PathType = AbsolutePathBuf> {
-    pub permissions: PermissionProfile<PathType>,
+pub struct FileSystemSandboxContext {
+    pub permissions: PermissionProfile<PathUri>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathUri>,
     pub windows_sandbox_level: WindowsSandboxLevel,
@@ -62,7 +62,7 @@ pub struct FileSystemSandboxContext<PathType = AbsolutePathBuf> {
     pub use_legacy_landlock: bool,
 }
 
-impl FileSystemSandboxContext<AbsolutePathBuf> {
+impl FileSystemSandboxContext {
     pub fn from_legacy_sandbox_policy(
         sandbox_policy: SandboxPolicy,
         cwd: PathUri,
@@ -100,7 +100,7 @@ impl FileSystemSandboxContext<AbsolutePathBuf> {
         cwd: Option<PathUri>,
     ) -> Self {
         Self {
-            permissions,
+            permissions: permissions.into(),
             cwd,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
@@ -108,26 +108,16 @@ impl FileSystemSandboxContext<AbsolutePathBuf> {
         }
     }
 
-    pub fn should_run_in_sandbox(&self) -> bool {
-        let file_system_policy = self.permissions.file_system_sandbox_policy();
-        matches!(file_system_policy.kind, FileSystemSandboxKind::Restricted)
-            && !file_system_policy.has_full_disk_write_access()
+    pub fn should_run_in_sandbox(&self) -> io::Result<bool> {
+        let permissions: PermissionProfile<AbsolutePathBuf> =
+            self.permissions.clone().try_into()?;
+        let file_system_policy = permissions.file_system_sandbox_policy();
+        Ok(
+            matches!(file_system_policy.kind, FileSystemSandboxKind::Restricted)
+                && !file_system_policy.has_full_disk_write_access(),
+        )
     }
-}
 
-impl From<FileSystemSandboxContext<AbsolutePathBuf>> for FileSystemSandboxContext<PathUri> {
-    fn from(value: FileSystemSandboxContext<AbsolutePathBuf>) -> Self {
-        FileSystemSandboxContext {
-            permissions: value.permissions.into(),
-            cwd: value.cwd,
-            windows_sandbox_level: value.windows_sandbox_level,
-            windows_sandbox_private_desktop: value.windows_sandbox_private_desktop,
-            use_legacy_landlock: value.use_legacy_landlock,
-        }
-    }
-}
-
-impl<PathType> FileSystemSandboxContext<PathType> {
     pub fn has_cwd_dependent_permissions(&self) -> bool {
         match &self.permissions {
             PermissionProfile::Managed {
@@ -157,20 +147,6 @@ impl<PathType> FileSystemSandboxContext<PathType> {
     }
 }
 
-impl TryFrom<FileSystemSandboxContext<PathUri>> for FileSystemSandboxContext<AbsolutePathBuf> {
-    type Error = io::Error;
-
-    fn try_from(value: FileSystemSandboxContext<PathUri>) -> Result<Self, Self::Error> {
-        Ok(FileSystemSandboxContext {
-            permissions: value.permissions.try_into()?,
-            cwd: value.cwd,
-            windows_sandbox_level: value.windows_sandbox_level,
-            windows_sandbox_private_desktop: value.windows_sandbox_private_desktop,
-            use_legacy_landlock: value.use_legacy_landlock,
-        })
-    }
-}
-
 pub type FileSystemResult<T> = io::Result<T>;
 
 /// Future returned by [`ExecutorFileSystem`] operations.
@@ -184,20 +160,20 @@ pub trait ExecutorFileSystem: Send + Sync {
     fn canonicalize<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, PathUri>;
 
     fn read_file<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>>;
 
     /// Reads a file and decodes it as UTF-8 text.
     fn read_file_text<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, String> {
         Box::pin(async move {
             let bytes = self.read_file(path, sandbox).await?;
@@ -209,33 +185,33 @@ pub trait ExecutorFileSystem: Send + Sync {
         &'a self,
         path: &'a PathUri,
         contents: Vec<u8>,
-        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()>;
 
     fn create_directory<'a>(
         &'a self,
         path: &'a PathUri,
         create_directory_options: CreateDirectoryOptions,
-        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()>;
 
     fn get_metadata<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata>;
 
     fn read_directory<'a>(
         &'a self,
         path: &'a PathUri,
-        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>>;
 
     fn remove<'a>(
         &'a self,
         path: &'a PathUri,
         remove_options: RemoveOptions,
-        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()>;
 
     fn copy<'a>(
@@ -243,6 +219,6 @@ pub trait ExecutorFileSystem: Send + Sync {
         source_path: &'a PathUri,
         destination_path: &'a PathUri,
         copy_options: CopyOptions,
-        sandbox: Option<&'a FileSystemSandboxContext<PathUri>>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()>;
 }

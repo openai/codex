@@ -890,8 +890,7 @@ mod tests {
                 &codex_protocol::permissions::FileSystemSandboxPolicy::restricted(Vec::new()),
                 codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
             ),
-        )
-        .into();
+        );
 
         let err = environment
             .get_filesystem()
