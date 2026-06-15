@@ -2218,6 +2218,7 @@ dependencies = [
  "codex-shell-escalation",
  "codex-utils-absolute-path",
  "codex-utils-home-dir",
+ "codex-windows-sandbox",
  "dotenvy",
  "pretty_assertions",
  "tempfile",
@@ -2577,6 +2578,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-app-server-protocol",
+ "codex-config",
  "pretty_assertions",
  "serde",
  "serde_json",

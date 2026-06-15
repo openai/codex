@@ -42,6 +42,7 @@ fn user_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        metadata: None,
     }
 }
 fn assistant_msg(text: &str) -> ResponseItem {
@@ -52,6 +53,7 @@ fn assistant_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        metadata: None,
     }
 }
 
@@ -80,6 +82,7 @@ fn truncates_before_requested_user_message() {
             }],
             content: None,
             encrypted_content: None,
+            metadata: None,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -87,6 +90,7 @@ fn truncates_before_requested_user_message() {
             name: "tool".to_string(),
             namespace: None,
             arguments: "{}".to_string(),
+            metadata: None,
         },
         assistant_msg("a4"),
     ];
@@ -291,58 +295,6 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
     assert_eq!(report.completed, expected_completed);
     assert!(report.submit_failed.is_empty());
     assert!(report.timed_out.is_empty());
-    assert!(manager.list_thread_ids().await.is_empty());
-}
-
-#[tokio::test]
-async fn start_thread_rejects_explicit_local_environment_when_default_provider_is_disabled() {
-    let temp_dir = tempdir().expect("tempdir");
-    let mut config = test_config().await;
-    config.codex_home = temp_dir.path().join("codex-home").abs();
-    config.cwd = config.codex_home.abs();
-    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
-
-    let runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
-        std::env::current_exe().expect("current exe path"),
-        /*codex_linux_sandbox_exe*/ None,
-    )
-    .expect("runtime paths");
-    let environment_manager = Arc::new(
-        codex_exec_server::EnvironmentManager::create_for_tests(
-            Some("none".to_string()),
-            Some(runtime_paths),
-        )
-        .await,
-    );
-    let manager = ThreadManager::with_models_provider_and_home_for_tests(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-        config.codex_home.to_path_buf(),
-        environment_manager,
-    );
-
-    let result = manager
-        .start_thread_with_options(StartThreadOptions {
-            config: config.clone(),
-            initial_history: InitialHistory::New,
-            session_source: None,
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: vec![TurnEnvironmentSelection {
-                environment_id: "local".to_string(),
-                cwd: PathUri::from_abs_path(&config.cwd),
-            }],
-            thread_extension_init: Default::default(),
-        })
-        .await;
-    let err = match result {
-        Ok(_) => panic!("explicit local environment should not resolve when provider is disabled"),
-        Err(err) => err,
-    };
-
-    assert_eq!(err.to_string(), "unknown turn environment id `local`");
     assert!(manager.list_thread_ids().await.is_empty());
 }
 

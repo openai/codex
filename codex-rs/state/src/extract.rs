@@ -191,6 +191,7 @@ mod tests {
                 text: "hello from response item".to_string(),
             }],
             phase: None,
+            metadata: None,
         });
 
         apply_rollout_item(&mut metadata, &item, "test-provider");
