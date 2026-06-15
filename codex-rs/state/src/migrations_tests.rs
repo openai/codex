@@ -31,7 +31,7 @@ async fn recency_migration_backfills_and_seeds_old_binary_inserts() {
         .connect("sqlite::memory:")
         .await
         .expect("in-memory database should open");
-    migrator_through(37)
+    migrator_through(/*version*/ 37)
         .run(&pool)
         .await
         .expect("pre-recency migrations should apply");

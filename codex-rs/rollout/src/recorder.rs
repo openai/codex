@@ -554,6 +554,7 @@ impl RolloutRecorder {
                         allowed_sources,
                         model_providers,
                         cwd_filters,
+                        /*parent_thread_id*/ None,
                         archived,
                         search_term,
                     )
