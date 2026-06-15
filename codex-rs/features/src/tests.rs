@@ -32,8 +32,7 @@ fn default_enabled_features_are_stable() {
     for spec in crate::FEATURES {
         if spec.default_enabled {
             assert!(
-                matches!(spec.stage, Stage::Stable | Stage::Removed)
-                    || spec.id == Feature::TerminalResizeReflow,
+                matches!(spec.stage, Stage::Stable | Stage::Removed),
                 "feature `{}` is enabled by default but is not stable/removed ({:?})",
                 spec.key,
                 spec.stage
@@ -151,16 +150,33 @@ fn request_permissions_tool_is_under_development() {
 }
 
 #[test]
-fn terminal_resize_reflow_is_experimental_and_enabled_by_default() {
+fn terminal_resize_reflow_is_removed_and_enabled_by_default() {
     assert_eq!(
         feature_for_key("terminal_resize_reflow"),
         Some(Feature::TerminalResizeReflow)
     );
-    assert!(matches!(
-        Feature::TerminalResizeReflow.stage(),
-        Stage::Experimental { .. }
-    ));
+    assert_eq!(Feature::TerminalResizeReflow.stage(), Stage::Removed);
     assert_eq!(Feature::TerminalResizeReflow.default_enabled(), true);
+}
+
+#[test]
+fn from_sources_ignores_removed_terminal_resize_reflow_feature_key() {
+    let features_toml = FeaturesToml::from(BTreeMap::from([(
+        "terminal_resize_reflow".to_string(),
+        false,
+    )]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
+    assert_eq!(features.enabled(Feature::TerminalResizeReflow), true);
 }
 
 #[test]
