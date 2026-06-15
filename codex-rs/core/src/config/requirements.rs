@@ -6,6 +6,8 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::FeedbackConfigToml;
 use codex_protocol::config_types::ForcedLoginMethod;
 
+use super::otel;
+
 /// Runtime values that cannot be applied by mutating [`ConfigToml`] alone.
 pub(super) struct AppliedConfigRequirements {
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
@@ -40,6 +42,9 @@ pub(super) fn apply_to_config(
     apply_exact!(model_catalog_json);
     apply_exact!(check_for_update_on_startup);
     apply_exact!(allow_login_shell);
+    if let Some(requirement) = requirements.otel.as_ref() {
+        otel::apply_requirement(&mut config.otel, requirement, startup_warnings)?;
+    }
     apply_feedback_requirement(
         &mut config.feedback,
         requirements.feedback.as_ref(),
