@@ -38,6 +38,8 @@ pub use client_api::NoiseRendezvousConnectArgs;
 pub use client_api::NoiseRendezvousConnectBundle;
 pub use client_api::NoiseRendezvousConnectProvider;
 pub use client_api::RemoteExecServerConnectArgs;
+pub use client_api::RemoteExecServerUrlProvider;
+pub use client_api::RemoteExecServerUrlProviderFuture;
 pub use codex_file_system::CopyOptions;
 pub use codex_file_system::CreateDirectoryOptions;
 pub use codex_file_system::ExecutorFileSystem;

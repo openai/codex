@@ -25,7 +25,9 @@ use crate::ProcessId;
 use crate::client_api::ExecServerClientConnectOptions;
 use crate::client_api::ExecServerTransportParams;
 use crate::client_api::HttpClient;
+use crate::client_api::LazyRemoteExecServerTransport;
 use crate::client_api::RemoteExecServerConnectArgs;
+use crate::client_api::RemoteExecServerUrlProvider;
 use crate::client_api::StdioExecServerConnectArgs;
 use crate::client_transport::ExecServerReconnectStrategy;
 use crate::connection::JsonRpcConnection;
@@ -228,7 +230,7 @@ impl Drop for ActiveProcessStart {
 
 #[derive(Clone)]
 pub(crate) struct LazyRemoteExecServerClient {
-    transport_params: ExecServerTransportParams,
+    transport: LazyRemoteExecServerTransport,
     client: Arc<StdMutex<Option<ExecServerClient>>>,
     connect_lock: Arc<Semaphore>,
 }
@@ -236,7 +238,17 @@ pub(crate) struct LazyRemoteExecServerClient {
 impl LazyRemoteExecServerClient {
     pub(crate) fn new(transport_params: ExecServerTransportParams) -> Self {
         Self {
-            transport_params,
+            transport: LazyRemoteExecServerTransport::Fixed(transport_params),
+            client: Arc::new(StdMutex::new(None)),
+            connect_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
+        }
+    }
+
+    pub(crate) fn new_with_websocket_url_provider(
+        provider: Arc<dyn RemoteExecServerUrlProvider>,
+    ) -> Self {
+        Self {
+            transport: LazyRemoteExecServerTransport::WebSocketUrlProvider(provider),
             client: Arc::new(StdMutex::new(None)),
             connect_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
         }
@@ -257,15 +269,18 @@ impl LazyRemoteExecServerClient {
         let next_client = match self.cached_client() {
             Some(_client)
                 if matches!(
-                    &self.transport_params,
-                    ExecServerTransportParams::WebSocketUrl { .. }
-                        | ExecServerTransportParams::NoiseRendezvous { .. }
+                    &self.transport,
+                    LazyRemoteExecServerTransport::WebSocketUrlProvider(_)
+                        | LazyRemoteExecServerTransport::Fixed(
+                            ExecServerTransportParams::WebSocketUrl { .. }
+                                | ExecServerTransportParams::NoiseRendezvous { .. }
+                        )
                 ) =>
             {
-                ExecServerClient::connect_for_transport(self.transport_params.clone()).await?
+                self.connect().await?
             }
             Some(client) => return Ok(client),
-            None => ExecServerClient::connect_for_transport(self.transport_params.clone()).await?,
+            None => self.connect().await?,
         };
 
         let mut cached_client = self
@@ -287,6 +302,39 @@ impl LazyRemoteExecServerClient {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
+
+    async fn connect(&self) -> Result<ExecServerClient, ExecServerError> {
+        match &self.transport {
+            LazyRemoteExecServerTransport::Fixed(transport_params) => {
+                ExecServerClient::connect_for_transport(transport_params.clone()).await
+            }
+            LazyRemoteExecServerTransport::WebSocketUrlProvider(provider) => {
+                let first = Self::connect_with_url_provider(provider.as_ref()).await;
+                if first.as_ref().is_err_and(is_unauthorized_websocket_error) {
+                    Self::connect_with_url_provider(provider.as_ref()).await
+                } else {
+                    first
+                }
+            }
+        }
+    }
+
+    async fn connect_with_url_provider(
+        provider: &dyn RemoteExecServerUrlProvider,
+    ) -> Result<ExecServerClient, ExecServerError> {
+        ExecServerClient::connect_for_transport(ExecServerTransportParams::websocket_url(
+            provider.websocket_url().await?,
+        ))
+        .await
+    }
+}
+
+fn is_unauthorized_websocket_error(error: &ExecServerError) -> bool {
+    matches!(
+        error,
+        ExecServerError::WebSocketConnect { source, .. }
+            if matches!(source, tokio_tungstenite::tungstenite::Error::Http(response) if response.status().as_u16() == 401)
+    )
 }
 
 impl HttpClient for LazyRemoteExecServerClient {
@@ -1078,6 +1126,8 @@ mod tests {
     #[cfg(unix)]
     use std::process::Command;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use tokio::io::AsyncBufReadExt;
     use tokio::io::AsyncWrite;
     use tokio::io::AsyncWriteExt;
@@ -1103,6 +1153,8 @@ mod tests {
     use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
     use crate::client_api::ExecServerTransportParams;
     use crate::client_api::RemoteExecServerConnectArgs;
+    use crate::client_api::RemoteExecServerUrlProvider;
+    use crate::client_api::RemoteExecServerUrlProviderFuture;
     use crate::client_api::StdioExecServerCommand;
     use crate::client_api::StdioExecServerConnectArgs;
     use crate::connection::JsonRpcConnection;
@@ -1770,6 +1822,99 @@ mod tests {
             .expect("initialized notification should not time out")
             .expect("initialized notification should signal");
         finish_tx.send(()).expect("test should finish");
+        server.await.expect("server task should finish");
+    }
+
+    struct CountingUrlProvider {
+        websocket_url: String,
+        calls: AtomicUsize,
+    }
+
+    impl RemoteExecServerUrlProvider for CountingUrlProvider {
+        fn websocket_url(&self) -> RemoteExecServerUrlProviderFuture<'_> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(self.websocket_url.clone()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_websocket_client_refreshes_url_after_unauthorized_handshake() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let provider = Arc::new(CountingUrlProvider {
+            websocket_url: format!(
+                "ws://{}",
+                listener.local_addr().expect("listener should have address")
+            ),
+            calls: AtomicUsize::new(0),
+        });
+        let server = tokio::spawn(async move {
+            let (mut unauthorized, _) = listener.accept().await.expect("listener should accept");
+            unauthorized
+                .write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .expect("unauthorized response should write");
+            drop(unauthorized);
+
+            let mut authorized = accept_websocket(&listener).await;
+            complete_websocket_initialize(
+                &mut authorized,
+                "session-1",
+                /*expected_resume_session_id*/ None,
+            )
+            .await;
+        });
+
+        let client = LazyRemoteExecServerClient::new_with_websocket_url_provider(provider.clone());
+        let connected = client.get().await.expect("refreshed URL should connect");
+
+        assert_eq!(connected.session_id().as_deref(), Some("session-1"));
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+        server.await.expect("server task should finish");
+    }
+
+    #[tokio::test]
+    async fn remote_websocket_client_refreshes_url_after_disconnect() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let provider = Arc::new(CountingUrlProvider {
+            websocket_url: format!(
+                "ws://{}",
+                listener.local_addr().expect("listener should have address")
+            ),
+            calls: AtomicUsize::new(0),
+        });
+        let server = tokio::spawn(async move {
+            let mut first = accept_websocket(&listener).await;
+            complete_websocket_initialize(
+                &mut first,
+                "session-1",
+                /*expected_resume_session_id*/ None,
+            )
+            .await;
+            first
+                .close(None)
+                .await
+                .expect("first websocket should close");
+
+            let mut second = accept_websocket(&listener).await;
+            complete_websocket_initialize(
+                &mut second,
+                "session-2",
+                /*expected_resume_session_id*/ None,
+            )
+            .await;
+        });
+
+        let client = LazyRemoteExecServerClient::new_with_websocket_url_provider(provider.clone());
+        let first = client.get().await.expect("first URL should connect");
+        wait_for_disconnect(&first).await;
+        let second = client.get().await.expect("refreshed URL should connect");
+
+        assert_eq!(second.session_id().as_deref(), Some("session-2"));
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
         server.await.expect("server task should finish");
     }
 
