@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use rmcp::model::ServerCapabilities;
 use rmcp::model::Tool;
 use serde::Deserialize;
 use serde::Serialize;
@@ -16,13 +15,19 @@ const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
 const MCP_FILE_HANDLE_GUIDANCE: &str = "Pass an absolute local file path. Do not construct data: URIs, mcp-file:// handles, signed URLs, or file-service payloads.";
 const OPENAI_FILE_HANDLE_GUIDANCE: &str = "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here.";
 
-pub(crate) const METHOD_FILES_PREPARE_UPLOAD: &str = "files/prepareUpload";
-pub(crate) const METHOD_FILES_COMPLETE_UPLOAD: &str = "files/completeUpload";
-pub(crate) const METHOD_FILES_GET_DOWNLOAD: &str = "files/getDownload";
+pub(crate) const METHOD_FILES_AUTHORIZE_UPLOAD: &str = "files/authorizeUpload";
+pub(crate) const METHOD_FILES_AUTHORIZE_DOWNLOAD: &str = "files/authorizeDownload";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct McpFileValue {
+pub struct FileDigest {
+    pub algorithm: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileValue {
     pub uri: String,
     #[serde(default)]
     pub name: Option<String>,
@@ -30,25 +35,40 @@ pub struct McpFileValue {
     pub mime_type: Option<String>,
     #[serde(default)]
     pub size: Option<u64>,
+    #[serde(default)]
+    pub digest: Option<FileDigest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferMultipart {
+    pub file_field: String,
+    #[serde(default)]
+    pub fields: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileTransferDescriptor {
-    #[serde(default)]
-    pub transport: Option<String>,
+    pub transport: String,
     pub method: String,
     pub url: String,
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+    #[serde(default)]
+    pub multipart: Option<FileTransferMultipart>,
     #[serde(default)]
     pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PrepareUploadParams {
+pub struct AuthorizeUploadParams {
     pub name: String,
     pub mime_type: String,
     pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digest: Option<FileDigest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -57,68 +77,21 @@ pub struct FileUriParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct PrepareUploadResult {
-    pub file: McpFileValue,
-    pub transfer: FileTransferDescriptor,
+pub struct AuthorizeUploadResult {
+    pub file: FileValue,
+    pub upload: FileTransferDescriptor,
+    #[serde(default)]
+    pub download: Option<FileTransferDescriptor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct CompleteUploadResult {
-    pub file: McpFileValue,
+pub struct AuthorizedFile {
+    pub file: FileValue,
+    #[serde(default)]
+    pub download: Option<FileTransferDescriptor>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct GetDownloadResult {
-    pub file: McpFileValue,
-    pub transfer: FileTransferDescriptor,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct McpFileCapabilities {
-    pub prepare_upload: bool,
-    pub complete_upload: bool,
-    pub get_download: bool,
-}
-
-impl McpFileCapabilities {
-    pub(crate) fn from_server_and_tools(
-        capabilities: &ServerCapabilities,
-        tools: &[crate::ToolInfo],
-    ) -> Self {
-        let extension = capabilities.extensions.as_ref().and_then(|extensions| {
-            extensions
-                .get("io.modelcontextprotocol/files")
-                .or_else(|| extensions.get("files"))
-        });
-        if let Some(extension) = extension {
-            return Self {
-                prepare_upload: extension
-                    .get("prepareUpload")
-                    .and_then(JsonValue::as_bool)
-                    .unwrap_or(true),
-                complete_upload: extension
-                    .get("completeUpload")
-                    .and_then(JsonValue::as_bool)
-                    .unwrap_or(true),
-                get_download: extension
-                    .get("getDownload")
-                    .and_then(JsonValue::as_bool)
-                    .unwrap_or(true),
-            };
-        }
-
-        let exposes_upload = tools.iter().any(|tool| {
-            file_input_specs(&tool.tool)
-                .iter()
-                .any(FileInputSpec::accepts_upload)
-        });
-        Self {
-            prepare_upload: exposes_upload,
-            complete_upload: exposes_upload,
-            get_download: exposes_upload,
-        }
-    }
-}
+pub type AuthorizeDownloadResult = AuthorizedFile;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -170,8 +143,11 @@ pub fn file_input_specs(tool: &Tool) -> Vec<FileInputSpec> {
         .and_then(JsonValue::as_object)
     {
         for (path, property) in properties {
+            let is_array = property.get("type").and_then(JsonValue::as_str) == Some("array")
+                || property.get("items").is_some();
             let Some(extension) = property
                 .get(MCP_FILE_SCHEMA_EXTENSION)
+                .or_else(|| property.get("items")?.get(MCP_FILE_SCHEMA_EXTENSION))
                 .and_then(JsonValue::as_object)
             else {
                 continue;
@@ -185,8 +161,7 @@ pub fn file_input_specs(tool: &Tool) -> Vec<FileInputSpec> {
                     max_size: extension.get("maxSize").and_then(JsonValue::as_u64),
                     transfer_modes,
                     sources: BTreeSet::from([FileInputSource::Mcp]),
-                    is_array: property.get("type").and_then(JsonValue::as_str) == Some("array")
-                        || property.get("items").is_some(),
+                    is_array,
                 },
             );
         }
@@ -250,7 +225,9 @@ fn parse_transfer_modes(value: Option<&JsonValue>) -> BTreeSet<FileTransferMode>
     let values = match value {
         Some(JsonValue::Array(values)) => values.as_slice(),
         Some(_) => return BTreeSet::new(),
-        None => return BTreeSet::from([FileTransferMode::Inline]),
+        None => {
+            return BTreeSet::from([FileTransferMode::Inline, FileTransferMode::Upload]);
+        }
     };
     values
         .iter()

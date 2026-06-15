@@ -2,6 +2,7 @@ use super::*;
 use codex_mcp::FileInputSource;
 use codex_mcp::FileTransferMode;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use tempfile::tempdir;
 use wiremock::Mock;
@@ -35,13 +36,17 @@ async fn transfer_rejects_non_https_remote_urls() {
         put_transfer_file(
             &session,
             &codex_mcp::FileTransferDescriptor {
-                transport: Some("https".to_string()),
+                transport: "https".to_string(),
                 method: "PUT".to_string(),
                 url: "http://example.com/upload".to_string(),
+                headers: Default::default(),
+                multipart: None,
                 expires_at: None,
             },
             Vec::new(),
             /*max_size*/ 0,
+            /*name*/ "file.txt",
+            /*mime_type*/ "text/plain",
         )
         .await
         .expect_err("remote HTTP must be rejected"),
@@ -58,7 +63,8 @@ fn output_file_detection_requires_a_structured_file_value() {
             "text": "mcp-file://server/not-a-file-value"
         }),
         &mut files,
-    );
+    )
+    .expect("collect output files");
     assert_eq!(files.len(), 1);
     assert!(files.contains_key("mcp-file://server/file_1"));
 }
@@ -96,9 +102,11 @@ fn sanitizes_download_filenames() {
 fn rejects_expired_transfer_descriptors() {
     let error = validated_transfer_descriptor(
         &codex_mcp::FileTransferDescriptor {
-            transport: Some("https".to_string()),
+            transport: "https".to_string(),
             method: "GET".to_string(),
             url: "https://example.com/file".to_string(),
+            headers: Default::default(),
+            multipart: None,
             expires_at: Some("2020-01-01T00:00:00Z".to_string()),
         },
         "GET",
@@ -118,10 +126,65 @@ fn matches_exact_and_wildcard_mime_types() {
 #[test]
 fn validates_opaque_mcp_file_uris() {
     assert_eq!(validate_mcp_file_uri("mcp-file://server/file_1"), Ok(()));
+    assert_eq!(validate_mcp_file_uri("artifact://server/file_1"), Ok(()));
     assert_eq!(
         validate_mcp_file_uri("https://example.com/signed?secret=value"),
         Err("MCP file response returned an invalid file URI".to_string())
     );
+}
+
+#[tokio::test]
+async fn multipart_upload_honors_authorized_fields_headers_and_file_part() {
+    let (session, _) = crate::session::tests::make_session_and_context().await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/upload"))
+        .and(header("x-upload-token", "authorized"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+    put_transfer_file(
+        &session,
+        &codex_mcp::FileTransferDescriptor {
+            transport: "https".to_string(),
+            method: "POST".to_string(),
+            url: format!("{}/upload", server.uri()),
+            headers: BTreeMap::from([
+                (
+                    "content-type".to_string(),
+                    "multipart/form-data".to_string(),
+                ),
+                ("x-upload-token".to_string(), "authorized".to_string()),
+            ]),
+            multipart: Some(codex_mcp::FileTransferMultipart {
+                file_field: "payload".to_string(),
+                fields: BTreeMap::from([("policy".to_string(), "signed-policy".to_string())]),
+            }),
+            expires_at: None,
+        },
+        b"multipart bytes".to_vec(),
+        /*max_size*/ 32,
+        /*name*/ "report.txt",
+        /*mime_type*/ "text/plain",
+    )
+    .await
+    .expect("multipart upload succeeds");
+
+    let requests = server.received_requests().await.expect("received requests");
+    let request = requests.first().expect("upload request");
+    let content_type = request
+        .headers
+        .get("content-type")
+        .expect("content type")
+        .to_str()
+        .expect("valid content type");
+    assert!(content_type.starts_with("multipart/form-data; boundary="));
+    let body = String::from_utf8_lossy(&request.body);
+    assert!(body.contains("name=\"policy\""));
+    assert!(body.contains("signed-policy"));
+    assert!(body.contains("name=\"payload\"; filename=\"report.txt\""));
+    assert!(body.contains("multipart bytes"));
 }
 
 #[test]
@@ -216,13 +279,17 @@ async fn upload_transfer_streams_the_exact_file_bytes() {
     put_transfer_file(
         &session,
         &codex_mcp::FileTransferDescriptor {
-            transport: Some("https".to_string()),
+            transport: "https".to_string(),
             method: "PUT".to_string(),
             url: format!("{}/upload", server.uri()),
+            headers: Default::default(),
+            multipart: None,
             expires_at: None,
         },
         b"stream me".to_vec(),
         /*max_size*/ 32,
+        /*name*/ "file.txt",
+        /*mime_type*/ "text/plain",
     )
     .await
     .expect("upload succeeds");
@@ -243,13 +310,17 @@ async fn upload_transfer_accepts_post_descriptors() {
     put_transfer_file(
         &session,
         &codex_mcp::FileTransferDescriptor {
-            transport: None,
+            transport: "https".to_string(),
             method: "POST".to_string(),
             url: format!("{}/upload", server.uri()),
+            headers: Default::default(),
+            multipart: None,
             expires_at: None,
         },
         b"stream me".to_vec(),
         /*max_size*/ 32,
+        /*name*/ "file.txt",
+        /*mime_type*/ "text/plain",
     )
     .await
     .expect("upload succeeds");
@@ -271,13 +342,17 @@ async fn download_transfer_materializes_exact_bytes() {
     let size = download_transfer_file(
         &session,
         &codex_mcp::FileTransferDescriptor {
-            transport: Some("https".to_string()),
+            transport: "https".to_string(),
             method: "GET".to_string(),
             url: format!("{}/download", server.uri()),
+            headers: Default::default(),
+            multipart: None,
             expires_at: None,
         },
         &output,
         /*max_size*/ 32,
+        /*expected_size*/ None,
+        /*expected_digest*/ None,
     )
     .await
     .expect("download succeeds");
@@ -287,6 +362,45 @@ async fn download_transfer_materializes_exact_bytes() {
         tokio::fs::read(&output).await.expect("read download"),
         b"download me"
     );
+}
+
+#[tokio::test]
+async fn download_rejects_digest_mismatch_and_removes_partial_file() {
+    let (session, _) = crate::session::tests::make_session_and_context().await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/download"))
+        .and(header("authorization", "Bearer signed"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"download me"))
+        .mount(&server)
+        .await;
+    let directory = tempdir().expect("temp dir");
+    let output = directory.path().join("download.txt");
+    let error = download_transfer_file(
+        &session,
+        &codex_mcp::FileTransferDescriptor {
+            transport: "https".to_string(),
+            method: "GET".to_string(),
+            url: format!("{}/download", server.uri()),
+            headers: BTreeMap::from([("authorization".to_string(), "Bearer signed".to_string())]),
+            multipart: None,
+            expires_at: None,
+        },
+        &output,
+        /*max_size*/ 32,
+        /*expected_size*/ Some(11),
+        /*expected_digest*/
+        Some(&codex_mcp::FileDigest {
+            algorithm: "sha-256".to_string(),
+            value: "invalid".to_string(),
+        }),
+    )
+    .await
+    .expect_err("digest mismatch");
+
+    assert_eq!(error, "MCP download digest did not match its file metadata");
+    assert!(!output.exists());
+    assert!(!output.with_extension("part").exists());
 }
 
 #[tokio::test]
@@ -305,13 +419,17 @@ async fn transfer_errors_do_not_expose_signed_urls() {
     let error = download_transfer_file(
         &session,
         &codex_mcp::FileTransferDescriptor {
-            transport: None,
+            transport: "https".to_string(),
             method: "GET".to_string(),
             url: format!("{}/download?sig={secret}", server.uri()),
+            headers: Default::default(),
+            multipart: None,
             expires_at: None,
         },
         &output,
         /*max_size*/ 32,
+        /*expected_size*/ None,
+        /*expected_digest*/ None,
     )
     .await
     .expect_err("failed transfer");
@@ -338,13 +456,17 @@ async fn failed_download_removes_partial_file() {
     let error = download_transfer_file(
         &session,
         &codex_mcp::FileTransferDescriptor {
-            transport: None,
+            transport: "https".to_string(),
             method: "GET".to_string(),
             url: format!("{}/download", server.uri()),
+            headers: Default::default(),
+            multipart: None,
             expires_at: None,
         },
         &output,
         /*max_size*/ 32,
+        /*expected_size*/ None,
+        /*expected_digest*/ None,
     )
     .await
     .expect_err("oversized transfer");

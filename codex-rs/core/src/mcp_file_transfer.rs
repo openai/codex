@@ -5,11 +5,15 @@ use std::path::PathBuf;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use codex_mcp::AuthorizeUploadParams;
+use codex_mcp::FileDigest;
 use codex_mcp::FileInputSpec;
-use codex_mcp::PrepareUploadParams;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::permissions::ReadDenyMatcher;
 use serde_json::Value as JsonValue;
+use sha2::Digest;
+use sha2::Sha256;
 use url::Url;
 
 use crate::session::session::Session;
@@ -73,10 +77,10 @@ pub(crate) async fn materialize_mcp_file_outputs(
 ) -> Result<CallToolResult, String> {
     let mut files = HashMap::<String, McpOutputFile>::new();
     for content in &result.content {
-        collect_output_files(content, &mut files);
+        collect_output_files(content, &mut files)?;
     }
     if let Some(structured_content) = result.structured_content.as_ref() {
-        collect_output_files(structured_content, &mut files);
+        collect_output_files(structured_content, &mut files)?;
     }
     if files.is_empty() {
         return Ok(result);
@@ -96,9 +100,9 @@ pub(crate) async fn materialize_mcp_file_outputs(
     let mut replacements = HashMap::new();
     for (uri, file) in files {
         let download = manager
-            .get_file_download(server, uri.clone())
+            .authorize_file_download(server, uri.clone())
             .await
-            .map_err(|error| format!("failed to prepare MCP file download: {error:#}"))?;
+            .map_err(|error| format!("failed to authorize MCP file download: {error:#}"))?;
         validate_mcp_file_uri(&download.file.uri)?;
         if download.file.uri != uri {
             return Err("MCP download response returned a different file URI".to_string());
@@ -112,16 +116,16 @@ pub(crate) async fn materialize_mcp_file_outputs(
                 .unwrap_or("download"),
         );
         let output_path = unique_output_path(&output_dir, &name).await;
+        let transfer = download.download.as_ref().ok_or_else(|| {
+            "MCP download authorization omitted a transfer descriptor".to_string()
+        })?;
         let size = download_transfer_file(
             sess,
-            &download.transfer,
+            transfer,
             &output_path,
-            download
-                .file
-                .size
-                .filter(|size| *size > 0)
-                .unwrap_or(DEFAULT_MAX_FILE_BYTES)
-                .min(DEFAULT_MAX_FILE_BYTES),
+            DEFAULT_MAX_FILE_BYTES,
+            download.file.size.or(file.size),
+            download.file.digest.as_ref().or(file.digest.as_ref()),
         )
         .await?;
         let local_uri = Url::from_file_path(&output_path)
@@ -134,6 +138,7 @@ pub(crate) async fn materialize_mcp_file_outputs(
                 "name": name,
                 "mimeType": download.file.mime_type.or(file.mime_type),
                 "size": size,
+                "digest": download.file.digest.or(file.digest),
             }),
         );
     }
@@ -150,19 +155,41 @@ pub(crate) async fn materialize_mcp_file_outputs(
 struct McpOutputFile {
     name: Option<String>,
     mime_type: Option<String>,
+    size: Option<u64>,
+    digest: Option<FileDigest>,
 }
 
-fn collect_output_files(value: &JsonValue, files: &mut HashMap<String, McpOutputFile>) {
+fn collect_output_files(
+    value: &JsonValue,
+    files: &mut HashMap<String, McpOutputFile>,
+) -> Result<(), String> {
     match value {
         JsonValue::Array(values) => {
             for value in values {
-                collect_output_files(value, files);
+                collect_output_files(value, files)?;
             }
         }
         JsonValue::Object(object) => {
+            if object.get("type").and_then(JsonValue::as_str) == Some("resource_link") {
+                return Ok(());
+            }
             if let Some(uri) = object.get("uri").and_then(JsonValue::as_str)
-                && uri.starts_with("mcp-file://")
+                && is_file_transfer_uri(uri)
             {
+                let size = object
+                    .get("size")
+                    .map(|size| {
+                        size.as_u64().ok_or_else(|| {
+                            "MCP file response returned an invalid file size".to_string()
+                        })
+                    })
+                    .transpose()?;
+                let digest = object
+                    .get("digest")
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(|_| "MCP file response returned an invalid digest".to_string())?;
                 files
                     .entry(uri.to_string())
                     .or_insert_with(|| McpOutputFile {
@@ -175,15 +202,18 @@ fn collect_output_files(value: &JsonValue, files: &mut HashMap<String, McpOutput
                             .or_else(|| object.get("mime_type"))
                             .and_then(JsonValue::as_str)
                             .map(str::to_string),
+                        size,
+                        digest,
                     });
-                return;
+                return Ok(());
             }
             for value in object.values() {
-                collect_output_files(value, files);
+                collect_output_files(value, files)?;
             }
         }
         _ => {}
     }
+    Ok(())
 }
 
 fn replace_output_files(value: &mut JsonValue, replacements: &HashMap<String, JsonValue>) {
@@ -335,10 +365,12 @@ async fn rewrite_single_file(
     let mime_type = mime_guess::from_path(&name)
         .first_raw()
         .unwrap_or("application/octet-stream");
-    if !spec.accepts.is_empty()
+    let has_mime_constraint = spec.accepts.iter().any(|accept| !accept.starts_with('.'));
+    if has_mime_constraint
         && !spec
             .accepts
             .iter()
+            .filter(|accept| !accept.starts_with('.'))
             .any(|accept| mime_matches(accept, mime_type))
     {
         return Err(format!(
@@ -347,35 +379,54 @@ async fn rewrite_single_file(
         ));
     }
     let manager = sess.services.mcp_connection_manager.load_full();
-    let capabilities = manager
-        .file_capabilities(server)
-        .await
-        .map_err(|error| format!("failed to inspect MCP file capabilities: {error:#}"))?;
-    if spec.accepts_upload() && capabilities.prepare_upload && capabilities.complete_upload {
+    if spec.accepts_upload() {
         tracing::debug!(
             transfer_mode = "upload",
             size_bucket = file_size_bucket(size),
             "adapting MCP file input"
         );
-        let prepared = manager
-            .prepare_file_upload(
+        let digest = FileDigest {
+            algorithm: "sha-256".to_string(),
+            value: URL_SAFE_NO_PAD.encode(Sha256::digest(&bytes)),
+        };
+        let authorized = manager
+            .authorize_file_upload(
                 server,
-                PrepareUploadParams {
-                    name,
+                AuthorizeUploadParams {
+                    name: name.clone(),
                     mime_type: mime_type.to_string(),
                     size,
+                    digest: Some(digest.clone()),
                 },
             )
             .await
-            .map_err(|error| format!("failed to prepare MCP file upload: {error:#}"))?;
-        validate_mcp_file_uri(&prepared.file.uri)?;
-        put_transfer_file(sess, &prepared.transfer, bytes, max_size).await?;
-        let completed = manager
-            .complete_file_upload(server, prepared.file.uri)
-            .await
-            .map_err(|error| format!("failed to complete MCP file upload: {error:#}"))?;
-        validate_mcp_file_uri(&completed.file.uri)?;
-        return Ok(JsonValue::String(completed.file.uri));
+            .map_err(|error| format!("failed to authorize MCP file upload: {error:#}"))?;
+        validate_mcp_file_uri(&authorized.file.uri)?;
+        if authorized
+            .file
+            .size
+            .is_some_and(|authorized_size| authorized_size != size)
+        {
+            return Err("MCP upload authorization returned a different file size".to_string());
+        }
+        if authorized
+            .file
+            .digest
+            .as_ref()
+            .is_some_and(|authorized_digest| authorized_digest != &digest)
+        {
+            return Err("MCP upload authorization returned a different file digest".to_string());
+        }
+        put_transfer_file(
+            sess,
+            &authorized.upload,
+            bytes,
+            max_size,
+            authorized.file.name.as_deref().unwrap_or(&name),
+            authorized.file.mime_type.as_deref().unwrap_or(mime_type),
+        )
+        .await?;
+        return Ok(JsonValue::String(authorized.file.uri));
     }
     if spec.accepts_inline() {
         tracing::debug!(
@@ -404,11 +455,15 @@ fn model_file_ref(value: &JsonValue) -> Option<&str> {
 }
 
 fn validate_mcp_file_uri(uri: &str) -> Result<(), String> {
-    if uri.starts_with("mcp-file://") {
+    if is_file_transfer_uri(uri) {
         Ok(())
     } else {
         Err("MCP file response returned an invalid file URI".to_string())
     }
+}
+
+fn is_file_transfer_uri(uri: &str) -> bool {
+    Url::parse(uri).is_ok_and(|uri| !matches!(uri.scheme(), "data" | "file" | "http" | "https"))
 }
 
 fn mime_matches(accept: &str, mime_type: &str) -> bool {

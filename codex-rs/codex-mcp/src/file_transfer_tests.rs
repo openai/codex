@@ -1,7 +1,6 @@
 use super::*;
 use pretty_assertions::assert_eq;
 use rmcp::model::Meta;
-use rmcp::model::ServerCapabilities;
 
 fn tool(input_schema: JsonValue, meta: Option<JsonValue>) -> Tool {
     let mut tool = Tool::new(
@@ -59,7 +58,7 @@ fn parses_and_merges_mcp_and_openai_file_inputs() {
 }
 
 #[test]
-fn missing_transfer_modes_defaults_to_inline() {
+fn missing_transfer_modes_allows_inline_and_upload() {
     let tool = tool(
         serde_json::json!({
             "type": "object",
@@ -69,7 +68,7 @@ fn missing_transfer_modes_defaults_to_inline() {
     );
     assert_eq!(
         file_input_specs(&tool)[0].transfer_modes,
-        BTreeSet::from([FileTransferMode::Inline])
+        BTreeSet::from([FileTransferMode::Inline, FileTransferMode::Upload])
     );
 }
 
@@ -81,11 +80,14 @@ fn malformed_extension_values_are_ignored_and_arrays_are_preserved() {
             "properties": {
                 "files": {
                     "type": "array",
-                    "items": {"type": "string"},
-                    "x-mcp-file": {
-                        "accept": ["text/plain", 7, ""],
-                        "maxSize": -1,
-                        "transferModes": ["upload", "future-mode", 7]
+                    "items": {
+                        "type": "string",
+                        "format": "uri",
+                        "x-mcp-file": {
+                            "accept": ["text/plain", 7, ""],
+                            "maxSize": -1,
+                            "transferModes": ["upload", "future-mode", 7]
+                        }
                     }
                 }
             }
@@ -142,92 +144,104 @@ fn mcp_schema_masking_is_gated_while_legacy_masking_is_not() {
 }
 
 #[test]
-fn file_capabilities_use_sep_extension_when_available() {
-    let mut capabilities = ServerCapabilities::default();
-    capabilities.extensions = Some(std::collections::BTreeMap::from([(
-        "io.modelcontextprotocol/files".to_string(),
-        serde_json::json!({
-            "prepareUpload": true,
-            "completeUpload": true,
-            "getDownload": false
-        })
-        .as_object()
-        .expect("object")
-        .clone(),
-    )]));
-
-    assert_eq!(
-        McpFileCapabilities::from_server_and_tools(&capabilities, &[]),
-        McpFileCapabilities {
-            prepare_upload: true,
-            complete_upload: true,
-            get_download: false,
-        }
-    );
-}
-
-#[test]
-fn file_capabilities_infer_openai_compatibility_from_upload_schema() {
-    let tool = tool(
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "file": {"x-mcp-file": {"transferModes": ["upload"]}}
-            }
-        }),
-        /*meta*/ None,
-    );
-    let tool = crate::ToolInfo {
-        server_name: "server".to_string(),
-        supports_parallel_tool_calls: false,
-        server_origin: None,
-        callable_name: "upload".to_string(),
-        callable_namespace: "server".to_string(),
-        namespace_description: None,
-        tool,
-        connector_id: None,
-        connector_name: None,
-        plugin_display_names: Vec::new(),
-    };
-
-    assert_eq!(
-        McpFileCapabilities::from_server_and_tools(&ServerCapabilities::default(), &[tool]),
-        McpFileCapabilities {
-            prepare_upload: true,
-            complete_upload: true,
-            get_download: true,
-        }
-    );
-}
-
-#[test]
-fn transfer_descriptors_accept_draft_and_extended_shapes() {
-    assert_eq!(
-        serde_json::from_value::<FileTransferDescriptor>(serde_json::json!({
-            "method": "PUT",
-            "url": "https://example.com/upload"
-        }))
-        .expect("draft descriptor"),
-        FileTransferDescriptor {
-            transport: None,
-            method: "PUT".to_string(),
-            url: "https://example.com/upload".to_string(),
-            expires_at: None,
-        }
-    );
+fn transfer_descriptors_accept_sep_shape() {
     assert_eq!(
         serde_json::from_value::<FileTransferDescriptor>(serde_json::json!({
             "transport": "https",
             "method": "GET",
             "url": "https://example.com/download",
+            "headers": {"Authorization": "Bearer secret"},
+            "multipart": {
+                "fileField": "payload",
+                "fields": {"token": "abc123"}
+            },
             "expiresAt": "2030-01-01T00:00:00Z"
         }))
         .expect("extended descriptor"),
         FileTransferDescriptor {
-            transport: Some("https".to_string()),
+            transport: "https".to_string(),
             method: "GET".to_string(),
             url: "https://example.com/download".to_string(),
+            headers: BTreeMap::from([("Authorization".to_string(), "Bearer secret".to_string(),)]),
+            multipart: Some(FileTransferMultipart {
+                file_field: "payload".to_string(),
+                fields: BTreeMap::from([("token".to_string(), "abc123".to_string())]),
+            }),
             expires_at: Some("2030-01-01T00:00:00Z".to_string()),
+        }
+    );
+}
+
+#[test]
+fn authorize_upload_params_match_sep_wire_shape() {
+    assert_eq!(
+        serde_json::to_value(AuthorizeUploadParams {
+            name: "report.pdf".to_string(),
+            mime_type: "application/pdf".to_string(),
+            size: 248_123,
+            digest: Some(FileDigest {
+                algorithm: "sha-256".to_string(),
+                value: "digest-value".to_string(),
+            }),
+        })
+        .expect("serialize params"),
+        serde_json::json!({
+            "name": "report.pdf",
+            "mimeType": "application/pdf",
+            "size": 248123,
+            "digest": {"algorithm": "sha-256", "value": "digest-value"}
+        })
+    );
+}
+
+#[test]
+fn authorize_results_match_sep_wire_shapes() {
+    let file = serde_json::json!({
+        "uri": "mcp-file://server/file-1",
+        "name": "report.pdf",
+        "mimeType": "application/pdf",
+        "size": 248123,
+        "digest": {"algorithm": "sha-256", "value": "digest-value"}
+    });
+    let upload = serde_json::json!({
+        "transport": "https",
+        "method": "POST",
+        "url": "https://upload.example.com/file-1",
+        "headers": {"X-Upload": "token"},
+        "multipart": {"fileField": "file", "fields": {"token": "abc123"}},
+        "expiresAt": "2030-01-01T00:00:00Z"
+    });
+    let download = serde_json::json!({
+        "transport": "https",
+        "method": "GET",
+        "url": "https://download.example.com/file-1"
+    });
+
+    let result: AuthorizeUploadResult = serde_json::from_value(serde_json::json!({
+        "file": file,
+        "upload": upload,
+        "download": download
+    }))
+    .expect("authorize upload result");
+    assert_eq!(
+        result,
+        AuthorizeUploadResult {
+            file: serde_json::from_value(file.clone()).expect("file value"),
+            upload: serde_json::from_value(upload).expect("upload descriptor"),
+            download: Some(serde_json::from_value(download.clone()).expect("download descriptor")),
+        }
+    );
+
+    let result: AuthorizeDownloadResult = serde_json::from_value(serde_json::json!({
+        "file": file,
+        "download": download
+    }))
+    .expect("authorize download result");
+    assert_eq!(
+        result,
+        AuthorizedFile {
+            file: serde_json::from_value(file).expect("file value"),
+            download: Some(serde_json::from_value(download).expect("download descriptor")),
         }
     );
 }

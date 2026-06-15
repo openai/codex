@@ -20,15 +20,12 @@ use crate::codex_apps::CodexAppsToolsCacheKey;
 use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::ElicitationReviewerHandle;
-use crate::file_transfer::CompleteUploadResult;
+use crate::file_transfer::AuthorizeDownloadResult;
+use crate::file_transfer::AuthorizeUploadParams;
+use crate::file_transfer::AuthorizeUploadResult;
 use crate::file_transfer::FileUriParams;
-use crate::file_transfer::GetDownloadResult;
-use crate::file_transfer::METHOD_FILES_COMPLETE_UPLOAD;
-use crate::file_transfer::METHOD_FILES_GET_DOWNLOAD;
-use crate::file_transfer::METHOD_FILES_PREPARE_UPLOAD;
-use crate::file_transfer::McpFileCapabilities;
-use crate::file_transfer::PrepareUploadParams;
-use crate::file_transfer::PrepareUploadResult;
+use crate::file_transfer::METHOD_FILES_AUTHORIZE_DOWNLOAD;
+use crate::file_transfer::METHOD_FILES_AUTHORIZE_UPLOAD;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
 use crate::rmcp_client::AsyncManagedClient;
@@ -749,60 +746,32 @@ impl McpConnectionManager {
         })
     }
 
-    pub async fn prepare_file_upload(
+    pub async fn authorize_file_upload(
         &self,
         server: &str,
-        params: PrepareUploadParams,
-    ) -> Result<PrepareUploadResult> {
-        self.require_file_capability(server, |capabilities| capabilities.prepare_upload)
-            .await?;
-        self.send_file_request(server, METHOD_FILES_PREPARE_UPLOAD, params)
+        params: AuthorizeUploadParams,
+    ) -> Result<AuthorizeUploadResult> {
+        self.send_file_request(server, METHOD_FILES_AUTHORIZE_UPLOAD, params)
             .await
     }
 
-    pub async fn file_capabilities(&self, server: &str) -> Result<McpFileCapabilities> {
-        if !self.mcp_file_transfer_enabled.load(Ordering::Relaxed) {
-            return Ok(McpFileCapabilities::default());
-        }
-        Ok(self.client_by_name(server).await?.file_capabilities)
-    }
-
-    pub async fn complete_file_upload(
+    pub async fn authorize_file_download(
         &self,
         server: &str,
         uri: String,
-    ) -> Result<CompleteUploadResult> {
-        self.require_file_capability(server, |capabilities| capabilities.complete_upload)
-            .await?;
-        self.send_file_request(server, METHOD_FILES_COMPLETE_UPLOAD, FileUriParams { uri })
-            .await
-    }
-
-    pub async fn get_file_download(&self, server: &str, uri: String) -> Result<GetDownloadResult> {
+    ) -> Result<AuthorizeDownloadResult> {
         if !self.mcp_file_transfer_enabled.load(Ordering::Relaxed) {
             return Err(anyhow!("MCP file transfer is disabled"));
         }
-        // rmcp 1.7 drops the draft top-level `capabilities.files` object. A
-        // structured `mcp-file://` tool result is itself sufficient evidence
-        // to try the matching draft download method.
-        self.send_file_request(server, METHOD_FILES_GET_DOWNLOAD, FileUriParams { uri })
-            .await
-    }
-
-    async fn require_file_capability(
-        &self,
-        server: &str,
-        supported: impl FnOnce(McpFileCapabilities) -> bool,
-    ) -> Result<()> {
-        if !self.mcp_file_transfer_enabled.load(Ordering::Relaxed) {
-            return Err(anyhow!("MCP file transfer is disabled"));
-        }
-        if !supported(self.file_capabilities(server).await?) {
-            return Err(anyhow!(
-                "MCP server `{server}` does not advertise the required file capability"
-            ));
-        }
-        Ok(())
+        // SEP-2631 defines `capabilities.files` on the client. A file URI
+        // returned by the server is sufficient evidence to try the download
+        // authorization method without a separate server capability gate.
+        self.send_file_request(
+            server,
+            METHOD_FILES_AUTHORIZE_DOWNLOAD,
+            FileUriParams { uri },
+        )
+        .await
     }
 
     async fn send_file_request<T, P>(&self, server: &str, method: &str, params: P) -> Result<T>

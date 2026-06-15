@@ -1,15 +1,23 @@
 use std::net::IpAddr;
 use std::time::Duration;
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_network_proxy::NetworkProxy;
 use futures::StreamExt;
 use reqwest::Method;
+use reqwest::RequestBuilder;
 use reqwest::header::ACCEPT;
 use reqwest::header::CONTENT_LENGTH;
 use reqwest::header::HeaderMap;
+use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use reqwest::header::USER_AGENT;
+use reqwest::multipart::Form;
+use reqwest::multipart::Part;
 use reqwest::redirect::Policy;
+use sha2::Digest;
+use sha2::Sha256;
 use tokio::io::AsyncWriteExt;
 use url::Url;
 
@@ -23,11 +31,18 @@ pub(super) async fn download_transfer_file(
     transfer: &codex_mcp::FileTransferDescriptor,
     output_path: &std::path::Path,
     max_size: u64,
+    expected_size: Option<u64>,
+    expected_digest: Option<&codex_mcp::FileDigest>,
 ) -> Result<u64, String> {
     let url = validated_transfer_descriptor(transfer, "GET")?;
-    let response = transfer_client(sess, &url)
-        .await?
-        .get(url)
+    if expected_size.is_some_and(|size| size > max_size) {
+        return Err(format!("MCP download exceeds the {max_size}-byte limit"));
+    }
+    if expected_digest.is_some_and(|digest| digest.algorithm != "sha-256") {
+        return Err("MCP download uses an unsupported digest algorithm".to_string());
+    }
+    let request = transfer_client(sess, &url).await?.get(url);
+    let response = apply_transfer_headers(request, transfer, /*multipart*/ false)?
         .send()
         .await
         .map_err(|_| "MCP download transfer request failed".to_string())?;
@@ -47,6 +62,7 @@ pub(super) async fn download_transfer_file(
             .await
             .map_err(|error| format!("failed to create MCP download: {error}"))?;
         let mut size = 0_u64;
+        let mut hasher = expected_digest.map(|_| Sha256::new());
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|error| format!("failed to read MCP download: {error}"))?;
@@ -54,10 +70,21 @@ pub(super) async fn download_transfer_file(
             if size > max_size {
                 return Err(format!("MCP download exceeds the {max_size}-byte limit"));
             }
+            if let Some(hasher) = hasher.as_mut() {
+                hasher.update(&chunk);
+            }
             output
                 .write_all(&chunk)
                 .await
                 .map_err(|error| format!("failed to write MCP download: {error}"))?;
+        }
+        if expected_size.is_some_and(|expected_size| size != expected_size) {
+            return Err("MCP download size did not match its file metadata".to_string());
+        }
+        if let (Some(hasher), Some(expected_digest)) = (hasher, expected_digest)
+            && URL_SAFE_NO_PAD.encode(hasher.finalize()) != expected_digest.value
+        {
+            return Err("MCP download digest did not match its file metadata".to_string());
         }
         output
             .flush()
@@ -81,6 +108,8 @@ pub(super) async fn put_transfer_file(
     transfer: &codex_mcp::FileTransferDescriptor,
     bytes: Vec<u8>,
     max_size: u64,
+    name: &str,
+    mime_type: &str,
 ) -> Result<(), String> {
     let url = validated_upload_transfer_descriptor(transfer)?;
     let method = Method::from_bytes(transfer.method.as_bytes())
@@ -89,16 +118,34 @@ pub(super) async fn put_transfer_file(
     if size > max_size {
         return Err(format!("MCP upload exceeds the {max_size}-byte limit"));
     }
-    let stream = futures::stream::once(async move { Ok::<_, std::io::Error>(bytes) });
     let azure_blob_upload = url.host_str().is_some_and(|host| {
         host.ends_with(".blob.core.windows.net") || host.ends_with(".oaiusercontent.com")
     });
-    let mut request = transfer_client(sess, &url)
-        .await?
-        .request(method, url)
-        .header(CONTENT_LENGTH, size)
-        .body(reqwest::Body::wrap_stream(stream));
-    if azure_blob_upload {
+    let mut request = transfer_client(sess, &url).await?.request(method, url);
+    if let Some(multipart) = transfer.multipart.as_ref() {
+        if transfer.method != "POST" {
+            return Err("MCP multipart upload method must be POST".to_string());
+        }
+        if multipart.file_field.is_empty() {
+            return Err("MCP multipart upload file field must not be empty".to_string());
+        }
+        let part = Part::bytes(bytes)
+            .file_name(name.to_string())
+            .mime_str(mime_type)
+            .map_err(|error| format!("invalid MCP upload MIME type: {error}"))?;
+        let mut form = Form::new();
+        for (field, value) in &multipart.fields {
+            form = form.text(field.clone(), value.clone());
+        }
+        request = request.multipart(form.part(multipart.file_field.clone(), part));
+    } else {
+        let stream = futures::stream::once(async move { Ok::<_, std::io::Error>(bytes) });
+        request = request
+            .header(CONTENT_LENGTH, size)
+            .body(reqwest::Body::wrap_stream(stream));
+    }
+    request = apply_transfer_headers(request, transfer, transfer.multipart.is_some())?;
+    if azure_blob_upload && transfer.multipart.is_none() {
         request = request.header("x-ms-blob-type", "BlockBlob");
     }
     let response = request
@@ -112,15 +159,46 @@ pub(super) async fn put_transfer_file(
     Ok(())
 }
 
+fn apply_transfer_headers(
+    mut request: RequestBuilder,
+    transfer: &codex_mcp::FileTransferDescriptor,
+    multipart: bool,
+) -> Result<RequestBuilder, String> {
+    for (name, value) in &transfer.headers {
+        let name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|error| format!("invalid MCP transfer header name: {error}"))?;
+        let lower_name = name.as_str();
+        if matches!(
+            lower_name,
+            "connection"
+                | "content-length"
+                | "host"
+                | "proxy-authenticate"
+                | "proxy-authorization"
+                | "te"
+                | "trailer"
+                | "transfer-encoding"
+                | "upgrade"
+        ) {
+            return Err(format!(
+                "MCP transfer header `{lower_name}` is not permitted"
+            ));
+        }
+        if multipart && lower_name == "content-type" {
+            continue;
+        }
+        let value = HeaderValue::from_str(value)
+            .map_err(|error| format!("invalid MCP transfer header value: {error}"))?;
+        request = request.header(name, value);
+    }
+    Ok(request)
+}
+
 pub(super) fn validated_transfer_descriptor(
     transfer: &codex_mcp::FileTransferDescriptor,
     expected_method: &str,
 ) -> Result<Url, String> {
-    if transfer
-        .transport
-        .as_deref()
-        .is_some_and(|value| value != "https")
-    {
+    if transfer.transport != "https" {
         return Err("MCP transfer transport must be HTTPS".to_string());
     }
     if transfer.method != expected_method {

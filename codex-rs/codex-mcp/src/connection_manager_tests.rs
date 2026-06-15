@@ -850,12 +850,13 @@ async fn file_methods_are_rejected_while_feature_is_disabled() {
     );
 
     let error = manager
-        .prepare_file_upload(
+        .authorize_file_upload(
             "server",
-            PrepareUploadParams {
+            AuthorizeUploadParams {
                 name: "file.txt".to_string(),
                 mime_type: "text/plain".to_string(),
                 size: 4,
+                digest: None,
             },
         )
         .await
