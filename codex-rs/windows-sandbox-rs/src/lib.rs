@@ -105,6 +105,9 @@ mod setup_error;
 mod spawn_prep;
 
 #[cfg(target_os = "windows")]
+mod stdio_bridge;
+
+#[cfg(target_os = "windows")]
 mod unified_exec;
 
 #[cfg(target_os = "windows")]
@@ -269,6 +272,8 @@ pub use setup_error::setup_error_path;
 #[cfg(target_os = "windows")]
 pub use setup_error::write_setup_error_report;
 #[cfg(target_os = "windows")]
+pub use stdio_bridge::forward_sandbox_session_stdio;
+#[cfg(target_os = "windows")]
 #[doc(hidden)]
 pub use token::LocalSid;
 #[cfg(target_os = "windows")]
@@ -286,7 +291,11 @@ pub use token::create_workspace_write_token_with_caps_from;
 #[cfg(target_os = "windows")]
 pub use token::get_current_token_for_restriction;
 #[cfg(target_os = "windows")]
+pub use unified_exec::WindowsSandboxSessionRequest;
+#[cfg(target_os = "windows")]
 pub use unified_exec::spawn_windows_sandbox_session_elevated_for_permission_profile;
+#[cfg(target_os = "windows")]
+pub use unified_exec::spawn_windows_sandbox_session_for_level;
 #[cfg(target_os = "windows")]
 pub use unified_exec::spawn_windows_sandbox_session_legacy;
 #[cfg(target_os = "windows")]
