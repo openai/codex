@@ -6,8 +6,6 @@ use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncSeekExt;
 use tokio::sync::Mutex;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 use uuid::Uuid;
 
 pub(crate) const FILE_READ_BLOCK_SIZE: usize = 1024 * 1024;
@@ -21,13 +19,7 @@ pub(crate) struct FileReadBlock {
 
 #[derive(Clone, Default)]
 pub(crate) struct FileReadHandleManager {
-    handles: Arc<Mutex<HashMap<String, mpsc::Sender<FileReadRequest>>>>,
-}
-
-struct FileReadRequest {
-    offset: u64,
-    len: usize,
-    response: oneshot::Sender<io::Result<FileReadBlock>>,
+    handles: Arc<Mutex<HashMap<String, tokio::fs::File>>>,
 }
 
 impl FileReadHandleManager {
@@ -40,9 +32,7 @@ impl FileReadHandleManager {
             ));
         }
         let handle_id = Uuid::new_v4().to_string();
-        let (sender, receiver) = mpsc::channel(1);
-        handles.insert(handle_id.clone(), sender);
-        tokio::spawn(serve_file_reads(file, receiver));
+        handles.insert(handle_id.clone(), file);
         Ok(handle_id)
     }
 
@@ -53,34 +43,18 @@ impl FileReadHandleManager {
         len: usize,
     ) -> io::Result<FileReadBlock> {
         validate_read_block_len(len)?;
-        let sender = {
-            let handles = self.handles.lock().await;
+        let mut file = {
+            let mut handles = self.handles.lock().await;
             handles
-                .get(handle_id)
-                .cloned()
+                .remove(handle_id)
                 .ok_or_else(|| unknown_handle_error(handle_id))?
         };
-        let (response, result) = oneshot::channel();
-        if sender
-            .send(FileReadRequest {
-                offset,
-                len,
-                response,
-            })
-            .await
-            .is_err()
-        {
-            self.close(handle_id).await;
-            return Err(unknown_handle_error(handle_id));
-        }
-        let result = result.await.map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                format!("file read handle `{handle_id}` stopped unexpectedly"),
-            )
-        })?;
-        if result.is_err() || result.as_ref().is_ok_and(|block| block.eof) {
-            self.close(handle_id).await;
+        let result = read_block(&mut file, offset, len).await;
+        if result.as_ref().is_ok_and(|block| !block.eof) {
+            self.handles
+                .lock()
+                .await
+                .insert(handle_id.to_string(), file);
         }
         result
     }
@@ -91,20 +65,6 @@ impl FileReadHandleManager {
 
     pub(crate) async fn close_all(&self) {
         self.handles.lock().await.clear();
-    }
-}
-
-async fn serve_file_reads(
-    mut file: tokio::fs::File,
-    mut requests: mpsc::Receiver<FileReadRequest>,
-) {
-    while let Some(request) = requests.recv().await {
-        let result = read_block(&mut file, request.offset, request.len).await;
-        let should_stop = result.is_err();
-        let _ = request.response.send(result);
-        if should_stop {
-            break;
-        }
     }
 }
 
