@@ -696,22 +696,6 @@ impl App {
                     .await?;
                 Ok(true)
             }
-            AppCommand::RealtimeConversationStart { transport, voice } => {
-                app_server
-                    .thread_realtime_start(thread_id, transport.clone(), voice.clone())
-                    .await?;
-                Ok(true)
-            }
-            AppCommand::RealtimeConversationAudio(frame) => {
-                app_server
-                    .thread_realtime_audio(thread_id, frame.clone())
-                    .await?;
-                Ok(true)
-            }
-            AppCommand::RealtimeConversationClose => {
-                app_server.thread_realtime_stop(thread_id).await?;
-                Ok(true)
-            }
             AppCommand::RunUserShellCommand { command } => {
                 app_server
                     .thread_shell_command(thread_id, command.to_string())
@@ -1114,8 +1098,7 @@ impl App {
         self.chat_widget
             .set_initial_user_message_submit_suppressed(/*suppressed*/ true);
         self.chat_widget.handle_thread_session(session);
-        let should_buffer_initial_replay =
-            self.terminal_resize_reflow_enabled() && !turns.is_empty();
+        let should_buffer_initial_replay = !turns.is_empty();
         if should_buffer_initial_replay {
             self.app_event_tx
                 .send(AppEvent::BeginInitialHistoryReplayBuffer);
@@ -1305,8 +1288,7 @@ impl App {
         resume_restored_queue: bool,
     ) {
         self.refresh_mcp_startup_expected_servers_from_config();
-        let should_buffer_replay = self.terminal_resize_reflow_enabled()
-            && (!snapshot.turns.is_empty() || !snapshot.events.is_empty());
+        let should_buffer_replay = !snapshot.turns.is_empty() || !snapshot.events.is_empty();
         if should_buffer_replay {
             self.app_event_tx
                 .send(AppEvent::BeginThreadSwitchHistoryReplayBuffer);

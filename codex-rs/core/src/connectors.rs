@@ -18,6 +18,7 @@ use codex_tools::DiscoverableTool;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
+use tracing::instrument;
 use tracing::warn;
 
 use crate::config::Config;
@@ -280,6 +281,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     let auth_status_entries = compute_auth_statuses(
         mcp_servers.iter(),
         config.mcp_oauth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
         auth.as_ref(),
     )
     .await;
@@ -291,6 +293,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     let mcp_connection_manager = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
         auth_status_entries,
         &config.permissions.approval_policy,
         INITIAL_SUBMIT_ID.to_owned(),
@@ -458,6 +461,7 @@ fn tool_suggest_connector_ids(
     connector_ids
 }
 
+#[instrument(level = "trace", skip_all)]
 async fn cached_directory_connectors_for_tool_suggest_with_auth(
     config: &Config,
     auth: Option<&CodexAuth>,

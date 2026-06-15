@@ -11,8 +11,9 @@ use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolExposure;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
-use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::protocol::DynamicToolCallResponseEvent;
 use codex_protocol::protocol::EventMsg;
@@ -36,13 +37,34 @@ pub struct DynamicToolHandler {
 }
 
 impl DynamicToolHandler {
-    pub fn new(tool: &DynamicToolSpec) -> Option<Self> {
-        let tool_name = ToolName::new(tool.namespace.clone(), tool.name.clone());
+    pub fn new(tool: &DynamicToolFunctionSpec) -> Option<Self> {
+        Self::from_parts(tool, /*namespace*/ None)
+    }
+
+    pub fn new_in_namespace(
+        namespace: &DynamicToolNamespaceSpec,
+        tool: &DynamicToolFunctionSpec,
+    ) -> Option<Self> {
+        Self::from_parts(tool, Some(namespace))
+    }
+
+    fn from_parts(
+        tool: &DynamicToolFunctionSpec,
+        namespace: Option<&DynamicToolNamespaceSpec>,
+    ) -> Option<Self> {
+        let tool_name = ToolName::new(
+            namespace.map(|namespace| namespace.name.clone()),
+            tool.name.clone(),
+        );
         let output_tool = dynamic_tool_to_responses_api_tool(tool).ok()?;
-        let spec = match tool.namespace.as_ref() {
+        let spec = match namespace {
             Some(namespace) => ToolSpec::Namespace(ResponsesApiNamespace {
-                name: namespace.clone(),
-                description: default_namespace_description(namespace),
+                name: namespace.name.clone(),
+                description: if namespace.description.trim().is_empty() {
+                    default_namespace_description(&namespace.name)
+                } else {
+                    namespace.description.clone()
+                },
                 tools: vec![ResponsesApiNamespaceTool::Function(output_tool)],
             }),
             None => ToolSpec::Function(output_tool),

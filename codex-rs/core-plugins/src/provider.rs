@@ -77,6 +77,25 @@ pub struct ExecutorPluginProvider {
     environment_manager: Arc<EnvironmentManager>,
 }
 
+/// A resolved plugin paired with the concrete filesystem used to read it.
+#[derive(Clone)]
+pub struct ResolvedExecutorPlugin {
+    plugin: ResolvedPlugin,
+    file_system: Arc<dyn ExecutorFileSystem>,
+}
+
+impl ResolvedExecutorPlugin {
+    /// Returns the source-neutral plugin descriptor.
+    pub fn plugin(&self) -> &ResolvedPlugin {
+        &self.plugin
+    }
+
+    /// Returns the concrete filesystem that resolved the descriptor.
+    pub fn file_system(&self) -> &dyn ExecutorFileSystem {
+        self.file_system.as_ref()
+    }
+}
+
 impl ExecutorPluginProvider {
     /// Creates a provider backed by the active execution environments.
     pub fn new(environment_manager: Arc<EnvironmentManager>) -> Self {
@@ -84,15 +103,12 @@ impl ExecutorPluginProvider {
             environment_manager,
         }
     }
-}
 
-impl PluginProvider for ExecutorPluginProvider {
-    type Error = ExecutorPluginProviderError;
-
-    async fn resolve(
+    /// Resolves a plugin and retains the exact filesystem used for package access.
+    pub async fn resolve_bound(
         &self,
         selected_root: &SelectedCapabilityRoot,
-    ) -> Result<Option<ResolvedPlugin>, Self::Error> {
+    ) -> Result<Option<ResolvedExecutorPlugin>, ExecutorPluginProviderError> {
         let root_id = &selected_root.id;
         let plugin_root = selected_plugin_root(selected_root)?;
         let CapabilityRootLocation::Environment { environment_id, .. } = &selected_root.location;
@@ -104,8 +120,25 @@ impl PluginProvider for ExecutorPluginProvider {
                 environment_id: environment_id.clone(),
             })?;
         let file_system = environment.get_filesystem();
+        let plugin = resolve_plugin_root(selected_root, plugin_root, file_system.as_ref()).await?;
 
-        resolve_plugin_root(selected_root, plugin_root, file_system.as_ref()).await
+        Ok(plugin.map(|plugin| ResolvedExecutorPlugin {
+            plugin,
+            file_system,
+        }))
+    }
+}
+
+impl PluginProvider for ExecutorPluginProvider {
+    type Error = ExecutorPluginProviderError;
+
+    async fn resolve(
+        &self,
+        selected_root: &SelectedCapabilityRoot,
+    ) -> Result<Option<ResolvedPlugin>, Self::Error> {
+        self.resolve_bound(selected_root)
+            .await
+            .map(|plugin| plugin.map(|plugin| plugin.plugin))
     }
 }
 
@@ -137,17 +170,8 @@ async fn resolve_plugin_root(
     file_system: &dyn ExecutorFileSystem,
 ) -> Result<Option<ResolvedPlugin>, ExecutorPluginProviderError> {
     let root_id = &selected_root.id;
-    let CapabilityRootLocation::Environment {
-        environment_id,
-        path,
-    } = &selected_root.location;
-    let root_uri = PathUri::from_abs_path(&plugin_root).map_err(|err| {
-        ExecutorPluginProviderError::InvalidRootPath {
-            root_id: root_id.clone(),
-            path: path.clone(),
-            message: err.to_string(),
-        }
-    })?;
+    let CapabilityRootLocation::Environment { environment_id, .. } = &selected_root.location;
+    let root_uri = PathUri::from_abs_path(&plugin_root);
     let root_metadata = file_system
         .get_metadata(&root_uri, /*sandbox*/ None)
         .await
@@ -166,13 +190,7 @@ async fn resolve_plugin_root(
     let mut manifest_path = None;
     for relative_path in DISCOVERABLE_PLUGIN_MANIFEST_PATHS {
         let candidate = plugin_root.join(relative_path);
-        let candidate_uri = PathUri::from_abs_path(&candidate).map_err(|err| {
-            ExecutorPluginProviderError::InvalidRootPath {
-                root_id: root_id.clone(),
-                path: candidate.as_path().to_string_lossy().into_owned(),
-                message: err.to_string(),
-            }
-        })?;
+        let candidate_uri = PathUri::from_abs_path(&candidate);
         match file_system
             .get_metadata(&candidate_uri, /*sandbox*/ None)
             .await

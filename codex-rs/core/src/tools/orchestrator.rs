@@ -39,6 +39,7 @@ use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
+use codex_utils_path_uri::PathUri;
 use std::time::Instant;
 
 pub(crate) struct ToolOrchestrator {
@@ -239,13 +240,14 @@ impl ToolOrchestrator {
         let use_legacy_landlock = turn_ctx.features.use_legacy_landlock();
         #[allow(deprecated)]
         let sandbox_cwd = tool.sandbox_cwd(req).unwrap_or(&turn_ctx.cwd);
+        let sandbox_policy_cwd = PathUri::from_abs_path(sandbox_cwd);
         let workspace_roots = turn_ctx.config.effective_workspace_roots();
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
             permissions: &turn_ctx.permission_profile,
             enforce_managed_network: managed_network_active,
             manager: &self.sandbox,
-            sandbox_cwd,
+            sandbox_cwd: &sandbox_policy_cwd,
             workspace_roots: workspace_roots.as_slice(),
             codex_linux_sandbox_exe: turn_ctx.codex_linux_sandbox_exe.as_ref(),
             use_legacy_landlock,
@@ -418,7 +420,7 @@ impl ToolOrchestrator {
                     permissions: &turn_ctx.permission_profile,
                     enforce_managed_network: managed_network_active,
                     manager: &self.sandbox,
-                    sandbox_cwd,
+                    sandbox_cwd: &sandbox_policy_cwd,
                     workspace_roots: workspace_roots.as_slice(),
                     codex_linux_sandbox_exe: retry_codex_linux_sandbox_exe,
                     use_legacy_landlock,

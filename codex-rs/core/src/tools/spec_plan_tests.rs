@@ -384,8 +384,7 @@ fn invalid_mcp_tool(server: &str, namespace: &str, name: &str) -> ToolInfo {
 }
 
 fn dynamic_tool(namespace: Option<&str>, name: &str, defer_loading: bool) -> DynamicToolSpec {
-    DynamicToolSpec {
-        namespace: namespace.map(str::to_string),
+    let function = codex_protocol::dynamic_tools::DynamicToolFunctionSpec {
         name: name.to_string(),
         description: format!("{name} dynamic tool"),
         input_schema: json!({
@@ -394,6 +393,18 @@ fn dynamic_tool(namespace: Option<&str>, name: &str, defer_loading: bool) -> Dyn
             "additionalProperties": false,
         }),
         defer_loading,
+    };
+    match namespace {
+        Some(namespace) => {
+            DynamicToolSpec::Namespace(codex_protocol::dynamic_tools::DynamicToolNamespaceSpec {
+                name: namespace.to_string(),
+                description: format!("{namespace} dynamic tools"),
+                tools: vec![
+                    codex_protocol::dynamic_tools::DynamicToolNamespaceTool::Function(function),
+                ],
+            })
+        }
+        None => DynamicToolSpec::Function(function),
     }
 }
 
@@ -573,21 +584,21 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
             .environments
             .primary()
             .expect("primary environment")
-            .cwd
+            .cwd()
             .clone();
-        turn.environments
-            .turn_environments
-            .push(crate::session::turn_context::TurnEnvironment {
-                environment_id: "remote".to_string(),
-                environment: Arc::new(
+        turn.environments.turn_environments.push(
+            crate::session::turn_context::TurnEnvironment::new(
+                "remote".to_string(),
+                Arc::new(
                     codex_exec_server::Environment::create_for_tests(Some(
                         "ws://127.0.0.1:1/remote-exec-server".to_string(),
                     ))
                     .expect("remote test environment"),
                 ),
-                cwd: remote_cwd,
-                shell: None,
-            });
+                remote_cwd,
+                /*shell*/ None,
+            ),
+        );
     })
     .await;
 
@@ -1044,6 +1055,9 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         other => panic!("expected spawn_agent function spec, got {other:?}"),
     };
     assert!(!spawn_agent_description.contains("max_concurrent_threads_per_session"));
+    assert!(spawn_agent_description.contains(
+        "Note that passing `fork_turns=\"none\"` will not pass any surrounding context to the spawned subagent"
+    ));
 
     let direct_model_only = probe(|turn| {
         set_features(

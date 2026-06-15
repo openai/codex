@@ -58,6 +58,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
+use codex_utils_path_uri::PathUri;
 use tracing::Span;
 
 use crate::rollout::recorder::RolloutRecorder;
@@ -4035,12 +4036,12 @@ fn turn_environments_for_tests(
     cwd: &codex_utils_absolute_path::AbsolutePathBuf,
 ) -> crate::environment_selection::ResolvedTurnEnvironments {
     crate::environment_selection::ResolvedTurnEnvironments {
-        turn_environments: vec![TurnEnvironment {
-            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-            environment: Arc::clone(environment),
-            cwd: cwd.clone(),
-            shell: None,
-        }],
+        turn_environments: vec![TurnEnvironment::new(
+            codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            Arc::clone(environment),
+            cwd.clone(),
+            /*shell*/ None,
+        )],
     }
 }
 
@@ -4614,6 +4615,7 @@ async fn session_update_settings_does_not_rewrite_sticky_environment_cwds() {
             .environment_selections()
             .to_vec()
     };
+    let expected_environments = current_environments.clone();
     std::fs::create_dir_all(updated_cwd.as_path()).expect("create project dir");
 
     session
@@ -4627,21 +4629,28 @@ async fn session_update_settings_does_not_rewrite_sticky_environment_cwds() {
         .await
         .expect("cwd update should succeed");
 
-    let session_cwd = {
+    let (session_cwd, stored_environments) = {
         let state = session.state.lock().await;
-        state.session_configuration.cwd().clone()
+        (
+            state.session_configuration.cwd().clone(),
+            state
+                .session_configuration
+                .environment_selections()
+                .to_vec(),
+        )
     };
     let config = session.get_config().await;
     let next_turn = session.new_default_turn().await;
 
     assert_eq!(session_cwd, updated_cwd);
+    assert_eq!(stored_environments, expected_environments);
     #[allow(deprecated)]
     let turn_cwd = turn_context.cwd.clone();
     #[allow(deprecated)]
     let next_turn_cwd = next_turn.cwd.clone();
     assert_eq!(config.cwd, turn_cwd);
-    assert_eq!(next_turn_cwd, updated_cwd);
-    assert_eq!(next_turn.config.cwd, updated_cwd);
+    assert_eq!(next_turn_cwd, turn_cwd);
+    assert_eq!(next_turn.config.cwd, turn_cwd);
 }
 
 #[tokio::test]
@@ -4677,7 +4686,7 @@ async fn relative_cwd_update_without_environments_resolves_under_session_cwd() {
 }
 
 #[tokio::test]
-async fn cwd_update_rewrites_sticky_environment_cwd() {
+async fn environment_settings_preserve_explicit_primary_cwd() {
     let (session, _turn_context) = make_session_and_context().await;
     let (original_cwd, environment_cwd, environments) = {
         let mut state = session.state.lock().await;
@@ -4705,9 +4714,8 @@ async fn cwd_update_rewrites_sticky_environment_cwd() {
     assert_eq!(state.session_configuration.cwd(), &updated_cwd);
     assert_eq!(
         state.session_configuration.environment_selections()[0].cwd,
-        updated_cwd
+        PathUri::from_abs_path(&environment_cwd)
     );
-    assert_ne!(environment_cwd, updated_cwd);
 }
 
 #[tokio::test]
@@ -4960,7 +4968,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         })),
         rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell: Arc::new(default_user_shell()),
-        shell_snapshot_tx: watch::channel(None).0,
+        shell_snapshot: arc_swap::ArcSwapOption::empty(),
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
         auth_manager: auth_manager.clone(),
@@ -5656,8 +5664,13 @@ async fn request_permissions_tool_resolves_relative_paths_against_selected_envir
             mcp_elicitations: true,
         }))
         .expect("test setup should allow updating approval policy");
-    turn_context_mut.environments.turn_environments[0].environment_id = "remote".to_string();
-    turn_context_mut.environments.turn_environments[0].cwd = environment_cwd.clone();
+    let current_environment = turn_context_mut.environments.turn_environments[0].clone();
+    turn_context_mut.environments.turn_environments[0] = TurnEnvironment::new(
+        "remote".to_string(),
+        current_environment.environment,
+        environment_cwd.clone(),
+        current_environment.shell,
+    );
 
     let call_id = "call-1".to_string();
     let handler = RequestPermissionsHandler;
@@ -6249,12 +6262,12 @@ async fn primary_environment_uses_first_turn_environment() {
     turn_context
         .environments
         .turn_environments
-        .push(TurnEnvironment {
-            environment_id: "second".to_string(),
-            environment: Arc::clone(&first_environment.environment),
-            cwd: second_cwd.clone(),
-            shell: None,
-        });
+        .push(TurnEnvironment::new(
+            "second".to_string(),
+            Arc::clone(&first_environment.environment),
+            second_cwd.clone(),
+            /*shell*/ None,
+        ));
 
     assert_eq!(
         turn_context
@@ -6271,13 +6284,13 @@ async fn primary_environment_uses_first_turn_environment() {
             .iter()
             .find(|environment| environment.environment_id == "second")
             .expect("second environment")
-            .cwd,
-        second_cwd
+            .cwd(),
+        &second_cwd
     );
     assert_eq!(turn_context.environments.turn_environments.len(), 2);
     assert_eq!(
-        turn_context.environments.turn_environments[1].cwd,
-        second_cwd
+        turn_context.environments.turn_environments[1].cwd(),
+        &second_cwd
     );
 }
 
@@ -6960,7 +6973,7 @@ where
         })),
         rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell: Arc::new(default_user_shell()),
-        shell_snapshot_tx: watch::channel(None).0,
+        shell_snapshot: arc_swap::ArcSwapOption::empty(),
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
         auth_manager: Arc::clone(&auth_manager),
@@ -7097,9 +7110,12 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
 
     let mcp_oauth_credentials_store_mode =
         serde_json::to_value(OAuthCredentialsStoreMode::Auto).expect("serialize store mode");
+    let auth_keyring_backend_kind =
+        serde_json::to_value(AuthKeyringBackendKind::Secrets).expect("serialize keyring backend");
     let refresh_config = McpServerRefreshConfig {
         mcp_servers: json!({}),
         mcp_oauth_credentials_store_mode,
+        auth_keyring_backend_kind,
     };
     {
         let mut guard = session.pending_mcp_server_refresh_config.lock().await;
@@ -7226,7 +7242,6 @@ async fn environment_context_uses_session_shell_when_environment_shell_is_absent
     session.services.user_shell = Arc::new(crate::shell::Shell {
         shell_type: crate::shell::ShellType::PowerShell,
         shell_path: PathBuf::from("powershell"),
-        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     });
     for environment in &mut turn_context.environments.turn_environments {
         environment.shell = None;
@@ -7251,7 +7266,6 @@ async fn environment_context_uses_session_shell_when_environment_shell_is_absent
     primary_environment.shell = Some(crate::shell::Shell {
         shell_type: crate::shell::ShellType::Cmd,
         shell_path: PathBuf::from("cmd"),
-        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     });
 
     let environment_context = crate::context::EnvironmentContext::from_turn_context(
@@ -9213,9 +9227,7 @@ async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
 
     assert_eq!(
         sess.input_queue.get_pending_input(&sess.active_turn).await,
-        vec![TurnInput::ResponseItem(ResponseItem::from(
-            communication.to_response_input_item()
-        ))],
+        vec![TurnInput::InterAgentCommunication(communication)],
     );
 }
 
@@ -9304,7 +9316,7 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
                 }],
                 client_id: None
             },
-            TurnInput::ResponseItem(ResponseItem::from(communication.to_response_input_item())),
+            TurnInput::InterAgentCommunication(communication),
         ],
     );
 }
@@ -9362,7 +9374,7 @@ async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
                 }],
                 client_id: None
             },
-            TurnInput::ResponseItem(ResponseItem::from(communication.to_response_input_item())),
+            TurnInput::InterAgentCommunication(communication),
         ],
     );
 }
@@ -9417,9 +9429,7 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
     assert!(output.tool_future.is_some());
     assert_eq!(
         sess.input_queue.get_pending_input(&sess.active_turn).await,
-        vec![TurnInput::ResponseItem(ResponseItem::from(
-            communication.to_response_input_item()
-        ))],
+        vec![TurnInput::InterAgentCommunication(communication)],
     );
 }
 

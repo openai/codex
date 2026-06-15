@@ -21,7 +21,7 @@ impl ExecutorFileSystem for TestFileSystem {
         Box::pin(async move {
             let path = path.to_abs_path()?;
             let canonicalized = path.canonicalize()?;
-            PathUri::from_abs_path(&canonicalized)
+            Ok(PathUri::from_abs_path(&canonicalized))
         })
     }
 

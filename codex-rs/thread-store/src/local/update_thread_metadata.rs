@@ -1494,6 +1494,7 @@ mod tests {
                 cwd_filters: Some(vec![workspace]),
                 archived: false,
                 search_term: None,
+                parent_thread_id: None,
                 use_state_db_only: true,
             })
             .await

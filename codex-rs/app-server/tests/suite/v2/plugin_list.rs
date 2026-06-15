@@ -2064,7 +2064,7 @@ async fn plugin_list_includes_openai_curated_remote_collection_when_requested() 
 }
 
 #[tokio::test]
-async fn plugin_list_fail_opens_openai_curated_remote_collection_errors() -> Result<()> {
+async fn plugin_list_propagates_explicit_openai_curated_remote_collection_errors() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     write_plugins_enabled_config_with_base_url(
@@ -2103,18 +2103,17 @@ async fn plugin_list_fail_opens_openai_curated_remote_collection_errors() -> Res
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::Vertical]),
         })
         .await?;
-    let response: JSONRPCResponse = timeout(
+    let err = timeout(
         DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let response: PluginListResponse = to_response(response)?;
 
+    assert_eq!(err.error.code, -32603);
     assert!(
-        response
-            .marketplaces
-            .iter()
-            .all(|marketplace| marketplace.name != "openai-curated-remote")
+        err.error
+            .message
+            .contains("list OpenAI Curated remote plugin catalog")
     );
     Ok(())
 }

@@ -144,7 +144,8 @@ mod tests {
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::McpHandler;
     use codex_mcp::ToolInfo;
-    use codex_protocol::dynamic_tools::DynamicToolSpec;
+    use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+    use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
     use codex_tools::ResponsesApiNamespace;
     use codex_tools::ResponsesApiNamespaceTool;
     use codex_tools::ResponsesApiTool;
@@ -154,8 +155,12 @@ mod tests {
 
     #[test]
     fn mixed_search_results_coalesce_mcp_namespaces() {
-        let dynamic_tools = [DynamicToolSpec {
-            namespace: Some("codex_app".to_string()),
+        let dynamic_namespace = DynamicToolNamespaceSpec {
+            name: "codex_app".to_string(),
+            description: "Tools in the codex_app namespace.".to_string(),
+            tools: Vec::new(),
+        };
+        let dynamic_tools = [DynamicToolFunctionSpec {
             name: "automation_update".to_string(),
             description: "Create, update, view, or delete recurring automations.".to_string(),
             input_schema: serde_json::json!({
@@ -182,7 +187,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         search_infos.extend(dynamic_tools.iter().map(|tool| {
-            DynamicToolHandler::new(tool)
+            DynamicToolHandler::new_in_namespace(&dynamic_namespace, tool)
                 .expect("dynamic tool should convert")
                 .search_info()
                 .expect("dynamic handler should return search info")
