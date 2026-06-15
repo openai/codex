@@ -1,4 +1,5 @@
 use anyhow::Context as _;
+use codex_desktop_distribution::discover_installed_distribution;
 use std::ffi::CString;
 use std::path::Path;
 use std::path::PathBuf;
@@ -13,7 +14,7 @@ pub async fn run_mac_app_open_or_install(
     workspace: PathBuf,
     download_url_override: Option<String>,
 ) -> anyhow::Result<()> {
-    if let Some(app_path) = find_existing_codex_app_path() {
+    if let Some(app_path) = find_existing_codex_app_path().await? {
         eprintln!(
             "Opening Codex Desktop at {app_path}...",
             app_path = app_path.display()
@@ -63,18 +64,11 @@ fn is_apple_silicon_mac() -> bool {
         || macos_sysctl_flag("hw.optional.arm64").unwrap_or(false)
 }
 
-fn find_existing_codex_app_path() -> Option<PathBuf> {
-    candidate_codex_app_paths()
-        .into_iter()
-        .find(|candidate| candidate.is_dir())
-}
-
-fn candidate_codex_app_paths() -> Vec<PathBuf> {
-    let mut paths = vec![PathBuf::from("/Applications/Codex.app")];
-    if let Some(home) = std::env::var_os("HOME") {
-        paths.push(PathBuf::from(home).join("Applications").join("Codex.app"));
-    }
-    paths
+async fn find_existing_codex_app_path() -> anyhow::Result<Option<PathBuf>> {
+    let distribution = tokio::task::spawn_blocking(discover_installed_distribution)
+        .await
+        .context("Desktop discovery task failed")??;
+    Ok(distribution.map(|distribution| distribution.app_root().to_path_buf()))
 }
 
 async fn open_codex_app(app_path: &Path, workspace: &Path) -> anyhow::Result<()> {

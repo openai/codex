@@ -1,4 +1,5 @@
 use anyhow::Context as _;
+use codex_desktop_distribution::discover_installed_distribution;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::process::Command;
@@ -31,19 +32,10 @@ pub async fn run_windows_app_open_or_install(
 }
 
 async fn codex_app_is_installed() -> anyhow::Result<bool> {
-    let output = Command::new("powershell.exe")
-        .arg("-NoProfile")
-        .arg("-Command")
-        .arg("Get-StartApps -Name 'Codex' | Select-Object -First 1 -ExpandProperty AppID")
-        .output()
+    Ok(tokio::task::spawn_blocking(discover_installed_distribution)
         .await
-        .context("failed to invoke `powershell.exe`")?;
-
-    if !output.status.success() {
-        return Ok(false);
-    }
-
-    Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+        .context("Desktop discovery task failed")??
+        .is_some())
 }
 
 async fn open_url(url: &str) -> anyhow::Result<()> {
