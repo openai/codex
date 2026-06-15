@@ -578,7 +578,7 @@ impl PluginRequestProcessor {
                     .list_marketplaces_for_config(
                         &config_for_marketplace_listing,
                         &roots_for_marketplace_listing,
-                        /*include_openai_curated*/ true,
+                        /*include_openai_curated*/ !include_global_remote,
                     )?;
                 Ok::<
                     (

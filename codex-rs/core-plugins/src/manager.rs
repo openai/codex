@@ -1891,7 +1891,7 @@ impl PluginsManager {
             &config.config_layer_stack,
             self.codex_home.as_path(),
         ));
-        let curated_marketplace_path = if include_openai_curated && !config.remote_plugin_enabled {
+        let curated_marketplace_path = if include_openai_curated {
             if matches!(
                 self.auth_mode(),
                 Some(AuthMode::ApiKey | AuthMode::BedrockApiKey)
