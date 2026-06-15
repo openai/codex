@@ -306,6 +306,8 @@ impl App {
                 }
             }
             ServerRequest::PermissionsRequestApproval { params, .. } => {
+                // TODO(anp): Remove this native-path localization error path once core permission
+                // paths remain PathUri after crossing the app-server boundary.
                 let permissions = params.permissions.clone().try_into().map_err(|err| {
                     std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,

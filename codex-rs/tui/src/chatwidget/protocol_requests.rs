@@ -30,6 +30,8 @@ impl ChatWidget {
                 self.on_elicitation_request(request_id, params);
             }
             ServerRequest::PermissionsRequestApproval { params, .. } => {
+                // TODO(anp): Remove this native-path localization error path once core permission
+                // paths remain PathUri after crossing the app-server boundary.
                 match request_permissions_from_params(params) {
                     Ok(event) => self.on_request_permissions(event),
                     Err(err) => {
@@ -69,6 +71,8 @@ impl ChatWidget {
         completion: Option<(i64, codex_app_server_protocol::AutoReviewDecisionSource)>,
         action: GuardianApprovalReviewAction,
     ) {
+        // TODO(anp): Remove this native-path localization error path once core permission paths
+        // remain PathUri after crossing the app-server boundary.
         let action = match action.try_into() {
             Ok(action) => action,
             Err(err) => {
