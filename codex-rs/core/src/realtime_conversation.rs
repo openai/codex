@@ -1358,7 +1358,9 @@ async fn handle_handoff_output(
                     .await
             }
             RealtimeOutbound::ConversationItem { text } => {
-                writer.send_conversation_context_item_create(text).await
+                writer
+                    .send_conversation_item_create(text, ConversationTextRole::Developer)
+                    .await
             }
             RealtimeOutbound::HandoffCompleteAck { .. } => Ok(()),
         },
@@ -1387,7 +1389,9 @@ async fn handle_handoff_output(
                     .await
             }
             RealtimeOutbound::ConversationItem { text } => {
-                writer.send_conversation_context_item_create(text).await
+                writer
+                    .send_conversation_item_create(text, ConversationTextRole::Developer)
+                    .await
             }
             RealtimeOutbound::HandoffCompleteAck { handoff_id } => {
                 writer

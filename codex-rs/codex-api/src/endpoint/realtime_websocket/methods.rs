@@ -304,14 +304,6 @@ impl RealtimeWebsocketWriter {
         .await
     }
 
-    pub async fn send_conversation_context_item_create(
-        &self,
-        text: String,
-    ) -> Result<(), ApiError> {
-        self.send_conversation_item_create(text, ConversationTextRole::Developer)
-            .await
-    }
-
     pub async fn send_conversation_handoff_append(
         &self,
         handoff_id: String,
