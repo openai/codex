@@ -1,14 +1,22 @@
+use crate::capabilities::PluginCapabilities;
+use crate::capabilities::PluginCapabilityContext;
+use crate::capabilities::plugin_is_visible_in_marketplace;
+use crate::declared_capabilities::load_declared_plugin_capabilities;
 use crate::manifest::PluginManifestInterface;
 use crate::manifest::load_plugin_manifest;
+use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_git_utils::get_git_repo_root;
+use codex_plugin::AppConnectorId;
+use codex_plugin::AppDeclaration;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
 use std::io;
@@ -21,6 +29,21 @@ const MARKETPLACE_MANIFEST_RELATIVE_PATHS: &[&str] = &[
     ".agents/plugins/marketplace.json",
     ".claude-plugin/marketplace.json",
 ];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MarketplaceLoadContext {
+    auth_mode: Option<AuthMode>,
+}
+
+impl MarketplaceLoadContext {
+    pub fn for_auth(auth_mode: Option<AuthMode>) -> Self {
+        Self { auth_mode }
+    }
+
+    pub fn unfiltered() -> Self {
+        Self { auth_mode: None }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedMarketplacePlugin {
@@ -172,6 +195,7 @@ impl MarketplaceError {
 pub fn find_marketplace_plugin(
     marketplace_path: &AbsolutePathBuf,
     plugin_name: &str,
+    context: MarketplaceLoadContext,
 ) -> Result<ResolvedMarketplacePlugin, MarketplaceError> {
     let marketplace = load_raw_marketplace_manifest(marketplace_path)?;
     let marketplace_name = marketplace.name;
@@ -184,6 +208,9 @@ pub fn find_marketplace_plugin(
         if let Some(plugin) =
             resolve_marketplace_plugin_entry(marketplace_path, &marketplace_name, plugin)?
         {
+            if !marketplace_plugin_is_visible(&plugin, context) {
+                continue;
+            }
             return Ok(plugin);
         }
     }
@@ -198,8 +225,9 @@ pub fn find_installable_marketplace_plugin(
     marketplace_path: &AbsolutePathBuf,
     plugin_name: &str,
     restriction_product: Option<Product>,
+    context: MarketplaceLoadContext,
 ) -> Result<ResolvedMarketplacePlugin, MarketplaceError> {
-    let resolved = find_marketplace_plugin(marketplace_path, plugin_name)?;
+    let resolved = find_marketplace_plugin(marketplace_path, plugin_name, context)?;
     let product_allowed = match resolved.policy.products.as_deref() {
         None => true,
         Some([]) => false,
@@ -221,8 +249,9 @@ pub fn find_installable_marketplace_plugin(
 
 pub fn list_marketplaces(
     additional_roots: &[AbsolutePathBuf],
+    context: MarketplaceLoadContext,
 ) -> Result<MarketplaceListOutcome, MarketplaceError> {
-    list_marketplaces_with_home(additional_roots, home_dir().as_deref())
+    list_marketplaces_with_home(additional_roots, home_dir().as_deref(), context)
 }
 
 pub(crate) fn home_dir() -> Option<PathBuf> {
@@ -242,7 +271,7 @@ pub fn validate_marketplace_root(root: &Path) -> Result<String, MarketplaceError
             message: "marketplace root does not contain a supported manifest".to_string(),
         });
     };
-    let marketplace = load_marketplace(&path)?;
+    let marketplace = load_marketplace(&path, MarketplaceLoadContext::unfiltered())?;
     Ok(marketplace.name)
 }
 
@@ -280,7 +309,10 @@ fn marketplace_root_from_layout(marketplace_path: &Path, relative_path: &str) ->
     Some(current.to_path_buf())
 }
 
-pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, MarketplaceError> {
+pub fn load_marketplace(
+    path: &AbsolutePathBuf,
+    context: MarketplaceLoadContext,
+) -> Result<Marketplace, MarketplaceError> {
     let marketplace = load_raw_marketplace_manifest(path)?;
     let mut plugins = Vec::new();
 
@@ -299,6 +331,9 @@ pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Marketpla
             }
             Err(err) => return Err(err),
         };
+        if !marketplace_plugin_is_visible(&plugin, context) {
+            continue;
+        }
 
         let local_version = plugin
             .manifest
@@ -341,11 +376,12 @@ pub(crate) fn load_raw_marketplace_plugin_names(
 pub fn list_marketplaces_with_home(
     additional_roots: &[AbsolutePathBuf],
     home_dir: Option<&Path>,
+    context: MarketplaceLoadContext,
 ) -> Result<MarketplaceListOutcome, MarketplaceError> {
     let mut outcome = MarketplaceListOutcome::default();
 
     for marketplace_path in discover_marketplace_paths_from_roots(additional_roots, home_dir) {
-        match load_marketplace(&marketplace_path) {
+        match load_marketplace(&marketplace_path, context) {
             Ok(marketplace) => outcome.marketplaces.push(marketplace),
             Err(err) => {
                 warn!(
@@ -529,6 +565,51 @@ fn resolve_plugin_source(
             unreachable!("unsupported plugin sources should be filtered before resolution")
         }
     }
+}
+
+fn marketplace_plugin_is_visible(
+    plugin: &ResolvedMarketplacePlugin,
+    context: MarketplaceLoadContext,
+) -> bool {
+    let capability_context =
+        PluginCapabilityContext::new(context.auth_mode, /*plugin_active*/ true);
+    if !capability_context.filters_marketplace_plugins() {
+        return true;
+    }
+
+    let MarketplacePluginSource::Local { path } = &plugin.source else {
+        // Remote Git entries are not materialized while listing marketplaces, so keep them visible
+        // until install/read flows have a local plugin root to inspect.
+        return true;
+    };
+
+    let Some(manifest) = &plugin.manifest else {
+        // Preserve existing marketplace behavior for local entries that do not expose a readable
+        // plugin manifest; the marketplace loader cannot prove these are unusable.
+        return true;
+    };
+
+    let declared_capabilities = load_declared_plugin_capabilities(path, &manifest.paths);
+    let has_skills = !declared_capabilities.skills.is_empty();
+    let apps = declared_capabilities
+        .apps
+        .into_iter()
+        .map(|app| AppDeclaration {
+            name: app.name,
+            connector_id: AppConnectorId(String::new()),
+            category: None,
+        })
+        .collect::<Vec<_>>();
+    let mcp_servers = declared_capabilities
+        .mcp
+        .into_iter()
+        .map(|mcp| (mcp.name, ()))
+        .collect::<HashMap<_, _>>();
+    plugin_is_visible_in_marketplace(
+        PluginCapabilities::new(apps, mcp_servers),
+        has_skills,
+        capability_context,
+    )
 }
 
 fn resolve_local_plugin_source_path(

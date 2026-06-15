@@ -7,6 +7,41 @@ use tempfile::tempdir;
 const ALTERNATE_MARKETPLACE_RELATIVE_PATH: &str = ".claude-plugin/marketplace.json";
 const ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH: &str = ".claude-plugin/plugin.json";
 
+fn find_marketplace_plugin(
+    marketplace_path: &AbsolutePathBuf,
+    plugin_name: &str,
+) -> Result<ResolvedMarketplacePlugin, MarketplaceError> {
+    super::find_marketplace_plugin(
+        marketplace_path,
+        plugin_name,
+        MarketplaceLoadContext::unfiltered(),
+    )
+}
+
+fn find_installable_marketplace_plugin(
+    marketplace_path: &AbsolutePathBuf,
+    plugin_name: &str,
+    restriction_product: Option<Product>,
+) -> Result<ResolvedMarketplacePlugin, MarketplaceError> {
+    super::find_installable_marketplace_plugin(
+        marketplace_path,
+        plugin_name,
+        restriction_product,
+        MarketplaceLoadContext::unfiltered(),
+    )
+}
+
+fn list_marketplaces_with_home(
+    additional_roots: &[AbsolutePathBuf],
+    home_dir: Option<&Path>,
+) -> Result<MarketplaceListOutcome, MarketplaceError> {
+    super::list_marketplaces_with_home(
+        additional_roots,
+        home_dir,
+        MarketplaceLoadContext::unfiltered(),
+    )
+}
+
 fn write_alternate_marketplace(repo_root: &Path, contents: &str) -> AbsolutePathBuf {
     let marketplace_path = repo_root.join(ALTERNATE_MARKETPLACE_RELATIVE_PATH);
     fs::create_dir_all(marketplace_path.parent().unwrap()).unwrap();
@@ -16,6 +51,19 @@ fn write_alternate_marketplace(repo_root: &Path, contents: &str) -> AbsolutePath
 
 fn write_alternate_plugin_manifest(plugin_root: &Path, contents: &str) {
     let manifest_path = plugin_root.join(ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH);
+    fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
+    fs::write(manifest_path, contents).unwrap();
+}
+
+fn write_default_marketplace(repo_root: &Path, contents: &str) -> AbsolutePathBuf {
+    let marketplace_path = repo_root.join(".agents/plugins/marketplace.json");
+    fs::create_dir_all(marketplace_path.parent().unwrap()).unwrap();
+    fs::write(&marketplace_path, contents).unwrap();
+    AbsolutePathBuf::try_from(marketplace_path).unwrap()
+}
+
+fn write_default_plugin_manifest(plugin_root: &Path, contents: &str) {
+    let manifest_path = plugin_root.join(".codex-plugin/plugin.json");
     fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
     fs::write(manifest_path, contents).unwrap();
 }
@@ -468,6 +516,200 @@ fn list_marketplaces_includes_plugins_without_discoverable_manifest() {
                 keywords: Vec::new(),
             }],
         }]
+    );
+}
+
+#[test]
+fn load_marketplace_for_api_key_filters_plugins_without_surviving_capabilities() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    let app_only_root = repo_root.join("plugins/app-only");
+    let app_and_skills_root = repo_root.join("plugins/app-and-skills");
+    let app_and_mcp_root = repo_root.join("plugins/app-and-mcp");
+    let app_and_other_mcp_root = repo_root.join("plugins/app-and-other-mcp");
+    let mcp_only_root = repo_root.join("plugins/mcp-only");
+    let skills_only_root = repo_root.join("plugins/skills-only");
+
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    let marketplace_path = write_default_marketplace(
+        &repo_root,
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "app-only",
+      "source": {
+        "source": "local",
+        "path": "./plugins/app-only"
+      }
+    },
+    {
+      "name": "app-and-skills",
+      "source": {
+        "source": "local",
+        "path": "./plugins/app-and-skills"
+      }
+    },
+    {
+      "name": "app-and-mcp",
+      "source": {
+        "source": "local",
+        "path": "./plugins/app-and-mcp"
+      }
+    },
+    {
+      "name": "app-and-other-mcp",
+      "source": {
+        "source": "local",
+        "path": "./plugins/app-and-other-mcp"
+      }
+    },
+    {
+      "name": "mcp-only",
+      "source": {
+        "source": "local",
+        "path": "./plugins/mcp-only"
+      }
+    },
+    {
+      "name": "skills-only",
+      "source": {
+        "source": "local",
+        "path": "./plugins/skills-only"
+      }
+    },
+    {
+      "name": "remote-plugin",
+      "source": {
+        "source": "git-subdir",
+        "url": "openai/toolkit",
+        "path": "plugins/toolkit"
+      }
+    }
+  ]
+}"#,
+    );
+
+    write_default_plugin_manifest(&app_only_root, r#"{"name":"app-only"}"#);
+    fs::write(
+        app_only_root.join(".app.json"),
+        r#"{"apps":{"linear":{"id":"connector_linear"}}}"#,
+    )
+    .unwrap();
+
+    write_default_plugin_manifest(
+        &app_and_skills_root,
+        r#"{"name":"app-and-skills","skills":"./skills/"}"#,
+    );
+    fs::write(
+        app_and_skills_root.join(".app.json"),
+        r#"{"apps":{"linear":{"id":"connector_linear"}}}"#,
+    )
+    .unwrap();
+    fs::create_dir_all(app_and_skills_root.join("skills/example")).unwrap();
+    fs::write(
+        app_and_skills_root.join("skills/example/SKILL.md"),
+        "---\nname: example\ndescription: example skill\n---\n",
+    )
+    .unwrap();
+
+    write_default_plugin_manifest(&app_and_mcp_root, r#"{"name":"app-and-mcp"}"#);
+    fs::write(
+        app_and_mcp_root.join(".app.json"),
+        r#"{"apps":{"linear":{"id":"connector_linear"}}}"#,
+    )
+    .unwrap();
+    fs::write(
+        app_and_mcp_root.join(".mcp.json"),
+        r#"{"mcpServers":{"linear":{"command":"linear-mcp"}}}"#,
+    )
+    .unwrap();
+
+    write_default_plugin_manifest(&app_and_other_mcp_root, r#"{"name":"app-and-other-mcp"}"#);
+    fs::write(
+        app_and_other_mcp_root.join(".app.json"),
+        r#"{"apps":{"linear":{"id":"connector_linear"}}}"#,
+    )
+    .unwrap();
+    fs::write(
+        app_and_other_mcp_root.join(".mcp.json"),
+        r#"{"mcpServers":{"other":{"command":"other-mcp"}}}"#,
+    )
+    .unwrap();
+
+    write_default_plugin_manifest(&mcp_only_root, r#"{"name":"mcp-only"}"#);
+    fs::write(
+        mcp_only_root.join(".mcp.json"),
+        r#"{"mcpServers":{"toolkit":{"command":"toolkit-mcp"}}}"#,
+    )
+    .unwrap();
+
+    write_default_plugin_manifest(&skills_only_root, r#"{"name":"skills-only"}"#);
+    fs::create_dir_all(skills_only_root.join("skills/example")).unwrap();
+    fs::write(
+        skills_only_root.join("skills/example/SKILL.md"),
+        "---\nname: example\ndescription: example skill\n---\n",
+    )
+    .unwrap();
+
+    let marketplace = super::load_marketplace(
+        &marketplace_path,
+        MarketplaceLoadContext::for_auth(Some(codex_app_server_protocol::AuthMode::ApiKey)),
+    )
+    .unwrap();
+
+    let plugin_names = marketplace
+        .plugins
+        .iter()
+        .map(|plugin| plugin.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        plugin_names,
+        vec!["app-and-mcp", "mcp-only", "skills-only", "remote-plugin"]
+    );
+}
+
+#[test]
+fn find_marketplace_plugin_for_api_key_treats_app_only_local_plugins_as_not_found() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    let plugin_root = repo_root.join("plugins/app-only");
+
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    let marketplace_path = write_default_marketplace(
+        &repo_root,
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "app-only",
+      "source": {
+        "source": "local",
+        "path": "./plugins/app-only"
+      }
+    }
+  ]
+}"#,
+    );
+    write_default_plugin_manifest(&plugin_root, r#"{"name":"app-only"}"#);
+    fs::write(
+        plugin_root.join(".app.json"),
+        r#"{"apps":{"linear":{"id":"connector_linear"}}}"#,
+    )
+    .unwrap();
+
+    assert!(find_marketplace_plugin(&marketplace_path, "app-only").is_ok());
+
+    let err = super::find_marketplace_plugin(
+        &marketplace_path,
+        "app-only",
+        MarketplaceLoadContext::for_auth(Some(codex_app_server_protocol::AuthMode::ApiKey)),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "plugin `app-only` was not found in marketplace `codex-curated`"
     );
 }
 

@@ -5,6 +5,7 @@ use crate::capabilities::resolve_plugin_capabilities;
 use crate::manifest::PluginManifestHooks;
 use crate::manifest::PluginManifestPaths;
 use crate::manifest::load_plugin_manifest;
+use crate::marketplace::MarketplaceLoadContext;
 use crate::marketplace::MarketplacePluginSource;
 use crate::marketplace::list_marketplaces;
 use crate::marketplace::load_marketplace;
@@ -303,8 +304,11 @@ pub fn refresh_curated_plugin_cache(
         .map_err(|err| {
             format!("failed to load curated marketplace plugin names for cache refresh: {err}")
         })?;
-    let curated_marketplace = load_marketplace(&curated_marketplace_path)
-        .map_err(|err| format!("failed to load curated marketplace for cache refresh: {err}"))?;
+    let curated_marketplace = load_marketplace(
+        &curated_marketplace_path,
+        MarketplaceLoadContext::unfiltered(),
+    )
+    .map_err(|err| format!("failed to load curated marketplace for cache refresh: {err}"))?;
 
     let mut plugin_sources = HashMap::<String, AbsolutePathBuf>::new();
     for plugin in curated_marketplace.plugins {
@@ -415,8 +419,9 @@ fn refresh_non_curated_plugin_cache_with_mode(
         .collect::<HashSet<_>>();
 
     let store = PluginStore::try_new(codex_home.to_path_buf()).map_err(|err| err.to_string())?;
-    let marketplace_outcome = list_marketplaces(additional_roots)
-        .map_err(|err| format!("failed to discover marketplaces for cache refresh: {err}"))?;
+    let marketplace_outcome =
+        list_marketplaces(additional_roots, MarketplaceLoadContext::unfiltered())
+            .map_err(|err| format!("failed to discover marketplaces for cache refresh: {err}"))?;
     let mut plugin_sources = HashMap::<String, MarketplacePluginSource>::new();
 
     for marketplace in marketplace_outcome.marketplaces {

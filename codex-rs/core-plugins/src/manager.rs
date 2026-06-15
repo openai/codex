@@ -24,6 +24,7 @@ use crate::marketplace::MarketplaceError;
 use crate::marketplace::MarketplaceInterface;
 use crate::marketplace::MarketplaceListError;
 use crate::marketplace::MarketplaceListOutcome;
+use crate::marketplace::MarketplaceLoadContext;
 use crate::marketplace::MarketplacePluginAuthPolicy;
 use crate::marketplace::MarketplacePluginPolicy;
 use crate::marketplace::MarketplacePluginSource;
@@ -882,6 +883,7 @@ impl PluginsManager {
             &request.marketplace_path,
             &request.plugin_name,
             self.restriction_product,
+            MarketplaceLoadContext::for_auth(self.auth_mode()),
         )?;
         self.install_resolved_plugin(resolved).await
     }
@@ -896,6 +898,7 @@ impl PluginsManager {
             &request.marketplace_path,
             &request.plugin_name,
             self.restriction_product,
+            MarketplaceLoadContext::for_auth(self.auth_mode()),
         )?;
         let plugin_id = resolved.plugin_id.as_key();
         // This only forwards the backend mutation before the local install flow.
@@ -1040,7 +1043,10 @@ impl PluginsManager {
             let curated_repo_root = curated_plugins_repo_path(self.codex_home.as_path());
             marketplace_roots.retain(|root| root.as_path() != curated_repo_root.as_path());
         }
-        let marketplace_outcome = list_marketplaces(&marketplace_roots)?;
+        let marketplace_outcome = list_marketplaces(
+            &marketplace_roots,
+            MarketplaceLoadContext::for_auth(self.auth_mode()),
+        )?;
         let mut seen_plugin_keys = HashSet::new();
         let marketplaces = marketplace_outcome
             .marketplaces
@@ -1127,7 +1133,10 @@ impl PluginsManager {
             return Ok(MarketplaceListOutcome::default());
         }
 
-        list_marketplaces(&self.marketplace_roots(config, additional_roots))
+        list_marketplaces(
+            &self.marketplace_roots(config, additional_roots),
+            MarketplaceLoadContext::for_auth(self.auth_mode()),
+        )
     }
 
     pub async fn read_plugin_for_config(
@@ -1139,7 +1148,11 @@ impl PluginsManager {
             return Err(MarketplaceError::PluginsDisabled);
         }
 
-        let plugin = find_marketplace_plugin(&request.marketplace_path, &request.plugin_name)?;
+        let plugin = find_marketplace_plugin(
+            &request.marketplace_path,
+            &request.plugin_name,
+            MarketplaceLoadContext::for_auth(self.auth_mode()),
+        )?;
         if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
             return Err(MarketplaceError::PluginNotFound {
                 plugin_name: plugin.plugin_id.plugin_name,
