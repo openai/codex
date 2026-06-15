@@ -4,9 +4,9 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 #[test]
-fn request_plugin_install_result_keeps_model_response_minimal() {
+fn request_plugin_installs_result_keeps_model_response_minimal() {
     assert_eq!(
-        json!(RequestPluginInstallResult {
+        json!(RequestPluginInstallsResult {
             completed: false,
             user_confirmed: false,
             action_type: DiscoverableToolAction::Install,
@@ -34,8 +34,8 @@ fn request_plugin_install_result_keeps_model_response_minimal() {
 }
 
 #[test]
-fn build_request_plugin_install_elicitation_request_uses_flat_entries_shape() {
-    let args = RequestPluginInstallArgs {
+fn build_request_plugin_installs_elicitation_request_uses_flat_entries_shape() {
+    let args = RequestPluginInstallsArgs {
         action_type: DiscoverableToolAction::Install,
         entries: Some(vec![RequestPluginInstallPickerEntry {
             tool_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
@@ -66,7 +66,7 @@ fn build_request_plugin_install_elicitation_request_uses_flat_entries_shape() {
         tool: &connector,
     }];
 
-    let request = build_request_plugin_install_elicitation_request(
+    let request = build_request_plugin_installs_elicitation_request(
         "codex-apps",
         "thread-1".to_string(),
         "turn-1".to_string(),
@@ -81,7 +81,7 @@ fn build_request_plugin_install_elicitation_request_uses_flat_entries_shape() {
             turn_id: Some("turn-1".to_string()),
             server_name: "codex-apps".to_string(),
             request: McpServerElicitationRequest::Form {
-                meta: Some(json!(RequestPluginInstallMeta {
+                meta: Some(json!(RequestPluginInstallsMeta {
                     codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
                     persist: Some(REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE),
                     suggest_type: DiscoverableToolAction::Install,
@@ -111,8 +111,8 @@ fn build_request_plugin_install_elicitation_request_uses_flat_entries_shape() {
 }
 
 #[test]
-fn build_request_plugin_install_elicitation_request_injects_plugin_metadata() {
-    let args = RequestPluginInstallArgs {
+fn build_request_plugin_installs_elicitation_request_injects_plugin_metadata() {
+    let args = RequestPluginInstallsArgs {
         action_type: DiscoverableToolAction::Install,
         entries: Some(vec![RequestPluginInstallPickerEntry {
             tool_id: "sample@openai-curated-remote".to_string(),
@@ -134,7 +134,7 @@ fn build_request_plugin_install_elicitation_request_injects_plugin_metadata() {
         tool: &plugin,
     }];
 
-    let request = build_request_plugin_install_elicitation_request(
+    let request = build_request_plugin_installs_elicitation_request(
         "codex-apps",
         "thread-1".to_string(),
         "turn-1".to_string(),
@@ -149,7 +149,7 @@ fn build_request_plugin_install_elicitation_request_injects_plugin_metadata() {
             turn_id: Some("turn-1".to_string()),
             server_name: "codex-apps".to_string(),
             request: McpServerElicitationRequest::Form {
-                meta: Some(json!(RequestPluginInstallMeta {
+                meta: Some(json!(RequestPluginInstallsMeta {
                     codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
                     persist: Some(REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE),
                     suggest_type: DiscoverableToolAction::Install,
@@ -177,8 +177,8 @@ fn build_request_plugin_install_elicitation_request_injects_plugin_metadata() {
 }
 
 #[test]
-fn build_request_plugin_install_elicitation_request_uses_categories_shape() {
-    let args = RequestPluginInstallArgs {
+fn build_request_plugin_installs_elicitation_request_uses_categories_shape() {
+    let args = RequestPluginInstallsArgs {
         action_type: DiscoverableToolAction::Install,
         entries: None,
         categories: Some(vec![RequestPluginInstallPickerCategory {
@@ -212,7 +212,7 @@ fn build_request_plugin_install_elicitation_request_uses_categories_shape() {
         tool: &connector,
     }];
 
-    let request = build_request_plugin_install_elicitation_request(
+    let request = build_request_plugin_installs_elicitation_request(
         "codex-apps",
         "thread-1".to_string(),
         "turn-1".to_string(),
@@ -227,7 +227,7 @@ fn build_request_plugin_install_elicitation_request_uses_categories_shape() {
             turn_id: Some("turn-1".to_string()),
             server_name: "codex-apps".to_string(),
             request: McpServerElicitationRequest::Form {
-                meta: Some(json!(RequestPluginInstallMeta {
+                meta: Some(json!(RequestPluginInstallsMeta {
                     codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
                     persist: Some(REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE),
                     suggest_type: DiscoverableToolAction::Install,

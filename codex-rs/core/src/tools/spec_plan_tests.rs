@@ -27,6 +27,7 @@ use codex_tools::ToolExposure;
 use codex_tools::ToolName;
 use codex_tools::ToolOutput;
 use codex_tools::ToolSpec;
+use codex_tools::create_request_plugin_installs_tool_for_tui;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -856,7 +857,7 @@ async fn request_plugin_install_requires_all_discovery_features() {
         .await;
         plan.assert_visible_lacks(&[
             "list_available_plugins_to_install",
-            "request_plugin_install",
+            "request_plugin_installs",
         ]);
     }
 
@@ -882,7 +883,7 @@ async fn request_plugin_install_requires_all_discovery_features() {
         .await;
         plan.assert_visible_lacks(&[
             "list_available_plugins_to_install",
-            "request_plugin_install",
+            "request_plugin_installs",
         ]);
     }
 
@@ -901,7 +902,11 @@ async fn request_plugin_install_requires_all_discovery_features() {
     .await;
     enabled.assert_visible_contains(&[
         "list_available_plugins_to_install",
-        "request_plugin_install",
+        "request_plugin_installs",
+    ]);
+    enabled.assert_registered_contains(&[
+        "list_available_plugins_to_install",
+        "request_plugin_installs",
     ]);
 }
 
@@ -924,9 +929,32 @@ async fn request_plugin_install_stays_visible_without_tool_search() {
 
     plan.assert_visible_contains(&[
         "list_available_plugins_to_install",
-        "request_plugin_install",
+        "request_plugin_installs",
     ]);
     plan.assert_visible_lacks(&["tool_search"]);
+}
+
+#[tokio::test]
+async fn request_plugin_installs_uses_single_entry_schema_for_tui() {
+    let plan = probe_with(
+        |turn| {
+            turn.app_server_client_name = Some("codex-tui".to_string());
+            set_features(
+                turn,
+                &[Feature::ToolSuggest, Feature::Apps, Feature::Plugins],
+            );
+        },
+        ToolPlanInputs {
+            tool_suggest_candidates: Some(plugin_candidates(ToolSuggestPresentation::ListTool)),
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    assert_eq!(
+        plan.visible_spec("request_plugin_installs"),
+        &create_request_plugin_installs_tool_for_tui(ToolSuggestPresentation::ListTool),
+    );
 }
 
 #[tokio::test]
@@ -947,24 +975,27 @@ async fn request_plugin_install_description_refers_to_recommended_plugins_hint()
     )
     .await;
 
-    let request_spec = plan.visible_spec("request_plugin_install");
+    let request_spec = plan.visible_spec("request_plugin_installs");
     let ToolSpec::Function(ResponsesApiTool {
         description: request_description,
         ..
     }) = request_spec
     else {
-        panic!("expected request_plugin_install function spec");
+        panic!("expected request_plugin_installs function spec");
     };
     assert!(request_description.contains("the `<recommended_plugins>` list"));
     assert!(!request_description.contains("list_available_plugins_to_install"));
     assert!(!request_description.contains("github"));
-    assert!(has_parameter(request_spec, "plugin_id"));
-    assert!(has_parameter(request_spec, "suggest_reason"));
+    assert!(has_parameter(request_spec, "entries"));
+    assert!(has_parameter(request_spec, "categories"));
+    assert!(has_parameter(request_spec, "action_type"));
+    assert!(!has_parameter(request_spec, "plugin_id"));
+    assert!(!has_parameter(request_spec, "suggest_reason"));
     assert!(!has_parameter(request_spec, "tool_id"));
     assert!(!has_parameter(request_spec, "tool_type"));
-    assert!(!has_parameter(request_spec, "action_type"));
     plan.assert_visible_lacks(&["list_available_plugins_to_install"]);
     plan.assert_registered_lacks(&["list_available_plugins_to_install"]);
+    plan.assert_registered_contains(&["request_plugin_installs"]);
 }
 
 #[tokio::test]

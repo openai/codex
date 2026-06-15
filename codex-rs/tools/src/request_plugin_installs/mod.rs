@@ -19,7 +19,7 @@ pub const REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE: &str = "always";
 const REQUEST_PLUGIN_INSTALL_MESSAGE: &str = "Choose integrations";
 
 #[derive(Debug, Deserialize)]
-pub struct RequestPluginInstallArgs {
+pub struct RequestPluginInstallsArgs {
     pub action_type: DiscoverableToolAction,
     pub entries: Option<Vec<RequestPluginInstallPickerEntry>>,
     pub categories: Option<Vec<RequestPluginInstallPickerCategory>>,
@@ -38,7 +38,7 @@ pub struct RequestPluginInstallPickerCategory {
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
-pub struct RequestPluginInstallResult {
+pub struct RequestPluginInstallsResult {
     pub completed: bool,
     pub user_confirmed: bool,
     pub action_type: DiscoverableToolAction,
@@ -60,7 +60,7 @@ pub struct RequestPluginInstallEntryResult {
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
-pub struct RequestPluginInstallMeta<'a> {
+pub struct RequestPluginInstallsMeta<'a> {
     pub codex_approval_kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub persist: Option<&'static str>,
@@ -98,11 +98,11 @@ pub struct RequestPluginInstallCategoryMeta<'a> {
     pub entries: Vec<RequestPluginInstallEntryMeta<'a>>,
 }
 
-pub fn build_request_plugin_install_elicitation_request<'a>(
+pub fn build_request_plugin_installs_elicitation_request<'a>(
     server_name: &str,
     thread_id: String,
     turn_id: String,
-    args: &'a RequestPluginInstallArgs,
+    args: &'a RequestPluginInstallsArgs,
     resolved_entries: &'a [RequestPluginInstallResolvedPickerEntry<'a>],
 ) -> McpServerElicitationRequestParams {
     McpServerElicitationRequestParams {
@@ -110,18 +110,22 @@ pub fn build_request_plugin_install_elicitation_request<'a>(
         turn_id: Some(turn_id),
         server_name: server_name.to_string(),
         request: McpServerElicitationRequest::Form {
-            meta: Some(json!(build_request_plugin_install_meta(
+            meta: Some(json!(build_request_plugin_installs_meta(
                 args,
                 resolved_entries
             ))),
             message: REQUEST_PLUGIN_INSTALL_MESSAGE.to_string(),
-            requested_schema: McpElicitationSchema {
-                schema_uri: None,
-                type_: McpElicitationObjectType::Object,
-                properties: BTreeMap::new(),
-                required: None,
-            },
+            requested_schema: empty_elicitation_schema(),
         },
+    }
+}
+
+fn empty_elicitation_schema() -> McpElicitationSchema {
+    McpElicitationSchema {
+        schema_uri: None,
+        type_: McpElicitationObjectType::Object,
+        properties: BTreeMap::new(),
+        required: None,
     }
 }
 
@@ -144,10 +148,10 @@ pub fn verified_connector_install_completed(
         .is_some_and(|connector| connector.is_accessible)
 }
 
-fn build_request_plugin_install_meta<'a>(
-    args: &'a RequestPluginInstallArgs,
+fn build_request_plugin_installs_meta<'a>(
+    args: &'a RequestPluginInstallsArgs,
     resolved_entries: &'a [RequestPluginInstallResolvedPickerEntry<'a>],
-) -> RequestPluginInstallMeta<'a> {
+) -> RequestPluginInstallsMeta<'a> {
     let entries = args.entries.as_ref().map(|_| {
         resolved_entries
             .iter()
@@ -172,7 +176,7 @@ fn build_request_plugin_install_meta<'a>(
             .collect()
     });
 
-    RequestPluginInstallMeta {
+    RequestPluginInstallsMeta {
         codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
         persist: Some(REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE),
         suggest_type: args.action_type,
@@ -211,6 +215,16 @@ fn discoverable_tool_description(tool: &DiscoverableTool) -> Option<&str> {
     }
 }
 
+mod spec;
+mod validation;
+
+pub use spec::ToolSuggestPresentation;
+pub use spec::create_request_plugin_installs_tool;
+pub use spec::create_request_plugin_installs_tool_for_tui;
+pub use validation::MAX_REQUEST_PLUGIN_INSTALLS_ENTRIES;
+pub use validation::request_plugin_install_picker_completed;
+pub use validation::validate_request_plugin_install_picker_args;
+
 #[cfg(test)]
-#[path = "request_plugin_install_tests.rs"]
+#[path = "../request_plugin_install_tests.rs"]
 mod tests;

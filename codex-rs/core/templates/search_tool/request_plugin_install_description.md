@@ -18,11 +18,12 @@ Workflow:
 2. Match the user's explicit request against the known plugin/connector list above. Only proceed for exact listed plugins/connectors.
 3. If we found both connectors and plugins to install, use plugins first, only use connectors if the corresponding plugin is installed but the connector is not.
 4. Do not invent ids or copy display metadata into this tool call. Every flat or categorized entry must contain only the exact `tool_type` and `tool_id` from the known plugin/connector list above; Codex resolves picker labels and metadata from that known list.
-5. If one or more plugins or connectors clearly fit, call `request_plugin_install` once with:
+   - Include at most 16 entries total across the request.
+5. If one or more plugins or connectors clearly fit, call `request_plugin_installs` once with:
    - `action_type`: `install`
    - `entries`: a flat list of candidates, each with `tool_type` and `tool_id`
    - use a one-item `entries` list when one plugin or connector clearly fits
-6. If multiple exact install candidates are alternatives within named categories, call `request_plugin_install` once with:
+6. If multiple exact install candidates are alternatives within named categories, call `request_plugin_installs` once with:
    - `action_type`: `install`
    - `categories`: a list of categories, each with `title` and `entries`
    - each categorized entry must include only `tool_type` and `tool_id`
