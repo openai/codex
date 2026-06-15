@@ -808,6 +808,10 @@ impl App {
                     }
                 }
             },
+            AppEvent::OpenTokenActivity => {
+                self.chat_widget
+                    .add_token_activity_output(crate::chatwidget::TokenActivityView::Daily);
+            }
             AppEvent::OpenRateLimitResetCredits => {
                 let request_id = self.chat_widget.show_rate_limit_reset_loading_popup();
                 self.refresh_rate_limit_reset_credits(app_server, request_id);

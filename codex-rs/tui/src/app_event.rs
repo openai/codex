@@ -306,7 +306,10 @@ pub(crate) enum AppEvent {
         result: Result<GetAccountRateLimitsResponse, String>,
     },
 
-    /// Open the reset-credit flow requested by `/usage`.
+    /// Open the default token-activity view selected from the `/usage` menu.
+    OpenTokenActivity,
+
+    /// Open the reset-credit flow selected from the `/usage` menu.
     OpenRateLimitResetCredits,
 
     /// Result of reading the current reset-credit balance.

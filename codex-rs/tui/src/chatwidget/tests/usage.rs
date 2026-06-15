@@ -6,13 +6,38 @@ use codex_app_server_protocol::RateLimitResetCreditsSummary;
 const TEST_OVERLAY_VIEW_ID: &str = "usage-test-overlay";
 
 #[tokio::test]
-async fn usage_command_opens_reset_flow_directly() {
+async fn usage_command_opens_menu_when_reset_is_available_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
+    let request_id = chat.start_rate_limit_reset_startup_check();
+    assert!(chat.finish_rate_limit_reset_hint_refresh(
+        request_id,
+        Ok(RateLimitResetCreditsSummary { available_count: 2 }),
+    ));
 
     chat.dispatch_command(SlashCommand::Usage);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenRateLimitResetCredits));
+    assert_chatwidget_snapshot!(
+        "usage_command_menu",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenTokenActivity));
+}
+
+#[tokio::test]
+async fn usage_command_opens_token_activity_when_no_reset_is_available() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+    let request_id = chat.start_rate_limit_reset_startup_check();
+    assert!(chat.finish_rate_limit_reset_hint_refresh(
+        request_id,
+        Ok(RateLimitResetCreditsSummary { available_count: 0 }),
+    ));
+
+    chat.dispatch_command(SlashCommand::Usage);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::RefreshTokenActivity { .. }));
 }
 
 #[tokio::test]
@@ -24,6 +49,23 @@ async fn usage_command_opens_token_activity_for_workspace_accounts() {
     chat.dispatch_command(SlashCommand::Usage);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::RefreshTokenActivity { .. }));
+}
+
+#[tokio::test]
+async fn usage_menu_rate_limit_reset_entry_opens_reset_flow() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+    let request_id = chat.start_rate_limit_reset_startup_check();
+    assert!(chat.finish_rate_limit_reset_hint_refresh(
+        request_id,
+        Ok(RateLimitResetCreditsSummary { available_count: 2 }),
+    ));
+    chat.dispatch_command(SlashCommand::Usage);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenRateLimitResetCredits));
 }
 
 #[tokio::test]

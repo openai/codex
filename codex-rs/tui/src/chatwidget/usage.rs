@@ -5,9 +5,42 @@ use uuid::Uuid;
 
 use super::*;
 
+const USAGE_MENU_VIEW_ID: &str = "usage-menu";
 const RATE_LIMIT_RESET_VIEW_ID: &str = "rate-limit-reset";
 
 impl ChatWidget {
+    pub(super) fn open_usage_menu(&mut self) {
+        self.clear_pending_rate_limit_reset_hint();
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            view_id: Some(USAGE_MENU_VIEW_ID),
+            title: Some("Usage".to_string()),
+            subtitle: Some("View account usage or redeem an earned reset.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items: vec![
+                SelectionItem {
+                    name: "Token activity".to_string(),
+                    description: Some("View recent account token usage.".to_string()),
+                    actions: vec![Box::new(|tx| {
+                        tx.send(AppEvent::OpenTokenActivity);
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Rate-limit resets".to_string(),
+                    description: Some("View and redeem earned rate-limit resets.".to_string()),
+                    actions: vec![Box::new(|tx| {
+                        tx.send(AppEvent::OpenRateLimitResetCredits);
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        self.request_redraw();
+    }
+
     pub(crate) fn show_rate_limit_reset_loading_popup(&mut self) -> u64 {
         self.clear_pending_rate_limit_reset_hint();
         let request_id = self.take_next_rate_limit_reset_request_id();
@@ -38,12 +71,16 @@ impl ChatWidget {
         self.pending_rate_limit_reset_request_id = None;
 
         let params = match result {
-            Ok(response) if response.available_count > 0 => {
-                Self::rate_limit_reset_confirmation_params(response.available_count)
+            Ok(response) => {
+                self.available_rate_limit_reset_credits = response.available_count;
+                if response.available_count > 0 {
+                    Self::rate_limit_reset_confirmation_params(response.available_count)
+                } else {
+                    Self::rate_limit_reset_message_params(
+                        "You don't have any rate-limit resets available.",
+                    )
+                }
             }
-            Ok(_) => Self::rate_limit_reset_message_params(
-                "You don't have any rate-limit resets available.",
-            ),
             Err(_) => Self::rate_limit_reset_message_params(
                 "Couldn't load rate-limit resets. Please try again.",
             ),
@@ -201,11 +238,14 @@ impl ChatWidget {
         self.pending_rate_limit_reset_request_id = None;
 
         let message = match result {
-            Ok(response) => format!(
-                "Usage reset. You have {} {} left.",
-                response.available_count,
-                reset_label(response.available_count)
-            ),
+            Ok(response) => {
+                self.available_rate_limit_reset_credits = response.available_count;
+                format!(
+                    "Usage reset. You have {} {} left.",
+                    response.available_count,
+                    reset_label(response.available_count)
+                )
+            }
             Err(_) => "Usage reset.".to_string(),
         };
         self.replace_rate_limit_reset_popup(Self::rate_limit_reset_message_params(&message));
@@ -256,6 +296,7 @@ impl ChatWidget {
             return false;
         }
         if let Ok(response) = result {
+            self.available_rate_limit_reset_credits = response.available_count;
             self.set_rate_limit_reset_available_hint(response.available_count);
         }
         true
@@ -263,6 +304,7 @@ impl ChatWidget {
 
     pub(crate) fn clear_pending_rate_limit_reset_requests(&mut self) {
         self.pending_rate_limit_reset_request_id = None;
+        self.available_rate_limit_reset_credits = 0;
         self.clear_pending_rate_limit_reset_hint();
         self.bottom_pane
             .dismiss_view_by_id(RATE_LIMIT_RESET_VIEW_ID);
