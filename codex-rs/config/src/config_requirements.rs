@@ -20,6 +20,7 @@ use crate::ConstraintError;
 use crate::ManagedHooksRequirementsToml;
 use crate::mcp_types::AppToolApproval;
 use crate::permissions_toml::PermissionProfileToml;
+use crate::types::FeedbackConfigToml;
 use crate::types::WindowsSandboxModeToml;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,10 +143,17 @@ impl<T> std::ops::DerefMut for ConstrainedWithSource<T> {
 /// normalization.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigRequirements {
+    pub sqlite_home: Option<Sourced<AbsolutePathBuf>>,
+    pub log_dir: Option<Sourced<AbsolutePathBuf>>,
+    pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
+    pub check_for_update_on_startup: Option<Sourced<bool>>,
+    pub allow_login_shell: Option<Sourced<bool>>,
+    pub feedback: Option<Sourced<FeedbackConfigToml>>,
     pub approval_policy: ConstrainedWithSource<AskForApproval>,
     pub approvals_reviewer: ConstrainedWithSource<ApprovalsReviewer>,
     pub permission_profile: ConstrainedWithSource<PermissionProfile>,
     pub windows_sandbox_mode: ConstrainedWithSource<Option<WindowsSandboxModeToml>>,
+    pub windows_sandbox_private_desktop: Option<Sourced<bool>>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
     pub allow_appshots: Option<Sourced<bool>>,
@@ -168,6 +176,12 @@ pub struct ConfigRequirements {
 impl Default for ConfigRequirements {
     fn default() -> Self {
         Self {
+            sqlite_home: None,
+            log_dir: None,
+            model_catalog_json: None,
+            check_for_update_on_startup: None,
+            allow_login_shell: None,
+            feedback: None,
             approval_policy: ConstrainedWithSource::new(
                 Constrained::allow_any_from_default(),
                 /*source*/ None,
@@ -184,6 +198,7 @@ impl Default for ConfigRequirements {
                 Constrained::allow_any(/*initial_value*/ None),
                 /*source*/ None,
             ),
+            windows_sandbox_private_desktop: None,
             web_search_mode: ConstrainedWithSource::new(
                 Constrained::allow_any(WebSearchMode::Cached),
                 /*source*/ None,
@@ -716,11 +731,12 @@ impl ComputerUseRequirementsToml {
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct WindowsRequirementsToml {
     pub allowed_sandbox_implementations: Option<Vec<WindowsSandboxModeToml>>,
+    pub sandbox_private_desktop: Option<bool>,
 }
 
 impl WindowsRequirementsToml {
     pub fn is_empty(&self) -> bool {
-        self.allowed_sandbox_implementations.is_none()
+        self.allowed_sandbox_implementations.is_none() && self.sandbox_private_desktop.is_none()
     }
 }
 
@@ -821,6 +837,12 @@ pub(crate) fn merge_app_requirements_descending(
 /// Base config deserialized from system `requirements.toml` or MDM.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
+    pub sqlite_home: Option<AbsolutePathBuf>,
+    pub log_dir: Option<AbsolutePathBuf>,
+    pub model_catalog_json: Option<AbsolutePathBuf>,
+    pub check_for_update_on_startup: Option<bool>,
+    pub allow_login_shell: Option<bool>,
+    pub feedback: Option<FeedbackConfigToml>,
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
@@ -877,6 +899,12 @@ impl<T> std::ops::Deref for Sourced<T> {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsWithSources {
+    pub sqlite_home: Option<Sourced<AbsolutePathBuf>>,
+    pub log_dir: Option<Sourced<AbsolutePathBuf>>,
+    pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
+    pub check_for_update_on_startup: Option<Sourced<bool>>,
+    pub allow_login_shell: Option<Sourced<bool>>,
+    pub feedback: Option<Sourced<FeedbackConfigToml>>,
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
     pub allowed_approvals_reviewers: Option<Sourced<Vec<ApprovalsReviewer>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
@@ -919,6 +947,12 @@ impl ConfigRequirementsWithSources {
         // Destructure without `..` so adding fields to `ConfigRequirementsToml`
         // forces this merge logic to be updated.
         let ConfigRequirementsToml {
+            sqlite_home: _,
+            log_dir: _,
+            model_catalog_json: _,
+            check_for_update_on_startup: _,
+            allow_login_shell: _,
+            feedback: _,
             allowed_approval_policies: _,
             allowed_approvals_reviewers: _,
             allowed_sandbox_modes: _,
@@ -956,6 +990,12 @@ impl ConfigRequirementsWithSources {
             other,
             source,
             {
+                sqlite_home,
+                log_dir,
+                model_catalog_json,
+                check_for_update_on_startup,
+                allow_login_shell,
+                feedback,
                 allowed_approval_policies,
                 allowed_approvals_reviewers,
                 allowed_sandbox_modes,
@@ -990,6 +1030,12 @@ impl ConfigRequirementsWithSources {
 
     pub fn into_toml(self) -> ConfigRequirementsToml {
         let ConfigRequirementsWithSources {
+            sqlite_home,
+            log_dir,
+            model_catalog_json,
+            check_for_update_on_startup,
+            allow_login_shell,
+            feedback,
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
@@ -1013,6 +1059,12 @@ impl ConfigRequirementsWithSources {
             guardian_policy_config,
         } = self;
         ConfigRequirementsToml {
+            sqlite_home: sqlite_home.map(|sourced| sourced.value),
+            log_dir: log_dir.map(|sourced| sourced.value),
+            model_catalog_json: model_catalog_json.map(|sourced| sourced.value),
+            check_for_update_on_startup: check_for_update_on_startup.map(|sourced| sourced.value),
+            allow_login_shell: allow_login_shell.map(|sourced| sourced.value),
+            feedback: feedback.map(|sourced| sourced.value),
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
             allowed_approvals_reviewers: allowed_approvals_reviewers.map(|sourced| sourced.value),
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
@@ -1103,7 +1155,16 @@ impl ConfigRequirementsToml {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.allowed_approval_policies.is_none()
+        self.sqlite_home.is_none()
+            && self.log_dir.is_none()
+            && self.model_catalog_json.is_none()
+            && self.check_for_update_on_startup.is_none()
+            && self.allow_login_shell.is_none()
+            && self
+                .feedback
+                .as_ref()
+                .is_none_or(|feedback| feedback == &FeedbackConfigToml::default())
+            && self.allowed_approval_policies.is_none()
             && self.allowed_approvals_reviewers.is_none()
             && self.allowed_sandbox_modes.is_none()
             && self.allowed_permission_profiles.is_none()
@@ -1157,6 +1218,12 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         // config loading and requirements API projection. The normalized
         // constraints below only need the compiled PermissionProfile envelope.
         let ConfigRequirementsWithSources {
+            sqlite_home,
+            log_dir,
+            model_catalog_json,
+            check_for_update_on_startup,
+            allow_login_shell,
+            feedback,
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
@@ -1277,42 +1344,60 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 /*source*/ None,
             ),
         };
-        let windows_sandbox_mode = match windows {
+        let (windows_sandbox_mode, windows_sandbox_private_desktop) = match windows {
             Some(Sourced {
                 value:
                     WindowsRequirementsToml {
-                        allowed_sandbox_implementations: Some(implementations),
+                        allowed_sandbox_implementations,
+                        sandbox_private_desktop,
                     },
                 source: requirement_source,
             }) => {
-                if implementations.is_empty() {
-                    return Err(ConstraintError::empty_field(
-                        "windows.allowed_sandbox_implementations",
-                    ));
-                }
-                // Prefer elevated when both Windows sandbox implementations are allowed.
-                let initial_value = if implementations.contains(&WindowsSandboxModeToml::Elevated) {
-                    WindowsSandboxModeToml::Elevated
-                } else {
-                    WindowsSandboxModeToml::Unelevated
-                };
+                let sandbox_private_desktop = sandbox_private_desktop
+                    .map(|value| Sourced::new(value, requirement_source.clone()));
+                let sandbox_mode = match allowed_sandbox_implementations {
+                    Some(implementations) => {
+                        if implementations.is_empty() {
+                            return Err(ConstraintError::empty_field(
+                                "windows.allowed_sandbox_implementations",
+                            ));
+                        }
+                        // Prefer elevated when both Windows sandbox implementations are allowed.
+                        let initial_value =
+                            if implementations.contains(&WindowsSandboxModeToml::Elevated) {
+                                WindowsSandboxModeToml::Elevated
+                            } else {
+                                WindowsSandboxModeToml::Unelevated
+                            };
 
-                let requirement_source_for_error = requirement_source.clone();
-                let constrained =
-                    Constrained::new(Some(initial_value), move |candidate| match candidate {
-                        Some(candidate) if implementations.contains(candidate) => Ok(()),
-                        _ => Err(ConstraintError::InvalidValue {
-                            field_name: "windows.sandbox",
-                            candidate: format!("{candidate:?}"),
-                            allowed: format!("{implementations:?}"),
-                            requirement_source: requirement_source_for_error.clone(),
-                        }),
-                    })?;
-                ConstrainedWithSource::new(constrained, Some(requirement_source))
+                        let requirement_source_for_error = requirement_source.clone();
+                        let constrained = Constrained::new(
+                            Some(initial_value),
+                            move |candidate| match candidate {
+                                Some(candidate) if implementations.contains(candidate) => Ok(()),
+                                _ => Err(ConstraintError::InvalidValue {
+                                    field_name: "windows.sandbox",
+                                    candidate: format!("{candidate:?}"),
+                                    allowed: format!("{implementations:?}"),
+                                    requirement_source: requirement_source_for_error.clone(),
+                                }),
+                            },
+                        )?;
+                        ConstrainedWithSource::new(constrained, Some(requirement_source))
+                    }
+                    None => ConstrainedWithSource::new(
+                        Constrained::allow_any(/*initial_value*/ None),
+                        /*source*/ None,
+                    ),
+                };
+                (sandbox_mode, sandbox_private_desktop)
             }
-            Some(_) | None => ConstrainedWithSource::new(
-                Constrained::allow_any(/*initial_value*/ None),
-                /*source*/ None,
+            None => (
+                ConstrainedWithSource::new(
+                    Constrained::allow_any(/*initial_value*/ None),
+                    /*source*/ None,
+                ),
+                None,
             ),
         };
         let exec_policy = match rules {
@@ -1437,10 +1522,17 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         });
         let guardian_policy_config_source = guardian_policy_config.map(|sourced| sourced.source);
         Ok(ConfigRequirements {
+            sqlite_home,
+            log_dir,
+            model_catalog_json,
+            check_for_update_on_startup,
+            allow_login_shell,
+            feedback,
             approval_policy,
             approvals_reviewer,
             permission_profile,
             windows_sandbox_mode,
+            windows_sandbox_private_desktop,
             web_search_mode,
             allow_managed_hooks_only,
             allow_appshots,

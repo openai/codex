@@ -1124,7 +1124,12 @@ pub async fn run_main(
         .config_layer_stack
         .effective_config()
         .as_table()
-        .is_some_and(|table| table.contains_key("log_dir"));
+        .is_some_and(|table| table.contains_key("log_dir"))
+        || config
+            .config_layer_stack
+            .requirements_toml()
+            .log_dir
+            .is_some();
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {

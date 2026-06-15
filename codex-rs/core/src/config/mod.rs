@@ -145,6 +145,7 @@ mod managed_features;
 mod network_proxy_spec;
 mod otel;
 mod permissions;
+mod requirements;
 mod resolved_permission_profile;
 #[cfg(test)]
 mod schema;
@@ -2642,7 +2643,7 @@ impl Config {
 
     pub(crate) async fn load_config_with_layer_stack(
         fs: &dyn ExecutorFileSystem,
-        cfg: ConfigToml,
+        mut cfg: ConfigToml,
         overrides: ConfigOverrides,
         codex_home: AbsolutePathBuf,
         config_layer_stack: ConfigLayerStack,
@@ -2658,13 +2659,30 @@ impl Config {
 
         validate_model_providers(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
-        // Ensure that every field of ConfigRequirements is applied to the final
-        // Config.
+        let mut startup_warnings = config_layer_stack
+            .startup_warnings()
+            .unwrap_or_default()
+            .to_vec();
+        requirements::apply_to_config(
+            &mut cfg,
+            config_layer_stack.requirements(),
+            &mut startup_warnings,
+        )?;
+
+        // Destructure every field to ensure ConfigRequirements additions are
+        // either applied above or handled while constructing the final Config.
         let ConfigRequirements {
+            sqlite_home: _,
+            log_dir: _,
+            model_catalog_json: _,
+            check_for_update_on_startup: _,
+            allow_login_shell: _,
+            feedback: _,
             approval_policy: mut constrained_approval_policy,
             approvals_reviewer: mut constrained_approvals_reviewer,
             permission_profile: mut constrained_permission_profile,
             windows_sandbox_mode: mut constrained_windows_sandbox_mode,
+            windows_sandbox_private_desktop: _,
             web_search_mode: mut constrained_web_search_mode,
             allow_managed_hooks_only: _,
             allow_appshots: _,
@@ -2680,11 +2698,6 @@ impl Config {
             filesystem: filesystem_requirements,
             guardian_policy_config_source: _,
         } = config_layer_stack.requirements().clone();
-
-        let mut startup_warnings = config_layer_stack
-            .startup_warnings()
-            .unwrap_or_default()
-            .to_vec();
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
