@@ -2,6 +2,75 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn shell_environment_policy_accepts_legacy_lists_and_rules() {
+    let legacy: ShellEnvironmentPolicyToml = toml::from_str(
+        r#"
+exclude = ["LEGACY_*", "SHARED_*"]
+include_only = ["PATH", "HOME"]
+"#,
+    )
+    .expect("legacy arrays should remain valid in config.toml");
+    assert_eq!(
+        legacy,
+        ShellEnvironmentPolicyToml {
+            exclude: Some(vec!["LEGACY_*".to_string(), "SHARED_*".to_string()]),
+            include_only: Some(vec!["PATH".to_string(), "HOME".to_string()]),
+            ..Default::default()
+        }
+    );
+
+    let ruled: ShellEnvironmentPolicyToml = toml::from_str(
+        r#"
+exclude = ["KEEP_EXCLUDED", "FLIP_TO_INCLUDE"]
+include_only = ["KEEP_INCLUDED", "FLIP_TO_EXCLUDE"]
+
+[rules]
+"FLIP_TO_EXCLUDE" = "exclude"
+"FLIP_TO_INCLUDE" = "include"
+"#,
+    )
+    .expect("rules should be valid in config.toml");
+    assert_eq!(
+        ruled,
+        ShellEnvironmentPolicyToml {
+            exclude: Some(vec![
+                "KEEP_EXCLUDED".to_string(),
+                "FLIP_TO_INCLUDE".to_string(),
+            ]),
+            include_only: Some(vec![
+                "KEEP_INCLUDED".to_string(),
+                "FLIP_TO_EXCLUDE".to_string(),
+            ]),
+            rules: Some(BTreeMap::from([
+                (
+                    "FLIP_TO_EXCLUDE".to_string(),
+                    ShellEnvironmentPolicyRule::Exclude,
+                ),
+                (
+                    "FLIP_TO_INCLUDE".to_string(),
+                    ShellEnvironmentPolicyRule::Include,
+                ),
+            ])),
+            ..Default::default()
+        }
+    );
+    assert_eq!(
+        ShellEnvironmentPolicy::from(ruled),
+        ShellEnvironmentPolicy::from(ShellEnvironmentPolicyToml {
+            exclude: Some(vec![
+                "KEEP_EXCLUDED".to_string(),
+                "FLIP_TO_EXCLUDE".to_string(),
+            ]),
+            include_only: Some(vec![
+                "KEEP_INCLUDED".to_string(),
+                "FLIP_TO_INCLUDE".to_string(),
+            ]),
+            ..Default::default()
+        })
+    );
+}
+
+#[test]
 fn deserialize_skill_config_with_name_selector() {
     let cfg: SkillConfig = toml::from_str(
         r#"

@@ -199,6 +199,16 @@ pub enum ShellEnvironmentPolicyInherit {
     None,
 }
 
+/// Assigns a shell environment variable pattern to the include-only or exclude
+/// set. Includes do not re-add variables removed by another exclude pattern.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum ShellEnvironmentPolicyRule {
+    Include,
+    Exclude,
+}
+
 pub type EnvironmentVariablePattern = WildMatchPattern<'*', '?'>;
 
 /// Deriving the `env` based on this policy works as follows:
