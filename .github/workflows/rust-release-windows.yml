@@ -7,6 +7,7 @@ on:
 # nested submodules. Prefer the system git CLI across every Cargo invocation.
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  WINDOWS_BINARIES: "codex codex-responses-api-proxy codex-windows-sandbox-setup codex-command-runner codex-app-server"
 
 jobs:
   build-windows-binaries:
@@ -142,6 +143,49 @@ jobs:
           path: |
             codex-rs/target/${{ matrix.target }}/release/staged-${{ matrix.bundle }}/*
 
+  build-windows-symbols:
+    needs:
+      - build-windows-binaries
+    name: Build Windows symbols - ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: codex-rs
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-pc-windows-msvc
+          - x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Download prebuilt Windows binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: windows-binaries-${{ matrix.target }}-*
+          merge-multiple: true
+          path: codex-rs/target/${{ matrix.target }}/release
+      - name: Build symbols archive
+        shell: bash
+        run: |
+          bash "${GITHUB_WORKSPACE}/.github/scripts/archive-release-symbols-and-strip-binaries.sh" \
+            --target "${{ matrix.target }}" \
+            --artifact-name "${{ matrix.target }}" \
+            --release-dir "target/${{ matrix.target }}/release" \
+            --archive-dir "symbols-dist/${{ matrix.target }}" \
+            --binaries "${WINDOWS_BINARIES}"
+      - name: Upload symbols archive
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.target }}-symbols
+          path: codex-rs/symbols-dist/${{ matrix.target }}/*
+          if-no-files-found: error
+
   build-windows:
     needs:
       - build-windows-binaries
@@ -157,9 +201,6 @@ jobs:
     defaults:
       run:
         working-directory: codex-rs
-    env:
-      WINDOWS_BINARIES: "codex codex-responses-api-proxy codex-windows-sandbox-setup codex-command-runner codex-app-server"
-
     strategy:
       fail-fast: false
       matrix:
@@ -217,23 +258,6 @@ jobs:
           endpoint: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
           account-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
-
-      - name: Build symbols archive
-        shell: bash
-        run: |
-          bash "${GITHUB_WORKSPACE}/.github/scripts/archive-release-symbols-and-strip-binaries.sh" \
-            --target "${{ matrix.target }}" \
-            --artifact-name "${{ matrix.target }}" \
-            --release-dir "target/${{ matrix.target }}/release" \
-            --archive-dir "symbols-dist/${{ matrix.target }}" \
-            --binaries "${WINDOWS_BINARIES}"
-
-      - name: Upload symbols archive
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: ${{ matrix.target }}-symbols
-          path: codex-rs/symbols-dist/${{ matrix.target }}/*
-          if-no-files-found: error
 
       - name: Stage artifacts
         shell: bash
