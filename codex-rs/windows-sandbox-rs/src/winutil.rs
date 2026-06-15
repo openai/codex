@@ -235,6 +235,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use std::path::Path;
+    use std::path::PathBuf;
 
     #[test]
     fn argv_to_command_line_quotes_each_argument_independently() {
