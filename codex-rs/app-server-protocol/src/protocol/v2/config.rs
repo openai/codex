@@ -9,6 +9,7 @@ use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+use codex_protocol::config_types::ShellEnvironmentPolicyRule;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
@@ -424,9 +425,8 @@ pub struct FeedbackRequirements {
 pub struct ShellEnvironmentPolicyRequirements {
     pub inherit: Option<ShellEnvironmentPolicyInherit>,
     pub ignore_default_excludes: Option<bool>,
-    pub exclude: Option<BTreeMap<String, bool>>,
     pub r#set: Option<HashMap<String, String>>,
-    pub include_only: Option<BTreeMap<String, bool>>,
+    pub rules: Option<BTreeMap<String, ShellEnvironmentPolicyRule>>,
     pub experimental_use_profile: Option<bool>,
 }
 

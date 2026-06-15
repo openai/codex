@@ -20,6 +20,7 @@ pub use codex_protocol::config_types::Personality;
 pub use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+use codex_protocol::config_types::ShellEnvironmentPolicyRule;
 pub use codex_protocol::config_types::WebSearchMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
@@ -913,41 +914,6 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings 
     }
 }
 
-// Compatibility input for list-like shell environment policy fields.
-//
-// Ordinary `config.toml` accepts both the legacy array form and the keyed
-// boolean-map form while the latter rolls out. Keeping that compatibility in
-// this input-only type lets requirements stay map-only and gives us a single
-// seam where arrays can be deprecated and removed later.
-#[derive(Deserialize, JsonSchema)]
-#[serde(untagged)]
-enum ShellEnvironmentPatternListInput {
-    List(Vec<String>),
-    Map(BTreeMap<String, bool>),
-}
-
-impl ShellEnvironmentPatternListInput {
-    fn into_enabled_patterns(self) -> Vec<String> {
-        match self {
-            Self::List(patterns) => patterns,
-            Self::Map(patterns) => patterns
-                .into_iter()
-                .filter_map(|(pattern, enabled)| enabled.then_some(pattern))
-                .collect(),
-        }
-    }
-}
-
-fn deserialize_optional_shell_environment_pattern_list<'de, D>(
-    deserializer: D,
-) -> Result<Option<Vec<String>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Option::<ShellEnvironmentPatternListInput>::deserialize(deserializer)
-        .map(|value| value.map(ShellEnvironmentPatternListInput::into_enabled_patterns))
-}
-
 /// Policy for building the `env` when spawning a process via shell-like tools.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -956,23 +922,20 @@ pub struct ShellEnvironmentPolicyToml {
 
     pub ignore_default_excludes: Option<bool>,
 
-    /// List or boolean map of regular expressions.
-    #[serde(
-        default,
-        deserialize_with = "deserialize_optional_shell_environment_pattern_list"
-    )]
-    #[schemars(with = "Option<ShellEnvironmentPatternListInput>")]
+    /// Legacy list of regular expressions to exclude.
     pub exclude: Option<Vec<String>>,
 
     pub r#set: Option<HashMap<String, String>>,
 
-    /// List or boolean map of regular expressions.
-    #[serde(
-        default,
-        deserialize_with = "deserialize_optional_shell_environment_pattern_list"
-    )]
-    #[schemars(with = "Option<ShellEnvironmentPatternListInput>")]
+    /// Legacy list of regular expressions to include.
     pub include_only: Option<Vec<String>>,
+
+    /// Pattern actions used by the canonical table representation.
+    ///
+    /// Ordinary config keeps accepting the legacy arrays above during the
+    /// migration. Requirements accept only this keyed form, keeping array
+    /// compatibility isolated so the legacy fields can be deprecated later.
+    pub rules: Option<BTreeMap<String, ShellEnvironmentPolicyRule>>,
 
     pub experimental_use_profile: Option<bool>,
 }
@@ -982,16 +945,22 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
         // Default to inheriting the full environment when not specified.
         let inherit = toml.inherit.unwrap_or(ShellEnvironmentPolicyInherit::All);
         let ignore_default_excludes = toml.ignore_default_excludes.unwrap_or(true);
-        let exclude = toml
-            .exclude
-            .unwrap_or_default()
+        let mut exclude = toml.exclude.unwrap_or_default();
+        let mut include_only = toml.include_only.unwrap_or_default();
+        for (pattern, rule) in toml.rules.unwrap_or_default() {
+            exclude.retain(|candidate| candidate != &pattern);
+            include_only.retain(|candidate| candidate != &pattern);
+            match rule {
+                ShellEnvironmentPolicyRule::Include => include_only.push(pattern),
+                ShellEnvironmentPolicyRule::Exclude => exclude.push(pattern),
+            }
+        }
+        let exclude = exclude
             .into_iter()
             .map(|s| EnvironmentVariablePattern::new_case_insensitive(&s))
             .collect();
         let r#set = toml.r#set.unwrap_or_default();
-        let include_only = toml
-            .include_only
-            .unwrap_or_default()
+        let include_only = include_only
             .into_iter()
             .map(|s| EnvironmentVariablePattern::new_case_insensitive(&s))
             .collect();

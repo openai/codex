@@ -410,17 +410,15 @@ fn map_shell_environment_policy_requirements_to_api(
     let ShellEnvironmentPolicyRequirementsToml {
         inherit,
         ignore_default_excludes,
-        exclude,
         r#set,
-        include_only,
+        rules,
         experimental_use_profile,
     } = policy;
     ShellEnvironmentPolicyRequirements {
         inherit,
         ignore_default_excludes,
-        exclude,
         r#set,
-        include_only,
+        rules,
         experimental_use_profile,
     }
 }
@@ -618,6 +616,7 @@ mod tests {
     use codex_config::ConfigRequirementsToml;
     use codex_config::WindowsRequirementsToml;
     use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+    use codex_protocol::config_types::ShellEnvironmentPolicyRule;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -736,13 +735,10 @@ inherit = "core"
 ignore_default_excludes = false
 experimental_use_profile = false
 
-[shell_environment_policy.exclude]
-"*OLD*" = false
-"*SECRET*" = true
-
-[shell_environment_policy.include_only]
-"HOME" = true
-"PATH" = false
+[shell_environment_policy.rules]
+"*SECRET*" = "exclude"
+"HOME" = "include"
+"PATH" = "exclude"
 
 [shell_environment_policy.set]
 MANAGED = "true"
@@ -763,16 +759,13 @@ MANAGED = "true"
             Some(ShellEnvironmentPolicyRequirements {
                 inherit: Some(ShellEnvironmentPolicyInherit::Core),
                 ignore_default_excludes: Some(false),
-                exclude: Some(BTreeMap::from([
-                    ("*OLD*".to_string(), false),
-                    ("*SECRET*".to_string(), true),
-                ])),
                 r#set: Some(HashMap::from([
                     ("MANAGED".to_string(), "true".to_string(),)
                 ])),
-                include_only: Some(BTreeMap::from([
-                    ("HOME".to_string(), true),
-                    ("PATH".to_string(), false),
+                rules: Some(BTreeMap::from([
+                    ("*SECRET*".to_string(), ShellEnvironmentPolicyRule::Exclude,),
+                    ("HOME".to_string(), ShellEnvironmentPolicyRule::Include,),
+                    ("PATH".to_string(), ShellEnvironmentPolicyRule::Exclude,),
                 ])),
                 experimental_use_profile: Some(false),
             })

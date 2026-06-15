@@ -8,6 +8,7 @@ use crate::ConfigRequirementsWithSources;
 use crate::RequirementSource;
 use crate::ShellEnvironmentPolicyRequirementsToml;
 use crate::Sourced;
+use codex_protocol::config_types::ShellEnvironmentPolicyRule;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -348,7 +349,7 @@ api = false
 }
 
 #[test]
-fn shell_environment_pattern_maps_compose_by_key_with_tombstones() {
+fn shell_environment_rules_compose_by_pattern() {
     let high_source = RequirementSource::EnterpriseManaged {
         id: "req_high".to_string(),
         name: "High".to_string(),
@@ -362,25 +363,17 @@ fn shell_environment_pattern_maps_compose_by_key_with_tombstones() {
             RequirementsLayerEntry::from_toml(
                 low_source.clone(),
                 r#"
-[shell_environment_policy.exclude]
-"KEEP_*" = true
-"REMOVE_*" = true
-
-[shell_environment_policy.include_only]
-"HOME" = true
-"PATH" = true
+[shell_environment_policy.rules]
+"FLIP_*" = "exclude"
+"KEEP_*" = "include"
 "#,
             ),
             RequirementsLayerEntry::from_toml(
                 high_source.clone(),
                 r#"
-[shell_environment_policy.exclude]
-"ADD_*" = true
-"REMOVE_*" = false
-
-[shell_environment_policy.include_only]
-"PATH" = false
-"USER" = true
+[shell_environment_policy.rules]
+"ADD_*" = "exclude"
+"FLIP_*" = "include"
 "#,
             ),
         ],
@@ -393,15 +386,10 @@ fn shell_environment_pattern_maps_compose_by_key_with_tombstones() {
         composed.shell_environment_policy,
         Some(Sourced::new(
             ShellEnvironmentPolicyRequirementsToml {
-                exclude: Some(BTreeMap::from([
-                    ("ADD_*".to_string(), true),
-                    ("KEEP_*".to_string(), true),
-                    ("REMOVE_*".to_string(), false),
-                ])),
-                include_only: Some(BTreeMap::from([
-                    ("HOME".to_string(), true),
-                    ("PATH".to_string(), false),
-                    ("USER".to_string(), true),
+                rules: Some(BTreeMap::from([
+                    ("ADD_*".to_string(), ShellEnvironmentPolicyRule::Exclude,),
+                    ("FLIP_*".to_string(), ShellEnvironmentPolicyRule::Include,),
+                    ("KEEP_*".to_string(), ShellEnvironmentPolicyRule::Include,),
                 ])),
                 ..Default::default()
             },

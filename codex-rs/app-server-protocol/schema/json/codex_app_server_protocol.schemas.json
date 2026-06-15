@@ -15572,15 +15572,6 @@
       },
       "ShellEnvironmentPolicyRequirements": {
         "properties": {
-          "exclude": {
-            "additionalProperties": {
-              "type": "boolean"
-            },
-            "type": [
-              "object",
-              "null"
-            ]
-          },
           "experimental_use_profile": {
             "type": [
               "boolean",
@@ -15590,15 +15581,6 @@
           "ignore_default_excludes": {
             "type": [
               "boolean",
-              "null"
-            ]
-          },
-          "include_only": {
-            "additionalProperties": {
-              "type": "boolean"
-            },
-            "type": [
-              "object",
               "null"
             ]
           },
@@ -15612,6 +15594,15 @@
               }
             ]
           },
+          "rules": {
+            "additionalProperties": {
+              "$ref": "#/definitions/v2/ShellEnvironmentPolicyRule"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "set": {
             "additionalProperties": {
               "type": "string"
@@ -15623,6 +15614,14 @@
           }
         },
         "type": "object"
+      },
+      "ShellEnvironmentPolicyRule": {
+        "description": "Assigns a shell environment variable pattern to the include-only or exclude set. Includes do not re-add variables removed by another exclude pattern.",
+        "enum": [
+          "include",
+          "exclude"
+        ],
+        "type": "string"
       },
       "SkillDependencies": {
         "properties": {

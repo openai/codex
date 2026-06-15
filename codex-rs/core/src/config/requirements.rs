@@ -7,6 +7,7 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::FeedbackConfigToml;
 use codex_config::types::ShellEnvironmentPolicyToml;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::ShellEnvironmentPolicyRule;
 use std::collections::BTreeMap;
 
 use super::otel;
@@ -147,9 +148,8 @@ fn apply_shell_environment_policy_requirement(
     let ShellEnvironmentPolicyRequirementsToml {
         inherit,
         ignore_default_excludes,
-        exclude,
         r#set: required_set,
-        include_only,
+        rules,
         experimental_use_profile,
     } = value;
     let mut conflict = false;
@@ -159,8 +159,7 @@ fn apply_shell_environment_policy_requirement(
         &mut configured.ignore_default_excludes,
         ignore_default_excludes,
     );
-    conflict |= apply_required_pattern_map(&mut configured.exclude, exclude);
-    conflict |= apply_required_pattern_map(&mut configured.include_only, include_only);
+    conflict |= apply_required_pattern_rules(configured, rules);
     conflict |= replace_required_leaf(
         &mut configured.experimental_use_profile,
         experimental_use_profile,
@@ -184,26 +183,47 @@ fn apply_shell_environment_policy_requirement(
     );
 }
 
-fn apply_required_pattern_map(
-    configured: &mut Option<Vec<String>>,
-    required: &Option<BTreeMap<String, bool>>,
+fn apply_required_pattern_rules(
+    configured: &mut ShellEnvironmentPolicyToml,
+    required: &Option<BTreeMap<String, ShellEnvironmentPolicyRule>>,
 ) -> bool {
     let Some(required) = required else {
         return false;
     };
-    let configured = configured.get_or_insert_default();
-    // Adding an enabled pattern is additive; removing a configured pattern is
-    // the only case that overrides the user's effective list.
-    let conflict = required
-        .iter()
-        .any(|(pattern, enabled)| !enabled && configured.contains(pattern));
+    let conflict = required.iter().any(|(pattern, required_action)| {
+        let configured_action = configured
+            .rules
+            .as_ref()
+            .and_then(|rules| rules.get(pattern).copied())
+            .or_else(|| {
+                configured
+                    .exclude
+                    .as_ref()
+                    .is_some_and(|patterns| patterns.contains(pattern))
+                    .then_some(ShellEnvironmentPolicyRule::Exclude)
+            })
+            .or_else(|| {
+                configured
+                    .include_only
+                    .as_ref()
+                    .is_some_and(|patterns| patterns.contains(pattern))
+                    .then_some(ShellEnvironmentPolicyRule::Include)
+            });
+        configured_action.is_some_and(|action| action != *required_action)
+    });
 
-    configured.retain(|pattern| required.get(pattern).copied().unwrap_or(true));
-    for (pattern, enabled) in required {
-        if *enabled && !configured.contains(pattern) {
-            configured.push(pattern.clone());
+    for pattern in required.keys() {
+        if let Some(exclude) = configured.exclude.as_mut() {
+            exclude.retain(|candidate| candidate != pattern);
+        }
+        if let Some(include_only) = configured.include_only.as_mut() {
+            include_only.retain(|candidate| candidate != pattern);
         }
     }
+    configured
+        .rules
+        .get_or_insert_default()
+        .extend(required.clone());
 
     conflict
 }

@@ -1,6 +1,7 @@
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+use codex_protocol::config_types::ShellEnvironmentPolicyRule;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -893,17 +894,17 @@ pub struct ConfigRequirementsToml {
 
 /// Managed shell environment policy fields accepted by `requirements.toml`.
 ///
-/// Unlike ordinary `config.toml`, requirements intentionally accept only
-/// boolean maps for list-like fields. This keeps tombstones composable by key
+/// Unlike ordinary `config.toml`, requirements intentionally accept only the
+/// keyed `rules` form. This makes include/exclude actions compose by pattern,
 /// while config arrays remain a migration-only compatibility path that can be
 /// deprecated independently later.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ShellEnvironmentPolicyRequirementsToml {
     pub inherit: Option<ShellEnvironmentPolicyInherit>,
     pub ignore_default_excludes: Option<bool>,
-    pub exclude: Option<BTreeMap<String, bool>>,
     pub r#set: Option<HashMap<String, String>>,
-    pub include_only: Option<BTreeMap<String, bool>>,
+    pub rules: Option<BTreeMap<String, ShellEnvironmentPolicyRule>>,
     pub experimental_use_profile: Option<bool>,
 }
 
@@ -1760,29 +1761,21 @@ mod tests {
     }
 
     #[test]
-    fn shell_environment_policy_requires_boolean_maps_for_list_fields() -> Result<()> {
+    fn shell_environment_policy_requires_rules_for_list_fields() -> Result<()> {
         let requirements: ConfigRequirementsToml = from_str(
             r#"
-[shell_environment_policy.exclude]
-"ADD_*" = true
-"REMOVE_*" = false
-
-[shell_environment_policy.include_only]
-"HOME" = true
-"PATH" = false
+[shell_environment_policy.rules]
+"HOME" = "include"
+"SECRET_*" = "exclude"
 "#,
         )?;
 
         assert_eq!(
             requirements.shell_environment_policy,
             Some(ShellEnvironmentPolicyRequirementsToml {
-                exclude: Some(BTreeMap::from([
-                    ("ADD_*".to_string(), true),
-                    ("REMOVE_*".to_string(), false),
-                ])),
-                include_only: Some(BTreeMap::from([
-                    ("HOME".to_string(), true),
-                    ("PATH".to_string(), false),
+                rules: Some(BTreeMap::from([
+                    ("HOME".to_string(), ShellEnvironmentPolicyRule::Include,),
+                    ("SECRET_*".to_string(), ShellEnvironmentPolicyRule::Exclude,),
                 ])),
                 ..Default::default()
             })
@@ -1792,9 +1785,14 @@ mod tests {
             let error = from_str::<ConfigRequirementsToml>(&format!(
                 "[shell_environment_policy]\n{field} = [\"LEGACY_*\"]\n"
             ))
-            .expect_err("requirements.toml arrays should be rejected");
+            .expect_err("legacy requirements.toml arrays should be rejected");
             assert!(error.to_string().contains(field));
         }
+        let error = from_str::<ConfigRequirementsToml>(
+            "[shell_environment_policy.rules]\n\"PATH\" = \"keep\"\n",
+        )
+        .expect_err("unknown rule actions should be rejected");
+        assert!(error.to_string().contains("keep"));
         Ok(())
     }
 
