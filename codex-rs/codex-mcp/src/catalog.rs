@@ -32,11 +32,17 @@ impl McpPluginAttribution {
 /// The component that declared an MCP server registration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpServerSource {
+    /// A plugin discovered through the process-wide legacy plugin manager.
     Plugin(McpPluginAttribution),
+    /// A plugin explicitly selected for this thread through a capability root.
     SelectedPlugin(McpPluginAttribution),
     Config,
-    Compatibility { id: String },
-    Extension { id: String },
+    Compatibility {
+        id: String,
+    },
+    Extension {
+        id: String,
+    },
 }
 
 impl McpServerSource {
