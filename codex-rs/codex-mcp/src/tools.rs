@@ -260,7 +260,7 @@ fn mask_input_schema_for_file_path_params(input_schema: &mut JsonValue, file_par
 }
 
 fn mask_input_property_schema(schema: &mut JsonValue) {
-    let Some(object) = schema.as_object_mut() else {
+    let Some(object) = schema.as_object() else {
         return;
     };
 
@@ -276,16 +276,67 @@ fn mask_input_property_schema(schema: &mut JsonValue) {
         description = format!("{description} {guidance}");
     }
 
-    let is_array = object.get("type").and_then(JsonValue::as_str) == Some("array")
-        || object.get("items").is_some();
+    let shape = file_param_schema_shape(schema);
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
     object.clear();
     object.insert("description".to_string(), JsonValue::String(description));
-    if is_array {
-        object.insert("type".to_string(), JsonValue::String("array".to_string()));
-        object.insert("items".to_string(), serde_json::json!({ "type": "string" }));
-    } else {
-        object.insert("type".to_string(), JsonValue::String("string".to_string()));
+    match shape {
+        FileParamSchemaShape::Scalar => {
+            object.insert("type".to_string(), JsonValue::String("string".to_string()));
+        }
+        FileParamSchemaShape::Array => {
+            object.insert("type".to_string(), JsonValue::String("array".to_string()));
+            object.insert("items".to_string(), serde_json::json!({ "type": "string" }));
+        }
+        FileParamSchemaShape::ScalarOrArray => {
+            object.insert(
+                "anyOf".to_string(),
+                serde_json::json!([
+                    { "type": "string" },
+                    {
+                        "type": "array",
+                        "items": { "type": "string" },
+                    },
+                ]),
+            );
+        }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FileParamSchemaShape {
+    Scalar,
+    Array,
+    ScalarOrArray,
+}
+
+fn file_param_schema_shape(schema: &JsonValue) -> FileParamSchemaShape {
+    let Some(object) = schema.as_object() else {
+        return FileParamSchemaShape::Scalar;
+    };
+    let Some(any_of) = object.get("anyOf").and_then(JsonValue::as_array) else {
+        return if is_array_schema(schema) {
+            FileParamSchemaShape::Array
+        } else {
+            FileParamSchemaShape::Scalar
+        };
+    };
+    let has_array = any_of.iter().any(is_array_schema);
+    let has_scalar = any_of.iter().any(|variant| !is_array_schema(variant));
+    match (has_scalar, has_array) {
+        (true, true) => FileParamSchemaShape::ScalarOrArray,
+        (false, true) => FileParamSchemaShape::Array,
+        _ => FileParamSchemaShape::Scalar,
+    }
+}
+
+fn is_array_schema(schema: &JsonValue) -> bool {
+    let Some(object) = schema.as_object() else {
+        return false;
+    };
+    object.get("type").and_then(JsonValue::as_str) == Some("array") || object.get("items").is_some()
 }
 
 fn sha1_hex(s: &str) -> String {

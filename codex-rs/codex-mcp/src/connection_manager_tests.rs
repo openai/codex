@@ -136,6 +136,16 @@ fn tool_with_model_visible_input_schema_masks_file_params() {
                 "files": {
                     "type": "array",
                     "items": {"type": "object"}
+                },
+                "file_or_files": {
+                    "description": "One or more file payloads.",
+                    "anyOf": [
+                        {"type": "object"},
+                        {
+                            "type": "array",
+                            "items": {"type": "object"}
+                        }
+                    ]
                 }
             }
         })
@@ -145,7 +155,7 @@ fn tool_with_model_visible_input_schema_masks_file_params() {
     );
     tool.meta = Some(Meta(
         serde_json::json!({
-            "openai/fileParams": ["file", "files"]
+            "openai/fileParams": ["file", "files", "file_or_files"]
         })
         .as_object()
         .expect("object")
@@ -167,6 +177,16 @@ fn tool_with_model_visible_input_schema_masks_file_params() {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
+                },
+                "file_or_files": {
+                    "description": "One or more file payloads. This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here.",
+                    "anyOf": [
+                        {"type": "string"},
+                        {
+                            "type": "array",
+                            "items": {"type": "string"}
+                        }
+                    ]
                 }
             }
         })
