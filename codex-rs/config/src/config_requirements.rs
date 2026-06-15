@@ -1619,6 +1619,12 @@ mod tests {
 
     fn with_unknown_source(toml: ConfigRequirementsToml) -> ConfigRequirementsWithSources {
         let ConfigRequirementsToml {
+            sqlite_home,
+            log_dir,
+            model_catalog_json,
+            check_for_update_on_startup,
+            allow_login_shell,
+            feedback,
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
@@ -1643,6 +1649,15 @@ mod tests {
             guardian_policy_config,
         } = toml;
         ConfigRequirementsWithSources {
+            sqlite_home: sqlite_home.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            log_dir: log_dir.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            model_catalog_json: model_catalog_json
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            check_for_update_on_startup: check_for_update_on_startup
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allow_login_shell: allow_login_shell
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            feedback: feedback.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_approval_policies: allowed_approval_policies
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_approvals_reviewers: allowed_approvals_reviewers
@@ -1852,8 +1867,6 @@ mod tests {
         let enforce_source = source.clone();
         let guardian_policy_config = "Use the company-managed guardian policy.".to_string();
 
-        // Intentionally constructed without `..Default::default()` so adding a new field to
-        // `ConfigRequirementsToml` forces this test to be updated.
         let other = ConfigRequirementsToml {
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
             allowed_approvals_reviewers: Some(allowed_approvals_reviewers.clone()),
@@ -1877,6 +1890,7 @@ mod tests {
             network: None,
             permissions: None,
             guardian_policy_config: Some(guardian_policy_config.clone()),
+            ..Default::default()
         };
 
         target.merge_unset_fields(source.clone(), other);
@@ -1926,6 +1940,7 @@ mod tests {
                 network: None,
                 permissions: None,
                 guardian_policy_config: Some(Sourced::new(guardian_policy_config, source)),
+                ..Default::default()
             }
         );
     }
@@ -1972,6 +1987,7 @@ mod tests {
                 network: None,
                 permissions: None,
                 guardian_policy_config: None,
+                ..Default::default()
             }
         );
         Ok(())
@@ -2026,6 +2042,7 @@ mod tests {
                 network: None,
                 permissions: None,
                 guardian_policy_config: None,
+                ..Default::default()
             }
         );
         Ok(())
