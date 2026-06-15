@@ -10,6 +10,7 @@ use codex_utils_cache::BlockingLruCache;
 use codex_utils_cache::sha1_digest;
 use image::ColorType;
 use image::DynamicImage;
+use image::GenericImageView;
 use image::ImageDecoder;
 use image::ImageEncoder;
 use image::ImageFormat;
@@ -113,27 +114,6 @@ pub fn load_for_prompt_bytes(
         let mut decoder = ImageReader::with_format(Cursor::new(&file_bytes), guessed_format)
             .into_decoder()
             .map_err(|source| ImageProcessingError::decode_error(&path_buf, source))?;
-        let (width, height) = decoder.dimensions();
-
-        let can_pass_through = match mode {
-            PromptImageMode::ResizeToFit => width <= MAX_DIMENSION && height <= MAX_DIMENSION,
-            PromptImageMode::Original => true,
-            PromptImageMode::ResizeWithLimits(limits) => {
-                prompt_image_dimensions_fit(width, height, limits)
-            }
-        };
-        if can_pass_through
-            && let Some(format) = format.filter(|format| can_preserve_source_bytes(*format))
-        {
-            drop(decoder);
-            return Ok(EncodedImage {
-                bytes: file_bytes.into(),
-                mime: format_to_mime(format),
-                width,
-                height,
-            });
-        }
-
         // Preserve the metadata most important for rendering prompt images faithfully: the color
         // profile and EXIF data, including orientation. Other format-specific metadata is
         // intentionally not copied.
@@ -150,6 +130,8 @@ pub fn load_for_prompt_bytes(
         };
         let dynamic = DynamicImage::from_decoder(decoder)
             .map_err(|source| ImageProcessingError::decode_error(&path_buf, source))?;
+
+        let (width, height) = dynamic.dimensions();
 
         let target_dimensions = match mode {
             PromptImageMode::ResizeToFit if width > MAX_DIMENSION || height > MAX_DIMENSION => {
