@@ -52,6 +52,7 @@ use codex_core_api::TuiNotificationSettings;
 use codex_core_api::TuiPetAnchor;
 use codex_core_api::UriBasedFileOpener;
 use codex_core_api::UserInput;
+use codex_core_api::UserSubmission;
 use codex_core_api::WebSearchMode;
 use codex_core_api::arg0_dispatch_or_else;
 use codex_core_api::built_in_model_providers;
@@ -297,13 +298,13 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
 async fn run_turn(thread: &CodexThread, thread_id: &str, prompt: String) -> anyhow::Result<()> {
     thread
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: prompt,
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: prompt,
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await

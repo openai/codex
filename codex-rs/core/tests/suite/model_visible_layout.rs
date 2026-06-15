@@ -9,6 +9,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::context_snapshot;
@@ -119,13 +120,13 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "first turn".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "first turn".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(first_turn_cwd)),
                 approval_policy: Some(AskForApproval::Never),
@@ -154,13 +155,13 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
     );
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "second turn with context updates".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "second turn with context updates".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(preturn_context_diff_cwd)),
                 approval_policy: Some(AskForApproval::OnRequest),
@@ -245,13 +246,13 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "first turn in agents_one".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "first turn in agents_one".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(cwd_one.clone())),
                 approval_policy: Some(AskForApproval::Never),
@@ -278,13 +279,13 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
         turn_permission_fields(PermissionProfile::read_only(), cwd_two.as_path());
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "second turn in agents_two".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "second turn in agents_two".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(cwd_two)),
                 approval_policy: Some(AskForApproval::Never),
@@ -361,13 +362,13 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
     .await;
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "seed resume history".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "seed resume history".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -403,13 +404,13 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
     resumed
         .codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "resume and change personality".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "resume and change personality".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(resume_override_cwd)),
                 approval_policy: Some(AskForApproval::Never),
@@ -476,13 +477,13 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     .await;
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "seed resume history".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "seed resume history".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -518,13 +519,13 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     resumed
         .codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "first resumed turn after model override".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "first resumed turn after model override".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;

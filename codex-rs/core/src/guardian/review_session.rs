@@ -27,6 +27,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::UserSubmission;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
@@ -761,10 +762,12 @@ async fn run_review_on_session(
         deadline,
         params.external_cancel.as_ref(),
         Box::pin(review_session.codex.submit(Op::UserInput {
-            items: prompt_items.items,
-            final_output_json_schema: Some(params.schema.clone()),
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: prompt_items.items,
+                final_output_json_schema: Some(params.schema.clone()),
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
                     parent_turn_legacy_fallback_cwd,

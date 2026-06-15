@@ -18,6 +18,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use core_test_support::TempDirExt;
 use core_test_support::responses::ev_completed;
@@ -159,13 +160,13 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 1".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 1".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -173,13 +174,13 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 2".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 2".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -253,13 +254,13 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
 
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 1".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 1".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -267,13 +268,13 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 2".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 2".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -332,13 +333,13 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 1".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 1".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -346,13 +347,13 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 2".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 2".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -429,13 +430,13 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     // First turn
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 1".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 1".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -467,13 +468,13 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     // Second turn after overrides
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 2".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 2".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -564,13 +565,13 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
 
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "first message".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "first message".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -718,13 +719,13 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     // First turn
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 1".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 1".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -743,13 +744,13 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
         turn_permission_fields(permission_profile, new_cwd.path());
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 2".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 2".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(new_cwd.abs())),
                 approval_policy: Some(AskForApproval::Never),
@@ -857,13 +858,13 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
 
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 1".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 1".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(default_cwd.clone())),
                 approval_policy: Some(default_approval_policy),
@@ -885,13 +886,13 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
 
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 2".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 2".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(default_cwd.clone())),
                 approval_policy: Some(default_approval_policy),
@@ -996,13 +997,13 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
 
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 1".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 1".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(default_cwd.clone())),
                 approval_policy: Some(default_approval_policy),
@@ -1026,13 +1027,13 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
         turn_permission_fields(PermissionProfile::Disabled, default_cwd.as_path());
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 2".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 2".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(default_cwd.clone())),
                 approval_policy: Some(AskForApproval::Never),

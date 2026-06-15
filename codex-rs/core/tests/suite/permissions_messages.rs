@@ -10,6 +10,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::ResponsesRequest;
@@ -51,13 +52,13 @@ async fn permissions_message_sent_once_on_start() -> Result<()> {
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -91,13 +92,13 @@ async fn permissions_message_added_on_override_change() -> Result<()> {
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 1".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 1".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -114,13 +115,13 @@ async fn permissions_message_added_on_override_change() -> Result<()> {
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 2".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 2".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -160,13 +161,13 @@ async fn permissions_message_not_added_when_no_change() -> Result<()> {
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 1".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 1".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -174,13 +175,13 @@ async fn permissions_message_not_added_when_no_change() -> Result<()> {
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 2".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 2".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -220,13 +221,13 @@ async fn permissions_message_omitted_when_disabled() -> Result<()> {
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 1".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 1".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -243,13 +244,13 @@ async fn permissions_message_omitted_when_disabled() -> Result<()> {
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 2".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 2".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -302,13 +303,13 @@ async fn resume_replays_permissions_messages() -> Result<()> {
     initial
         .codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 1".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 1".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -326,13 +327,13 @@ async fn resume_replays_permissions_messages() -> Result<()> {
     initial
         .codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 2".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 2".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -342,13 +343,13 @@ async fn resume_replays_permissions_messages() -> Result<()> {
     resumed
         .codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "after resume".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "after resume".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -402,13 +403,13 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
     initial
         .codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 1".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 1".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -426,13 +427,13 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
     initial
         .codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 2".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello 2".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -448,13 +449,13 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
     resumed
         .codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "after resume".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "after resume".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -483,13 +484,13 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
     forked
         .thread
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "after fork".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "after fork".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;
@@ -544,13 +545,13 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
 
     test.codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![UserInput::Text {
+                    text: "hello".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             thread_settings: Default::default(),
         })
         .await?;

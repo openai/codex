@@ -7,6 +7,7 @@ use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -82,19 +83,19 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
         turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
     test.codex
         .submit(Op::UserInput {
-            items: vec![
-                UserInput::Text {
-                    text: "please use $demo".to_string(),
-                    text_elements: Vec::new(),
-                },
-                UserInput::Skill {
-                    name: "demo".to_string(),
-                    path: skill_path.clone(),
-                },
-            ],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
+            submission: UserSubmission {
+                items: vec![
+                    UserInput::Text {
+                        text: "please use $demo".to_string(),
+                        text_elements: Vec::new(),
+                    },
+                    UserInput::Skill {
+                        name: "demo".to_string(),
+                        path: skill_path.clone(),
+                    },
+                ],
+                ..Default::default()
+            },
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(AskForApproval::Never),

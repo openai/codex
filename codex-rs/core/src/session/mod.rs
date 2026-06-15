@@ -372,6 +372,7 @@ use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnModerationMetadataEvent;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolEnvironmentMode;
@@ -1136,13 +1137,13 @@ impl Session {
             self,
             self.next_internal_sub_id(),
             Op::UserInput {
-                items: vec![UserInput::Text {
-                    text,
-                    text_elements: Vec::new(),
-                }],
-                final_output_json_schema: None,
-                responsesapi_client_metadata: None,
-                additional_context: Default::default(),
+                submission: UserSubmission {
+                    items: vec![UserInput::Text {
+                        text,
+                        text_elements: Vec::new(),
+                    }],
+                    ..Default::default()
+                },
                 thread_settings: Default::default(),
             },
             /*client_user_message_id*/ None,

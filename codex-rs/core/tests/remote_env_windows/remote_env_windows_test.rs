@@ -12,9 +12,10 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandStatus;
-use codex_protocol::protocol::Op;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::UserSubmission;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -88,13 +89,13 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
 
             test.codex
                 .submit(Op::UserInput {
-                    items: vec![UserInput::Text {
-                        text: "run the Windows smoke command".to_string(),
-                        text_elements: Vec::new(),
-                    }],
-                    final_output_json_schema: None,
-                    responsesapi_client_metadata: None,
-                    additional_context: Default::default(),
+                    submission: UserSubmission {
+                        items: vec![UserInput::Text {
+                            text: "run the Windows smoke command".to_string(),
+                            text_elements: Vec::new(),
+                        }],
+                        ..Default::default()
+                    },
                     thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                         environments: Some(environments),
                         approval_policy: Some(AskForApproval::Never),
