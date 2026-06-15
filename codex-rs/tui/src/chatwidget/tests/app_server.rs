@@ -9,6 +9,7 @@ fn thread_settings_for_test(
         thread_id: thread_id.to_string(),
         thread_settings: codex_app_server_protocol::ThreadSettings {
             cwd: test_path_buf("/tmp/thread-settings").abs(),
+            runtime_workspace_roots: Some(vec![test_path_buf("/tmp/thread-settings").abs()]),
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
             sandbox_policy: codex_app_server_protocol::SandboxPolicy::ReadOnly {
@@ -104,9 +105,13 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
     let thread_id = ThreadId::new();
     chat.handle_thread_session(configured_thread_session(thread_id));
     let _ = drain_insert_history(&mut rx);
+    let runtime_workspace_root = test_path_buf("/tmp/thread-settings-updated").abs();
+    let mut notification = thread_settings_for_test("gpt-5.4", thread_id);
+    notification.thread_settings.runtime_workspace_roots =
+        Some(vec![runtime_workspace_root.clone()]);
 
     chat.handle_server_notification(
-        ServerNotification::ThreadSettingsUpdated(thread_settings_for_test("gpt-5.4", thread_id)),
+        ServerNotification::ThreadSettingsUpdated(notification),
         /*replay_kind*/ None,
     );
 
@@ -136,10 +141,36 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
         codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY
     );
     assert_eq!(chat.config_ref().personality, Some(Personality::Pragmatic));
+    assert_eq!(
+        chat.config_ref().workspace_roots,
+        vec![runtime_workspace_root.clone()]
+    );
+    assert_eq!(
+        chat.config_ref().permissions.user_visible_workspace_roots(),
+        std::slice::from_ref(&runtime_workspace_root)
+    );
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert!(
         drain_insert_history(&mut rx).is_empty(),
         "ThreadSettingsUpdated should not render transcript history"
+    );
+
+    let mut notification_without_roots = thread_settings_for_test("gpt-5.4", thread_id);
+    notification_without_roots
+        .thread_settings
+        .runtime_workspace_roots = None;
+    chat.handle_server_notification(
+        ServerNotification::ThreadSettingsUpdated(notification_without_roots),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(
+        chat.config_ref().workspace_roots,
+        vec![runtime_workspace_root.clone()]
+    );
+    assert_eq!(
+        chat.config_ref().permissions.user_visible_workspace_roots(),
+        &[runtime_workspace_root]
     );
 
     chat.handle_server_notification(

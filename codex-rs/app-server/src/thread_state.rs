@@ -221,6 +221,9 @@ mod tests {
     fn thread_settings(model: &str) -> ThreadSettings {
         ThreadSettings {
             cwd: AbsolutePathBuf::from_absolute_path("/tmp").expect("absolute path"),
+            runtime_workspace_roots: Some(vec![
+                AbsolutePathBuf::from_absolute_path("/tmp").expect("absolute path"),
+            ]),
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::ReadOnly {

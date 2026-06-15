@@ -475,6 +475,12 @@ impl ChatWidget {
     fn apply_thread_settings(&mut self, mut settings: ThreadSettings) {
         let cwd_changed = self.config.cwd != settings.cwd;
         self.apply_thread_settings_cwd(settings.cwd.clone());
+        if let Some(runtime_workspace_roots) = settings.runtime_workspace_roots.clone() {
+            self.config.workspace_roots = runtime_workspace_roots.clone();
+            self.config
+                .permissions
+                .set_workspace_roots(runtime_workspace_roots);
+        }
         self.config.model_provider_id = settings.model_provider.clone();
         self.set_service_tier(settings.service_tier.clone());
         self.set_approval_policy(settings.approval_policy);

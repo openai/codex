@@ -171,6 +171,7 @@ async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
             permission_profile: snapshot.permission_profile,
             active_permission_profile: snapshot.active_permission_profile,
             cwd,
+            runtime_workspace_roots: snapshot.workspace_roots,
             reasoning_effort: snapshot.reasoning_effort,
             reasoning_summary: snapshot.reasoning_summary,
             personality: snapshot.personality,

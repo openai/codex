@@ -3716,6 +3716,16 @@ fn thread_settings_update_params_preserve_explicit_null_service_tier() {
 
 #[test]
 fn thread_settings_update_params_preserve_field_level_experimental_gates() {
+    let runtime_workspace_roots = ThreadSettingsUpdateParams {
+        thread_id: "thread_123".to_string(),
+        runtime_workspace_roots: Some(vec![PathBuf::from("repo")]),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&runtime_workspace_roots),
+        Some("thread/settings/update.runtimeWorkspaceRoots")
+    );
+
     let permissions = ThreadSettingsUpdateParams {
         thread_id: "thread_123".to_string(),
         permissions: Some(":workspace".to_string()),

@@ -9,6 +9,10 @@ use codex_utils_path_uri::PathUri;
 const DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR: &str =
     "direct app-server input is not allowed for multi-agent v2 sub-agents";
 
+const MAX_RUNTIME_WORKSPACE_ROOTS: usize = 32;
+const MAX_RUNTIME_WORKSPACE_ROOT_CHARS: usize = 1024;
+const MAX_RUNTIME_WORKSPACE_ROOTS_TOTAL_CHARS: usize = 8 * 1024;
+
 #[derive(Clone)]
 pub(crate) struct TurnRequestProcessor {
     auth_manager: Arc<AuthManager>,
@@ -23,6 +27,43 @@ pub(crate) struct TurnRequestProcessor {
     thread_watch_manager: ThreadWatchManager,
     thread_list_state_permit: Arc<Semaphore>,
     skills_watcher: Arc<SkillsWatcher>,
+}
+
+fn resolve_thread_settings_workspace_roots(
+    workspace_roots: Vec<PathBuf>,
+    base_cwd: &AbsolutePathBuf,
+) -> Result<Vec<AbsolutePathBuf>, JSONRPCErrorError> {
+    let mut resolved_roots = Vec::new();
+    for path in workspace_roots {
+        let root = AbsolutePathBuf::resolve_path_against_base(path, base_cwd.as_path());
+        if root.as_path().to_string_lossy().chars().count() > MAX_RUNTIME_WORKSPACE_ROOT_CHARS {
+            return Err(invalid_params(format!(
+                "Runtime workspace root exceeds the maximum length of {MAX_RUNTIME_WORKSPACE_ROOT_CHARS} characters."
+            )));
+        }
+        if !resolved_roots.iter().any(|existing| existing == &root) {
+            resolved_roots.push(root);
+        }
+    }
+    Ok(resolved_roots)
+}
+
+fn validate_runtime_workspace_roots(workspace_roots: &[PathBuf]) -> Result<(), JSONRPCErrorError> {
+    if workspace_roots.len() > MAX_RUNTIME_WORKSPACE_ROOTS {
+        return Err(invalid_params(format!(
+            "Runtime workspace roots exceed the maximum count of {MAX_RUNTIME_WORKSPACE_ROOTS}."
+        )));
+    }
+    let total_chars = workspace_roots
+        .iter()
+        .map(|path| path.to_string_lossy().chars().count())
+        .sum::<usize>();
+    if total_chars > MAX_RUNTIME_WORKSPACE_ROOTS_TOTAL_CHARS {
+        return Err(invalid_params(format!(
+            "Runtime workspace roots exceed the maximum total length of {MAX_RUNTIME_WORKSPACE_ROOTS_TOTAL_CHARS} characters."
+        )));
+    }
+    Ok(())
 }
 
 fn map_additional_context(
@@ -694,6 +735,20 @@ impl TurnRequestProcessor {
     ) -> Result<ThreadSettingsUpdateResponse, JSONRPCErrorError> {
         let (_, thread) = self.load_thread(&params.thread_id).await?;
         let cwd = resolve_request_cwd(params.cwd)?;
+        let runtime_workspace_roots = match params.runtime_workspace_roots {
+            Some(workspace_roots) => {
+                validate_runtime_workspace_roots(&workspace_roots)?;
+                let base_cwd = match cwd.as_ref() {
+                    Some(cwd) => cwd.clone(),
+                    None => thread.config_snapshot().await.cwd().clone(),
+                };
+                Some(resolve_thread_settings_workspace_roots(
+                    workspace_roots,
+                    &base_cwd,
+                )?)
+            }
+            None => None,
+        };
         let environments = Self::build_environment_override(
             thread.as_ref(),
             cwd,
@@ -706,7 +761,7 @@ impl TurnRequestProcessor {
                 ThreadSettingsBuildParams {
                     method: "thread/settings/update",
                     environments,
-                    runtime_workspace_roots: None,
+                    runtime_workspace_roots,
                     approval_policy: params.approval_policy,
                     approvals_reviewer: params.approvals_reviewer,
                     sandbox_policy: params.sandbox_policy,

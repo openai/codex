@@ -1959,6 +1959,8 @@ pub struct ThreadSettingsSnapshot {
     #[ts(optional)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub cwd: AbsolutePathBuf,
+    #[serde(default)]
+    pub runtime_workspace_roots: Vec<AbsolutePathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffortConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -5235,6 +5237,42 @@ mod tests {
             ),
             Some(MultiAgentVersion::V2)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn thread_settings_snapshot_deserializes_without_runtime_workspace_roots() -> Result<()> {
+        let snapshot = ThreadSettingsSnapshot {
+            model: "gpt-5".to_string(),
+            model_provider_id: "openai".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
+            cwd: test_path_buf("/tmp").abs(),
+            runtime_workspace_roots: vec![test_path_buf("/tmp").abs()],
+            reasoning_effort: None,
+            reasoning_summary: None,
+            personality: None,
+            collaboration_mode: CollaborationMode {
+                mode: ModeKind::Default,
+                settings: crate::config_types::Settings {
+                    model: "gpt-5".to_string(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            },
+        };
+        let mut value = serde_json::to_value(snapshot)?;
+        value
+            .as_object_mut()
+            .expect("thread settings snapshot should serialize as an object")
+            .remove("runtime_workspace_roots");
+
+        let snapshot: ThreadSettingsSnapshot = serde_json::from_value(value)?;
+
+        assert!(snapshot.runtime_workspace_roots.is_empty());
         Ok(())
     }
 

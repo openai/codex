@@ -4586,6 +4586,15 @@
             }
           ]
         },
+        "runtimeWorkspaceRoots": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "sandboxPolicy": {
           "$ref": "#/definitions/SandboxPolicy"
         },

@@ -6018,6 +6018,7 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
         thread_id: inactive_thread_id.to_string(),
         thread_settings: ThreadSettings {
             cwd: test_absolute_path("/tmp/thread-settings"),
+            runtime_workspace_roots: Some(vec![test_absolute_path("/tmp/thread-settings")]),
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
             sandbox_policy: codex_app_server_protocol::SandboxPolicy::ReadOnly {
@@ -6055,6 +6056,10 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
     assert_eq!(cached_session.model, "gpt-test");
     assert_eq!(cached_session.personality, Some(Personality::Pragmatic));
     assert_eq!(
+        cached_session.runtime_workspace_roots,
+        vec![test_absolute_path("/tmp/thread-settings")]
+    );
+    assert_eq!(
         cached_session.collaboration_mode.as_deref(),
         Some(&collaboration_mode)
     );
@@ -6076,6 +6081,89 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
     assert_eq!(
         app.chat_widget.config_ref().personality,
         Some(Personality::Pragmatic)
+    );
+}
+
+#[tokio::test]
+async fn inactive_thread_settings_notification_without_roots_retargets_implicit_root() {
+    let mut app = make_test_app().await;
+    let primary_thread_id = ThreadId::new();
+    let inactive_thread_id = ThreadId::new();
+    let primary_session = test_thread_session(primary_thread_id, test_path_buf("/tmp/main"));
+    let mut inactive_session =
+        test_thread_session(inactive_thread_id, test_path_buf("/tmp/inactive"));
+    inactive_session.runtime_workspace_roots = vec![inactive_session.cwd.clone()];
+
+    app.primary_thread_id = Some(primary_thread_id);
+    app.active_thread_id = Some(primary_thread_id);
+    app.primary_session_configured = Some(primary_session.clone());
+    app.thread_event_channels.insert(
+        primary_thread_id,
+        ThreadEventChannel::new_with_session(
+            THREAD_EVENT_CHANNEL_CAPACITY,
+            primary_session,
+            Vec::new(),
+        ),
+    );
+    app.thread_event_channels.insert(
+        inactive_thread_id,
+        ThreadEventChannel::new_with_session(
+            THREAD_EVENT_CHANNEL_CAPACITY,
+            inactive_session,
+            Vec::new(),
+        ),
+    );
+
+    let notification = ThreadSettingsUpdatedNotification {
+        thread_id: inactive_thread_id.to_string(),
+        thread_settings: ThreadSettings {
+            cwd: test_absolute_path("/tmp/retargeted"),
+            runtime_workspace_roots: None,
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
+            sandbox_policy: codex_app_server_protocol::SandboxPolicy::ReadOnly {
+                network_access: false,
+            },
+            active_permission_profile: Some(
+                codex_app_server_protocol::ActivePermissionProfile::read_only(),
+            ),
+            model: "gpt-test".to_string(),
+            model_provider: "openai".to_string(),
+            service_tier: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "gpt-test".to_string(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            },
+            personality: None,
+        },
+    };
+    app.enqueue_thread_notification(
+        inactive_thread_id,
+        ServerNotification::ThreadSettingsUpdated(notification),
+    )
+    .await
+    .expect("settings notification should be cached");
+
+    let cached_session = app
+        .thread_event_channels
+        .get(&inactive_thread_id)
+        .expect("inactive thread channel")
+        .store
+        .lock()
+        .await
+        .session
+        .clone()
+        .expect("inactive session should remain cached");
+    assert_eq!(cached_session.cwd, test_absolute_path("/tmp/retargeted"));
+    assert_eq!(
+        cached_session.runtime_workspace_roots,
+        vec![test_absolute_path("/tmp/retargeted")]
     );
 }
 

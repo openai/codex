@@ -191,6 +191,7 @@ pub(crate) fn thread_settings_from_config_snapshot(
 ) -> ThreadSettings {
     ThreadSettings {
         cwd: config_snapshot.cwd().clone(),
+        runtime_workspace_roots: Some(config_snapshot.workspace_roots.clone()),
         approval_policy: config_snapshot.approval_policy.into(),
         approvals_reviewer: config_snapshot.approvals_reviewer.into(),
         sandbox_policy: thread_response_sandbox_policy(
@@ -222,6 +223,7 @@ pub(crate) fn thread_settings_from_core_snapshot(
         permission_profile,
         active_permission_profile,
         cwd,
+        runtime_workspace_roots,
         reasoning_effort,
         reasoning_summary,
         personality,
@@ -231,6 +233,7 @@ pub(crate) fn thread_settings_from_core_snapshot(
     ThreadSettings {
         sandbox_policy,
         cwd,
+        runtime_workspace_roots: Some(runtime_workspace_roots),
         approval_policy: approval_policy.into(),
         approvals_reviewer: approvals_reviewer.into(),
         active_permission_profile: thread_response_active_permission_profile(
