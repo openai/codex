@@ -88,6 +88,7 @@ use codex_login::AuthManager;
 use codex_protocol::protocol::SessionSource;
 pub use codex_rollout::StateDbHandle;
 pub use codex_state::log_db::LogDbLayer;
+use codex_thread_store::ThreadStore;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
@@ -148,6 +149,23 @@ pub struct InProcessStartArgs {
     pub initialize: InitializeParams,
     /// Capacity used for all runtime queues (clamped to at least 1).
     pub channel_capacity: usize,
+}
+
+/// Optional dependencies and behavior overrides for an in-process runtime.
+///
+/// Use [`InProcessStartOptions::default`] to preserve the standard app-server
+/// startup behavior.
+#[derive(Default)]
+pub struct InProcessStartOptions {
+    thread_store: Option<Arc<dyn ThreadStore>>,
+}
+
+impl InProcessStartOptions {
+    /// Uses `thread_store` instead of the store derived from the runtime config.
+    pub fn with_thread_store(mut self, thread_store: Arc<dyn ThreadStore>) -> Self {
+        self.thread_store = Some(thread_store);
+        self
+    }
 }
 
 /// Event emitted from the app-server to the in-process client.
@@ -350,8 +368,16 @@ impl InProcessClientHandle {
 /// the handle, so callers receive a ready-to-use runtime. If initialize fails,
 /// the runtime is shut down and an `InvalidData` error is returned.
 pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
+    start_with_options(args, InProcessStartOptions::default()).await
+}
+
+/// Starts an in-process app-server runtime with explicit dependency overrides.
+pub async fn start_with_options(
+    args: InProcessStartArgs,
+    options: InProcessStartOptions,
+) -> IoResult<InProcessClientHandle> {
     let initialize = args.initialize.clone();
-    let client = start_uninitialized(args).await?;
+    let client = start_uninitialized(args, options).await?;
 
     let initialize_response = client
         .request(ClientRequest::Initialize {
@@ -371,7 +397,10 @@ pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> 
     Ok(client)
 }
 
-async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
+async fn start_uninitialized(
+    args: InProcessStartArgs,
+    options: InProcessStartOptions,
+) -> IoResult<InProcessClientHandle> {
     let channel_capacity = args.channel_capacity.max(1);
     let installation_id = resolve_installation_id(&args.config.codex_home).await?;
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
@@ -440,6 +469,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 rpc_transport: AppServerRpcTransport::InProcess,
                 remote_control_handle: None,
                 plugin_startup_tasks: crate::PluginStartupTasks::Start,
+                thread_store: options.thread_store,
             }));
             let mut thread_created_rx = processor.thread_created_receiver();
             let session = Arc::new(ConnectionSessionState::new());
@@ -733,6 +763,7 @@ mod tests {
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
+    use codex_app_server_protocol::ThreadListParams;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_app_server_protocol::Turn;
@@ -740,6 +771,7 @@ mod tests {
     use codex_app_server_protocol::TurnItemsView;
     use codex_app_server_protocol::TurnStatus;
     use codex_core::config::ConfigBuilder;
+    use codex_thread_store::InMemoryThreadStore;
     use pretty_assertions::assert_eq;
     use std::path::Path;
     use tempfile::TempDir;
@@ -760,15 +792,12 @@ mod tests {
         }
     }
 
-    async fn start_test_client_with_capacity(
+    async fn build_test_start_args(
         session_source: SessionSource,
         channel_capacity: usize,
-    ) -> InProcessClientHandle {
+    ) -> (TempDir, InProcessStartArgs) {
         let codex_home = TempDir::new().expect("temp dir");
         let config = Arc::new(build_test_config(codex_home.path()).await);
-        let state_db = codex_rollout::state_db::try_init(config.as_ref())
-            .await
-            .expect("state db should initialize for in-process test");
         let args = InProcessStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
             config,
@@ -779,7 +808,7 @@ mod tests {
             thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
             feedback: CodexFeedback::new(),
             log_db: None,
-            state_db: Some(state_db),
+            state_db: None,
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
             config_warnings: Vec::new(),
             session_source,
@@ -794,6 +823,27 @@ mod tests {
             },
             channel_capacity,
         };
+        (codex_home, args)
+    }
+
+    async fn start_test_client_with_capacity_and_options(
+        session_source: SessionSource,
+        channel_capacity: usize,
+        options: InProcessStartOptions,
+    ) -> InProcessClientHandle {
+        let (codex_home, args) = build_test_start_args(session_source, channel_capacity).await;
+        let mut client = start_with_options(args, options)
+            .await
+            .expect("in-process runtime should start");
+        client._test_codex_home = Some(codex_home);
+        client
+    }
+
+    async fn start_test_client_with_capacity(
+        session_source: SessionSource,
+        channel_capacity: usize,
+    ) -> InProcessClientHandle {
+        let (codex_home, args) = build_test_start_args(session_source, channel_capacity).await;
         let mut client = start(args).await.expect("in-process runtime should start");
         client._test_codex_home = Some(codex_home);
         client
@@ -850,6 +900,45 @@ mod tests {
                 .await
                 .expect("in-process runtime should shutdown cleanly");
         }
+    }
+
+    #[tokio::test]
+    async fn in_process_start_uses_injected_thread_store() {
+        let thread_store = Arc::new(InMemoryThreadStore::default());
+        let client = start_test_client_with_capacity_and_options(
+            SessionSource::Cli,
+            DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+            InProcessStartOptions::default().with_thread_store(thread_store.clone()),
+        )
+        .await;
+
+        client
+            .request(ClientRequest::ThreadList {
+                request_id: RequestId::Integer(3),
+                params: ThreadListParams {
+                    cursor: None,
+                    limit: Some(1),
+                    sort_key: None,
+                    sort_direction: None,
+                    model_providers: Some(Vec::new()),
+                    source_kinds: None,
+                    archived: None,
+                    cwd: None,
+                    use_state_db_only: false,
+                    search_term: None,
+                    parent_thread_id: None,
+                    ancestor_thread_id: None,
+                },
+            })
+            .await
+            .expect("request transport should work")
+            .expect("thread/list should succeed");
+
+        assert_eq!(thread_store.calls().await.list_threads, 1);
+        client
+            .shutdown()
+            .await
+            .expect("in-process runtime should shutdown cleanly");
     }
 
     #[tokio::test]
