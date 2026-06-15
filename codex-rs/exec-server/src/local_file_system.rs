@@ -446,14 +446,13 @@ impl DirectFileSystem {
     ) -> FileSystemResult<tokio::fs::File> {
         reject_sandbox_context(sandbox)?;
         let path = path.to_abs_path()?;
-        let file = tokio::fs::File::open(path.as_path()).await?;
-        if !file.metadata().await?.is_file() {
+        if !tokio::fs::metadata(path.as_path()).await?.is_file() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("path `{}` is not a file", path.display()),
             ));
         }
-        Ok(file)
+        tokio::fs::File::open(path.as_path()).await
     }
 
     async fn canonicalize(

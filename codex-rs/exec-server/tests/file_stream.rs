@@ -22,7 +22,9 @@ use futures::TryStreamExt;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use std::time::Duration;
 use tempfile::TempDir;
+use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::common::exec_server::ExecServerHarness;
@@ -122,6 +124,44 @@ async fn stream_rejects_platform_sandbox() -> Result<()> {
     assert_eq!(
         error.to_string(),
         "exec-server rejected request (-32600): streaming file reads do not support platform sandboxing"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn stream_rejects_fifo_without_waiting_for_a_writer() -> Result<()> {
+    let server = exec_server().await?;
+    let client = connect_client(server.websocket_url()).await?;
+    let tmp = TempDir::new()?;
+    let path = tmp.path().join("named-pipe");
+    let output = std::process::Command::new("mkfifo").arg(&path).output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "mkfifo failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let result = timeout(
+        Duration::from_secs(1),
+        client.stream(FsReadFileParams {
+            path: PathUri::from_path(&path)?,
+            sandbox: None,
+        }),
+    )
+    .await
+    .expect("opening a FIFO should not wait for a writer");
+    let Err(error) = result else {
+        panic!("streaming a FIFO should be rejected");
+    };
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "exec-server rejected request (-32600): path `{}` is not a file",
+            path.display()
+        )
     );
     Ok(())
 }
