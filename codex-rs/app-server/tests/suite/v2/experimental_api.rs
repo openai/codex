@@ -79,6 +79,7 @@ async fn realtime_conversation_start_requires_experimental_api_capability() -> R
 
     let request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
             thread_id: "thr_123".to_string(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -187,6 +188,7 @@ async fn realtime_webrtc_start_requires_experimental_api_capability() -> Result<
 
     let request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
             thread_id: "thr_123".to_string(),
             model: None,
             output_modality: RealtimeOutputModality::Audio,

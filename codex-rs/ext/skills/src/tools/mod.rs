@@ -24,6 +24,7 @@ use crate::catalog::SkillCatalog;
 use crate::catalog::SkillSourceKind;
 use crate::provider::SkillListQuery;
 use crate::sources::SkillProviders;
+use crate::state::SkillsThreadState;
 
 mod list;
 mod read;
@@ -35,10 +36,12 @@ const MAX_HANDLE_BYTES: usize = 2_048;
 pub(crate) fn skill_tools(
     providers: SkillProviders,
     mcp_resources: Option<Arc<McpResourceClient>>,
+    thread_state: Arc<SkillsThreadState>,
 ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
     let context = SkillToolContext {
         providers,
         mcp_resources,
+        thread_state,
     };
     vec![
         Arc::new(list::ListTool {
@@ -52,30 +55,28 @@ pub(crate) fn skill_tools(
 struct SkillToolContext {
     providers: SkillProviders,
     mcp_resources: Option<Arc<McpResourceClient>>,
+    thread_state: Arc<SkillsThreadState>,
 }
 
 impl SkillToolContext {
     async fn catalog(&self, turn_id: &str, authority: SkillToolAuthority) -> SkillCatalog {
         match authority {
-            SkillToolAuthority::Orchestrator => match self
-                .providers
-                .list_orchestrator_for_turn(SkillListQuery {
-                    turn_id: turn_id.to_string(),
-                    executor_roots: Vec::new(),
-                    host: None,
-                    include_host_skills: false,
-                    include_bundled_skills: false,
-                    include_orchestrator_skills: true,
-                    mcp_resources: self.mcp_resources.clone(),
-                })
-                .await
-            {
-                Ok(catalog) => catalog,
-                Err(err) => SkillCatalog {
-                    warnings: vec![err.message],
-                    ..Default::default()
-                },
-            },
+            SkillToolAuthority::Orchestrator => {
+                self.thread_state
+                    .orchestrator_catalog_snapshot(
+                        self.mcp_resources.as_deref(),
+                        self.providers.list_orchestrator_for_turn(SkillListQuery {
+                            turn_id: turn_id.to_string(),
+                            executor_roots: Vec::new(),
+                            host: None,
+                            include_host_skills: false,
+                            include_bundled_skills: false,
+                            include_orchestrator_skills: true,
+                            mcp_resources: self.mcp_resources.clone(),
+                        }),
+                    )
+                    .await
+            }
         }
     }
 }

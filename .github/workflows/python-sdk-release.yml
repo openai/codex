@@ -191,8 +191,8 @@ jobs:
             sh -euxc '
               python -m venv /tmp/release-tools
               /tmp/release-tools/bin/python -m pip install build twine uv==0.11.3
-              /tmp/release-tools/bin/uv sync --extra dev --frozen
-              /tmp/release-tools/bin/uv run --extra dev --frozen python scripts/update_sdk_artifacts.py \
+              /tmp/release-tools/bin/uv sync --group dev --frozen
+              /tmp/release-tools/bin/uv run --frozen --no-sync python scripts/update_sdk_artifacts.py \
                 stage-sdk "${SDK_STAGE_DIR}" \
                 --sdk-version "${SDK_VERSION}"
               /tmp/release-tools/bin/python -m build \

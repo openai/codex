@@ -293,6 +293,7 @@ impl AccountRequestProcessor {
             &self.config.codex_home,
             &params.api_key,
             self.config.cli_auth_credentials_store_mode,
+            self.config.auth_keyring_backend_kind(),
         ) {
             Ok(()) => {
                 self.auth_manager.reload().await;
@@ -338,9 +339,10 @@ impl AccountRequestProcessor {
             codex_streamlined_login,
             ..LoginServerOptions::new(
                 config.codex_home.to_path_buf(),
-                CLIENT_ID.to_string(),
+                oauth_client_id(),
                 config.forced_chatgpt_workspace_id.clone(),
                 config.cli_auth_credentials_store_mode,
+                config.auth_keyring_backend_kind(),
             )
         };
         #[cfg(debug_assertions)]
