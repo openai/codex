@@ -319,6 +319,60 @@ async fn disabled_permissions_do_not_auto_accept_elicitation_with_requested_fiel
     );
 }
 
+#[tokio::test]
+async fn resolve_elicitation_searches_request_scopes_retained_across_refresh() {
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    let old_scope = manager.elicitation_requests();
+    let (tx_event, rx_event) = async_channel::bounded(1);
+    let sender = old_scope.make_sender("server".to_string(), tx_event);
+    let request_id = NumberOrString::Number(1);
+    let pending_response = tokio::spawn(sender(
+        request_id.clone(),
+        CreateElicitationRequestParams::FormElicitationParams {
+            meta: None,
+            message: "Confirm?".to_string(),
+            requested_schema: rmcp::model::ElicitationSchema::builder()
+                .build()
+                .expect("schema should build"),
+        },
+    ));
+    rx_event
+        .recv()
+        .await
+        .expect("elicitation request event should be sent");
+
+    let new_scope = old_scope.new_request_scope(/*reviewer*/ None);
+    manager.register_elicitation_request_scope(&new_scope);
+    *manager
+        .elicitation_requests
+        .write()
+        .unwrap_or_else(PoisonError::into_inner) = Arc::new(new_scope);
+    let response = ElicitationResponse {
+        action: ElicitationAction::Accept,
+        content: Some(serde_json::json!({})),
+        meta: None,
+    };
+
+    manager
+        .resolve_elicitation("server".to_string(), request_id, response.clone())
+        .await
+        .expect("previous request scope should remain resolvable");
+
+    assert_eq!(
+        pending_response
+            .await
+            .expect("elicitation task should finish")
+            .expect("elicitation response should succeed"),
+        response
+    );
+}
+
 #[test]
 fn test_normalize_tools_short_non_duplicated_names() {
     let tools = vec![

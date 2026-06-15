@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::Weak;
 
 use crate::mcp::McpPermissionPromptAutoApproveContext;
 use crate::mcp::mcp_permission_prompt_is_auto_approved;
@@ -57,6 +58,11 @@ pub(crate) struct ElicitationRequestManager {
     reviewer: Option<ElicitationReviewerHandle>,
 }
 
+#[derive(Clone)]
+pub(crate) struct ElicitationRequestScope {
+    requests: Weak<Mutex<ResponderMap>>,
+}
+
 impl ElicitationRequestManager {
     pub(crate) fn new(
         approval_policy: AskForApproval,
@@ -82,6 +88,12 @@ impl ElicitationRequestManager {
         }
     }
 
+    pub(crate) fn request_scope(&self) -> ElicitationRequestScope {
+        ElicitationRequestScope {
+            requests: Arc::downgrade(&self.requests),
+        }
+    }
+
     pub(crate) fn auto_deny(&self) -> bool {
         self.auto_deny
             .lock()
@@ -93,21 +105,6 @@ impl ElicitationRequestManager {
         if let Ok(mut current) = self.auto_deny.lock() {
             *current = auto_deny;
         }
-    }
-
-    pub(crate) async fn resolve(
-        &self,
-        server_name: String,
-        id: RequestId,
-        response: ElicitationResponse,
-    ) -> Result<()> {
-        self.requests
-            .lock()
-            .await
-            .remove(&(server_name, id))
-            .ok_or_else(|| anyhow!("elicitation request not found"))?
-            .send(response)
-            .map_err(|e| anyhow!("failed to send elicitation response: {e:?}"))
     }
 
     pub(crate) fn make_sender(
@@ -238,6 +235,34 @@ impl ElicitationRequestManager {
             }
             .boxed()
         })
+    }
+}
+
+impl ElicitationRequestScope {
+    pub(crate) fn is_live(&self) -> bool {
+        self.requests.strong_count() > 0
+    }
+
+    pub(crate) async fn try_resolve(
+        &self,
+        server_name: &str,
+        id: &RequestId,
+        response: ElicitationResponse,
+    ) -> Result<bool> {
+        let Some(requests) = self.requests.upgrade() else {
+            return Ok(false);
+        };
+        let Some(responder) = requests
+            .lock()
+            .await
+            .remove(&(server_name.to_string(), id.clone()))
+        else {
+            return Ok(false);
+        };
+        responder
+            .send(response)
+            .map_err(|error| anyhow!("failed to send elicitation response: {error:?}"))?;
+        Ok(true)
     }
 }
 

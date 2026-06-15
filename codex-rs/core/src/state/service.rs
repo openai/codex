@@ -17,7 +17,6 @@ use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
-use anyhow::Result;
 use arc_swap::ArcSwap;
 use arc_swap::ArcSwapOption;
 use codex_analytics::AnalyticsEventsClient;
@@ -40,7 +39,7 @@ use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 
 pub(crate) struct SessionServices {
-    /// The latest manager; callers retain an owned handle while performing MCP I/O.
+    /// The session's stable manager; callers retain an owned handle while performing MCP I/O.
     pub(crate) mcp_connection_manager: Arc<ArcSwap<McpConnectionManager>>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     #[cfg_attr(not(unix), allow(dead_code))]
@@ -84,19 +83,4 @@ pub(crate) struct SessionServices {
     /// Shared process-level environment registry. Sessions carry an `Arc` handle so they can pass
     /// the same manager through child-thread spawn paths without reconstructing it.
     pub(crate) environment_manager: Arc<EnvironmentManager>,
-}
-
-impl SessionServices {
-    /// Installs the manager before validating required servers so startup-time elicitation can
-    /// resolve through the session's manager while validation waits.
-    pub(crate) async fn install_mcp_connection_manager(
-        &self,
-        manager: McpConnectionManager,
-    ) -> Result<()> {
-        self.mcp_connection_manager.store(Arc::new(manager));
-        self.mcp_connection_manager
-            .load_full()
-            .validate_required_servers()
-            .await
-    }
 }

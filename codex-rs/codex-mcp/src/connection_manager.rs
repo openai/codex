@@ -22,6 +22,7 @@ use crate::codex_apps::CodexAppsToolsCacheContext;
 use crate::codex_apps::CodexAppsToolsCacheKey;
 use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
 use crate::elicitation::ElicitationRequestManager;
+use crate::elicitation::ElicitationRequestScope;
 use crate::elicitation::ElicitationReviewerHandle;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
@@ -82,6 +83,7 @@ use tracing::warn;
 const MCP_UI_META_KEY: &str = "ui";
 const MCP_UI_VISIBILITY_META_KEY: &str = "visibility";
 const MCP_UI_MODEL_VISIBILITY: &str = "model";
+const MAX_ELICITATION_REQUEST_SCOPES: usize = 16;
 
 /// Returns whether a tool may be included in model-facing tool declarations.
 ///
@@ -112,6 +114,7 @@ pub struct McpConnectionManager {
     /// Replaced by refresh while existing operations retain their current snapshot.
     connections: RwLock<Arc<McpConnections>>,
     elicitation_requests: RwLock<Arc<ElicitationRequestManager>>,
+    elicitation_request_scopes: Mutex<Vec<ElicitationRequestScope>>,
     /// Rotated before each refresh so cancellation always reaches the active startup round.
     startup_cancellation_token: Mutex<CancellationToken>,
 }
@@ -174,6 +177,7 @@ impl McpConnectionManager {
         .await;
         Self {
             connections: RwLock::new(Arc::new(connections)),
+            elicitation_request_scopes: Mutex::new(vec![elicitation_requests.request_scope()]),
             elicitation_requests: RwLock::new(Arc::new(elicitation_requests)),
             startup_cancellation_token: Mutex::new(startup_cancellation_token),
         }
@@ -211,6 +215,7 @@ impl McpConnectionManager {
         let elicitation_requests = self
             .elicitation_requests()
             .new_request_scope(elicitation_reviewer);
+        self.register_elicitation_request_scope(&elicitation_requests);
         {
             let mut current = self
                 .elicitation_requests
@@ -297,6 +302,12 @@ impl McpConnectionManager {
         permission_profile: &PermissionProfile,
         prefix_mcp_tool_names: bool,
     ) -> Self {
+        let elicitation_requests = Arc::new(ElicitationRequestManager::new(
+            approval_policy.value(),
+            permission_profile.clone(),
+            /*reviewer*/ None,
+        ));
+        let elicitation_request_scope = elicitation_requests.request_scope();
         Self {
             connections: RwLock::new(Arc::new(McpConnections {
                 resource_cache_identity: Arc::new(()),
@@ -307,11 +318,8 @@ impl McpConnectionManager {
                 host_owned_codex_apps_enabled: false,
                 prefix_mcp_tool_names,
             })),
-            elicitation_requests: RwLock::new(Arc::new(ElicitationRequestManager::new(
-                approval_policy.value(),
-                permission_profile.clone(),
-                /*reviewer*/ None,
-            ))),
+            elicitation_requests: RwLock::new(elicitation_requests),
+            elicitation_request_scopes: Mutex::new(vec![elicitation_request_scope]),
             startup_cancellation_token: Mutex::new(CancellationToken::new()),
         }
     }
@@ -419,9 +427,20 @@ impl McpConnectionManager {
         id: RequestId,
         response: ElicitationResponse,
     ) -> Result<()> {
-        self.elicitation_requests()
-            .resolve(server_name, id, response)
-            .await
+        let scopes = self
+            .elicitation_request_scopes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        for scope in scopes {
+            if scope
+                .try_resolve(&server_name, &id, response.clone())
+                .await?
+            {
+                return Ok(());
+            }
+        }
+        Err(anyhow!("elicitation request not found"))
     }
 
     pub async fn wait_for_server_ready(&self, server_name: &str, timeout: Duration) -> bool {
@@ -838,6 +857,16 @@ impl McpConnectionManager {
                 .read()
                 .unwrap_or_else(PoisonError::into_inner),
         )
+    }
+
+    fn register_elicitation_request_scope(&self, manager: &ElicitationRequestManager) {
+        let mut scopes = self
+            .elicitation_request_scopes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        scopes.retain(ElicitationRequestScope::is_live);
+        scopes.insert(0, manager.request_scope());
+        scopes.truncate(MAX_ELICITATION_REQUEST_SCOPES);
     }
 
     #[cfg(test)]

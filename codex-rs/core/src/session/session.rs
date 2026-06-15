@@ -970,13 +970,9 @@ impl Session {
             }
 
             let services = SessionServices {
-                // Initialize the MCP connection manager with an uninitialized
-                // instance. It will be replaced with one created via
-                // McpConnectionManager::new() once all its constructor args are
-                // available. This also ensures `SessionConfigured` is emitted
-                // before any MCP-related events. It is reasonable to consider
-                // changing this to use Option or OnceCell, though the current
-                // setup is straightforward enough and performs well.
+                // Publish the stable MCP manager before startup so interrupts and extension
+                // resource clients can reach the active startup round. Its connections are
+                // populated after `SessionConfigured` is emitted.
                 mcp_connection_manager,
                 unified_exec_manager: UnifiedExecProcessManager::new(
                     config.background_terminal_max_timeout,
@@ -1131,33 +1127,34 @@ impl Session {
                     session_configuration.cwd().to_path_buf(),
                 ),
             };
-            let mcp_connection_manager = McpConnectionManager::new(
-                &mcp_servers,
-                config.mcp_oauth_credentials_store_mode,
-                config.auth_keyring_backend_kind(),
-                auth_statuses,
-                &session_configuration.approval_policy,
-                INITIAL_SUBMIT_ID.to_owned(),
-                tx_event.clone(),
-                session_configuration.permission_profile(),
-                mcp_runtime_context,
-                config.codex_home.to_path_buf(),
-                codex_apps_tools_cache_key(auth),
-                host_owned_codex_apps_enabled,
-                config.prefix_mcp_tool_names(),
-                client_elicitation_capability,
-                tool_plugin_provenance,
-                auth,
-                Some(sess.mcp_elicitation_reviewer()),
-            )
-            .instrument(info_span!(
-                "session_init.mcp_manager_init",
-                otel.name = "session_init.mcp_manager_init",
-            ))
-            .await;
-            sess.services
-                .install_mcp_connection_manager(mcp_connection_manager)
-                .await?;
+            let mcp_connection_manager = sess.services.mcp_connection_manager.load_full();
+            mcp_connection_manager.set_approval_policy(&session_configuration.approval_policy);
+            mcp_connection_manager
+                .set_permission_profile(session_configuration.permission_profile());
+            mcp_connection_manager
+                .refresh(
+                    &mcp_servers,
+                    config.mcp_oauth_credentials_store_mode,
+                    config.auth_keyring_backend_kind(),
+                    auth_statuses,
+                    INITIAL_SUBMIT_ID.to_owned(),
+                    tx_event.clone(),
+                    mcp_runtime_context,
+                    config.codex_home.to_path_buf(),
+                    codex_apps_tools_cache_key(auth),
+                    host_owned_codex_apps_enabled,
+                    config.prefix_mcp_tool_names(),
+                    client_elicitation_capability,
+                    tool_plugin_provenance,
+                    auth,
+                    Some(sess.mcp_elicitation_reviewer()),
+                )
+                .instrument(info_span!(
+                    "session_init.mcp_manager_init",
+                    otel.name = "session_init.mcp_manager_init",
+                ))
+                .await;
+            mcp_connection_manager.validate_required_servers().await?;
             sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
                 .await;
             let session_start_source = match &initial_history {

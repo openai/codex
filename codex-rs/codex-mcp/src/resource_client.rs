@@ -29,8 +29,8 @@ pub struct McpResourceReadResult {
 
 /// Session-scoped access to MCP resources through the currently installed manager.
 ///
-/// The client retains the manager's shared publication handle rather than a manager
-/// snapshot, so calls automatically use replacements installed during startup and refresh.
+/// The client retains the session's shared manager handle, so each call observes the current
+/// connection snapshot while in-flight calls may finish against the snapshot they started with.
 #[derive(Clone)]
 pub struct McpResourceClient {
     manager: Arc<ArcSwap<McpConnectionManager>>,
