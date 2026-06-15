@@ -12,6 +12,7 @@ pub const SOURCE_CONNECTOR: &str = "connector";
 pub const CONNECTOR_ID_KEY: &str = "connector_id";
 pub const CONNECTOR_NAME_KEY: &str = "connector_name";
 pub const CONNECTOR_DESCRIPTION_KEY: &str = "connector_description";
+pub const LINK_ID_KEY: &str = "link_id";
 pub const TOOL_NAME_KEY: &str = "tool_name";
 pub const TOOL_TITLE_KEY: &str = "tool_title";
 pub const TOOL_DESCRIPTION_KEY: &str = "tool_description";

@@ -54,6 +54,7 @@ use codex_protocol::mcp_approval_meta::APPROVAL_KIND_MCP_TOOL_CALL as MCP_TOOL_A
 use codex_protocol::mcp_approval_meta::CONNECTOR_DESCRIPTION_KEY as MCP_TOOL_APPROVAL_CONNECTOR_DESCRIPTION_KEY;
 use codex_protocol::mcp_approval_meta::CONNECTOR_ID_KEY as MCP_TOOL_APPROVAL_CONNECTOR_ID_KEY;
 use codex_protocol::mcp_approval_meta::CONNECTOR_NAME_KEY as MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY;
+use codex_protocol::mcp_approval_meta::LINK_ID_KEY as MCP_TOOL_APPROVAL_LINK_ID_KEY;
 use codex_protocol::mcp_approval_meta::PERSIST_ALWAYS as MCP_TOOL_APPROVAL_PERSIST_ALWAYS;
 use codex_protocol::mcp_approval_meta::PERSIST_KEY as MCP_TOOL_APPROVAL_PERSIST_KEY;
 use codex_protocol::mcp_approval_meta::PERSIST_SESSION as MCP_TOOL_APPROVAL_PERSIST_SESSION;
@@ -972,6 +973,7 @@ pub(crate) struct McpToolApprovalMetadata {
     tool_title: Option<String>,
     tool_description: Option<String>,
     mcp_app_resource_uri: Option<String>,
+    connector_link_id: Option<String>,
     codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
     openai_file_input_params: Option<Vec<String>>,
 }
@@ -1467,6 +1469,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         tool_title: tool_info.tool.title,
         tool_description: tool_info.tool.description.map(std::borrow::Cow::into_owned),
         mcp_app_resource_uri: get_mcp_app_resource_uri(tool_info.tool.meta.as_deref()),
+        connector_link_id: connector_link_id_for_server(server, tool_info.tool.meta.as_deref()),
         codex_apps_meta: tool_info
             .tool
             .meta
@@ -1489,6 +1492,19 @@ fn openai_file_input_params_for_server(
     (server == CODEX_APPS_MCP_SERVER_NAME)
         .then_some(declared_openai_file_input_param_names(meta))
         .filter(|params| !params.is_empty())
+}
+
+fn connector_link_id_for_server(
+    server: &str,
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<String> {
+    if server != CODEX_APPS_MCP_SERVER_NAME {
+        return None;
+    }
+
+    meta.and_then(|meta| meta.get(MCP_TOOL_APPROVAL_LINK_ID_KEY))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
 }
 
 fn get_mcp_app_resource_uri(
@@ -1712,6 +1728,14 @@ fn build_mcp_tool_approval_elicitation_meta(
                     serde_json::Value::String(connector_description.clone()),
                 );
             }
+        }
+        if server == CODEX_APPS_MCP_SERVER_NAME
+            && let Some(connector_link_id) = metadata.connector_link_id.as_ref()
+        {
+            meta.insert(
+                MCP_TOOL_APPROVAL_LINK_ID_KEY.to_string(),
+                serde_json::Value::String(connector_link_id.clone()),
+            );
         }
     }
     if let Some(tool_params) = tool_params {
