@@ -187,7 +187,8 @@ def codex_rust_crate(
         test_shard_counts = {},
         test_tags = [],
         unit_test_timeout = None,
-        extra_binaries = []):
+        extra_binaries = [],
+        extra_binaries_non_windows = []):
     """Defines a Rust crate with library, binaries, and tests wired for Bazel + Cargo parity.
 
     The macro mirrors Cargo conventions: it builds a library when `src/` exists,
@@ -232,6 +233,9 @@ def codex_rust_crate(
             generated from `src/**/*.rs`.
         extra_binaries: Additional binary labels to surface as test data and
             `CARGO_BIN_EXE_*` environment variables. These are only needed for binaries from a different crate.
+        extra_binaries_non_windows: Like `extra_binaries`, but omitted from
+            Windows test data and environment variables. Tests using these
+            binaries must be excluded when targeting Windows.
     """
     test_env = {
         # The launcher resolves an absolute workspace root at runtime so
@@ -370,6 +374,32 @@ def codex_rust_crate(
         cargo_env_runfiles[binary_label] = "CARGO_BIN_EXE_" + binary
         cargo_env["CARGO_BIN_EXE_" + binary] = "$(rlocationpath %s)" % binary_label
 
+    integration_test_binaries = sanitized_binaries
+    integration_test_cargo_env = cargo_env
+    integration_test_cargo_env_runfiles = cargo_env_runfiles
+    if extra_binaries_non_windows:
+        non_windows_sanitized_binaries = []
+        non_windows_cargo_env = {}
+        non_windows_cargo_env_runfiles = {}
+        for binary_label in extra_binaries_non_windows:
+            non_windows_sanitized_binaries.append(binary_label)
+            binary = Label(binary_label).name
+            non_windows_cargo_env_runfiles[binary_label] = "CARGO_BIN_EXE_" + binary
+            non_windows_cargo_env["CARGO_BIN_EXE_" + binary] = "$(rlocationpath %s)" % binary_label
+
+        integration_test_binaries = sanitized_binaries + select({
+            "@platforms//os:windows": [],
+            "//conditions:default": non_windows_sanitized_binaries,
+        })
+        integration_test_cargo_env = select({
+            "@platforms//os:windows": cargo_env,
+            "//conditions:default": cargo_env | non_windows_cargo_env,
+        })
+        integration_test_cargo_env_runfiles = select({
+            "@platforms//os:windows": cargo_env_runfiles,
+            "//conditions:default": cargo_env_runfiles | non_windows_cargo_env_runfiles,
+        })
+
     integration_test_kwargs = {}
     if integration_test_args:
         integration_test_kwargs["args"] = integration_test_args
@@ -418,7 +448,7 @@ def codex_rust_crate(
                 crate_name = test_crate_name,
                 crate_root = test,
                 srcs = [test],
-                data = native.glob(["tests/**"], allow_empty = True) + sanitized_binaries + test_data_extra,
+                data = native.glob(["tests/**"], allow_empty = True) + integration_test_binaries + test_data_extra,
                 compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
                 deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
                 # Bazel has emitted both `codex-rs/<crate>/...` and
@@ -440,7 +470,7 @@ def codex_rust_crate(
                 # The launcher rewrites them to absolute paths at execution
                 # time so tests keep working after chdir_workspace_root and on
                 # manifest-only platforms.
-                runfile_env = cargo_env_runfiles,
+                runfile_env = integration_test_cargo_env_runfiles,
                 test_bin = ":" + integration_test_binary,
                 workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
                 target_compatible_with = WINDOWS_GNULLVM_INCOMPATIBLE,
@@ -457,7 +487,7 @@ def codex_rust_crate(
                 crate_name = test_crate_name,
                 crate_root = test,
                 srcs = [test],
-                data = native.glob(["tests/**"], allow_empty = True) + sanitized_binaries + test_data_extra,
+                data = native.glob(["tests/**"], allow_empty = True) + integration_test_binaries + test_data_extra,
                 compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
                 deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
                 # Bazel has emitted both `codex-rs/<crate>/...` and
@@ -468,7 +498,7 @@ def codex_rust_crate(
                     "--remap-path-prefix=codex-rs=",
                 ],
                 rustc_env = rustc_env,
-                env = cargo_env,
+                env = integration_test_cargo_env,
                 target_compatible_with = WINDOWS_GNULLVM_INCOMPATIBLE,
                 tags = test_tags,
                 **test_kwargs
@@ -485,7 +515,7 @@ def codex_rust_crate(
             crate_name = test_crate_name,
             crate_root = test,
             srcs = [test],
-            data = native.glob(["tests/**"], allow_empty = True) + sanitized_binaries + test_data_extra,
+            data = native.glob(["tests/**"], allow_empty = True) + integration_test_binaries + test_data_extra,
             compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
             deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
             rustc_flags = rustc_flags_extra + WINDOWS_RUSTC_LINK_FLAGS + [
@@ -493,7 +523,7 @@ def codex_rust_crate(
                 "--remap-path-prefix=codex-rs=",
             ],
             rustc_env = rustc_env,
-            env = cargo_env,
+            env = integration_test_cargo_env,
             target_compatible_with = WINDOWS_GNULLVM_ONLY,
             tags = test_tags + ["manual"],
         )
@@ -501,8 +531,8 @@ def codex_rust_crate(
         workspace_root_test(
             name = test_name + "-windows-cross",
             chdir_workspace_root = False,
-            env = cargo_env,
-            runfile_env = cargo_env_runfiles,
+            env = integration_test_cargo_env,
+            runfile_env = integration_test_cargo_env_runfiles,
             test_bin = ":" + windows_cross_test_binary,
             workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
             target_compatible_with = WINDOWS_GNULLVM_ONLY,
