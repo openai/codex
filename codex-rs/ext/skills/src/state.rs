@@ -1,4 +1,5 @@
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Mutex;
 use tokio::sync::OnceCell;
@@ -6,7 +7,18 @@ use tokio::sync::OnceCell;
 use crate::SkillsExtensionConfig;
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
+use crate::catalog::SkillProviderResult;
+use crate::catalog::SkillReadResult;
+use crate::catalog::SkillSourceKind;
 use crate::catalog::SkillProviderError;
+use crate::catalog::SkillAuthority;
+use crate::catalog::SkillPackageId;
+use crate::catalog::SkillResourceId;
+use crate::provider::SkillReadRequest;
+use crate::sources::SkillProviders;
+
+const MAX_CACHED_ORCHESTRATOR_RESOURCES: usize = 100;
+const MAX_CACHED_ORCHESTRATOR_CONTENT_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug)]
 pub(crate) struct SkillsThreadState {
@@ -14,6 +26,7 @@ pub(crate) struct SkillsThreadState {
     selected_roots: Vec<SelectedCapabilityRoot>,
     orchestrator_skills_enabled: bool,
     orchestrator_catalog: OnceCell<SkillCatalog>,
+    orchestrator_resources: Mutex<OrchestratorResourceCache>,
 }
 
 impl SkillsThreadState {
@@ -27,6 +40,7 @@ impl SkillsThreadState {
             selected_roots,
             orchestrator_skills_enabled,
             orchestrator_catalog: OnceCell::new(),
+            orchestrator_resources: Mutex::new(OrchestratorResourceCache::default()),
         }
     }
 
@@ -65,6 +79,86 @@ impl SkillsThreadState {
             })
             .await
             .clone()
+    }
+
+    pub(crate) async fn read_skill(
+        &self,
+        providers: &SkillProviders,
+        request: SkillReadRequest,
+    ) -> SkillProviderResult<SkillReadResult> {
+        if request.authority.kind != SkillSourceKind::Orchestrator {
+            return providers.read(request).await;
+        }
+
+        let cache_key = SkillReadCacheKey::from(&request);
+        if let Some(result) = self
+            .orchestrator_resources
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&cache_key)
+        {
+            return Ok(result);
+        }
+
+        let result = providers.read(request).await?;
+        if result.resource != cache_key.resource {
+            return Ok(result);
+        }
+
+        Ok(self
+            .orchestrator_resources
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(cache_key, result))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct SkillReadCacheKey {
+    authority: SkillAuthority,
+    package: SkillPackageId,
+    resource: SkillResourceId,
+}
+
+impl From<&SkillReadRequest> for SkillReadCacheKey {
+    fn from(request: &SkillReadRequest) -> Self {
+        Self {
+            authority: request.authority.clone(),
+            package: request.package.clone(),
+            resource: request.resource.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct OrchestratorResourceCache {
+    entries: HashMap<SkillReadCacheKey, SkillReadResult>,
+    contents_bytes: usize,
+}
+
+impl OrchestratorResourceCache {
+    fn get(&self, key: &SkillReadCacheKey) -> Option<SkillReadResult> {
+        self.entries.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: SkillReadCacheKey, result: SkillReadResult) -> SkillReadResult {
+        if let Some(cached) = self.entries.get(&key) {
+            return cached.clone();
+        }
+
+        let contents_bytes = result.contents.len();
+        let Some(next_contents_bytes) = self.contents_bytes.checked_add(contents_bytes) else {
+            return result;
+        };
+        if self.entries.len() >= MAX_CACHED_ORCHESTRATOR_RESOURCES
+            || next_contents_bytes > MAX_CACHED_ORCHESTRATOR_CONTENT_BYTES
+        {
+            return result;
+        }
+
+        self.contents_bytes = next_contents_bytes;
+        self.entries.insert(key, result.clone());
+        result
     }
 }
 
