@@ -1,6 +1,5 @@
 use super::*;
 use crate::compact::InitialContextInjection;
-use crate::environment_selection::ResolvedTurnEnvironments;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::sandboxing::SandboxPermissions;
@@ -731,9 +730,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell_override: None,
         parent_trace: None,
-        environment_selections: ResolvedTurnEnvironments {
-            turn_environments: Vec::new(),
-        },
+        environment_selections: Vec::new(),
         thread_extension_init: codex_extension_api::ExtensionDataInit::default(),
         analytics_events_client: None,
         thread_store,

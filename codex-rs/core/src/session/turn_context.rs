@@ -2,7 +2,7 @@ use super::*;
 use crate::SkillLoadOutcome;
 use crate::agents_md::LoadedAgentsMd;
 use crate::config::GhostSnapshotConfig;
-use crate::environment_selection::ResolvedTurnEnvironments;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use codex_core_skills::HostLoadedSkills;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
@@ -102,7 +102,7 @@ pub struct TurnContext {
     pub(crate) session_source: SessionSource,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
-    pub(crate) environments: ResolvedTurnEnvironments,
+    pub(crate) environments: TurnEnvironmentSnapshot,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
@@ -502,7 +502,7 @@ impl Session {
         model_info: ModelInfo,
         models_manager: &SharedModelsManager,
         network: Option<NetworkProxy>,
-        environments: ResolvedTurnEnvironments,
+        environments: TurnEnvironmentSnapshot,
         cwd: AbsolutePathBuf,
         sub_id: String,
         skills_outcome: Arc<SkillLoadOutcome>,
@@ -635,6 +635,11 @@ impl Session {
                     });
                     let new_config = notify_config_contributors
                         .then(|| Self::build_effective_session_config(&next));
+                    if updates.environments.is_some() {
+                        self.services
+                            .turn_environments
+                            .update_selections(next.environment_selections());
+                    }
                     state.session_configuration = next.clone();
                     Ok((
                         next,
@@ -673,7 +678,6 @@ impl Session {
                 return Err(CodexErr::InvalidRequest(message));
             }
         };
-
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         self.maybe_refresh_shell_snapshot_for_cwd(
             &previous_cwd,
@@ -733,15 +737,7 @@ impl Session {
         final_output_json_schema: Option<Option<Value>>,
         multi_agent_runtime: TurnMultiAgentRuntime,
     ) -> Arc<TurnContext> {
-        let turn_environments = crate::environment_selection::resolve_environment_selections(
-            self.services.environment_manager.as_ref(),
-            session_configuration.environment_selections(),
-        )
-        .await
-        .unwrap_or_else(|err| {
-            warn!("failed to resolve turn environments: {err}");
-            ResolvedTurnEnvironments::default()
-        });
+        let turn_environments = self.services.turn_environments.snapshot().await;
         let primary_turn_environment = turn_environments.primary().cloned();
         let cwd = primary_turn_environment
             .as_ref()
