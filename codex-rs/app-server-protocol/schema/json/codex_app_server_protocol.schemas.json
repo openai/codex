@@ -8478,13 +8478,36 @@
         "type": "object"
       },
       "ConsumeAccountRateLimitResetCreditOutcome": {
-        "enum": [
-          "reset",
-          "nothing_to_reset",
-          "no_credit",
-          "already_redeemed"
-        ],
-        "type": "string"
+        "oneOf": [
+          {
+            "description": "A reset credit was consumed and the eligible rate-limit windows were reset.",
+            "enum": [
+              "reset"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "No current rate-limit window is eligible for a reset.",
+            "enum": [
+              "nothing_to_reset"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The account has no earned reset credits available.",
+            "enum": [
+              "no_credit"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The same idempotency key already completed a reset successfully.",
+            "enum": [
+              "already_redeemed"
+            ],
+            "type": "string"
+          }
+        ]
       },
       "ConsumeAccountRateLimitResetCreditParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",

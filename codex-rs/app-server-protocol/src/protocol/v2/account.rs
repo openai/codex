@@ -286,9 +286,13 @@ pub struct ConsumeAccountRateLimitResetCreditResponse {
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/", rename_all = "snake_case")]
 pub enum ConsumeAccountRateLimitResetCreditOutcome {
+    /// A reset credit was consumed and the eligible rate-limit windows were reset.
     Reset,
+    /// No current rate-limit window is eligible for a reset.
     NothingToReset,
+    /// The account has no earned reset credits available.
     NoCredit,
+    /// The same idempotency key already completed a reset successfully.
     AlreadyRedeemed,
 }
 
