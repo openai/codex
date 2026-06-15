@@ -834,6 +834,76 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_while_client_is_pending()
 }
 
 #[tokio::test]
+async fn list_all_tools_polls_clients_concurrently() {
+    let barrier = Arc::new(tokio::sync::Barrier::new(3));
+    let (first_started_tx, first_started_rx) = tokio::sync::oneshot::channel();
+    let first_barrier = Arc::clone(&barrier);
+    let first_pending_client = async move {
+        let _ = first_started_tx.send(());
+        first_barrier.wait().await;
+        Err(StartupOutcomeError::Cancelled)
+    }
+    .boxed()
+    .shared();
+    let (second_started_tx, second_started_rx) = tokio::sync::oneshot::channel();
+    let second_barrier = Arc::clone(&barrier);
+    let second_pending_client = async move {
+        let _ = second_started_tx.send(());
+        second_barrier.wait().await;
+        Err(StartupOutcomeError::Cancelled)
+    }
+    .boxed()
+    .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.required_servers = vec!["first".to_string(), "second".to_string()];
+    manager.clients.insert(
+        "first".to_string(),
+        AsyncManagedClient {
+            client: first_pending_client,
+            cached_tool_info_snapshot: None,
+            cached_server_info: None,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+    manager.clients.insert(
+        "second".to_string(),
+        AsyncManagedClient {
+            client: second_pending_client,
+            cached_tool_info_snapshot: None,
+            cached_server_info: None,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+    let list_task = tokio::spawn(async move { manager.list_all_tools().await });
+
+    let (first_started, second_started) =
+        tokio::time::timeout(Duration::from_secs(1), async move {
+            tokio::join!(first_started_rx, second_started_rx)
+        })
+        .await
+        .expect("all client futures should be polled before either is released");
+    first_started.expect("first client future should start");
+    second_started.expect("second client future should start");
+    barrier.wait().await;
+
+    let tools = tokio::time::timeout(Duration::from_secs(1), list_task)
+        .await
+        .expect("tool listing should finish after clients are released")
+        .expect("tool listing task should not panic");
+    assert!(tools.is_empty());
+}
+
+#[tokio::test]
 async fn list_available_server_infos_uses_cache_while_client_is_pending() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
@@ -957,7 +1027,7 @@ async fn list_all_tools_applies_legacy_mcp_prefix_by_default() {
 }
 
 #[tokio::test]
-async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_snapshot() {
+async fn list_all_tools_skips_optional_client_pending_without_cached_tool_info_snapshot() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
@@ -973,6 +1043,75 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_
         AsyncManagedClient {
             client: pending_client,
             cached_tool_info_snapshot: None,
+            cached_server_info: None,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+
+    let timeout_result =
+        tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools()).await;
+    let tools = timeout_result.expect("optional client tool listing should not block on startup");
+    assert!(tools.is_empty());
+}
+
+#[tokio::test]
+async fn list_all_tools_blocks_while_required_client_is_pending_without_cached_tool_info_snapshot()
+{
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager
+        .required_servers
+        .push(CODEX_APPS_MCP_SERVER_NAME.to_string());
+    manager.clients.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            cached_tool_info_snapshot: None,
+            cached_server_info: None,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+
+    let timeout_result =
+        tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools()).await;
+    assert!(timeout_result.is_err());
+}
+
+#[tokio::test]
+async fn list_all_tools_blocks_while_required_client_is_pending_with_cached_tool_info_snapshot() {
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager
+        .required_servers
+        .push(CODEX_APPS_MCP_SERVER_NAME.to_string());
+    manager.clients.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            cached_tool_info_snapshot: Some(vec![create_test_tool(
+                CODEX_APPS_MCP_SERVER_NAME,
+                "calendar_create_event",
+            )]),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
@@ -1004,6 +1143,9 @@ async fn shutdown_cancels_pending_tool_listing() {
         &permission_profile,
         /*prefix_mcp_tool_names*/ true,
     );
+    manager
+        .required_servers
+        .push(CODEX_APPS_MCP_SERVER_NAME.to_string());
     manager.clients.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
