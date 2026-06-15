@@ -49,17 +49,10 @@ pub(super) async fn read_thread(
         .await;
         let mut thread = stored_thread_from_sqlite_metadata(store, metadata).await;
         if !params.include_history || rollout_thread.is_some() {
-            if let Some(mut rollout_thread) = rollout_thread
+            if !params.include_history
+                && let Some(mut rollout_thread) = rollout_thread
                 && !rollout_thread.preview.is_empty()
             {
-                if params.include_history {
-                    if !thread.preview.is_empty() {
-                        rollout_thread.preview = thread.preview;
-                    }
-                    if thread.first_user_message.is_some() {
-                        rollout_thread.first_user_message = thread.first_user_message;
-                    }
-                }
                 if thread.name.is_some() {
                     rollout_thread.name = thread.name;
                 }
