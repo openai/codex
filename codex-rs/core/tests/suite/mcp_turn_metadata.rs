@@ -5,6 +5,7 @@ use anyhow::Result;
 use codex_config::types::AppToolApproval;
 use codex_core::config::Config;
 use codex_features::Feature;
+use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -19,6 +20,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathExt;
 use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_LINK_ID;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_CREATE_TOOL;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_NAMESPACE;
 use core_test_support::apps_test_server::recorded_apps_tool_call_by_call_id;
@@ -127,7 +129,7 @@ async fn submit_user_turn(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approved_mcp_tool_call_metadata_records_prior_user_input_request() -> Result<()> {
+async fn approved_mcp_tool_call_forwards_link_id_and_records_user_input() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -202,6 +204,34 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request() -> R
     else {
         panic!("expected apps._default user to route the app approval to the user");
     };
+
+    let ElicitationRequest::Form { meta, .. } = &request.request else {
+        panic!("expected form elicitation for the app tool approval");
+    };
+    assert_eq!(
+        meta,
+        &Some(json!({
+            "codex_approval_kind": "mcp_tool_call",
+            "source": "connector",
+            "connector_id": "calendar",
+            "connector_name": "Calendar",
+            "link_id": CALENDAR_CREATE_EVENT_LINK_ID,
+            "tool_description": "Create a calendar event.",
+            "tool_params": {
+                "title": "Lunch",
+                "starts_at": "2026-03-10T12:00:00Z"
+            },
+            "tool_params_display": [{
+                "name": "starts_at",
+                "value": "2026-03-10T12:00:00Z",
+                "display_name": "starts_at"
+            }, {
+                "name": "title",
+                "value": "Lunch",
+                "display_name": "title"
+            }]
+        }))
+    );
 
     test.codex
         .submit(Op::ResolveElicitation {
