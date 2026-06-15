@@ -5,6 +5,7 @@ mod connection;
 mod environment;
 mod environment_provider;
 mod environment_toml;
+mod file_read;
 mod fs_helper;
 mod fs_helper_main;
 mod fs_sandbox;
@@ -25,6 +26,7 @@ mod server;
 
 pub use client::ExecServerClient;
 pub use client::ExecServerError;
+pub use client::FileReadStream;
 pub use client::http_client::HttpResponseBodyStream;
 pub use client::http_client::ReqwestHttpClient;
 pub use client_api::ExecServerClientConnectOptions;

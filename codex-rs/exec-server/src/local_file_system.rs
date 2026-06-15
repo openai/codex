@@ -79,6 +79,20 @@ impl LocalFileSystem {
 }
 
 impl LocalFileSystem {
+    pub(crate) async fn open_file_for_read(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<tokio::fs::File> {
+        if sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "streaming file reads do not support platform sandboxing",
+            ));
+        }
+        self.unsandboxed.open_file_for_read(path, sandbox).await
+    }
+
     async fn canonicalize(
         &self,
         path: &PathUri,
@@ -239,6 +253,17 @@ impl ExecutorFileSystem for LocalFileSystem {
 }
 
 impl UnsandboxedFileSystem {
+    async fn open_file_for_read(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<tokio::fs::File> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system
+            .open_file_for_read(path, /*sandbox*/ None)
+            .await
+    }
+
     async fn canonicalize(
         &self,
         path: &PathUri,
@@ -414,6 +439,23 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
 }
 
 impl DirectFileSystem {
+    async fn open_file_for_read(
+        &self,
+        path: &PathUri,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<tokio::fs::File> {
+        reject_sandbox_context(sandbox)?;
+        let path = path.to_abs_path()?;
+        let file = tokio::fs::File::open(path.as_path()).await?;
+        if !file.metadata().await?.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("path `{}` is not a file", path.display()),
+            ));
+        }
+        Ok(file)
+    }
+
     async fn canonicalize(
         &self,
         path: &PathUri,

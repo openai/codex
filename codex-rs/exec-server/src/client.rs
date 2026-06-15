@@ -1,15 +1,22 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
+use std::task::Context;
+use std::task::Poll;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
+use bytes::Bytes;
 use codex_app_server_protocol::JSONRPCNotification;
 use futures::FutureExt;
+use futures::Stream;
+use futures::StreamExt;
 use futures::future::BoxFuture;
+use futures::stream::BoxStream;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
@@ -45,21 +52,30 @@ use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
 use crate::protocol::FS_CANONICALIZE_METHOD;
+use crate::protocol::FS_CLOSE_METHOD;
 use crate::protocol::FS_COPY_METHOD;
 use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
+use crate::protocol::FS_OPEN_METHOD;
+use crate::protocol::FS_READ_BLOCK_METHOD;
 use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCanonicalizeResponse;
+use crate::protocol::FsCloseParams;
+use crate::protocol::FsCloseResponse;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
+use crate::protocol::FsOpenParams;
+use crate::protocol::FsOpenResponse;
+use crate::protocol::FsReadBlockParams;
+use crate::protocol::FsReadBlockResponse;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
 use crate::protocol::FsReadFileParams;
@@ -94,6 +110,26 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const PROCESS_EVENT_CHANNEL_CAPACITY: usize = 256;
 const PROCESS_EVENT_RETAINED_BYTES: usize = 1024 * 1024;
+
+/// Stream of immutable file blocks returned by [`ExecServerClient::stream`].
+pub struct FileReadStream {
+    inner: BoxStream<'static, Result<Bytes, ExecServerError>>,
+}
+
+impl Stream for FileReadStream {
+    type Item = Result<Bytes, ExecServerError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
+struct FileReadRegistration {
+    client: ExecServerClient,
+    handle_id: String,
+    runtime: Option<tokio::runtime::Handle>,
+    active: bool,
+}
 
 impl Default for ExecServerClientConnectOptions {
     fn default() -> Self {
@@ -429,6 +465,83 @@ impl ExecServerClient {
         self.call(FS_READ_FILE_METHOD, &params).await
     }
 
+    /// Opens an unsandboxed file and returns a demand-driven stream of 1 MiB blocks.
+    pub async fn stream(
+        &self,
+        params: FsReadFileParams,
+    ) -> Result<FileReadStream, ExecServerError> {
+        let response = self
+            .fs_open(FsOpenParams {
+                path: params.path,
+                sandbox: params.sandbox,
+            })
+            .await?;
+        let registration = FileReadRegistration {
+            client: self.clone(),
+            handle_id: response.handle_id,
+            runtime: tokio::runtime::Handle::try_current().ok(),
+            active: true,
+        };
+        Ok(FileReadStream {
+            inner: futures::stream::try_unfold(Some((registration, 0_u64)), |state| async move {
+                let Some((mut registration, offset)) = state else {
+                    return Ok(None);
+                };
+                let response = registration
+                    .client
+                    .fs_read_block(FsReadBlockParams {
+                        handle_id: registration.handle_id.clone(),
+                        offset,
+                        len: crate::file_read::FILE_READ_BLOCK_SIZE,
+                    })
+                    .await?;
+                let chunk = Bytes::from(response.chunk.into_inner());
+                if chunk.len() > crate::file_read::FILE_READ_BLOCK_SIZE {
+                    return Err(ExecServerError::Protocol(format!(
+                        "{FS_READ_BLOCK_METHOD} returned {} bytes, maximum is {}",
+                        chunk.len(),
+                        crate::file_read::FILE_READ_BLOCK_SIZE
+                    )));
+                }
+                if response.eof {
+                    registration.active = false;
+                    return if chunk.is_empty() {
+                        Ok(None)
+                    } else {
+                        Ok(Some((chunk, None)))
+                    };
+                }
+                if chunk.is_empty() {
+                    return Err(ExecServerError::Protocol(format!(
+                        "{FS_READ_BLOCK_METHOD} returned an empty non-terminal block"
+                    )));
+                }
+                let next_offset = offset.checked_add(chunk.len() as u64).ok_or_else(|| {
+                    ExecServerError::Protocol(format!(
+                        "{FS_READ_BLOCK_METHOD} offset overflowed after {offset} bytes"
+                    ))
+                })?;
+                Ok(Some((chunk, Some((registration, next_offset)))))
+            })
+            .boxed(),
+        })
+    }
+
+    async fn fs_open(&self, params: FsOpenParams) -> Result<FsOpenResponse, ExecServerError> {
+        self.call(FS_OPEN_METHOD, &params).await
+    }
+
+    async fn fs_read_block(
+        &self,
+        params: FsReadBlockParams,
+    ) -> Result<FsReadBlockResponse, ExecServerError> {
+        self.call(FS_READ_BLOCK_METHOD, &params).await
+    }
+
+    async fn fs_close(&self, params: FsCloseParams) -> Result<FsCloseResponse, ExecServerError> {
+        self.call(FS_CLOSE_METHOD, &params).await
+    }
+
     pub async fn fs_write_file(
         &self,
         params: FsWriteFileParams,
@@ -597,6 +710,25 @@ impl ExecServerClient {
                     Err(error)
                 }
             }
+        }
+    }
+}
+
+impl Drop for FileReadRegistration {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        let client = self.client.clone();
+        let handle_id = self.handle_id.clone();
+        let runtime = self
+            .runtime
+            .clone()
+            .or_else(|| tokio::runtime::Handle::try_current().ok());
+        if let Some(runtime) = runtime {
+            runtime.spawn(async move {
+                let _ = client.fs_close(FsCloseParams { handle_id }).await;
+            });
         }
     }
 }
