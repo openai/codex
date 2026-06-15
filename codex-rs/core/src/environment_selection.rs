@@ -12,7 +12,6 @@ use codex_utils_path_uri::PathUri;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::future::Shared;
-use tokio_util::task::AbortOnDropHandle;
 
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
@@ -59,17 +58,13 @@ impl ThreadEnvironments {
             .unwrap_or_default();
         let environment_manager = Arc::clone(&self.environment_manager);
         let environments = environments.to_vec();
-        let snapshot_task = AbortOnDropHandle::new(tokio::spawn(async move {
+        let (snapshot_task, snapshot) = async move {
             Self::resolve_snapshot(environment_manager, previous, environments).await
-        }));
-        let snapshot_task = async move {
-            snapshot_task
-                .await
-                .expect("environment resolution task should not panic")
         }
-        .boxed()
-        .shared();
-        self.snapshot_task.store(Arc::new(snapshot_task));
+        .remote_handle();
+        drop(tokio::spawn(snapshot_task));
+        self.snapshot_task
+            .store(Arc::new(snapshot.boxed().shared()));
     }
 
     async fn resolve_snapshot(
