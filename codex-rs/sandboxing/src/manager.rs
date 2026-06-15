@@ -365,16 +365,33 @@ impl SandboxManager {
         &self,
         request: SandboxDirectSpawnTransformRequest<'_>,
     ) -> Result<SandboxExecRequest, SandboxTransformError> {
-        let transform = request.transform;
         #[cfg(target_os = "windows")]
-        let workspace_roots = request.workspace_roots;
-        #[cfg(target_os = "windows")]
-        let mut request = self.transform(transform)?;
+        {
+            let codex_home = codex_utils_home_dir::find_codex_home()
+                .map_err(|err| SandboxTransformError::WindowsSandboxPreparation(err.to_string()))?;
+            self.transform_for_direct_spawn_with_codex_home(request, codex_home.as_path())
+        }
+
         #[cfg(not(target_os = "windows"))]
-        let request = self.transform(transform)?;
-        #[cfg(target_os = "windows")]
+        {
+            self.transform(request.transform)
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn transform_for_direct_spawn_with_codex_home(
+        &self,
+        request: SandboxDirectSpawnTransformRequest<'_>,
+        codex_home: &Path,
+    ) -> Result<SandboxExecRequest, SandboxTransformError> {
+        let workspace_roots = request.workspace_roots;
+        let mut request = self.transform(request.transform)?;
         if request.sandbox == SandboxType::WindowsRestrictedToken {
-            wrap_windows_sandbox_exec_request_for_direct_spawn(&mut request, workspace_roots)?;
+            wrap_windows_sandbox_exec_request_for_direct_spawn(
+                &mut request,
+                workspace_roots,
+                codex_home,
+            )?;
         }
         Ok(request)
     }
@@ -384,17 +401,15 @@ impl SandboxManager {
 fn wrap_windows_sandbox_exec_request_for_direct_spawn(
     request: &mut SandboxExecRequest,
     workspace_roots: &[AbsolutePathBuf],
+    codex_home: &Path,
 ) -> Result<(), SandboxTransformError> {
-    let codex_home = codex_utils_home_dir::find_codex_home()
-        .map_err(|err| SandboxTransformError::WindowsSandboxPreparation(err.to_string()))?;
     let Some(program) = request.command.first_mut() else {
         return Err(SandboxTransformError::WindowsSandboxPreparation(
             "sandbox command was empty".to_string(),
         ));
     };
     let source = std::path::PathBuf::from(&program);
-    let helper =
-        codex_windows_sandbox::resolve_exe_for_launch(source.as_path(), codex_home.as_path());
+    let helper = codex_windows_sandbox::resolve_exe_for_launch(source.as_path(), codex_home);
     *program = helper.to_string_lossy().into_owned();
 
     let inner_command = std::mem::take(&mut request.command);
@@ -448,7 +463,7 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
             write_roots_override,
             deny_read_paths_override,
             deny_write_paths_override,
-            codex_home.as_path(),
+            codex_home,
         );
 
     request.command = Vec::with_capacity(1 + wrapper_args.len());

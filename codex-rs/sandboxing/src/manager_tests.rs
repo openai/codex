@@ -448,43 +448,9 @@ fn transform_for_direct_spawn_windows_preserves_only_wrapper_setup_identity() {
 }
 
 #[cfg(target_os = "windows")]
-static CODEX_HOME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-#[cfg(target_os = "windows")]
-struct EnvVarGuard {
-    key: &'static str,
-    original: Option<std::ffi::OsString>,
-}
-
-#[cfg(target_os = "windows")]
-impl EnvVarGuard {
-    fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
-        let original = std::env::var_os(key);
-        unsafe {
-            std::env::set_var(key, value);
-        }
-        Self { key, original }
-    }
-}
-
-#[cfg(target_os = "windows")]
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        unsafe {
-            match &self.original {
-                Some(value) => std::env::set_var(self.key, value),
-                None => std::env::remove_var(self.key),
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
 #[test]
 fn transform_for_direct_spawn_windows_materializes_inner_helper() {
-    let _lock = CODEX_HOME_TEST_LOCK.lock().expect("lock CODEX_HOME test");
     let codex_home = tempfile::TempDir::new().expect("codex home");
-    let _guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
     let helper_dir = tempfile::TempDir::new().expect("helper dir");
     let configured_helper = helper_dir.path().join("configured-codex-helper.exe");
     std::fs::write(&configured_helper, b"helper").expect("write configured helper");
@@ -519,27 +485,33 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
     let workspace_roots = vec![cwd, other_workspace_root];
     let manager = SandboxManager::new();
     let exec_request = manager
-        .transform_for_direct_spawn(SandboxDirectSpawnTransformRequest {
-            workspace_roots: workspace_roots.as_slice(),
-            transform: SandboxTransformRequest {
-                command: SandboxCommand {
-                    program: configured_helper.as_os_str().to_owned(),
-                    args: vec!["--codex-run-as-fs-helper".to_string()],
-                    cwd: cwd_uri.clone(),
-                    env: HashMap::from([("Path".to_string(), r"C:\Windows\System32".to_string())]),
-                    additional_permissions: None,
+        .transform_for_direct_spawn_with_codex_home(
+            SandboxDirectSpawnTransformRequest {
+                workspace_roots: workspace_roots.as_slice(),
+                transform: SandboxTransformRequest {
+                    command: SandboxCommand {
+                        program: configured_helper.as_os_str().to_owned(),
+                        args: vec!["--codex-run-as-fs-helper".to_string()],
+                        cwd: cwd_uri.clone(),
+                        env: HashMap::from([(
+                            "Path".to_string(),
+                            r"C:\Windows\System32".to_string(),
+                        )]),
+                        additional_permissions: None,
+                    },
+                    permissions: &permissions,
+                    sandbox: SandboxType::WindowsRestrictedToken,
+                    enforce_managed_network: false,
+                    network: None,
+                    sandbox_policy_cwd: &cwd_uri,
+                    codex_linux_sandbox_exe: None,
+                    use_legacy_landlock: false,
+                    windows_sandbox_level: WindowsSandboxLevel::Elevated,
+                    windows_sandbox_private_desktop: false,
                 },
-                permissions: &permissions,
-                sandbox: SandboxType::WindowsRestrictedToken,
-                enforce_managed_network: false,
-                network: None,
-                sandbox_policy_cwd: &cwd_uri,
-                codex_linux_sandbox_exe: None,
-                use_legacy_landlock: false,
-                windows_sandbox_level: WindowsSandboxLevel::Elevated,
-                windows_sandbox_private_desktop: false,
             },
-        })
+            codex_home.path(),
+        )
         .expect("transform for direct spawn");
 
     let separator_index = exec_request
