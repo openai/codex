@@ -68,9 +68,9 @@ impl App {
     /// result as a `RateLimitsLoaded` event.
     ///
     /// The `origin` is forwarded to the completion handler so it can distinguish
-    /// a startup prefetch (which only updates cached snapshots and schedules a
-    /// frame) from a `/status`-triggered refresh (which must finalize the
-    /// corresponding status card).
+    /// a startup prefetch (which updates cached snapshots and may surface a
+    /// reset-credit notice) from a `/status`-triggered refresh (which must
+    /// finalize the corresponding status card).
     pub(super) fn refresh_rate_limits(
         &mut self,
         app_server: &AppServerSession,
@@ -87,7 +87,7 @@ impl App {
                         .map_err(|_| "account/rateLimits/read timed out in TUI".to_string())
                         .and_then(|result| result.map_err(|err| err.to_string()))
                 }
-                RateLimitRefreshOrigin::StartupPrefetch
+                RateLimitRefreshOrigin::StartupPrefetch { .. }
                 | RateLimitRefreshOrigin::StatusCommand { .. } => {
                     request.await.map_err(|err| err.to_string())
                 }
@@ -118,7 +118,7 @@ impl App {
     pub(super) fn refresh_rate_limit_reset_credits(
         &mut self,
         app_server: &AppServerSession,
-        origin: RateLimitResetCreditsRefreshOrigin,
+        request_id: u64,
     ) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
@@ -130,7 +130,7 @@ impl App {
             .await
             .map_err(|_| "account/rateLimits/read timed out in TUI".to_string())
             .and_then(|result| result.map_err(|err| err.to_string()));
-            app_event_tx.send(AppEvent::RateLimitResetCreditsLoaded { origin, result });
+            app_event_tx.send(AppEvent::RateLimitResetCreditsLoaded { request_id, result });
         });
     }
 

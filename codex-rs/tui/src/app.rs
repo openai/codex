@@ -14,7 +14,6 @@ use crate::app_event::PermissionProfileSelection;
 use crate::app_event::PluginLocation;
 use crate::app_event::PluginRemoteSectionError;
 use crate::app_event::RateLimitRefreshOrigin;
-use crate::app_event::RateLimitResetCreditsRefreshOrigin;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -1116,9 +1115,16 @@ See the Codex keymap documentation for supported actions and examples."
         );
         app.refresh_startup_skills(&app_server);
         // Kick off a non-blocking rate-limit prefetch so the first `/status`
-        // already has data, without delaying the initial frame render.
+        // already has data and available reset credits can be surfaced, without
+        // delaying the initial frame render.
         if requires_openai_auth && has_chatgpt_account {
-            app.refresh_rate_limits(&app_server, RateLimitRefreshOrigin::StartupPrefetch);
+            let reset_hint_request_id = app.chat_widget.start_rate_limit_reset_startup_check();
+            app.refresh_rate_limits(
+                &app_server,
+                RateLimitRefreshOrigin::StartupPrefetch {
+                    reset_hint_request_id,
+                },
+            );
         }
 
         let mut listen_for_app_server_events = true;

@@ -5,48 +5,9 @@ use uuid::Uuid;
 
 use super::*;
 
-const USAGE_MENU_VIEW_ID: &str = "usage-menu";
 const RATE_LIMIT_RESET_VIEW_ID: &str = "rate-limit-reset";
 
 impl ChatWidget {
-    pub(super) fn open_usage_menu(&mut self) {
-        let show_rate_limit_resets = !self.plan_type.is_some_and(PlanType::is_workspace_account);
-        let subtitle = if show_rate_limit_resets {
-            "View account usage or redeem an earned reset."
-        } else {
-            "View account usage."
-        };
-        let mut items = vec![SelectionItem {
-            name: "Token activity".to_string(),
-            description: Some("View recent account token usage.".to_string()),
-            actions: vec![Box::new(|tx| {
-                tx.send(AppEvent::OpenTokenActivity);
-            })],
-            dismiss_on_select: true,
-            ..Default::default()
-        }];
-        if show_rate_limit_resets {
-            items.push(SelectionItem {
-                name: "Rate-limit resets".to_string(),
-                description: Some("View and redeem earned rate-limit resets.".to_string()),
-                actions: vec![Box::new(|tx| {
-                    tx.send(AppEvent::OpenRateLimitResetCredits);
-                })],
-                dismiss_on_select: true,
-                ..Default::default()
-            });
-        }
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            view_id: Some(USAGE_MENU_VIEW_ID),
-            title: Some("Usage".to_string()),
-            subtitle: Some(subtitle.to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            ..Default::default()
-        });
-        self.request_redraw();
-    }
-
     pub(crate) fn show_rate_limit_reset_loading_popup(&mut self) -> u64 {
         self.clear_pending_rate_limit_reset_hint();
         let request_id = self.take_next_rate_limit_reset_request_id();
@@ -275,15 +236,11 @@ impl ChatWidget {
         }
     }
 
-    pub(super) fn start_rate_limit_reset_hint_check(&mut self) {
-        if !self.has_codex_backend_auth {
-            return;
-        }
+    pub(crate) fn start_rate_limit_reset_startup_check(&mut self) -> u64 {
         self.clear_pending_rate_limit_reset_hint();
         let request_id = self.take_next_rate_limit_reset_request_id();
         self.pending_rate_limit_reset_hint_request_id = Some(request_id);
-        self.app_event_tx
-            .send(AppEvent::CheckRateLimitResetCredits { request_id });
+        request_id
     }
 
     pub(crate) fn finish_rate_limit_reset_hint_refresh(
@@ -309,7 +266,6 @@ impl ChatWidget {
         self.clear_pending_rate_limit_reset_hint();
         self.bottom_pane
             .dismiss_view_by_id(RATE_LIMIT_RESET_VIEW_ID);
-        self.bottom_pane.dismiss_view_by_id(USAGE_MENU_VIEW_ID);
     }
 
     pub(crate) fn clear_pending_rate_limit_reset_hint(&mut self) {

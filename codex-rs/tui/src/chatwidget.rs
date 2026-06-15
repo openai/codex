@@ -408,6 +408,7 @@ mod status_surfaces;
 mod streaming;
 use self::status_surfaces::CachedProjectRootName;
 mod tokens;
+#[cfg(test)]
 pub(crate) use self::tokens::TokenActivityView;
 mod tool_lifecycle;
 mod tool_requests;

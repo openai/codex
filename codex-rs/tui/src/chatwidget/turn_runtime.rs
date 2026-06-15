@@ -383,12 +383,6 @@ impl ChatWidget {
             }
         });
         self.codex_rate_limit_reached_type = rate_limit_reached_type;
-        let should_check_reset_credits = usage_limit_error
-            && matches!(
-                rate_limit_reached_type,
-                Some(RateLimitReachedType::RateLimitReached)
-            );
-
         match rate_limit_reached_type {
             Some(RateLimitReachedType::WorkspaceOwnerCreditsDepleted) => {
                 self.on_error(
@@ -413,9 +407,6 @@ impl ChatWidget {
             Some(RateLimitReachedType::RateLimitReached) | None => {
                 self.on_error(message);
             }
-        }
-        if should_check_reset_credits {
-            self.start_rate_limit_reset_hint_check();
         }
     }
 

@@ -756,7 +756,18 @@ impl App {
                         self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
                     }
                     match origin {
-                        RateLimitRefreshOrigin::StartupPrefetch => {
+                        RateLimitRefreshOrigin::StartupPrefetch {
+                            reset_hint_request_id,
+                        } => {
+                            if self.chat_widget.finish_rate_limit_reset_hint_refresh(
+                                reset_hint_request_id,
+                                rate_limit_reset_credits.ok_or_else(|| {
+                                    "account/rateLimits/read response did not include rateLimitResetCredits"
+                                        .to_string()
+                                }),
+                            ) {
+                                self.insert_pending_usage_output_if_ready(tui);
+                            }
                             tui.frame_requester().schedule_frame();
                         }
                         RateLimitRefreshOrigin::ResetConsume { request_id } => {
@@ -778,7 +789,14 @@ impl App {
                 Err(err) => {
                     tracing::warn!("account/rateLimits/read failed during TUI refresh: {err}");
                     match origin {
-                        RateLimitRefreshOrigin::StartupPrefetch => {}
+                        RateLimitRefreshOrigin::StartupPrefetch {
+                            reset_hint_request_id,
+                        } => {
+                            self.chat_widget.finish_rate_limit_reset_hint_refresh(
+                                reset_hint_request_id,
+                                Err(err),
+                            );
+                        }
                         RateLimitRefreshOrigin::ResetConsume { request_id } => {
                             self.chat_widget
                                 .finish_post_consume_reset_credits_refresh(request_id, Err(err));
@@ -790,47 +808,19 @@ impl App {
                     }
                 }
             },
-            AppEvent::OpenTokenActivity => {
-                self.chat_widget
-                    .add_token_activity_output(crate::chatwidget::TokenActivityView::Daily);
-            }
             AppEvent::OpenRateLimitResetCredits => {
                 let request_id = self.chat_widget.show_rate_limit_reset_loading_popup();
-                self.refresh_rate_limit_reset_credits(
-                    app_server,
-                    RateLimitResetCreditsRefreshOrigin::UsageMenu { request_id },
-                );
+                self.refresh_rate_limit_reset_credits(app_server, request_id);
             }
-            AppEvent::CheckRateLimitResetCredits { request_id } => {
-                self.refresh_rate_limit_reset_credits(
-                    app_server,
-                    RateLimitResetCreditsRefreshOrigin::UsageLimitHint { request_id },
-                );
+            AppEvent::RateLimitResetCreditsLoaded { request_id, result } => {
+                if let Err(err) = &result {
+                    tracing::warn!(
+                        "account/rateLimits/read failed during reset-credit refresh: {err}"
+                    );
+                }
+                self.chat_widget
+                    .finish_rate_limit_reset_credits_refresh(request_id, result);
             }
-            AppEvent::RateLimitResetCreditsLoaded { origin, result } => match origin {
-                RateLimitResetCreditsRefreshOrigin::UsageMenu { request_id } => {
-                    if let Err(err) = &result {
-                        tracing::warn!(
-                            "account/rateLimits/read failed during reset-credit refresh: {err}"
-                        );
-                    }
-                    self.chat_widget
-                        .finish_rate_limit_reset_credits_refresh(request_id, result);
-                }
-                RateLimitResetCreditsRefreshOrigin::UsageLimitHint { request_id } => {
-                    if let Err(err) = &result {
-                        tracing::warn!(
-                            "account/rateLimits/read failed while checking usage-limit hint: {err}"
-                        );
-                    }
-                    if self
-                        .chat_widget
-                        .finish_rate_limit_reset_hint_refresh(request_id, result)
-                    {
-                        self.insert_pending_usage_output_if_ready(tui);
-                    }
-                }
-            },
             AppEvent::ConsumeRateLimitResetCredit { idempotency_key } => {
                 let request_id = self.chat_widget.show_rate_limit_reset_consuming_popup();
                 self.consume_rate_limit_reset_credit(app_server, request_id, idempotency_key);

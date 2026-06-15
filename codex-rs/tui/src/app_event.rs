@@ -116,25 +116,19 @@ pub(crate) struct PluginRemoteSectionError {
 /// handler can route the result correctly.
 ///
 /// A `StartupPrefetch` fires once, concurrently with the rest of TUI init, and
-/// only updates the cached snapshots (no status card to finalize). A
-/// `StatusCommand` is tied to a specific `/status` invocation and must call
-/// `finish_status_rate_limit_refresh` when done so the card stops showing a
-/// "refreshing" state.
+/// updates the cached snapshots and any available reset-credit notice (no
+/// status card to finalize). A `StatusCommand` is tied to a specific `/status`
+/// invocation and must call `finish_status_rate_limit_refresh` when done so the
+/// card stops showing a "refreshing" state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RateLimitRefreshOrigin {
-    /// Eagerly fetched after bootstrap so the first `/status` already has data.
-    StartupPrefetch,
+    /// Eagerly fetched after bootstrap for `/status` data and reset availability.
+    StartupPrefetch { reset_hint_request_id: u64 },
     /// User-initiated via `/status`; the `request_id` correlates with the
     /// status card that should be updated when the fetch completes.
     StatusCommand { request_id: u64 },
     /// Refresh requested after a reset credit was successfully consumed.
     ResetConsume { request_id: u64 },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RateLimitResetCreditsRefreshOrigin {
-    UsageMenu { request_id: u64 },
-    UsageLimitHint { request_id: u64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -312,20 +306,12 @@ pub(crate) enum AppEvent {
         result: Result<GetAccountRateLimitsResponse, String>,
     },
 
-    /// Open the default token-activity view selected from the `/usage` menu.
-    OpenTokenActivity,
-
-    /// Open the reset-credit flow selected from the `/usage` menu.
+    /// Open the reset-credit flow requested by `/usage`.
     OpenRateLimitResetCredits,
-
-    /// Check reset availability after a standard usage-limit failure.
-    CheckRateLimitResetCredits {
-        request_id: u64,
-    },
 
     /// Result of reading the current reset-credit balance.
     RateLimitResetCreditsLoaded {
-        origin: RateLimitResetCreditsRefreshOrigin,
+        request_id: u64,
         result: Result<RateLimitResetCreditsSummary, String>,
     },
 

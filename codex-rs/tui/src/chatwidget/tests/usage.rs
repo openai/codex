@@ -6,46 +6,24 @@ use codex_app_server_protocol::RateLimitResetCreditsSummary;
 const TEST_OVERLAY_VIEW_ID: &str = "usage-test-overlay";
 
 #[tokio::test]
-async fn usage_command_opens_menu_snapshot() {
+async fn usage_command_opens_reset_flow_directly() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
     chat.dispatch_command(SlashCommand::Usage);
 
-    assert_chatwidget_snapshot!(
-        "usage_command_menu",
-        render_bottom_popup(&chat, /*width*/ 80)
-    );
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenTokenActivity));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenRateLimitResetCredits));
 }
 
 #[tokio::test]
-async fn usage_command_omits_rate_limit_resets_for_workspace_accounts_snapshot() {
+async fn usage_command_opens_token_activity_for_workspace_accounts() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
     chat.plan_type = Some(PlanType::Business);
 
     chat.dispatch_command(SlashCommand::Usage);
 
-    assert_chatwidget_snapshot!(
-        "usage_command_workspace_menu",
-        render_bottom_popup(&chat, /*width*/ 80)
-    );
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenTokenActivity));
-}
-
-#[tokio::test]
-async fn usage_menu_rate_limit_reset_entry_opens_reset_flow() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    set_chatgpt_auth(&mut chat);
-    chat.dispatch_command(SlashCommand::Usage);
-
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenRateLimitResetCredits));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::RefreshTokenActivity { .. }));
 }
 
 #[tokio::test]
@@ -223,11 +201,10 @@ async fn account_change_invalidates_pending_reset_requests() {
 
 #[tokio::test]
 async fn clearing_pending_reset_hint_preserves_in_flight_redemption() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
     let consume_request_id = chat.show_rate_limit_reset_consuming_popup();
-    chat.start_rate_limit_reset_hint_check();
-    let hint_request_id = take_reset_hint_request(&mut rx).expect("reset hint request");
+    let hint_request_id = chat.start_rate_limit_reset_startup_check();
     assert!(chat.finish_rate_limit_reset_hint_refresh(
         hint_request_id,
         Ok(RateLimitResetCreditsSummary { available_count: 2 }),
@@ -315,13 +292,10 @@ async fn account_change_dismisses_reset_popup_beneath_overlay() {
 }
 
 #[tokio::test]
-async fn standard_usage_limit_shows_available_reset_hint_snapshot() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+async fn startup_check_shows_available_reset_hint_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
-    mark_standard_usage_limit_reached(&mut chat);
-
-    show_usage_limit_error(&mut chat);
-    let hint_request_id = take_reset_hint_request(&mut rx).expect("reset hint request");
+    let hint_request_id = chat.start_rate_limit_reset_startup_check();
 
     assert!(chat.finish_rate_limit_reset_hint_refresh(
         hint_request_id,
@@ -337,12 +311,10 @@ async fn standard_usage_limit_shows_available_reset_hint_snapshot() {
 }
 
 #[tokio::test]
-async fn rate_limit_reset_hint_waits_for_active_output_snapshot() {
+async fn startup_reset_hint_waits_for_active_output_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
-    mark_standard_usage_limit_reached(&mut chat);
-    show_usage_limit_error(&mut chat);
-    let hint_request_id = take_reset_hint_request(&mut rx).expect("reset hint request");
+    let hint_request_id = chat.start_rate_limit_reset_startup_check();
     chat.transcript.active_cell = Some(Box::new(PlainHistoryCell::new(vec![Line::from(
         "active tool",
     )])));
@@ -370,11 +342,10 @@ async fn rate_limit_reset_hint_waits_for_active_output_snapshot() {
 }
 
 #[tokio::test]
-async fn opening_rate_limit_reset_flow_invalidates_in_flight_hint() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+async fn opening_rate_limit_reset_flow_invalidates_in_flight_startup_hint() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
-    chat.start_rate_limit_reset_hint_check();
-    let hint_request_id = take_reset_hint_request(&mut rx).expect("reset hint request");
+    let hint_request_id = chat.start_rate_limit_reset_startup_check();
 
     chat.show_rate_limit_reset_loading_popup();
 
@@ -386,11 +357,10 @@ async fn opening_rate_limit_reset_flow_invalidates_in_flight_hint() {
 }
 
 #[tokio::test]
-async fn starting_rate_limit_reset_redemption_clears_deferred_hint() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+async fn starting_rate_limit_reset_redemption_clears_deferred_startup_hint() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
-    chat.start_rate_limit_reset_hint_check();
-    let hint_request_id = take_reset_hint_request(&mut rx).expect("reset hint request");
+    let hint_request_id = chat.start_rate_limit_reset_startup_check();
     assert!(chat.finish_rate_limit_reset_hint_refresh(
         hint_request_id,
         Ok(RateLimitResetCreditsSummary { available_count: 2 }),
@@ -403,33 +373,16 @@ async fn starting_rate_limit_reset_redemption_clears_deferred_hint() {
 }
 
 #[tokio::test]
-async fn standard_usage_limit_omits_reset_hint_when_none_are_available() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+async fn startup_check_omits_reset_hint_when_none_are_available() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
-    mark_standard_usage_limit_reached(&mut chat);
-
-    show_usage_limit_error(&mut chat);
+    let hint_request_id = chat.start_rate_limit_reset_startup_check();
 
     assert!(chat.finish_rate_limit_reset_hint_refresh(
-        take_reset_hint_request(&mut rx).expect("reset hint request"),
+        hint_request_id,
         Ok(RateLimitResetCreditsSummary { available_count: 0 }),
     ));
-    assert!(drain_insert_history(&mut rx).is_empty());
-}
-
-#[tokio::test]
-async fn usage_limit_without_known_limit_type_does_not_check_reset_credits() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    set_chatgpt_auth(&mut chat);
-
-    show_usage_limit_error(&mut chat);
-
-    while let Ok(event) = rx.try_recv() {
-        assert!(!matches!(
-            event,
-            AppEvent::CheckRateLimitResetCredits { .. }
-        ));
-    }
+    assert!(chat.pending_rate_limit_reset_hint().is_none());
 }
 
 fn consume_response(
@@ -457,28 +410,6 @@ fn record_popup(chat: &ChatWidget, states: &mut Vec<String>) {
 
 fn dismiss_popup(chat: &mut ChatWidget) {
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-}
-
-fn mark_standard_usage_limit_reached(chat: &mut ChatWidget) {
-    let mut limits = snapshot(/*percent*/ 100.0);
-    limits.rate_limit_reached_type = Some(RateLimitReachedType::RateLimitReached);
-    chat.on_rate_limit_snapshot(Some(limits));
-}
-
-fn show_usage_limit_error(chat: &mut ChatWidget) {
-    chat.on_rate_limit_error(
-        RateLimitErrorKind::UsageLimit,
-        "Usage limit reached.".to_string(),
-    );
-}
-
-fn take_reset_hint_request(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> Option<u64> {
-    while let Ok(event) = rx.try_recv() {
-        if let AppEvent::CheckRateLimitResetCredits { request_id } = event {
-            return Some(request_id);
-        }
-    }
-    None
 }
 
 fn show_usage_test_overlay(chat: &mut ChatWidget) {
