@@ -1,8 +1,6 @@
 use super::PluginLoadOutcome;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
-use crate::capabilities::PluginCapabilities;
-use crate::capabilities::PluginCapabilityContext;
-use crate::capabilities::resolve_plugin_capabilities;
+use crate::capabilities::resolve_app_and_mcp_capabilities;
 use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
 use crate::loader::PluginHookLoadOutcome;
 use crate::loader::configured_curated_plugin_ids_from_codex_home;
@@ -215,15 +213,13 @@ fn project_plugin_load_outcome_for_auth(
 ) -> PluginLoadOutcome {
     let mut plugins = outcome.plugins().to_vec();
     for plugin in &mut plugins {
-        let projected = resolve_plugin_capabilities(
-            PluginCapabilities::new(
-                std::mem::take(&mut plugin.apps),
-                std::mem::take(&mut plugin.mcp_servers),
-            ),
-            PluginCapabilityContext::new(auth_mode, plugin.is_active()),
+        let plugin_active = plugin.is_active();
+        resolve_app_and_mcp_capabilities(
+            &mut plugin.apps,
+            &mut plugin.mcp_servers,
+            auth_mode,
+            plugin_active,
         );
-        plugin.apps = projected.apps;
-        plugin.mcp_servers = projected.mcp_servers;
     }
     PluginLoadOutcome::from_plugins(plugins)
 }

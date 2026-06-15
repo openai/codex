@@ -1,7 +1,6 @@
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
-use crate::capabilities::PluginCapabilities;
-use crate::capabilities::PluginCapabilityContext;
-use crate::capabilities::resolve_plugin_capabilities;
+use crate::capabilities::apps_route_available;
+use crate::capabilities::resolve_app_and_mcp_capabilities;
 use crate::manifest::PluginManifestHooks;
 use crate::manifest::PluginManifestPaths;
 use crate::manifest::load_plugin_manifest;
@@ -1087,18 +1086,19 @@ pub async fn load_plugin_mcp_servers(
     plugin_root: &Path,
     auth_mode: Option<AuthMode>,
 ) -> HashMap<String, McpServerConfig> {
-    let mcp_servers = load_declared_plugin_mcp_servers(plugin_root).await;
-    let capability_context = PluginCapabilityContext::new(auth_mode, /*plugin_active*/ true);
-    if !capability_context.apps_route_available() || mcp_servers.is_empty() {
+    let mut mcp_servers = load_declared_plugin_mcp_servers(plugin_root).await;
+    if !apps_route_available(auth_mode) || mcp_servers.is_empty() {
         return mcp_servers;
     }
 
-    let app_declarations = load_plugin_apps(plugin_root).await;
-    resolve_plugin_capabilities(
-        PluginCapabilities::new(app_declarations, mcp_servers),
-        capability_context,
-    )
-    .mcp_servers
+    let mut app_declarations = load_plugin_apps(plugin_root).await;
+    resolve_app_and_mcp_capabilities(
+        &mut app_declarations,
+        &mut mcp_servers,
+        auth_mode,
+        /*plugin_active*/ true,
+    );
+    mcp_servers
 }
 
 async fn load_declared_plugin_mcp_servers(plugin_root: &Path) -> HashMap<String, McpServerConfig> {
