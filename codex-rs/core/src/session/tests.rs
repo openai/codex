@@ -1,5 +1,6 @@
 use super::turn_context::TurnEnvironment;
 use super::*;
+use crate::codex_thread::IdleTurnInput;
 use crate::codex_thread::TryStartTurnIfIdleRejectionReason;
 use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
@@ -8968,12 +8969,12 @@ async fn try_start_turn_if_idle_rejects_active_turn_without_injecting() {
 
     let item = user_message("synthetic idle input");
     let err = sess
-        .try_start_turn_if_idle(vec![item.clone()])
+        .try_start_turn_if_idle(IdleTurnInput::ResponseItems(vec![item.clone()]))
         .await
         .expect_err("active turn should reject idle-only input");
 
     assert_eq!(TryStartTurnIfIdleRejectionReason::Busy, err.reason());
-    assert_eq!(vec![item], err.into_input());
+    assert_eq!(IdleTurnInput::ResponseItems(vec![item]), err.into_input());
     assert_eq!(
         Vec::<TurnInput>::new(),
         sess.input_queue.get_pending_input(&sess.active_turn).await
@@ -8994,17 +8995,132 @@ async fn try_start_turn_if_idle_rejects_plan_mode_without_injecting() {
 
     let item = user_message("synthetic idle input");
     let err = sess
-        .try_start_turn_if_idle(vec![item.clone()])
+        .try_start_turn_if_idle(IdleTurnInput::ResponseItems(vec![item.clone()]))
         .await
         .expect_err("plan mode should reject automatic idle input");
 
     assert_eq!(TryStartTurnIfIdleRejectionReason::PlanMode, err.reason());
-    assert_eq!(vec![item], err.into_input());
+    assert_eq!(IdleTurnInput::ResponseItems(vec![item]), err.into_input());
     assert!(sess.active_turn.lock().await.is_none());
     assert_eq!(
         Vec::<TurnInput>::new(),
         sess.input_queue.get_pending_input(&sess.active_turn).await
     );
+}
+
+#[tokio::test]
+async fn try_start_turn_if_idle_allows_user_submission_in_plan_mode() {
+    let (sess, _tc, rx) = make_session_and_context_with_rx().await;
+    let mut collaboration_mode = sess.collaboration_mode().await;
+    collaboration_mode.mode = ModeKind::Plan;
+    {
+        let mut state = sess.state.lock().await;
+        state.session_configuration.collaboration_mode = collaboration_mode;
+    }
+    sess.merge_connector_selection(std::collections::HashSet::from([
+        "stale-connector".to_string()
+    ]))
+    .await;
+    let (_tx, startup_prewarm_rx) = tokio::sync::oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+        let _ = startup_prewarm_rx.await;
+        Ok(test_model_client_session())
+    });
+    sess.set_session_startup_prewarm(
+        crate::session_startup_prewarm::SessionStartupPrewarmHandle::new(
+            handle,
+            std::time::Instant::now(),
+            crate::client::WEBSOCKET_CONNECT_TIMEOUT,
+        ),
+    )
+    .await;
+
+    let submission = UserSubmission {
+        items: vec![UserInput::Text {
+            text: "queued plan input".to_string(),
+            text_elements: Vec::new(),
+        }],
+        responsesapi_client_metadata: Some(std::collections::HashMap::from([(
+            "workspace_kind".to_string(),
+            "local".to_string(),
+        )])),
+        ..Default::default()
+    };
+
+    sess.try_start_turn_if_idle(IdleTurnInput::UserSubmission(submission))
+        .await
+        .expect("user submission should start in plan mode");
+
+    assert!(sess.get_connector_selection().await.is_empty());
+
+    let event = tokio::time::timeout(StdDuration::from_secs(2), rx.recv())
+        .await
+        .expect("turn started event")
+        .expect("event channel open");
+    assert!(matches!(event.msg, EventMsg::TurnStarted(_)));
+    {
+        let active = sess.active_turn.lock().await;
+        let turn_context = &active
+            .as_ref()
+            .and_then(|turn| turn.task.as_ref())
+            .expect("active user turn")
+            .turn_context;
+        assert_eq!(ModeKind::Plan, turn_context.collaboration_mode.mode);
+        assert_eq!(None, turn_context.final_output_json_schema);
+        assert_eq!(
+            Some("local".to_string()),
+            turn_context.turn_metadata_state.workspace_kind()
+        );
+    }
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_idle_user_submissions_start_at_most_one_turn() {
+    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    let (_tx, startup_prewarm_rx) = tokio::sync::oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+        let _ = startup_prewarm_rx.await;
+        Ok(test_model_client_session())
+    });
+    sess.set_session_startup_prewarm(
+        crate::session_startup_prewarm::SessionStartupPrewarmHandle::new(
+            handle,
+            std::time::Instant::now(),
+            crate::client::WEBSOCKET_CONNECT_TIMEOUT,
+        ),
+    )
+    .await;
+
+    let first = IdleTurnInput::UserSubmission(UserSubmission {
+        items: vec![UserInput::Text {
+            text: "first".to_string(),
+            text_elements: Vec::new(),
+        }],
+        ..Default::default()
+    });
+    let second = IdleTurnInput::UserSubmission(UserSubmission {
+        items: vec![UserInput::Text {
+            text: "second".to_string(),
+            text_elements: Vec::new(),
+        }],
+        ..Default::default()
+    });
+    let (first_result, second_result) = tokio::join!(
+        sess.try_start_turn_if_idle(first.clone()),
+        sess.try_start_turn_if_idle(second.clone())
+    );
+
+    let (accepted, rejected) = match (first_result, second_result) {
+        (Ok(()), Err(err)) => (first, err),
+        (Err(err), Ok(())) => (second, err),
+        results => panic!("expected one accepted idle turn, got {results:?}"),
+    };
+    assert_eq!(TryStartTurnIfIdleRejectionReason::Busy, rejected.reason());
+    assert_ne!(accepted, rejected.into_input());
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 }
 
 #[tokio::test]
@@ -9022,7 +9138,7 @@ async fn try_start_turn_if_idle_rejects_pending_trigger_turn_without_injecting()
 
     let item = user_message("synthetic idle input");
     let err = sess
-        .try_start_turn_if_idle(vec![item.clone()])
+        .try_start_turn_if_idle(IdleTurnInput::ResponseItems(vec![item.clone()]))
         .await
         .expect_err("pending trigger-turn mail should reject automatic idle input");
 
@@ -9030,7 +9146,41 @@ async fn try_start_turn_if_idle_rejects_pending_trigger_turn_without_injecting()
         TryStartTurnIfIdleRejectionReason::PendingTriggerTurn,
         err.reason()
     );
-    assert_eq!(vec![item], err.into_input());
+    assert_eq!(IdleTurnInput::ResponseItems(vec![item]), err.into_input());
+    assert!(sess.active_turn.lock().await.is_none());
+    assert!(sess.input_queue.has_trigger_turn_mailbox_items().await);
+}
+
+#[tokio::test]
+async fn trigger_turn_mail_takes_precedence_over_idle_user_submission() {
+    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    sess.input_queue
+        .enqueue_mailbox_communication(InterAgentCommunication::new(
+            AgentPath::root(),
+            AgentPath::root(),
+            Vec::new(),
+            "pending trigger".to_string(),
+            /*trigger_turn*/ true,
+        ))
+        .await;
+    let input = IdleTurnInput::UserSubmission(UserSubmission {
+        items: vec![UserInput::Text {
+            text: "queued user input".to_string(),
+            text_elements: Vec::new(),
+        }],
+        ..Default::default()
+    });
+
+    let err = sess
+        .try_start_turn_if_idle(input.clone())
+        .await
+        .expect_err("trigger-turn mail should win over queued user input");
+
+    assert_eq!(
+        TryStartTurnIfIdleRejectionReason::PendingTriggerTurn,
+        err.reason()
+    );
+    assert_eq!(input, err.into_input());
     assert!(sess.active_turn.lock().await.is_none());
     assert!(sess.input_queue.has_trigger_turn_mailbox_items().await);
 }
@@ -9050,12 +9200,12 @@ async fn try_start_turn_if_idle_rejects_active_review_turn_without_injecting() {
 
     let item = user_message("synthetic idle input");
     let err = sess
-        .try_start_turn_if_idle(vec![item.clone()])
+        .try_start_turn_if_idle(IdleTurnInput::ResponseItems(vec![item.clone()]))
         .await
         .expect_err("active review turn should reject automatic idle input");
 
     assert_eq!(TryStartTurnIfIdleRejectionReason::Busy, err.reason());
-    assert_eq!(vec![item], err.into_input());
+    assert_eq!(IdleTurnInput::ResponseItems(vec![item]), err.into_input());
     assert_eq!(
         Vec::<TurnInput>::new(),
         sess.input_queue.get_pending_input(&sess.active_turn).await
