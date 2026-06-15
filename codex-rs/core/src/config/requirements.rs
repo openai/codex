@@ -3,6 +3,15 @@ use codex_config::RequirementSource;
 use codex_config::Sourced;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::FeedbackConfigToml;
+use codex_config::types::AuthCredentialsStoreMode;
+use codex_protocol::config_types::ForcedLoginMethod;
+
+/// Runtime values that cannot be applied by mutating [`ConfigToml`] alone.
+pub(super) struct AppliedConfigRequirements {
+    pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+    pub forced_login_method: Option<ForcedLoginMethod>,
+    pub forced_chatgpt_workspace_id: Option<Vec<String>>,
+}
 
 /// Applies managed requirements to regular config before final config construction.
 ///
@@ -12,7 +21,7 @@ pub(super) fn apply_to_config(
     config: &mut ConfigToml,
     requirements: &ConfigRequirements,
     startup_warnings: &mut Vec<String>,
-) -> std::io::Result<()> {
+) -> std::io::Result<AppliedConfigRequirements> {
     macro_rules! apply_exact {
         ($field:ident) => {
             apply_exact_requirement(
@@ -24,6 +33,8 @@ pub(super) fn apply_to_config(
         };
     }
 
+    apply_exact!(cli_auth_credentials_store);
+    apply_exact!(chatgpt_base_url);
     apply_exact!(sqlite_home);
     apply_exact!(log_dir);
     apply_exact!(model_catalog_json);
@@ -46,7 +57,23 @@ pub(super) fn apply_to_config(
         );
     }
 
-    Ok(())
+    let (forced_login_method, forced_chatgpt_workspace_id) =
+        resolve_auth_restrictions(config, requirements)?;
+    let configured_auth_credentials_store = config.cli_auth_credentials_store.unwrap_or_default();
+    let cli_auth_credentials_store_mode = if requirements.cli_auth_credentials_store.is_some() {
+        configured_auth_credentials_store
+    } else {
+        super::resolve_cli_auth_credentials_store_mode(
+            configured_auth_credentials_store,
+            env!("CARGO_PKG_VERSION"),
+        )
+    };
+
+    Ok(AppliedConfigRequirements {
+        cli_auth_credentials_store_mode,
+        forced_login_method,
+        forced_chatgpt_workspace_id,
+    })
 }
 
 fn apply_exact_requirement<T>(
@@ -122,4 +149,75 @@ pub(super) fn push_structured_requirement_override_warning(
     startup_warnings.push(format!(
         "Configured values under `{field_name}` are overridden by requirements from {source}."
     ));
+}
+
+fn resolve_auth_restrictions(
+    config: &ConfigToml,
+    requirements: &ConfigRequirements,
+) -> std::io::Result<(Option<ForcedLoginMethod>, Option<Vec<String>>)> {
+    let configured_forced_chatgpt_workspace_id = config
+        .forced_chatgpt_workspace_id
+        .clone()
+        .map(codex_config::config_toml::ForcedChatgptWorkspaceIds::into_vec)
+        .map(|values| {
+            values
+                .into_iter()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .filter(|values| !values.is_empty());
+    let forced_chatgpt_workspace_id = match requirements.allowed_chatgpt_workspaces.as_ref() {
+        Some(requirement) => Some(match configured_forced_chatgpt_workspace_id {
+            Some(configured) => configured
+                .into_iter()
+                .filter(|workspace| requirement.value.get(workspace).copied().unwrap_or(false))
+                .collect(),
+            None => requirement
+                .value
+                .iter()
+                .filter_map(|(workspace, allowed)| allowed.then_some(workspace.clone()))
+                .collect(),
+        }),
+        None => configured_forced_chatgpt_workspace_id,
+    };
+
+    let forced_login_method = match requirements.allowed_login_methods.as_ref() {
+        Some(requirement) => {
+            let chatgpt_allowed = requirement.value.get("chatgpt").copied().unwrap_or(false);
+            let api_allowed = requirement.value.get("api").copied().unwrap_or(false);
+            match config.forced_login_method {
+                Some(ForcedLoginMethod::Chatgpt) if chatgpt_allowed => {
+                    Some(ForcedLoginMethod::Chatgpt)
+                }
+                Some(ForcedLoginMethod::Api) if api_allowed => Some(ForcedLoginMethod::Api),
+                Some(configured) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "configured `forced_login_method = \"{configured}\"` conflicts with `allowed_login_methods` from {}",
+                            requirement.source
+                        ),
+                    ));
+                }
+                None => match (chatgpt_allowed, api_allowed) {
+                    (true, true) => None,
+                    (true, false) => Some(ForcedLoginMethod::Chatgpt),
+                    (false, true) => Some(ForcedLoginMethod::Api),
+                    (false, false) => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!(
+                                "`allowed_login_methods` from {} does not allow any login method",
+                                requirement.source
+                            ),
+                        ));
+                    }
+                },
+            }
+        }
+        None => config.forced_login_method,
+    };
+
+    Ok((forced_login_method, forced_chatgpt_workspace_id))
 }

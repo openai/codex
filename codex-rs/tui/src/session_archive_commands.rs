@@ -11,7 +11,7 @@ use crate::Cli;
 use crate::app_server_session::AppServerSession;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
-use crate::legacy_core::config::load_config_toml_with_layer_stack;
+use crate::legacy_core::config::load_bootstrap_config_toml_with_layer_stack;
 use crate::legacy_core::config::resolve_bootstrap_auth_keyring_backend_kind;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
@@ -312,7 +312,7 @@ async fn start_app_server_for_archive_command(
         loader_overrides.user_config_profile = Some(profile_v2.clone());
     }
 
-    let bootstrap_config = load_config_toml_with_layer_stack(
+    let bootstrap_config = load_bootstrap_config_toml_with_layer_stack(
         codex_home.as_path(),
         config_cwd.as_ref(),
         cli_kv_overrides.clone(),

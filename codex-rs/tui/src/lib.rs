@@ -8,7 +8,7 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::ConfigTomlLoadResult;
-use crate::legacy_core::config::load_config_toml_with_layer_stack;
+use crate::legacy_core::config::load_bootstrap_config_toml_with_layer_stack;
 use crate::legacy_core::config::resolve_bootstrap_auth_keyring_backend_kind;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
@@ -1938,7 +1938,7 @@ async fn load_bootstrap_config_or_exit(
     strict_config: bool,
     cloud_config_bundle: CloudConfigBundleLoader,
 ) -> ConfigTomlLoadResult {
-    match load_config_toml_with_layer_stack(
+    match load_bootstrap_config_toml_with_layer_stack(
         codex_home,
         cwd,
         cli_kv_overrides,

@@ -8330,6 +8330,10 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
     let fixture = create_test_fixture()?;
 
     let requirements_toml = codex_config::ConfigRequirementsToml {
+        allowed_login_methods: None,
+        allowed_chatgpt_workspaces: None,
+        cli_auth_credentials_store: None,
+        chatgpt_base_url: None,
         sqlite_home: None,
         log_dir: None,
         model_catalog_json: None,
@@ -10940,6 +10944,93 @@ async fn absent_allow_login_shell_does_not_report_an_override() -> std::io::Resu
             .startup_warnings
             .iter()
             .all(|warning| !warning.contains("allow_login_shell"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn conflicting_login_method_requirements_fail_closed() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        "forced_login_method = \"api\"\n",
+    )?;
+    let err =
+        load_with_enterprise_requirement(&codex_home, "[allowed_login_methods]\nchatgpt = true\n")
+            .await
+            .expect_err("conflicting login restrictions should fail closed");
+
+    assert_eq!(err.kind(), ErrorKind::InvalidInput);
+    assert!(
+        err.to_string()
+            .contains("conflicts with `allowed_login_methods`")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn workspace_requirements_can_disable_all_chatgpt_workspaces() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = load_with_enterprise_requirement(
+        &codex_home,
+        r#"
+[allowed_chatgpt_workspaces]
+"A" = false
+"#,
+    )
+    .await?;
+
+    assert_eq!(config.forced_chatgpt_workspace_id, Some(Vec::new()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn bootstrap_config_applies_local_auth_requirements() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let requirements_path = codex_home.path().join("requirements.toml");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+cli_auth_credentials_store = "file"
+chatgpt_base_url = "https://user.example/backend-api"
+"#,
+    )?;
+    std::fs::write(
+        &requirements_path,
+        r#"
+cli_auth_credentials_store = "keyring"
+chatgpt_base_url = "https://managed.example/backend-api"
+
+[features]
+secret_auth_storage = true
+"#,
+    )?;
+    let mut loader_overrides = LoaderOverrides::without_managed_config_for_tests();
+    loader_overrides.system_requirements_path = Some(requirements_path);
+
+    let bootstrap_config = load_bootstrap_config_toml_with_layer_stack(
+        codex_home.path(),
+        Some(&codex_home.path().abs()),
+        Vec::new(),
+        ConfigLoadOptions {
+            loader_overrides,
+            ..Default::default()
+        },
+    )
+    .await?;
+    let auth_keyring_backend_kind = resolve_bootstrap_auth_keyring_backend_kind(&bootstrap_config)?;
+
+    assert_eq!(
+        (
+            bootstrap_config.config_toml.cli_auth_credentials_store,
+            bootstrap_config.config_toml.chatgpt_base_url,
+            auth_keyring_backend_kind,
+        ),
+        (
+            Some(AuthCredentialsStoreMode::Keyring),
+            Some("https://managed.example/backend-api".to_string()),
+            AuthKeyringBackendKind::Secrets,
+        )
     );
     Ok(())
 }
