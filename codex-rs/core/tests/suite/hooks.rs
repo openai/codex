@@ -2755,8 +2755,9 @@ async fn pre_tool_use_rewrites_code_mode_nested_exec_command_before_execution() 
 
     let server = start_mock_server().await;
     let call_id = "pretooluse-code-mode-rewrite";
-    let original_marker = std::env::temp_dir().join("pretooluse-code-mode-original-marker");
-    let rewritten_marker = std::env::temp_dir().join("pretooluse-code-mode-rewritten-marker");
+    let marker_dir = TempDir::new().context("create pre tool rewrite marker directory")?;
+    let original_marker = marker_dir.path().join("original");
+    let rewritten_marker = marker_dir.path().join("rewritten");
     let original_command = format!(
         "printf original > {}; printf original-result",
         original_marker.display()
@@ -2804,13 +2805,6 @@ text(output.output);
         });
     let test = builder.build(&server).await?;
 
-    if original_marker.exists() {
-        fs::remove_file(&original_marker).context("remove stale original pre tool marker")?;
-    }
-    if rewritten_marker.exists() {
-        fs::remove_file(&rewritten_marker).context("remove stale rewritten pre tool marker")?;
-    }
-
     test.submit_turn_with_permission_profile(
         "run the rewritten shell command from code mode",
         PermissionProfile::Disabled,
@@ -2852,7 +2846,8 @@ async fn pre_tool_use_block_rejects_code_mode_tool_promise_before_execution() ->
 
     let server = start_mock_server().await;
     let call_id = "pretooluse-code-mode-block";
-    let marker = std::env::temp_dir().join("pretooluse-code-mode-block-marker");
+    let marker_dir = TempDir::new().context("create pre tool block marker directory")?;
+    let marker = marker_dir.path().join("blocked");
     let command = format!("printf blocked > {}", marker.display());
     let command_json = serde_json::to_string(&command).context("serialize blocked command")?;
     let code = format!(
@@ -2896,10 +2891,6 @@ try {{
         });
     let test = builder.build(&server).await?;
 
-    if marker.exists() {
-        fs::remove_file(&marker).context("remove stale blocked pre tool marker")?;
-    }
-
     test.submit_turn_with_permission_profile(
         "run the blocked shell command from code mode",
         PermissionProfile::Disabled,
@@ -2932,9 +2923,9 @@ async fn assert_post_tool_use_blocks_code_mode_tool_result(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let slug = hook_mode.replace('_', "-");
-    let call_id = format!("posttooluse-code-mode-{slug}");
-    let marker = std::env::temp_dir().join(format!("posttooluse-code-mode-{slug}-marker"));
+    let call_id = format!("posttooluse-code-mode-{hook_mode}");
+    let marker_dir = TempDir::new().context("create post tool block marker directory")?;
+    let marker = marker_dir.path().join(hook_mode);
     let command = format!(
         "printf executed > {}; printf original-post-tool-result",
         marker.display()
@@ -2979,10 +2970,6 @@ try {{
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
-
-    if marker.exists() {
-        fs::remove_file(&marker).context("remove stale blocking post tool marker")?;
-    }
 
     test.submit_turn_with_permission_profile(
         "run the shell command blocked after execution from code mode",
