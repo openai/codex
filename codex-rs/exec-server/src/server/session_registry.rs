@@ -32,6 +32,12 @@ struct AttachmentState {
     detached_expires_at: Option<tokio::time::Instant>,
 }
 
+enum AttachResult {
+    Attached,
+    AlreadyAttached,
+    Expired,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ConnectionId(Uuid);
 
@@ -76,19 +82,17 @@ impl SessionRegistry {
                     .get(&session_id)
                     .cloned()
                     .ok_or_else(|| invalid_request(format!("unknown session id {session_id}")))?;
-                if entry.is_expired(tokio::time::Instant::now()) {
-                    let entry = sessions.remove(&session_id).ok_or_else(|| {
-                        invalid_request(format!("unknown session id {session_id}"))
-                    })?;
-                    Ok(AttachOutcome::Expired { session_id, entry })
-                } else if entry.has_active_connection() {
-                    Err(invalid_request(format!(
+                match entry.attach(connection_id, notifications, tokio::time::Instant::now()) {
+                    AttachResult::Attached => Ok(AttachOutcome::Attached(entry)),
+                    AttachResult::AlreadyAttached => Err(invalid_request(format!(
                         "session {session_id} is already attached to another connection"
-                    )))
-                } else {
-                    entry.process.set_notification_sender(Some(notifications));
-                    entry.attach(connection_id);
-                    Ok(AttachOutcome::Attached(entry))
+                    ))),
+                    AttachResult::Expired => {
+                        let entry = sessions.remove(&session_id).ok_or_else(|| {
+                            invalid_request(format!("unknown session id {session_id}"))
+                        })?;
+                        Ok(AttachOutcome::Expired { session_id, entry })
+                    }
                 }
             } else {
                 let session_id = Uuid::new_v4().to_string();
@@ -157,14 +161,31 @@ impl SessionEntry {
         }
     }
 
-    fn attach(&self, connection_id: ConnectionId) {
+    fn attach(
+        &self,
+        connection_id: ConnectionId,
+        notifications: RpcNotificationSender,
+        now: tokio::time::Instant,
+    ) -> AttachResult {
         let mut attachment = self
             .attachment
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if attachment
+            .detached_expires_at
+            .is_some_and(|deadline| now >= deadline)
+        {
+            return AttachResult::Expired;
+        }
+        if attachment.current_connection_id.is_some() {
+            return AttachResult::AlreadyAttached;
+        }
+
+        self.process.set_notification_sender(Some(notifications));
         attachment.current_connection_id = Some(connection_id);
         attachment.detached_connection_id = None;
         attachment.detached_expires_at = None;
+        AttachResult::Attached
     }
 
     fn detach(&self, connection_id: ConnectionId) -> bool {
@@ -176,18 +197,11 @@ impl SessionEntry {
             return false;
         }
 
+        self.process.set_notification_sender(/*notifications*/ None);
         attachment.current_connection_id = None;
         attachment.detached_connection_id = Some(connection_id);
         attachment.detached_expires_at = Some(tokio::time::Instant::now() + DETACHED_SESSION_TTL);
         true
-    }
-
-    fn has_active_connection(&self) -> bool {
-        self.attachment
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .current_connection_id
-            .is_some()
     }
 
     fn is_attached_to(&self, connection_id: ConnectionId) -> bool {
@@ -196,14 +210,6 @@ impl SessionEntry {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .current_connection_id
             == Some(connection_id)
-    }
-
-    fn is_expired(&self, now: tokio::time::Instant) -> bool {
-        self.attachment
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .detached_expires_at
-            .is_some_and(|deadline| now >= deadline)
     }
 
     fn is_detached_connection_expired(
@@ -244,10 +250,6 @@ impl SessionHandle {
         if !self.entry.detach(self.connection_id) {
             return;
         }
-
-        self.entry
-            .process
-            .set_notification_sender(/*notifications*/ None);
 
         let registry = Arc::clone(&self.registry);
         let session_id = self.entry.session_id.clone();

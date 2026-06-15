@@ -2,8 +2,10 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::OnceLock;
+use std::sync::RwLock as StdRwLock;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
@@ -12,6 +14,8 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::RwLock;
+use tokio::sync::RwLockReadGuard;
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
@@ -163,19 +167,12 @@ pub(crate) struct Session {
 }
 
 struct Inner {
-    client: ArcSwap<ClientGeneration>,
+    transport: RwLock<TransportState>,
     // The remote transport delivers one shared notification stream for every
     // process on the connection. Keep a local process_id -> session registry so
     // we can turn those connection-global notifications into process wakeups
     // without making notifications the source of truth for output delivery.
-    sessions: ArcSwap<HashMap<ProcessId, Arc<SessionState>>>,
-    // ArcSwap makes reads cheap on the hot notification path, but writes still
-    // need serialization so concurrent register/remove operations do not
-    // overwrite each other's copy-on-write updates.
-    sessions_write_lock: Mutex<()>,
-    // Once recovery is exhausted, every environment operation should fail
-    // quickly with the same canonical message.
-    disconnected: OnceLock<String>,
+    sessions: StdRwLock<HashMap<ProcessId, Arc<SessionState>>>,
     // Streaming HTTP responses are keyed by a client-generated request id
     // because they share the same connection-global notification channel as
     // process output. Keep the routing table local to the client so higher
@@ -184,23 +181,68 @@ struct Inner {
     http_body_stream_failures: ArcSwap<HashMap<String, String>>,
     http_body_streams_write_lock: Mutex<()>,
     http_body_stream_next_id: AtomicU64,
-    session_id: std::sync::RwLock<Option<String>>,
+    session_id: String,
     remote_connect_args: Option<RemoteExecServerConnectArgs>,
-    recovery_lock: Mutex<()>,
-    connection_state_tx: watch::Sender<ConnectionState>,
     next_generation_id: AtomicU64,
 }
 
 struct ClientGeneration {
     id: u64,
     client: RpcClient,
+    terminal: AtomicBool,
 }
 
-#[derive(Clone, Debug)]
-enum ConnectionState {
-    Connected(u64),
-    Recovering,
+enum TransportState {
+    Connected(Arc<ClientGeneration>),
     Failed(String),
+}
+
+struct GenerationLease<'a> {
+    generation: Arc<ClientGeneration>,
+    _state: RwLockReadGuard<'a, TransportState>,
+}
+
+struct SessionRegistration {
+    client: ExecServerClient,
+    process_id: ProcessId,
+    state: Arc<SessionState>,
+    active: bool,
+}
+
+impl ClientGeneration {
+    fn new(id: u64, client: RpcClient) -> Self {
+        Self {
+            id,
+            client,
+            terminal: AtomicBool::new(false),
+        }
+    }
+
+    fn mark_terminal(&self) -> bool {
+        !self.terminal.swap(true, Ordering::AcqRel)
+    }
+
+    fn is_terminal(&self) -> bool {
+        self.terminal.load(Ordering::Acquire) || self.client.is_disconnected()
+    }
+}
+
+impl Drop for SessionRegistration {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.client
+            .inner
+            .remove_session_if(&self.process_id, &self.state);
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let client = self.client.clone();
+            let process_id = self.process_id.clone();
+            handle.spawn(async move {
+                let _ = client.terminate(&process_id).await;
+            });
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -336,23 +378,6 @@ pub enum ExecServerError {
 }
 
 impl ExecServerClient {
-    pub async fn initialize(
-        &self,
-        options: ExecServerClientConnectOptions,
-    ) -> Result<InitializeResponse, ExecServerError> {
-        let generation = self.inner.client.load_full();
-        let response = Self::initialize_generation(&generation, options).await?;
-        {
-            let mut session_id = self
-                .inner
-                .session_id
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *session_id = Some(response.session_id.clone());
-        }
-        Ok(response)
-    }
-
     async fn initialize_generation(
         generation: &ClientGeneration,
         options: ExecServerClientConnectOptions,
@@ -493,14 +518,9 @@ impl ExecServerClient {
         self.call(FS_COPY_METHOD, &params).await
     }
 
-    pub(crate) async fn register_session(
-        &self,
-        process_id: &ProcessId,
-    ) -> Result<Session, ExecServerError> {
+    fn create_session(&self, process_id: &ProcessId) -> Result<Session, ExecServerError> {
         let state = Arc::new(SessionState::new());
-        self.inner
-            .insert_session(process_id, Arc::clone(&state))
-            .await?;
+        self.inner.insert_session(process_id, Arc::clone(&state))?;
         Ok(Session {
             client: self.clone(),
             process_id: process_id.clone(),
@@ -508,20 +528,42 @@ impl ExecServerClient {
         })
     }
 
-    pub(crate) async fn unregister_session(&self, process_id: &ProcessId) {
-        self.inner.remove_session(process_id).await;
+    pub(crate) async fn start_process(
+        &self,
+        params: ExecParams,
+    ) -> Result<Session, ExecServerError> {
+        let generation = self.inner.generation().await?;
+        let process_id = params.process_id.clone();
+        let session = self.create_session(&process_id)?;
+        let mut registration = SessionRegistration {
+            client: self.clone(),
+            process_id,
+            state: Arc::clone(&session.state),
+            active: true,
+        };
+        if let Err(error) = self
+            .call_generation::<_, ExecResponse>(&generation.generation, EXEC_METHOD, &params)
+            .await
+        {
+            return Err(error);
+        }
+        registration.active = false;
+        Ok(session)
+    }
+
+    pub(crate) fn unregister_session(&self, process_id: &ProcessId) {
+        self.inner.remove_session(process_id);
     }
 
     pub fn session_id(&self) -> Option<String> {
-        self.inner
-            .session_id
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        Some(self.inner.session_id.clone())
     }
 
     fn is_disconnected(&self) -> bool {
-        self.inner.disconnected.get().is_some()
+        self.inner
+            .transport
+            .try_read()
+            .is_ok_and(|state| matches!(&*state, TransportState::Failed(_)))
     }
 
     pub(crate) async fn connect(
@@ -538,58 +580,53 @@ impl ExecServerClient {
     ) -> Result<Self, ExecServerError> {
         let (rpc_client, events_rx) = RpcClient::new(connection);
         let generation_id = 1;
-        let generation = Arc::new(ClientGeneration {
-            id: generation_id,
-            client: rpc_client,
-        });
-        let (connection_state_tx, _connection_state_rx) =
-            watch::channel(ConnectionState::Connected(generation_id));
+        let generation = Arc::new(ClientGeneration::new(generation_id, rpc_client));
+        let response = Self::initialize_generation(&generation, options).await?;
         let inner = Arc::new(Inner {
-            client: ArcSwap::from(generation),
-            sessions: ArcSwap::from_pointee(HashMap::new()),
-            sessions_write_lock: Mutex::new(()),
-            disconnected: OnceLock::new(),
+            transport: RwLock::new(TransportState::Connected(Arc::clone(&generation))),
+            sessions: StdRwLock::new(HashMap::new()),
             http_body_streams: ArcSwap::from_pointee(HashMap::new()),
             http_body_stream_failures: ArcSwap::from_pointee(HashMap::new()),
             http_body_streams_write_lock: Mutex::new(()),
             http_body_stream_next_id: AtomicU64::new(1),
-            session_id: std::sync::RwLock::new(None),
+            session_id: response.session_id,
             remote_connect_args,
-            recovery_lock: Mutex::new(()),
-            connection_state_tx,
             next_generation_id: AtomicU64::new(generation_id + 1),
         });
 
         let client = Self { inner };
-        client.spawn_generation_reader(generation_id, events_rx);
-        client.initialize(options).await?;
+        client.spawn_generation_reader(generation, events_rx);
         Ok(client)
     }
 
     fn spawn_generation_reader(
         &self,
-        generation_id: u64,
+        generation: Arc<ClientGeneration>,
         mut events_rx: mpsc::Receiver<RpcClientEvent>,
     ) {
-        let weak = Arc::downgrade(&self.inner);
+        let inner = Arc::downgrade(&self.inner);
+        let generation = Arc::downgrade(&generation);
         tokio::spawn(async move {
             while let Some(event) = events_rx.recv().await {
+                let Some(generation) = generation.upgrade() else {
+                    return;
+                };
                 match event {
                     RpcClientEvent::Notification(notification) => {
-                        if let Some(inner) = weak.upgrade()
+                        if let Some(inner) = inner.upgrade()
                             && let Err(err) = handle_server_notification(&inner, notification).await
                         {
                             inner.handle_generation_disconnect(
-                                generation_id,
+                                Arc::clone(&generation),
                                 format!("exec-server notification handling failed: {err}"),
                             );
                             return;
                         }
                     }
                     RpcClientEvent::Disconnected { reason } => {
-                        if let Some(inner) = weak.upgrade() {
+                        if let Some(inner) = inner.upgrade() {
                             inner.handle_generation_disconnect(
-                                generation_id,
+                                Arc::clone(&generation),
                                 disconnected_message(reason.as_deref()),
                             );
                         }
@@ -605,7 +642,7 @@ impl ExecServerClient {
             .client
             .notify(INITIALIZED_METHOD, &serde_json::json!({}))
             .await
-            .map_err(ExecServerError::Json)
+            .map_err(ExecServerError::from)
     }
 
     async fn call<P, T>(&self, method: &str, params: &P) -> Result<T, ExecServerError>
@@ -613,13 +650,30 @@ impl ExecServerClient {
         P: serde::Serialize,
         T: serde::de::DeserializeOwned,
     {
-        let generation = self.inner.connected_generation().await?;
+        let generation = self.inner.generation().await?;
+        self.call_generation(&generation.generation, method, params)
+            .await
+    }
 
+    async fn call_generation<P, T>(
+        &self,
+        generation: &Arc<ClientGeneration>,
+        method: &str,
+        params: &P,
+    ) -> Result<T, ExecServerError>
+    where
+        P: serde::Serialize,
+        T: serde::de::DeserializeOwned,
+    {
         match generation.client.call(method, params).await {
             Ok(response) => Ok(response),
             Err(error) => {
                 let error = ExecServerError::from(error);
                 if is_transport_closed_error(&error) {
+                    self.inner.handle_generation_disconnect(
+                        Arc::clone(generation),
+                        disconnected_message(/*reason*/ None),
+                    );
                     Err(ExecServerError::Disconnected(disconnected_message(
                         /*reason*/ None,
                     )))
@@ -735,7 +789,6 @@ impl SessionState {
                 "process failed while recovering: {message}"
             )));
         }
-
         let mut recovered = BTreeMap::new();
         for chunk in chunks {
             recovered.insert(chunk.seq, ExecProcessEvent::Output(chunk));
@@ -839,31 +892,40 @@ impl Session {
         max_bytes: Option<usize>,
         wait_ms: Option<u64>,
     ) -> Result<ReadResponse, ExecServerError> {
-        if let Some(response) = self.state.failed_response().await {
-            return Ok(response);
-        }
-
         loop {
-            let generation_id = self.client.inner.client.load().id;
-            match self
+            if let Some(response) = self.state.failed_response().await {
+                return Ok(response);
+            }
+            let generation = match self.client.inner.generation().await {
+                Ok(generation) => generation,
+                Err(error) => {
+                    if let Some(response) = self.state.failed_response().await {
+                        return Ok(response);
+                    }
+                    return Err(error);
+                }
+            };
+            let result = self
                 .client
-                .read(ReadParams {
-                    process_id: self.process_id.clone(),
-                    after_seq,
-                    max_bytes,
-                    wait_ms,
-                })
-                .await
-            {
+                .call_generation::<_, ReadResponse>(
+                    &generation.generation,
+                    EXEC_READ_METHOD,
+                    &ReadParams {
+                        process_id: self.process_id.clone(),
+                        after_seq,
+                        max_bytes,
+                        wait_ms,
+                    },
+                )
+                .await;
+            drop(generation);
+            match result {
                 Ok(response) => return Ok(response),
                 Err(err)
                     if is_transport_closed_error(&err)
                         && self.client.inner.remote_connect_args.is_some() =>
                 {
-                    self.client
-                        .inner
-                        .wait_for_generation_recovery(generation_id)
-                        .await?;
+                    continue;
                 }
                 Err(err) if is_transport_closed_error(&err) => {
                     let message = disconnected_message(/*reason*/ None);
@@ -888,71 +950,87 @@ impl Session {
         Ok(())
     }
 
-    pub(crate) async fn unregister(&self) {
-        self.client.unregister_session(&self.process_id).await;
+    pub(crate) fn unregister(&self) {
+        self.client.unregister_session(&self.process_id);
     }
 }
 
 impl Inner {
-    fn disconnected_error(&self) -> Option<ExecServerError> {
-        self.disconnected
-            .get()
-            .cloned()
-            .map(ExecServerError::Disconnected)
-    }
-
-    fn set_disconnected(&self, message: String) -> Option<String> {
-        match self.disconnected.set(message.clone()) {
-            Ok(()) => Some(message),
-            Err(_) => None,
+    async fn generation(&self) -> Result<GenerationLease<'_>, ExecServerError> {
+        loop {
+            let state = self.transport.read().await;
+            match &*state {
+                TransportState::Connected(generation) if !generation.is_terminal() => {
+                    return Ok(GenerationLease {
+                        generation: Arc::clone(generation),
+                        _state: state,
+                    });
+                }
+                TransportState::Connected(_) => {
+                    drop(state);
+                    tokio::task::yield_now().await;
+                }
+                TransportState::Failed(message) => {
+                    return Err(ExecServerError::Disconnected(message.clone()));
+                }
+            }
         }
     }
 
     fn get_session(&self, process_id: &ProcessId) -> Option<Arc<SessionState>> {
-        self.sessions.load().get(process_id).cloned()
+        self.sessions
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(process_id)
+            .cloned()
     }
 
-    async fn insert_session(
+    fn insert_session(
         &self,
         process_id: &ProcessId,
         session: Arc<SessionState>,
     ) -> Result<(), ExecServerError> {
-        let _sessions_write_guard = self.sessions_write_lock.lock().await;
-        // Do not register a process session that can never receive environment
-        // notifications. Without this check, remote MCP startup could create a
-        // dead session and wait for process output that will never arrive.
-        if let Some(error) = self.disconnected_error() {
-            return Err(error);
-        }
-        let sessions = self.sessions.load();
+        let mut sessions = self
+            .sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if sessions.contains_key(process_id) {
             return Err(ExecServerError::Protocol(format!(
                 "session already registered for process {process_id}"
             )));
         }
-        let mut next_sessions = sessions.as_ref().clone();
-        next_sessions.insert(process_id.clone(), session);
-        self.sessions.store(Arc::new(next_sessions));
+        sessions.insert(process_id.clone(), session);
         Ok(())
     }
 
-    async fn remove_session(&self, process_id: &ProcessId) -> Option<Arc<SessionState>> {
-        let _sessions_write_guard = self.sessions_write_lock.lock().await;
-        let sessions = self.sessions.load();
-        let session = sessions.get(process_id).cloned();
-        session.as_ref()?;
-        let mut next_sessions = sessions.as_ref().clone();
-        next_sessions.remove(process_id);
-        self.sessions.store(Arc::new(next_sessions));
-        session
+    fn remove_session(&self, process_id: &ProcessId) -> Option<Arc<SessionState>> {
+        self.sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(process_id)
     }
 
-    async fn take_all_sessions(&self) -> HashMap<ProcessId, Arc<SessionState>> {
-        let _sessions_write_guard = self.sessions_write_lock.lock().await;
-        let sessions = self.sessions.load();
-        let drained_sessions = sessions.as_ref().clone();
-        self.sessions.store(Arc::new(HashMap::new()));
-        drained_sessions
+    fn remove_session_if(&self, process_id: &ProcessId, expected: &Arc<SessionState>) {
+        let mut sessions = self
+            .sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !sessions
+            .get(process_id)
+            .is_some_and(|session| Arc::ptr_eq(session, expected))
+        {
+            return;
+        }
+        sessions.remove(process_id);
+    }
+
+    fn take_all_sessions(&self) -> HashMap<ProcessId, Arc<SessionState>> {
+        std::mem::take(
+            &mut *self
+                .sessions
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 }
 
@@ -976,19 +1054,8 @@ fn is_transport_closed_error(error: &ExecServerError) -> bool {
     )
 }
 
-fn record_disconnected(inner: &Arc<Inner>, message: String) -> String {
-    // The first observer records the canonical disconnect reason. Session
-    // draining stays with the reader task so it can preserve notification
-    // ordering before publishing the terminal failure.
-    if let Some(message) = inner.set_disconnected(message.clone()) {
-        message
-    } else {
-        inner.disconnected.get().cloned().unwrap_or(message)
-    }
-}
-
-async fn fail_all_sessions(inner: &Arc<Inner>, message: String) {
-    let sessions = inner.take_all_sessions().await;
+async fn fail_all_sessions(inner: &Inner, message: String) {
+    let sessions = inner.take_all_sessions();
 
     for (_, session) in sessions {
         // Sessions synthesize a closed read response and emit a pushed Failed
@@ -999,7 +1066,7 @@ async fn fail_all_sessions(inner: &Arc<Inner>, message: String) {
 }
 
 /// Fails all in-flight work that depends on the shared JSON-RPC transport.
-async fn fail_all_in_flight_work(inner: &Arc<Inner>, message: String) {
+async fn fail_all_in_flight_work(inner: &Inner, message: String) {
     fail_all_sessions(inner, message.clone()).await;
     inner.fail_all_http_body_streams(message).await;
 }
@@ -1021,7 +1088,7 @@ async fn handle_server_notification(
                         chunk: params.chunk,
                     }));
                 if published_closed {
-                    inner.remove_session(&params.process_id).await;
+                    inner.remove_session(&params.process_id);
                 }
             }
         }
@@ -1035,7 +1102,7 @@ async fn handle_server_notification(
                     exit_code: params.exit_code,
                 });
                 if published_closed {
-                    inner.remove_session(&params.process_id).await;
+                    inner.remove_session(&params.process_id);
                 }
             }
         }
@@ -1050,7 +1117,7 @@ async fn handle_server_notification(
                 let published_closed =
                     session.publish_ordered_event(ExecProcessEvent::Closed { seq: params.seq });
                 if published_closed {
-                    inner.remove_session(&params.process_id).await;
+                    inner.remove_session(&params.process_id);
                 }
             }
         }
@@ -1068,9 +1135,12 @@ async fn handle_server_notification(
 
 #[cfg(test)]
 mod tests {
+    use codex_app_server_protocol::JSONRPCError;
+    use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::JSONRPCMessage;
     use codex_app_server_protocol::JSONRPCNotification;
     use codex_app_server_protocol::JSONRPCResponse;
+    use codex_utils_path_uri::PathUri;
     use futures::SinkExt;
     use futures::StreamExt;
     use pretty_assertions::assert_eq;
@@ -1090,7 +1160,6 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
     use tokio::time::Duration;
-    #[cfg(unix)]
     use tokio::time::sleep;
     use tokio::time::timeout;
     use tokio_tungstenite::WebSocketStream;
@@ -1100,6 +1169,9 @@ mod tests {
     use super::ExecServerClient;
     use super::ExecServerClientConnectOptions;
     use super::LazyRemoteExecServerClient;
+    use super::RemoteExecServerConnectArgs;
+    use super::SessionRegistration;
+    use super::SessionState;
     use crate::ProcessId;
     #[cfg(not(windows))]
     use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
@@ -1112,17 +1184,24 @@ mod tests {
     use crate::protocol::EXEC_EXITED_METHOD;
     use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
     use crate::protocol::EXEC_READ_METHOD;
+    use crate::protocol::EXEC_TERMINATE_METHOD;
     use crate::protocol::EXEC_WRITE_METHOD;
+    use crate::protocol::EnvironmentInfo;
     use crate::protocol::ExecClosedNotification;
     use crate::protocol::ExecExitedNotification;
     use crate::protocol::ExecOutputDeltaNotification;
     use crate::protocol::ExecOutputStream;
+    use crate::protocol::ExecParams;
+    use crate::protocol::HttpRequestParams;
     use crate::protocol::INITIALIZE_METHOD;
     use crate::protocol::INITIALIZED_METHOD;
     use crate::protocol::InitializeResponse;
     use crate::protocol::ProcessOutputChunk;
     use crate::protocol::ReadParams;
     use crate::protocol::ReadResponse;
+    use crate::protocol::ShellInfo;
+    use crate::protocol::TerminateParams;
+    use crate::protocol::TerminateResponse;
     use crate::protocol::WriteResponse;
     use crate::protocol::WriteStatus;
 
@@ -1229,24 +1308,33 @@ mod tests {
     async fn wait_for_generation(client: &ExecServerClient, generation_id: u64) {
         let result = timeout(Duration::from_secs(1), async {
             loop {
-                if matches!(
-                    client.inner.connection_state_tx.borrow().clone(),
-                    super::ConnectionState::Connected(current_generation_id)
-                        if current_generation_id == generation_id
-                ) {
+                let state = client.inner.transport.read().await;
+                if matches!(&*state, super::TransportState::Connected(generation) if generation.id == generation_id)
+                {
                     return;
                 }
+                drop(state);
                 tokio::task::yield_now().await;
             }
         })
         .await;
         assert!(
             result.is_ok(),
-            "client should connect generation {generation_id}; state: {:?}, current generation: {}, disconnected: {:?}",
-            client.inner.connection_state_tx.borrow().clone(),
-            client.inner.client.load().id,
-            client.inner.disconnected.get(),
+            "client should connect generation {generation_id}",
         );
+    }
+
+    fn test_exec_params(process_id: &str) -> ExecParams {
+        ExecParams {
+            process_id: ProcessId::from(process_id),
+            argv: vec!["ignored".to_string()],
+            cwd: PathUri::from_path(std::env::current_dir().expect("cwd")).expect("cwd URI"),
+            env_policy: None,
+            env: HashMap::new(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+        }
     }
 
     #[cfg(not(windows))]
@@ -1486,8 +1574,7 @@ mod tests {
 
         let process_id = ProcessId::from("reordered");
         let session = client
-            .register_session(&process_id)
-            .await
+            .create_session(&process_id)
             .expect("session should register");
         let mut events = session.subscribe_events();
 
@@ -1628,8 +1715,7 @@ mod tests {
 
         let process_id = ProcessId::from("disconnect");
         let session = client
-            .register_session(&process_id)
-            .await
+            .create_session(&process_id)
             .expect("session should register");
         let mut events = session.subscribe_events();
 
@@ -1656,13 +1742,222 @@ mod tests {
         );
         assert!(response.closed);
 
-        let new_session = client.register_session(&ProcessId::from("new")).await;
         assert!(matches!(
-            new_session,
+            client.inner.generation().await,
             Err(super::ExecServerError::Disconnected(_))
         ));
 
         drop(client);
+        server.await.expect("server task should finish");
+    }
+
+    #[tokio::test]
+    async fn recovery_retries_generation_that_disconnects_during_handoff() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let websocket_url = format!(
+            "ws://{}",
+            listener.local_addr().expect("listener should have address")
+        );
+        let (release_tx, release_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut first = accept_websocket(&listener).await;
+            complete_websocket_initialize(
+                &mut first,
+                "session-1",
+                /*expected_resume_session_id*/ None,
+            )
+            .await;
+            first.close(None).await.expect("first websocket closes");
+
+            let mut second = accept_websocket(&listener).await;
+            complete_websocket_initialize(
+                &mut second,
+                "session-1",
+                /*expected_resume_session_id*/ Some("session-1"),
+            )
+            .await;
+            second.close(None).await.expect("second websocket closes");
+
+            let mut third = accept_websocket(&listener).await;
+            complete_websocket_initialize(
+                &mut third,
+                "session-1",
+                /*expected_resume_session_id*/ Some("session-1"),
+            )
+            .await;
+            let request = match read_jsonrpc_websocket(&mut third).await {
+                JSONRPCMessage::Request(request)
+                    if request.method == super::ENVIRONMENT_INFO_METHOD =>
+                {
+                    request
+                }
+                other => panic!("expected environment info request, got {other:?}"),
+            };
+            write_jsonrpc_websocket(
+                &mut third,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(EnvironmentInfo {
+                        shell: ShellInfo {
+                            name: "sh".to_string(),
+                            path: "/bin/sh".to_string(),
+                        },
+                    })
+                    .expect("environment info should serialize"),
+                }),
+            )
+            .await;
+            release_rx.await.expect("test should release websocket");
+        });
+
+        let mut args = RemoteExecServerConnectArgs::new(websocket_url, "test-client".to_string());
+        args.connect_timeout = Duration::from_secs(1);
+        args.initialize_timeout = Duration::from_secs(1);
+        let client = ExecServerClient::connect_websocket(args)
+            .await
+            .expect("initial client should connect");
+
+        wait_for_generation(&client, /*generation_id*/ 3).await;
+        assert_eq!(
+            client
+                .environment_info()
+                .await
+                .expect("replacement generation should serve requests"),
+            EnvironmentInfo {
+                shell: ShellInfo {
+                    name: "sh".to_string(),
+                    path: "/bin/sh".to_string(),
+                },
+            }
+        );
+        drop(client);
+        release_tx.send(()).expect("websocket should still be open");
+        server.await.expect("server task should finish");
+    }
+
+    #[tokio::test]
+    async fn process_and_http_routes_wait_for_transport_handoff() {
+        let (client_stdin, server_reader) = duplex(1 << 20);
+        let (mut server_writer, client_stdout) = duplex(1 << 20);
+        let (terminate_seen_tx, terminate_seen_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut lines = BufReader::new(server_reader).lines();
+            let initialize = read_jsonrpc_line(&mut lines).await;
+            let request = match initialize {
+                JSONRPCMessage::Request(request) if request.method == INITIALIZE_METHOD => request,
+                other => panic!("expected initialize request, got {other:?}"),
+            };
+            write_jsonrpc_line(
+                &mut server_writer,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(InitializeResponse {
+                        session_id: "session-1".to_string(),
+                    })
+                    .expect("initialize response should serialize"),
+                }),
+            )
+            .await;
+            assert!(matches!(
+                read_jsonrpc_line(&mut lines).await,
+                JSONRPCMessage::Notification(notification)
+                    if notification.method == INITIALIZED_METHOD
+            ));
+            let request = match read_jsonrpc_line(&mut lines).await {
+                JSONRPCMessage::Request(request) if request.method == EXEC_TERMINATE_METHOD => {
+                    request
+                }
+                other => panic!("expected terminate request, got {other:?}"),
+            };
+            let params: TerminateParams =
+                serde_json::from_value(request.params.expect("terminate params should exist"))
+                    .expect("terminate params should deserialize");
+            assert_eq!(params.process_id, ProcessId::from("cancelled"));
+            write_jsonrpc_line(
+                &mut server_writer,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(TerminateResponse { running: false })
+                        .expect("terminate response should serialize"),
+                }),
+            )
+            .await;
+            terminate_seen_tx
+                .send(())
+                .expect("terminate request should signal");
+            release_rx.await.expect("test should release server");
+        });
+
+        let client = ExecServerClient::connect(
+            JsonRpcConnection::from_stdio(client_stdout, client_stdin, "handoff-test".to_string()),
+            ExecServerClientConnectOptions::default(),
+        )
+        .await
+        .expect("client should connect");
+        let handoff = client.inner.transport.write().await;
+
+        let process_client = client.clone();
+        let process_task = tokio::spawn(async move {
+            process_client
+                .start_process(test_exec_params("after-handoff"))
+                .await
+        });
+        let http_client = client.clone();
+        let http_task = tokio::spawn(async move {
+            http_client
+                .http_request_stream(HttpRequestParams {
+                    method: "GET".to_string(),
+                    url: "https://example.test".to_string(),
+                    headers: Vec::new(),
+                    body: None,
+                    timeout_ms: None,
+                    request_id: String::new(),
+                    stream_response: false,
+                })
+                .await
+        });
+
+        sleep(Duration::from_millis(25)).await;
+        assert!(
+            client
+                .inner
+                .get_session(&ProcessId::from("after-handoff"))
+                .is_none()
+        );
+        assert!(client.inner.http_body_streams.load().is_empty());
+        process_task.abort();
+        http_task.abort();
+        let (process_result, http_result) = tokio::join!(process_task, http_task);
+        assert!(matches!(process_result, Err(error) if error.is_cancelled()));
+        assert!(matches!(http_result, Err(error) if error.is_cancelled()));
+
+        let state = Arc::new(SessionState::new());
+        client
+            .inner
+            .insert_session(&ProcessId::from("cancelled"), Arc::clone(&state))
+            .expect("cancelled session should register");
+        drop(SessionRegistration {
+            client: client.clone(),
+            process_id: ProcessId::from("cancelled"),
+            state,
+            active: true,
+        });
+        assert!(
+            client
+                .inner
+                .get_session(&ProcessId::from("cancelled"))
+                .is_none()
+        );
+
+        drop(handoff);
+        terminate_seen_rx
+            .await
+            .expect("cancelled registration should terminate the remote process");
+        drop(client);
+        release_tx.send(()).expect("server should still be running");
         server.await.expect("server task should finish");
     }
 
@@ -1719,42 +2014,74 @@ mod tests {
                 )
                 .await;
 
-                let read = read_jsonrpc_websocket(&mut second).await;
-                let read = match read {
-                    JSONRPCMessage::Request(request) if request.method == EXEC_READ_METHOD => {
-                        request
-                    }
-                    other => panic!("expected recovery read request, got {other:?}"),
-                };
-                let params: ReadParams = serde_json::from_value(
-                    read.params
-                        .clone()
-                        .expect("recovery read params should exist"),
-                )
-                .expect("recovery read params should deserialize");
-                assert_eq!(params.after_seq, Some(1));
-                write_jsonrpc_websocket(
-                    &mut second,
-                    JSONRPCMessage::Response(JSONRPCResponse {
-                        id: read.id,
-                        result: serde_json::to_value(ReadResponse {
-                            chunks: vec![ProcessOutputChunk {
-                                seq: 2,
-                                stream: ExecOutputStream::Stdout,
-                                chunk: b"during\n".to_vec().into(),
-                            }],
-                            next_seq: 3,
-                            exited: false,
-                            exit_code: None,
-                            exit_seq: None,
-                            closed: false,
-                            closed_seq: None,
-                            failure: None,
-                        })
-                        .expect("recovery read response should serialize"),
-                    }),
-                )
-                .await;
+                for _ in 0..3 {
+                    let read = match read_jsonrpc_websocket(&mut second).await {
+                        JSONRPCMessage::Request(request) if request.method == EXEC_READ_METHOD => {
+                            request
+                        }
+                        other => panic!("expected recovery read request, got {other:?}"),
+                    };
+                    let params: ReadParams = serde_json::from_value(
+                        read.params
+                            .clone()
+                            .expect("recovery read params should exist"),
+                    )
+                    .expect("recovery read params should deserialize");
+                    let message = match params.process_id.as_ref() {
+                        "resumed-process" => {
+                            assert_eq!(params.after_seq, Some(1));
+                            JSONRPCMessage::Response(JSONRPCResponse {
+                                id: read.id,
+                                result: serde_json::to_value(ReadResponse {
+                                    chunks: vec![ProcessOutputChunk {
+                                        seq: 2,
+                                        stream: ExecOutputStream::Stdout,
+                                        chunk: b"during\n".to_vec().into(),
+                                    }],
+                                    next_seq: 3,
+                                    exited: false,
+                                    exit_code: None,
+                                    exit_seq: None,
+                                    closed: false,
+                                    closed_seq: None,
+                                    failure: None,
+                                })
+                                .expect("recovery read response should serialize"),
+                            })
+                        }
+                        "terminal-process" => {
+                            assert_eq!(params.after_seq, Some(0));
+                            JSONRPCMessage::Response(JSONRPCResponse {
+                                id: read.id,
+                                result: serde_json::to_value(ReadResponse {
+                                    chunks: vec![ProcessOutputChunk {
+                                        seq: 1,
+                                        stream: ExecOutputStream::Stdout,
+                                        chunk: b"tail\n".to_vec().into(),
+                                    }],
+                                    next_seq: 4,
+                                    exited: true,
+                                    exit_code: Some(0),
+                                    exit_seq: Some(2),
+                                    closed: true,
+                                    closed_seq: Some(3),
+                                    failure: None,
+                                })
+                                .expect("terminal recovery response should serialize"),
+                            })
+                        }
+                        "missing-process" => JSONRPCMessage::Error(JSONRPCError {
+                            id: read.id,
+                            error: JSONRPCErrorError {
+                                code: -32600,
+                                message: "unknown process".to_string(),
+                                data: None,
+                            },
+                        }),
+                        process_id => panic!("unexpected recovery process {process_id}"),
+                    };
+                    write_jsonrpc_websocket(&mut second, message).await;
+                }
 
                 let write = read_jsonrpc_websocket(&mut second).await;
                 let write = match write {
@@ -1785,10 +2112,17 @@ mod tests {
         });
         let first = client.get().await.expect("first client should connect");
         let session = first
-            .register_session(&ProcessId::from("resumed-process"))
-            .await
+            .create_session(&ProcessId::from("resumed-process"))
             .expect("process session should register");
         let mut events = session.subscribe_events();
+        let terminal_session = first
+            .create_session(&ProcessId::from("terminal-process"))
+            .expect("terminal process session should register");
+        let mut terminal_events = terminal_session.subscribe_events();
+        let missing_session = first
+            .create_session(&ProcessId::from("missing-process"))
+            .expect("missing process session should register");
+        let mut missing_events = missing_session.subscribe_events();
         registered_tx.send(()).expect("registration should signal");
         assert_eq!(
             timeout(Duration::from_secs(1), events.recv())
@@ -1813,6 +2147,40 @@ mod tests {
                 stream: ExecOutputStream::Stdout,
                 chunk: b"during\n".to_vec().into(),
             })
+        );
+        let mut recovered_terminal_events = Vec::new();
+        for _ in 0..3 {
+            recovered_terminal_events.push(
+                timeout(Duration::from_secs(1), terminal_events.recv())
+                    .await
+                    .expect("terminal recovery should not time out")
+                    .expect("terminal event stream should stay open"),
+            );
+        }
+        assert_eq!(
+            recovered_terminal_events,
+            vec![
+                ExecProcessEvent::Output(ProcessOutputChunk {
+                    seq: 1,
+                    stream: ExecOutputStream::Stdout,
+                    chunk: b"tail\n".to_vec().into(),
+                }),
+                ExecProcessEvent::Exited {
+                    seq: 2,
+                    exit_code: 0,
+                },
+                ExecProcessEvent::Closed { seq: 3 },
+            ]
+        );
+        assert_eq!(
+            timeout(Duration::from_secs(1), missing_events.recv())
+                .await
+                .expect("missing process recovery should not time out")
+                .expect("missing process event stream should stay open"),
+            ExecProcessEvent::Failed(
+                "failed to recover process missing-process: exec-server rejected request (-32600): unknown process"
+                    .to_string()
+            )
         );
         assert_eq!(
             session
@@ -1886,12 +2254,10 @@ mod tests {
         let noisy_process_id = ProcessId::from("noisy");
         let quiet_process_id = ProcessId::from("quiet");
         let _noisy_session = client
-            .register_session(&noisy_process_id)
-            .await
+            .create_session(&noisy_process_id)
             .expect("noisy session should register");
         let quiet_session = client
-            .register_session(&quiet_process_id)
-            .await
+            .create_session(&quiet_process_id)
             .expect("quiet session should register");
         let mut quiet_wake_rx = quiet_session.subscribe_wake();
 

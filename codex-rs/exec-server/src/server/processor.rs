@@ -187,7 +187,6 @@ async fn run_connection(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
     use std::time::Duration;
 
     use codex_app_server_protocol::JSONRPCMessage;
@@ -207,13 +206,15 @@ mod tests {
     use tokio::task::JoinHandle;
     use tokio::time::timeout;
 
-    use super::run_connection;
+    use super::ConnectionProcessor;
     use crate::ExecServerRuntimePaths;
     use crate::ProcessId;
     use crate::connection::JsonRpcConnection;
     use crate::protocol::EXEC_METHOD;
+    use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
     use crate::protocol::EXEC_READ_METHOD;
-    use crate::protocol::EXEC_TERMINATE_METHOD;
+    use crate::protocol::EXEC_WRITE_METHOD;
+    use crate::protocol::ExecOutputDeltaNotification;
     use crate::protocol::ExecParams;
     use crate::protocol::ExecResponse;
     use crate::protocol::INITIALIZE_METHOD;
@@ -221,15 +222,13 @@ mod tests {
     use crate::protocol::InitializeParams;
     use crate::protocol::InitializeResponse;
     use crate::protocol::ReadParams;
-    use crate::protocol::TerminateParams;
-    use crate::protocol::TerminateResponse;
-    use crate::server::session_registry::SessionRegistry;
+    use crate::protocol::WriteParams;
 
-    #[tokio::test]
-    async fn transport_disconnect_detaches_session_during_in_flight_read() {
-        let registry = SessionRegistry::new();
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn resumed_connection_routes_process_notifications_to_replacement() {
+        let processor = ConnectionProcessor::new(test_runtime_paths());
         let (mut first_writer, mut first_lines, first_task) =
-            spawn_test_connection(Arc::clone(&registry), "first");
+            spawn_test_connection(processor.clone(), "first");
 
         send_request(
             &mut first_writer,
@@ -268,10 +267,13 @@ mod tests {
         )
         .await;
         drop(first_writer);
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        timeout(Duration::from_secs(1), first_task)
+            .await
+            .expect("first processor should exit")
+            .expect("first processor should join");
 
         let (mut second_writer, mut second_lines, second_task) =
-            spawn_test_connection(Arc::clone(&registry), "second");
+            spawn_test_connection(processor, "second");
         send_request(
             &mut second_writer,
             /*id*/ 1,
@@ -287,25 +289,33 @@ mod tests {
             read_response::<InitializeResponse>(&mut second_lines, /*expected_id*/ 1),
         )
         .await
-        .expect("resume initialize should not wait for the old read to finish");
+        .expect("resume initialize should complete");
         assert_eq!(
             second_initialize_response.session_id,
             initialize_response.session_id
         );
-        timeout(Duration::from_secs(1), first_task)
-            .await
-            .expect("first processor should exit")
-            .expect("first processor should join");
         send_notification(&mut second_writer, INITIALIZED_METHOD, &()).await;
-
         send_request(
             &mut second_writer,
             /*id*/ 2,
-            EXEC_TERMINATE_METHOD,
-            &TerminateParams { process_id },
+            EXEC_WRITE_METHOD,
+            &WriteParams {
+                process_id: process_id.clone(),
+                chunk: b"go\n".to_vec().into(),
+            },
         )
         .await;
-        let _: TerminateResponse = read_response(&mut second_lines, /*expected_id*/ 2).await;
+        let output = timeout(
+            Duration::from_secs(1),
+            read_notification::<ExecOutputDeltaNotification>(
+                &mut second_lines,
+                EXEC_OUTPUT_DELTA_METHOD,
+            ),
+        )
+        .await
+        .expect("resumed connection should receive process output");
+        assert_eq!(output.process_id, process_id);
+        assert_eq!(output.chunk.into_inner(), b"late");
 
         drop(second_writer);
         drop(second_lines);
@@ -316,14 +326,16 @@ mod tests {
     }
 
     fn spawn_test_connection(
-        registry: Arc<SessionRegistry>,
+        processor: ConnectionProcessor,
         label: &str,
     ) -> (DuplexStream, Lines<BufReader<DuplexStream>>, JoinHandle<()>) {
         let (client_writer, server_reader) = duplex(1 << 20);
         let (server_writer, client_reader) = duplex(1 << 20);
         let connection =
             JsonRpcConnection::from_stdio(server_reader, server_writer, label.to_string());
-        let task = tokio::spawn(run_connection(connection, registry, test_runtime_paths()));
+        let task = tokio::spawn(async move {
+            processor.run_connection(connection).await;
+        });
         (client_writer, BufReader::new(client_reader).lines(), task)
     }
 
@@ -389,6 +401,33 @@ mod tests {
         }
     }
 
+    async fn read_notification<T: DeserializeOwned>(
+        lines: &mut Lines<BufReader<DuplexStream>>,
+        expected_method: &str,
+    ) -> T {
+        loop {
+            let line = lines
+                .next_line()
+                .await
+                .expect("read notification")
+                .expect("notification line");
+            match serde_json::from_str::<JSONRPCMessage>(&line)
+                .expect("decode JSON-RPC notification")
+            {
+                JSONRPCMessage::Notification(notification)
+                    if notification.method == expected_method =>
+                {
+                    return serde_json::from_value(
+                        notification.params.expect("notification params"),
+                    )
+                    .expect("decode notification params");
+                }
+                JSONRPCMessage::Notification(_) | JSONRPCMessage::Response(_) => {}
+                other => panic!("expected JSON-RPC notification, got {other:?}"),
+            }
+        }
+    }
+
     fn exec_params(process_id: ProcessId) -> ExecParams {
         let mut env = HashMap::new();
         if let Some(path) = std::env::var_os("PATH") {
@@ -396,28 +435,29 @@ mod tests {
         }
         ExecParams {
             process_id,
-            argv: sleep_then_print_argv(),
+            argv: wait_for_stdin_then_print_argv(),
             cwd: PathUri::from_path(std::env::current_dir().expect("cwd")).expect("cwd URI"),
             env_policy: None,
             env,
             tty: false,
-            pipe_stdin: false,
+            pipe_stdin: true,
             arg0: None,
         }
     }
 
-    fn sleep_then_print_argv() -> Vec<String> {
+    fn wait_for_stdin_then_print_argv() -> Vec<String> {
         if cfg!(windows) {
             vec![
-                std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string()),
-                "/C".to_string(),
-                "ping -n 3 127.0.0.1 >NUL && echo late".to_string(),
+                "powershell.exe".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "$null = [Console]::In.ReadLine(); [Console]::Out.Write('late')".to_string(),
             ]
         } else {
             vec![
                 "/bin/sh".to_string(),
                 "-c".to_string(),
-                "sleep 1; printf late".to_string(),
+                "read _line; printf late".to_string(),
             ]
         }
     }

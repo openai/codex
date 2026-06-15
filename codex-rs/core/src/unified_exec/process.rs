@@ -435,7 +435,9 @@ impl UnifiedExecProcess {
                             next_seq,
                             exited,
                             exit_code,
+                            exit_seq: _,
                             closed,
+                            closed_seq: _,
                             failure,
                         } = response;
 

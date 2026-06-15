@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
@@ -225,6 +226,7 @@ pub(crate) struct RpcClient {
     // immediately when the socket closes, even if no JSON-RPC error response
     // can be delivered for their request id.
     disconnected_rx: watch::Receiver<bool>,
+    closed: Arc<AtomicBool>,
     next_request_id: AtomicI64,
     transport_tasks: Vec<JoinHandle<()>>,
     transport: JsonRpcTransport,
@@ -241,9 +243,11 @@ impl RpcClient {
             transport,
         } = connection;
         let pending = Arc::new(Mutex::new(HashMap::<RequestId, PendingRequest>::new()));
+        let closed = Arc::new(AtomicBool::new(false));
         let (event_tx, event_rx) = mpsc::channel(128);
 
         let pending_for_reader = Arc::clone(&pending);
+        let closed_for_reader = Arc::clone(&closed);
         let transport_for_reader = transport.clone();
         let reader_task = tokio::spawn(async move {
             let disconnect_reason = loop {
@@ -274,7 +278,7 @@ impl RpcClient {
                     reason: disconnect_reason,
                 })
                 .await;
-            drain_pending(&pending_for_reader).await;
+            close_pending(&pending_for_reader, &closed_for_reader).await;
             transport_for_reader.terminate();
         });
 
@@ -283,6 +287,7 @@ impl RpcClient {
                 write_tx,
                 pending,
                 disconnected_rx,
+                closed,
                 next_request_id: AtomicI64::new(1),
                 transport_tasks,
                 transport,
@@ -296,24 +301,36 @@ impl RpcClient {
         &self,
         method: &str,
         params: &P,
-    ) -> Result<(), serde_json::Error> {
-        let params = serde_json::to_value(params)?;
+    ) -> Result<(), RpcCallError> {
+        let params = serde_json::to_value(params).map_err(RpcCallError::Json)?;
+        if self.closed.load(Ordering::Acquire) || *self.disconnected_rx.borrow() {
+            return Err(RpcCallError::Closed);
+        }
         self.write_tx
             .send(JSONRPCMessage::Notification(JSONRPCNotification {
                 method: method.to_string(),
                 params: Some(params),
             }))
             .await
-            .map_err(|_| {
-                serde_json::Error::io(std::io::Error::new(
-                    std::io::ErrorKind::BrokenPipe,
-                    "JSON-RPC transport closed",
-                ))
-            })
+            .map_err(|_| RpcCallError::Closed)
     }
 
     pub(crate) fn is_disconnected(&self) -> bool {
-        *self.disconnected_rx.borrow()
+        self.closed.load(Ordering::Acquire) || *self.disconnected_rx.borrow()
+    }
+
+    pub(crate) fn close_transport(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.transport.terminate();
+        for task in &self.transport_tasks {
+            task.abort();
+        }
+        self.reader_task.abort();
+    }
+
+    pub(crate) async fn close(&self) {
+        self.close_transport();
+        close_pending(&self.pending, &self.closed).await;
     }
 
     pub(crate) async fn call<P, T>(&self, method: &str, params: &P) -> Result<T, RpcCallError>
@@ -328,7 +345,7 @@ impl RpcClient {
             // Registering the pending request and checking disconnect must be
             // atomic with the reader's drain_pending path. Otherwise a call
             // can sneak in after the drain and wait forever.
-            if *self.disconnected_rx.borrow() {
+            if self.closed.load(Ordering::Acquire) || *self.disconnected_rx.borrow() {
                 return Err(RpcCallError::Closed);
             }
             pending.insert(request_id.clone(), response_tx);
@@ -379,11 +396,7 @@ impl RpcClient {
 
 impl Drop for RpcClient {
     fn drop(&mut self) {
-        self.transport.terminate();
-        for task in &self.transport_tasks {
-            task.abort();
-        }
-        self.reader_task.abort();
+        self.close_transport();
     }
 }
 
@@ -512,9 +525,10 @@ async fn handle_server_message(
     Ok(())
 }
 
-async fn drain_pending(pending: &Mutex<HashMap<RequestId, PendingRequest>>) {
+async fn close_pending(pending: &Mutex<HashMap<RequestId, PendingRequest>>, closed: &AtomicBool) {
     let pending = {
         let mut pending = pending.lock().await;
+        closed.store(true, Ordering::Release);
         pending
             .drain()
             .map(|(_, pending)| pending)

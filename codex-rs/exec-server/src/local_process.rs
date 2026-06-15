@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::sync::MutexGuard;
 use std::time::Duration;
 
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -11,7 +13,6 @@ use codex_protocol::shell_environment;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::ProcessSignal as PtyProcessSignal;
 use codex_utils_pty::TerminalSize;
-use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
@@ -90,12 +91,41 @@ enum ProcessEntry {
 
 struct Inner {
     notifications: std::sync::RwLock<Option<RpcNotificationSender>>,
-    processes: Mutex<HashMap<ProcessId, ProcessEntry>>,
+    processes: StdMutex<HashMap<ProcessId, ProcessEntry>>,
+}
+
+struct ProcessStartReservation {
+    inner: Arc<Inner>,
+    process_id: ProcessId,
+    active: bool,
 }
 
 #[derive(Clone)]
 pub(crate) struct LocalProcess {
     inner: Arc<Inner>,
+}
+
+impl Inner {
+    fn lock_processes(&self) -> MutexGuard<'_, HashMap<ProcessId, ProcessEntry>> {
+        self.processes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl Drop for ProcessStartReservation {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        let mut processes = self.inner.lock_processes();
+        if matches!(
+            processes.get(&self.process_id),
+            Some(ProcessEntry::Starting)
+        ) {
+            processes.remove(&self.process_id);
+        }
+    }
 }
 
 struct LocalExecProcess {
@@ -119,14 +149,14 @@ impl LocalProcess {
         Self {
             inner: Arc::new(Inner {
                 notifications: std::sync::RwLock::new(Some(notifications)),
-                processes: Mutex::new(HashMap::new()),
+                processes: StdMutex::new(HashMap::new()),
             }),
         }
     }
 
     pub(crate) async fn shutdown(&self) {
         let remaining = {
-            let mut processes = self.inner.processes.lock().await;
+            let mut processes = self.inner.lock_processes();
             processes
                 .drain()
                 .filter_map(|(_, process)| match process {
@@ -166,7 +196,7 @@ impl LocalProcess {
         })?;
 
         {
-            let mut process_map = self.inner.processes.lock().await;
+            let mut process_map = self.inner.lock_processes();
             if process_map.contains_key(&process_id) {
                 return Err(invalid_request(format!(
                     "process {process_id} already exists"
@@ -174,6 +204,11 @@ impl LocalProcess {
             }
             process_map.insert(process_id.clone(), ProcessEntry::Starting);
         }
+        let mut reservation = ProcessStartReservation {
+            inner: Arc::clone(&self.inner),
+            process_id: process_id.clone(),
+            active: true,
+        };
 
         let env = child_env(&params);
         let spawned_result = if params.tty {
@@ -205,16 +240,7 @@ impl LocalProcess {
             )
             .await
         };
-        let spawned = match spawned_result {
-            Ok(spawned) => spawned,
-            Err(err) => {
-                let mut process_map = self.inner.processes.lock().await;
-                if matches!(process_map.get(&process_id), Some(ProcessEntry::Starting)) {
-                    process_map.remove(&process_id);
-                }
-                return Err(internal_error(err.to_string()));
-            }
-        };
+        let spawned = spawned_result.map_err(|err| internal_error(err.to_string()))?;
 
         let output_notify = Arc::new(Notify::new());
         let (wake_tx, _wake_rx) = watch::channel(0);
@@ -223,7 +249,13 @@ impl LocalProcess {
             RETAINED_OUTPUT_BYTES_PER_PROCESS,
         );
         {
-            let mut process_map = self.inner.processes.lock().await;
+            let mut process_map = self.inner.lock_processes();
+            if !matches!(process_map.get(&process_id), Some(ProcessEntry::Starting)) {
+                spawned.session.terminate();
+                return Err(internal_error(format!(
+                    "process {process_id} start was cancelled"
+                )));
+            }
             process_map.insert(
                 process_id.clone(),
                 ProcessEntry::Running(Box::new(RunningProcess {
@@ -243,6 +275,7 @@ impl LocalProcess {
                     closed_seq: None,
                 })),
             );
+            reservation.active = false;
         }
 
         tokio::spawn(stream_output(
@@ -294,7 +327,7 @@ impl LocalProcess {
 
         loop {
             let (response, output_notify) = {
-                let process_map = self.inner.processes.lock().await;
+                let process_map = self.inner.lock_processes();
                 let process = process_map.get(&params.process_id).ok_or_else(|| {
                     invalid_request(format!("unknown process id {}", params.process_id))
                 })?;
@@ -372,7 +405,7 @@ impl LocalProcess {
     ) -> Result<WriteResponse, JSONRPCErrorError> {
         let _input_bytes = params.chunk.0.len();
         let writer_tx = {
-            let process_map = self.inner.processes.lock().await;
+            let process_map = self.inner.lock_processes();
             let Some(process) = process_map.get(&params.process_id) else {
                 return Ok(WriteResponse {
                     status: WriteStatus::UnknownProcess,
@@ -406,7 +439,7 @@ impl LocalProcess {
         params: SignalParams,
     ) -> Result<SignalResponse, JSONRPCErrorError> {
         {
-            let process_map = self.inner.processes.lock().await;
+            let process_map = self.inner.lock_processes();
             match process_map.get(&params.process_id) {
                 Some(ProcessEntry::Running(process)) => {
                     if process.exit_code.is_some() {
@@ -429,7 +462,7 @@ impl LocalProcess {
         params: TerminateParams,
     ) -> Result<TerminateResponse, JSONRPCErrorError> {
         let running = {
-            let process_map = self.inner.processes.lock().await;
+            let process_map = self.inner.lock_processes();
             match process_map.get(&params.process_id) {
                 Some(ProcessEntry::Running(process)) => {
                     if process.exit_code.is_some() {
@@ -637,7 +670,7 @@ async fn stream_output(
     while let Some(chunk) = receiver.recv().await {
         let _chunk_len = chunk.len();
         let notification = {
-            let mut processes = inner.processes.lock().await;
+            let mut processes = inner.lock_processes();
             let Some(entry) = processes.get_mut(&process_id) else {
                 break;
             };
@@ -693,7 +726,7 @@ async fn watch_exit(
 ) {
     let exit_code = exit_rx.await.unwrap_or(-1);
     let notification = {
-        let mut processes = inner.processes.lock().await;
+        let mut processes = inner.lock_processes();
         if let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) {
             let seq = process.next_seq;
             process.next_seq += 1;
@@ -726,7 +759,7 @@ async fn watch_exit(
 
 async fn finish_output_stream(process_id: ProcessId, inner: Arc<Inner>) {
     {
-        let mut processes = inner.processes.lock().await;
+        let mut processes = inner.lock_processes();
         let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) else {
             return;
         };
@@ -741,7 +774,7 @@ async fn finish_output_stream(process_id: ProcessId, inner: Arc<Inner>) {
 
 async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>) {
     let (notification, output_notify) = {
-        let mut processes = inner.processes.lock().await;
+        let mut processes = inner.lock_processes();
         let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) else {
             return;
         };
@@ -770,7 +803,7 @@ async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>) {
     let cleanup_inner = Arc::clone(&inner);
     tokio::spawn(async move {
         tokio::time::sleep(EXITED_PROCESS_RETENTION).await;
-        let mut processes = cleanup_inner.processes.lock().await;
+        let mut processes = cleanup_inner.lock_processes();
         match processes.entry(cleanup_process_id) {
             Entry::Occupied(entry) => {
                 if matches!(entry.get(), ProcessEntry::Running(process) if process.closed) {
@@ -817,6 +850,24 @@ mod tests {
             pipe_stdin: false,
             arg0: None,
         }
+    }
+
+    #[tokio::test]
+    async fn dropped_start_reservation_releases_process_id() {
+        let backend = LocalProcess::default();
+        let process_id = ProcessId::from("cancelled-start");
+        backend
+            .inner
+            .lock_processes()
+            .insert(process_id.clone(), ProcessEntry::Starting);
+
+        drop(ProcessStartReservation {
+            inner: Arc::clone(&backend.inner),
+            process_id,
+            active: true,
+        });
+
+        assert!(backend.inner.lock_processes().is_empty());
     }
 
     #[tokio::test]
@@ -952,7 +1003,7 @@ mod tests {
         timeout(Duration::from_secs(1), async {
             loop {
                 {
-                    let processes = backend.inner.processes.lock().await;
+                    let processes = backend.inner.lock_processes();
                     if !processes.contains_key(&process_id) {
                         break;
                     }
@@ -994,7 +1045,7 @@ mod tests {
             RETAINED_OUTPUT_BYTES_PER_PROCESS,
         );
 
-        let mut processes = backend.inner.processes.lock().await;
+        let mut processes = backend.inner.lock_processes();
         let previous = processes.insert(
             process_id.clone(),
             ProcessEntry::Running(Box::new(RunningProcess {

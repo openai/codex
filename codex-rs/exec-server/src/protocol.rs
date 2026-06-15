@@ -142,10 +142,8 @@ pub struct ReadResponse {
     pub next_seq: u64,
     pub exited: bool,
     pub exit_code: Option<i32>,
-    #[serde(default)]
     pub exit_seq: Option<u64>,
     pub closed: bool,
-    #[serde(default)]
     pub closed_seq: Option<u64>,
     pub failure: Option<String>,
 }
