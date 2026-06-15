@@ -70,6 +70,12 @@ pub struct ThreadRealtimeStartParams {
     /// Overrides the configured realtime architecture for this session only.
     #[ts(optional = nullable)]
     pub architecture: Option<RealtimeConversationArchitecture>,
+    /// Sends automatic Codex responses as realtime conversation items instead of handoff appends.
+    #[ts(optional = nullable)]
+    pub codex_responses_as_items: Option<bool>,
+    /// Optional prefix added to automatic Codex response items when `codexResponsesAsItems` is true.
+    #[ts(optional = nullable)]
+    pub codex_response_item_prefix: Option<String>,
     /// Overrides the configured realtime model for this session only.
     #[ts(optional = nullable)]
     pub model: Option<String>,
@@ -145,6 +151,21 @@ pub struct ThreadRealtimeAppendTextParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeAppendTextResponse {}
+
+/// EXPERIMENTAL - append speakable text to thread realtime.
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeAppendSpeechParams {
+    pub thread_id: String,
+    pub text: String,
+}
+
+/// EXPERIMENTAL - response for appending realtime speech.
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeAppendSpeechResponse {}
 
 /// EXPERIMENTAL - stop thread realtime.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
