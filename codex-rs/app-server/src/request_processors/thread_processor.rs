@@ -4,6 +4,7 @@ use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
+use codex_utils_path_uri::PathUri;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -15,6 +16,7 @@ struct ThreadListFilters {
     cwd_filters: Option<Vec<PathBuf>>,
     search_term: Option<String>,
     use_state_db_only: bool,
+    parent_thread_id: Option<ThreadId>,
 }
 
 fn collect_resume_override_mismatches(
@@ -1293,7 +1295,7 @@ impl ThreadRequestProcessor {
                 .into_iter()
                 .map(|environment| TurnEnvironmentSelection {
                     environment_id: environment.environment_id,
-                    cwd: environment.cwd,
+                    cwd: PathUri::from_abs_path(&environment.cwd),
                 })
                 .collect::<Vec<_>>()
         });
@@ -1875,8 +1877,14 @@ impl ThreadRequestProcessor {
             cwd,
             use_state_db_only,
             search_term,
+            parent_thread_id,
         } = params;
         let cwd_filters = normalize_thread_list_cwd_filters(cwd)?;
+        let parent_thread_id = parent_thread_id
+            .as_deref()
+            .map(ThreadId::from_string)
+            .transpose()
+            .map_err(|err| invalid_request(format!("invalid parent thread id: {err}")))?;
 
         let requested_page_size = limit
             .map(|value| value as usize)
@@ -1900,6 +1908,7 @@ impl ThreadRequestProcessor {
                     cwd_filters,
                     search_term,
                     use_state_db_only,
+                    parent_thread_id,
                 },
             )
             .await?;
@@ -2810,6 +2819,7 @@ impl ThreadRequestProcessor {
         Some(persisted_metadata)
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn resume_running_thread(
         &self,
         request_id: &ConnectionRequestId,
@@ -2996,6 +3006,7 @@ impl ThreadRequestProcessor {
         Ok(RunningThreadResumeResult::NotRunning(None))
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn resume_thread_from_history(
         &self,
         history: &[ResponseItem],
@@ -3012,6 +3023,7 @@ impl ThreadRequestProcessor {
         ))
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn resume_thread_from_rollout(
         &self,
         thread_id: &str,
@@ -3066,6 +3078,7 @@ impl ThreadRequestProcessor {
         Ok(stored_thread)
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn stored_thread_to_initial_history(
         &self,
         stored_thread: &StoredThread,
@@ -3558,6 +3571,7 @@ impl ThreadRequestProcessor {
             cwd_filters,
             search_term,
             use_state_db_only,
+            parent_thread_id,
         } = filters;
         let mut cursor_obj = cursor;
         let mut last_cursor = cursor_obj.clone();
@@ -3573,9 +3587,15 @@ impl ThreadRequestProcessor {
                     Some(providers)
                 }
             }
+            None if parent_thread_id.is_some() => None,
             None => Some(vec![self.config.model_provider_id.clone()]),
         };
-        let (allowed_sources_vec, source_kind_filter) = compute_source_filters(source_kinds);
+        let (allowed_sources_vec, source_kind_filter) =
+            if parent_thread_id.is_some() && source_kinds.is_none() {
+                (Vec::new(), None)
+            } else {
+                compute_source_filters(source_kinds)
+            };
         let allowed_sources = allowed_sources_vec.as_slice();
         let store_sort_direction = match sort_direction {
             SortDirection::Asc => StoreSortDirection::Asc,
@@ -3597,6 +3617,7 @@ impl ThreadRequestProcessor {
                     archived,
                     search_term: search_term.clone(),
                     use_state_db_only,
+                    parent_thread_id,
                 })
                 .await
                 .map_err(thread_store_list_error)?;

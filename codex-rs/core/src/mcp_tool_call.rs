@@ -167,6 +167,8 @@ pub(crate) async fn handle_mcp_tool_call(
     let approval_mode = if server == CODEX_APPS_MCP_SERVER_NAME {
         app_tool_policy.approval
     } else if let Some(approval_mode) = {
+        // Selected-plugin registrations are absent from config.toml and the legacy plugin manager,
+        // so their resolved catalog entry is the authoritative source for tool approval policy.
         let manager = sess.services.mcp_connection_manager.load();
         manager
             .is_selected_plugin_mcp_server(&server)

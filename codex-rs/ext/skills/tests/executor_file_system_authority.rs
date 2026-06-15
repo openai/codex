@@ -38,10 +38,10 @@ impl SyntheticFileSystem {
     async fn canonicalize(&self, path: &PathUri) -> io::Result<PathUri> {
         let path = path.to_abs_path()?;
         if path == self.alias_root {
-            return PathUri::from_abs_path(&self.canonical_root);
+            return Ok(PathUri::from_abs_path(&self.canonical_root));
         }
         self.metadata(&path)?;
-        PathUri::from_abs_path(&path)
+        Ok(PathUri::from_abs_path(&path))
     }
 
     async fn read_file(&self, path: &PathUri) -> io::Result<Vec<u8>> {
@@ -85,6 +85,7 @@ impl SyntheticFileSystem {
             is_directory,
             is_file,
             is_symlink: false,
+            size: 0,
             created_at_ms: 0,
             modified_at_ms: 0,
         })

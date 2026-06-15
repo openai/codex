@@ -148,6 +148,23 @@ pub(super) async fn make_chatwidget_manual(
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     tokio::sync::mpsc::UnboundedReceiver<Op>,
 ) {
+    make_chatwidget_manual_with_auth(
+        model_override,
+        /*has_chatgpt_account*/ false,
+        /*has_codex_backend_auth*/ false,
+    )
+    .await
+}
+
+pub(super) async fn make_chatwidget_manual_with_auth(
+    model_override: Option<&str>,
+    has_chatgpt_account: bool,
+    has_codex_backend_auth: bool,
+) -> (
+    ChatWidget,
+    tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    tokio::sync::mpsc::UnboundedReceiver<Op>,
+) {
     let (tx_raw, rx) = unbounded_channel::<AppEvent>();
     let app_event_tx = AppEventSender::new(tx_raw);
     let (op_tx, op_rx) = unbounded_channel::<Op>();
@@ -167,7 +184,8 @@ pub(super) async fn make_chatwidget_manual(
         workspace_command_runner: None,
         initial_user_message: None,
         enhanced_keys_supported: false,
-        has_chatgpt_account: false,
+        has_chatgpt_account,
+        has_codex_backend_auth,
         model_catalog,
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
@@ -217,21 +235,6 @@ pub(super) fn next_interrupt_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver
     }
 }
 
-pub(super) fn next_realtime_close_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
-    loop {
-        match op_rx.try_recv() {
-            Ok(Op::RealtimeConversationClose) => return,
-            Ok(_) => continue,
-            Err(TryRecvError::Empty) => {
-                panic!("expected realtime close op but queue was empty")
-            }
-            Err(TryRecvError::Disconnected) => {
-                panic!("expected realtime close op but channel closed")
-            }
-        }
-    }
-}
-
 pub(super) fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
     while let Ok(op) = op_rx.try_recv() {
         assert!(
@@ -243,6 +246,7 @@ pub(super) fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiv
 
 pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.has_chatgpt_account = true;
+    chat.has_codex_backend_auth = true;
     chat.model_catalog = test_model_catalog(&chat.config);
 }
 
@@ -694,6 +698,7 @@ pub(super) fn handle_view_image_tool_call(
 pub(super) fn handle_image_generation_end(
     chat: &mut ChatWidget,
     call_id: impl Into<String>,
+    status: impl Into<String>,
     revised_prompt: Option<String>,
     saved_path: Option<AbsolutePathBuf>,
 ) {
@@ -704,7 +709,7 @@ pub(super) fn handle_image_generation_end(
             completed_at_ms: 0,
             item: AppServerThreadItem::ImageGeneration {
                 id: call_id.into(),
-                status: "completed".to_string(),
+                status: status.into(),
                 revised_prompt,
                 result: String::new(),
                 saved_path,
@@ -1421,6 +1426,7 @@ pub(super) fn plugins_test_detail(
         marketplace_name: "ChatGPT Marketplace".to_string(),
         marketplace_path: Some(plugins_test_absolute_path("marketplaces/chatgpt")),
         summary,
+        share_url: None,
         description: description.map(str::to_string),
         skills: skills
             .iter()

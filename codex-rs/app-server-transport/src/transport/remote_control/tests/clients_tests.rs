@@ -7,6 +7,7 @@ use codex_app_server_protocol::RemoteControlClientsListParams;
 use codex_app_server_protocol::RemoteControlClientsListResponse;
 use codex_app_server_protocol::RemoteControlClientsRevokeParams;
 use codex_app_server_protocol::RemoteControlClientsRevokeResponse;
+use codex_login::AuthKeyringBackendKind;
 use pretty_assertions::assert_eq;
 
 fn client_management_handle(
@@ -21,6 +22,7 @@ fn client_management_handle(
         environment_id: None,
     });
     RemoteControlHandle {
+        policy: RemoteControlPolicy::Allowed,
         desired_state_tx: Arc::new(desired_state_tx),
         desired_state_rpc_lock: Arc::new(Semaphore::new(1)),
         desired_state_persistence_lock: Arc::new(Semaphore::new(1)),
@@ -173,6 +175,7 @@ async fn list_remote_control_clients_recovers_auth_after_unauthorized() {
         codex_home.path(),
         &stale_auth,
         AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
     )
     .expect("stale auth should save");
     let auth_manager = AuthManager::shared(
@@ -180,6 +183,7 @@ async fn list_remote_control_clients_recovers_auth_after_unauthorized() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
     )
     .await;
     let mut fresh_auth = remote_control_auth_dot_json(Some("account_id"));
@@ -192,6 +196,7 @@ async fn list_remote_control_clients_recovers_auth_after_unauthorized() {
         codex_home.path(),
         &fresh_auth,
         AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
     )
     .expect("fresh auth should save");
 
@@ -254,6 +259,7 @@ async fn list_remote_control_clients_retries_unauthorized_only_once() {
         codex_home.path(),
         &stale_auth,
         AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
     )
     .expect("stale auth should save");
     let auth_manager = AuthManager::shared(
@@ -261,6 +267,7 @@ async fn list_remote_control_clients_retries_unauthorized_only_once() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
     )
     .await;
     let mut fresh_auth = remote_control_auth_dot_json(Some("account_id"));
@@ -273,6 +280,7 @@ async fn list_remote_control_clients_retries_unauthorized_only_once() {
         codex_home.path(),
         &fresh_auth,
         AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
     )
     .expect("fresh auth should save");
 

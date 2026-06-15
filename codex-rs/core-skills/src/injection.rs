@@ -76,20 +76,7 @@ pub async fn build_skill_injections(
         let fs = loaded_skills
             .and_then(|outcome| outcome.file_system_for_skill(skill))
             .unwrap_or_else(|| Arc::clone(&LOCAL_FS));
-        // Skill metadata may point at a file that is absent, but a path the host
-        // cannot represent means the configured skill cannot be loaded correctly.
-        let path = match PathUri::from_abs_path(&skill.path_to_skills_md) {
-            Ok(path) => path,
-            Err(err) => {
-                emit_skill_injected_metric(otel, skill, "error");
-                result.warnings.push(format!(
-                    "Failed to load skill {name} at {path}: {err:#}",
-                    name = skill.name,
-                    path = skill.path_to_skills_md.display()
-                ));
-                continue;
-            }
-        };
+        let path = PathUri::from_abs_path(&skill.path_to_skills_md);
         match fs.read_file_text(&path, /*sandbox*/ None).await {
             Ok(contents) => {
                 emit_skill_injected_metric(otel, skill, "ok");

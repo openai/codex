@@ -233,6 +233,7 @@ pub(crate) async fn run_direct_request(
                 is_directory: metadata.is_directory,
                 is_file: metadata.is_file,
                 is_symlink: metadata.is_symlink,
+                size: metadata.size,
                 created_at_ms: metadata.created_at_ms,
                 modified_at_ms: metadata.modified_at_ms,
             }))

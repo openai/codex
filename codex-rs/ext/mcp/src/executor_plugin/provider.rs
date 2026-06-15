@@ -21,13 +21,6 @@ pub(super) struct ExecutorPluginMcpProvider;
 /// Failure to load an executor plugin's MCP declarations.
 #[derive(Debug, Error)]
 pub(super) enum ExecutorPluginMcpProviderError {
-    #[error("selected plugin `{plugin_id}` has invalid MCP config path `{path}`: {source}")]
-    InvalidConfigPath {
-        plugin_id: String,
-        path: AbsolutePathBuf,
-        #[source]
-        source: io::Error,
-    },
     #[error("failed to read MCP config for selected plugin `{plugin_id}` at `{path}`: {source}")]
     ReadConfig {
         plugin_id: String,
@@ -67,13 +60,7 @@ async fn load_from_file_system(
         Some(PluginResourceLocator::Environment { path, .. }) => (path.clone(), false),
         None => (plugin_root.join(DEFAULT_MCP_CONFIG_FILE), true),
     };
-    let config_uri = PathUri::from_abs_path(&config_path).map_err(|source| {
-        ExecutorPluginMcpProviderError::InvalidConfigPath {
-            plugin_id: plugin_id.to_string(),
-            path: config_path.clone(),
-            source,
-        }
-    })?;
+    let config_uri = PathUri::from_abs_path(&config_path);
 
     let contents = match file_system
         .read_file_text(&config_uri, /*sandbox*/ None)

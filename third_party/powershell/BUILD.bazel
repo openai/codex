@@ -1,0 +1,27 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["pwsh.exe"])
+
+filegroup(
+    name = "pwsh",
+    srcs = ["pwsh.exe"],
+    tags = ["manual"],
+)
+
+# The executable is also a stable marker whose parent is the runtime root.
+filegroup(
+    name = "runtime_marker",
+    srcs = ["pwsh.exe"],
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "runtime",
+    srcs = glob(
+        ["**"],
+        # This BUILD file is also loaded from the source tree, where the
+        # archive-only paths are intentionally absent.
+        allow_empty = True,
+    ),
+    tags = ["manual"],
+)
