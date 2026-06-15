@@ -28,6 +28,8 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt;
 
+mod rate_limit_resets;
+
 #[derive(Debug)]
 pub enum RequestError {
     UnexpectedStatus {
@@ -294,14 +296,7 @@ impl Client {
     }
 
     pub async fn get_rate_limits_many(&self) -> Result<Vec<RateLimitSnapshot>> {
-        let url = match self.path_style {
-            PathStyle::CodexApi => format!("{}/api/codex/usage", self.base_url),
-            PathStyle::ChatGptApi => format!("{}/wham/usage", self.base_url),
-        };
-        let req = self.http.get(&url).headers(self.headers());
-        let (body, ct) = self.exec_request(req, "GET", &url).await?;
-        let payload: RateLimitStatusPayload = self.decode_json(&url, &ct, &body)?;
-        Ok(Self::rate_limit_snapshots_from_payload(payload))
+        Ok(self.get_rate_limits_with_reset_credits().await?.rate_limits)
     }
 
     pub async fn get_accounts_check(&self) -> Result<AccountsCheckResponse> {

@@ -12,10 +12,45 @@ pub use codex_backend_openapi_models::models::RateLimitWindowSnapshot;
 pub use codex_backend_openapi_models::models::SpendControlLimitDetails;
 pub use codex_backend_openapi_models::models::TaskListItem;
 
+use codex_protocol::protocol::RateLimitSnapshot;
 use serde::Deserialize;
 use serde::de::Deserializer;
 use serde_json::Value;
 use std::collections::HashMap;
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct RateLimitResetCreditsSummary {
+    pub available_count: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RateLimitsWithResetCredits {
+    pub rate_limits: Vec<RateLimitSnapshot>,
+    pub rate_limit_reset_credits: Option<RateLimitResetCreditsSummary>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct RateLimitStatusWithResetCredits {
+    #[serde(flatten)]
+    pub rate_limits: RateLimitStatusPayload,
+    pub rate_limit_reset_credits: Option<RateLimitResetCreditsSummary>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConsumeRateLimitResetCreditCode {
+    Reset,
+    NothingToReset,
+    NoCredit,
+    AlreadyRedeemed,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct ConsumeRateLimitResetCreditResponse {
+    pub code: ConsumeRateLimitResetCreditCode,
+    #[serde(default)]
+    pub windows_reset: i64,
+}
 
 #[derive(Clone, Debug)]
 pub struct AccountsCheckResponse {
