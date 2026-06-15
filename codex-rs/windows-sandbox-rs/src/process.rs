@@ -9,6 +9,7 @@ use anyhow::anyhow;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::Path;
+use std::path::PathBuf;
 use std::ptr;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
@@ -35,6 +36,9 @@ pub struct CreatedProcess {
     pub startup_info: STARTUPINFOW,
     _desktop: LaunchDesktop,
 }
+
+const ERROR_FILE_NOT_FOUND: i32 = 2;
+const ERROR_PATH_NOT_FOUND: i32 = 3;
 
 pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
     let mut items: Vec<(String, String)> =
@@ -70,6 +74,76 @@ unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
     si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
     si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
     Ok(())
+}
+
+fn command_has_explicit_path(command: &str) -> bool {
+    command.contains('\\') || command.contains('/') || command.contains(':')
+}
+
+fn path_exts(env_map: &HashMap<String, String>) -> Vec<String> {
+    let raw = env_map
+        .get("PATHEXT")
+        .cloned()
+        .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_string());
+    raw.split(';')
+        .map(str::trim)
+        .filter(|ext| !ext.is_empty())
+        .map(|ext| ext.to_ascii_lowercase())
+        .collect()
+}
+
+fn path_candidates(command: &str, env_map: &HashMap<String, String>) -> Vec<String> {
+    let command_path = Path::new(command);
+    let has_known_ext = command_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| format!(".{}", ext).to_ascii_lowercase())
+        .is_some_and(|ext| path_exts(env_map).iter().any(|candidate| candidate == &ext));
+    if has_known_ext {
+        return vec![command.to_string()];
+    }
+
+    let mut candidates = vec![command.to_string()];
+    for ext in path_exts(env_map) {
+        candidates.push(format!("{command}{ext}"));
+    }
+    candidates
+}
+
+fn resolved_path_on_env(command: &str, env_map: &HashMap<String, String>) -> Option<PathBuf> {
+    if command.is_empty() || command_has_explicit_path(command) {
+        return None;
+    }
+    let path = env_map.get("PATH")?;
+    let candidates = path_candidates(command, env_map);
+    path.split(';')
+        .map(str::trim)
+        .filter(|dir| !dir.is_empty())
+        .map(Path::new)
+        .find_map(|dir| {
+            candidates
+                .iter()
+                .map(|candidate| dir.join(candidate))
+                .find(|candidate| candidate.is_file())
+        })
+}
+
+fn create_process_path_hint(
+    err: i32,
+    argv: &[String],
+    env_map: &HashMap<String, String>,
+) -> Option<String> {
+    if !matches!(err, ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND) {
+        return None;
+    }
+    let command = argv.first()?;
+    let resolved = resolved_path_on_env(command, env_map)?;
+    Some(format!(
+        "command `{command}` resolves on PATH to `{}`, but the Windows sandbox still reported {} ({}); this usually means the sandboxed user cannot traverse or execute that path",
+        resolved.display(),
+        err,
+        format_last_error(err),
+    ))
 }
 
 /// # Safety
@@ -135,6 +209,7 @@ pub unsafe fn create_process_as_user(
             );
             if ok == 0 {
                 let err = GetLastError() as i32;
+                let path_hint = create_process_path_hint(err, argv, env_map);
                 let msg = format!(
                     "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
                     err,
@@ -146,7 +221,10 @@ pub unsafe fn create_process_as_user(
                     creation_flags,
                 );
                 logging::debug_log(&msg, logs_base_dir);
-                return Err(anyhow!("CreateProcessAsUserW failed: {err}"));
+                return Err(match path_hint {
+                    Some(path_hint) => anyhow!("CreateProcessAsUserW failed: {err}; {path_hint}"),
+                    None => anyhow!("CreateProcessAsUserW failed: {err}"),
+                });
             }
             Ok(CreatedProcess {
                 process_info: pi,
@@ -176,6 +254,7 @@ pub unsafe fn create_process_as_user(
             );
             if ok == 0 {
                 let err = GetLastError() as i32;
+                let path_hint = create_process_path_hint(err, argv, env_map);
                 let msg = format!(
                     "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
                     err,
@@ -187,7 +266,10 @@ pub unsafe fn create_process_as_user(
                     creation_flags,
                 );
                 logging::debug_log(&msg, logs_base_dir);
-                return Err(anyhow!("CreateProcessAsUserW failed: {err}"));
+                return Err(match path_hint {
+                    Some(path_hint) => anyhow!("CreateProcessAsUserW failed: {err}; {path_hint}"),
+                    None => anyhow!("CreateProcessAsUserW failed: {err}"),
+                });
             }
             Ok(CreatedProcess {
                 process_info: pi,
@@ -195,6 +277,35 @@ pub unsafe fn create_process_as_user(
                 _desktop: desktop,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::create_process_path_hint;
+    use std::collections::HashMap;
+    use tempfile::tempdir;
+
+    #[test]
+    fn path_hint_mentions_resolved_executable_for_bare_command() {
+        let temp = tempdir().expect("tempdir");
+        let exe = temp.path().join("go.exe");
+        std::fs::write(&exe, b"stub").expect("write stub");
+        let env = HashMap::from([
+            ("PATH".to_string(), temp.path().display().to_string()),
+            ("PATHEXT".to_string(), ".EXE;.CMD".to_string()),
+        ]);
+
+        let hint = create_process_path_hint(2, &["go".to_string()], &env).expect("path hint");
+
+        assert!(hint.contains("go"));
+        assert!(hint.contains(&exe.display().to_string()));
+    }
+
+    #[test]
+    fn path_hint_skips_explicit_paths() {
+        let env = HashMap::from([("PATH".to_string(), "C:\\tools".to_string())]);
+        assert!(create_process_path_hint(2, &["C:\\tools\\go.exe".to_string()], &env).is_none());
     }
 }
 
