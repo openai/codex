@@ -288,10 +288,14 @@ async fn rewrite_single_file(
         /*additional_permissions*/ None,
         turn_environment.cwd_uri(),
     );
-    if let (Ok(native_path), Some(native_cwd)) = (
-        path.to_abs_path(),
-        sandbox.cwd.as_ref().and_then(|cwd| cwd.to_abs_path().ok()),
-    ) {
+    if !turn_environment.environment.is_remote() {
+        let native_path = path
+            .to_abs_path()
+            .map_err(|error| format!("failed to read `{path_display}`: {error}"))?;
+        let native_cwd = turn_environment
+            .cwd_uri()
+            .to_abs_path()
+            .map_err(|error| format!("failed to read `{path_display}`: {error}"))?;
         let file_system_policy = sandbox.permissions.file_system_sandbox_policy();
         if ReadDenyMatcher::new(&file_system_policy, native_cwd.as_path())
             .is_some_and(|matcher| matcher.is_read_denied(native_path.as_path()))
