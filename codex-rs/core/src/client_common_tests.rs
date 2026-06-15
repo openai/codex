@@ -20,6 +20,7 @@ fn prompt_with_image_outputs() -> Prompt {
                     detail: Some(ImageDetail::Original),
                 }],
                 phase: None,
+                metadata: None,
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "function-call".to_string(),
@@ -29,6 +30,7 @@ fn prompt_with_image_outputs() -> Prompt {
                         detail: Some(ImageDetail::High),
                     },
                 ]),
+                metadata: None,
             },
             ResponseItem::CustomToolCallOutput {
                 call_id: "custom-call".to_string(),
@@ -39,6 +41,7 @@ fn prompt_with_image_outputs() -> Prompt {
                         detail: Some(ImageDetail::Auto),
                     },
                 ]),
+                metadata: None,
             },
         ],
         ..Default::default()
@@ -63,6 +66,7 @@ fn responses_lite_request_copies_strip_image_details() {
                     detail: None,
                 }],
                 phase: None,
+                metadata: None,
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "function-call".to_string(),
@@ -72,6 +76,7 @@ fn responses_lite_request_copies_strip_image_details() {
                         detail: None,
                     },
                 ]),
+                metadata: None,
             },
             ResponseItem::CustomToolCallOutput {
                 call_id: "custom-call".to_string(),
@@ -82,6 +87,7 @@ fn responses_lite_request_copies_strip_image_details() {
                         detail: None,
                     },
                 ]),
+                metadata: None,
             },
         ]
     );

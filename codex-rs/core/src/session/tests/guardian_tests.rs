@@ -536,6 +536,7 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
                     text: "stale developer message".to_string(),
                 }],
                 phase: None,
+                metadata: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -544,6 +545,7 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
                     text: "summary".to_string(),
                 }],
                 phase: None,
+                metadata: None,
             },
         ],
         InitialContextInjection::BeforeLastUserMessage,

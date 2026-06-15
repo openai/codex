@@ -33,6 +33,7 @@ fn assistant_output_text(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        metadata: None,
     }
 }
 

@@ -136,9 +136,11 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
                 text: "REMOTE_COMPACT_SUMMARY".to_string(),
             }],
             phase: None,
+            metadata: None,
         },
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+            metadata: None,
         },
     ];
     let compact_mock = responses::mount_compact_json_once(

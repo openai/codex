@@ -453,6 +453,7 @@ impl App {
                 text: SIDE_BOUNDARY_PROMPT.to_string(),
             }],
             phase: None,
+            metadata: None,
         }
     }
 

@@ -782,7 +782,10 @@ impl ModelClient {
         responses_metadata: &CodexResponsesMetadata,
     ) -> Result<ResponsesApiRequest> {
         let instructions = &prompt.base_instructions.text;
-        let input = prompt.get_formatted_input_for_request(model_info.use_responses_lite);
+        let mut input = prompt.get_formatted_input_for_request(model_info.use_responses_lite);
+        if !self.state.provider.info().is_openai() {
+            input.iter_mut().for_each(ResponseItem::clear_metadata);
+        }
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
         let reasoning = Self::build_reasoning(model_info, effort, summary);
         let include = if reasoning.is_some() {
@@ -1057,9 +1060,15 @@ impl ModelClientSession {
             trace!("incremental request failed, items didn't match");
             return None;
         };
-        let response_items =
-            last_response.map_or(&[][..], |response| response.items_added.as_slice());
-        let Some(incremental_items) = after_previous_input.strip_prefix(response_items) else {
+        let mut response_items =
+            last_response.map_or_else(Vec::new, |response| response.items_added.clone());
+        if !self.client.state.provider.info().is_openai() {
+            response_items
+                .iter_mut()
+                .for_each(ResponseItem::clear_metadata);
+        }
+        let Some(incremental_items) = after_previous_input.strip_prefix(response_items.as_slice())
+        else {
             trace!("incremental request failed, items didn't match");
             return None;
         };

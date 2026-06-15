@@ -83,6 +83,7 @@ pub trait ContextualUserFragment {
                 text: self.render(),
             }],
             phase: None,
+            metadata: None,
         }
     }
 
@@ -94,6 +95,7 @@ pub trait ContextualUserFragment {
                 text: self.render(),
             }],
             phase: None,
+            metadata: None,
         }
     }
 
