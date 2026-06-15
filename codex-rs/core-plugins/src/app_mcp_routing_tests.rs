@@ -31,7 +31,7 @@ fn sorted_mcp_server_names(mcp_servers: &HashMap<String, i32>) -> Vec<String> {
 }
 
 #[test]
-fn apps_route_available_tracks_auth_mode_capabilities() {
+fn apps_route_available_tracks_auth_mode() {
     assert!(apps_route_available(Some(AuthMode::Chatgpt)));
     assert!(apps_route_available(Some(AuthMode::AgentIdentity)));
     assert!(!apps_route_available(Some(AuthMode::ApiKey)));
@@ -39,11 +39,11 @@ fn apps_route_available_tracks_auth_mode_capabilities() {
 }
 
 #[test]
-fn app_and_mcp_resolver_clears_apps_when_apps_route_is_unavailable() {
+fn app_mcp_routing_clears_apps_when_apps_route_is_unavailable() {
     let mut apps = vec![app("linear")];
     let mut mcp_servers = mcp_servers([("linear", 1), ("docs", 2)]);
 
-    resolve_app_and_mcp_capabilities(
+    apply_app_mcp_routing_policy(
         &mut apps,
         &mut mcp_servers,
         Some(AuthMode::ApiKey),
@@ -58,11 +58,11 @@ fn app_and_mcp_resolver_clears_apps_when_apps_route_is_unavailable() {
 }
 
 #[test]
-fn app_and_mcp_resolver_preserves_apps_and_removes_conflicting_mcp_with_apps_route() {
+fn app_mcp_routing_preserves_apps_and_removes_conflicting_mcp_with_apps_route() {
     let mut apps = vec![app("linear"), app("notion")];
     let mut mcp_servers = mcp_servers([("linear", 1), ("docs", 2), ("notion", 3)]);
 
-    resolve_app_and_mcp_capabilities(
+    apply_app_mcp_routing_policy(
         &mut apps,
         &mut mcp_servers,
         Some(AuthMode::Chatgpt),
@@ -80,11 +80,11 @@ fn app_and_mcp_resolver_preserves_apps_and_removes_conflicting_mcp_with_apps_rou
 }
 
 #[test]
-fn app_and_mcp_resolver_preserves_mcp_conflicts_when_plugin_is_inactive() {
+fn app_mcp_routing_preserves_mcp_conflicts_when_plugin_is_inactive() {
     let mut apps = vec![app("linear")];
     let mut mcp_servers = mcp_servers([("linear", 1), ("docs", 2)]);
 
-    resolve_app_and_mcp_capabilities(
+    apply_app_mcp_routing_policy(
         &mut apps,
         &mut mcp_servers,
         Some(AuthMode::Chatgpt),

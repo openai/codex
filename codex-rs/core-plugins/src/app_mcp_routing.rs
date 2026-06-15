@@ -3,11 +3,11 @@ use codex_plugin::AppDeclaration;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-pub(crate) fn apps_route_available(auth_mode: Option<AuthMode>) -> bool {
+pub fn apps_route_available(auth_mode: Option<AuthMode>) -> bool {
     auth_mode.is_some_and(AuthMode::uses_codex_backend)
 }
 
-pub(crate) fn resolve_app_and_mcp_capabilities<M>(
+pub(crate) fn apply_app_mcp_routing_policy<M>(
     apps: &mut Vec<AppDeclaration>,
     mcp_servers: &mut HashMap<String, M>,
     auth_mode: Option<AuthMode>,
@@ -28,5 +28,5 @@ pub(crate) fn resolve_app_and_mcp_capabilities<M>(
 }
 
 #[cfg(test)]
-#[path = "capabilities_tests.rs"]
+#[path = "app_mcp_routing_tests.rs"]
 mod tests;

@@ -1,6 +1,6 @@
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
-use crate::capabilities::apps_route_available;
-use crate::capabilities::resolve_app_and_mcp_capabilities;
+use crate::app_mcp_routing::apply_app_mcp_routing_policy;
+use crate::app_mcp_routing::apps_route_available;
 use crate::manifest::PluginManifestHooks;
 use crate::manifest::PluginManifestPaths;
 use crate::manifest::load_plugin_manifest;
@@ -1092,7 +1092,7 @@ pub async fn load_plugin_mcp_servers(
     }
 
     let mut app_declarations = load_plugin_apps(plugin_root).await;
-    resolve_app_and_mcp_capabilities(
+    apply_app_mcp_routing_policy(
         &mut app_declarations,
         &mut mcp_servers,
         auth_mode,
