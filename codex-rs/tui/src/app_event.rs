@@ -331,13 +331,13 @@ pub(crate) enum AppEvent {
 
     /// Consume one reset credit using a stable idempotency key.
     ConsumeRateLimitResetCredit {
-        redeem_request_id: String,
+        idempotency_key: String,
     },
 
     /// Result of consuming one reset credit.
     RateLimitResetCreditConsumed {
         request_id: u64,
-        redeem_request_id: String,
+        idempotency_key: String,
         result: Result<ConsumeAccountRateLimitResetCreditResponse, String>,
     },
 

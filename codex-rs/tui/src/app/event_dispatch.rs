@@ -831,13 +831,13 @@ impl App {
                     }
                 }
             },
-            AppEvent::ConsumeRateLimitResetCredit { redeem_request_id } => {
+            AppEvent::ConsumeRateLimitResetCredit { idempotency_key } => {
                 let request_id = self.chat_widget.show_rate_limit_reset_consuming_popup();
-                self.consume_rate_limit_reset_credit(app_server, request_id, redeem_request_id);
+                self.consume_rate_limit_reset_credit(app_server, request_id, idempotency_key);
             }
             AppEvent::RateLimitResetCreditConsumed {
                 request_id,
-                redeem_request_id,
+                idempotency_key,
                 result,
             } => {
                 if let Err(err) = &result {
@@ -847,7 +847,7 @@ impl App {
                 }
                 if self.chat_widget.finish_rate_limit_reset_consume(
                     request_id,
-                    redeem_request_id,
+                    idempotency_key,
                     result,
                 ) {
                     self.refresh_rate_limits(

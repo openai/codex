@@ -140,8 +140,8 @@ async fn rate_limit_reset_retry_reuses_idempotency_key() {
 
     assert_matches!(
         rx.try_recv(),
-        Ok(AppEvent::ConsumeRateLimitResetCredit { redeem_request_id })
-            if redeem_request_id == "stable-redeem-id"
+        Ok(AppEvent::ConsumeRateLimitResetCredit { idempotency_key })
+            if idempotency_key == "stable-redeem-id"
     );
 }
 
@@ -444,12 +444,12 @@ fn consume_response(
 fn finish_reset_consume_code(
     chat: &mut ChatWidget,
     request_id: u64,
-    redeem_request_id: &str,
+    idempotency_key: &str,
     code: ConsumeAccountRateLimitResetCreditCode,
 ) -> bool {
     chat.finish_rate_limit_reset_consume(
         request_id,
-        redeem_request_id.to_string(),
+        idempotency_key.to_string(),
         Ok(consume_response(code)),
     )
 }

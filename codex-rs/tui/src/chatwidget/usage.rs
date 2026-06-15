@@ -97,7 +97,7 @@ impl ChatWidget {
     }
 
     fn rate_limit_reset_confirmation_params(available_count: i64) -> SelectionViewParams {
-        let redeem_request_id = Uuid::new_v4().to_string();
+        let idempotency_key = Uuid::new_v4().to_string();
         SelectionViewParams {
             view_id: Some(RATE_LIMIT_RESET_VIEW_ID),
             title: Some("Rate-limit resets".to_string()),
@@ -113,7 +113,7 @@ impl ChatWidget {
                     is_default: true,
                     actions: vec![Box::new(move |tx| {
                         tx.send(AppEvent::ConsumeRateLimitResetCredit {
-                            redeem_request_id: redeem_request_id.clone(),
+                            idempotency_key: idempotency_key.clone(),
                         });
                     })],
                     dismiss_on_select: true,
@@ -166,7 +166,7 @@ impl ChatWidget {
     pub(crate) fn finish_rate_limit_reset_consume(
         &mut self,
         request_id: u64,
-        redeem_request_id: String,
+        idempotency_key: String,
         result: Result<ConsumeAccountRateLimitResetCreditResponse, String>,
     ) -> bool {
         if self.pending_rate_limit_reset_request_id != Some(request_id) {
@@ -210,7 +210,7 @@ impl ChatWidget {
                             name: "Try again".to_string(),
                             actions: vec![Box::new(move |tx| {
                                 tx.send(AppEvent::ConsumeRateLimitResetCredit {
-                                    redeem_request_id: redeem_request_id.clone(),
+                                    idempotency_key: idempotency_key.clone(),
                                 });
                             })],
                             dismiss_on_select: true,

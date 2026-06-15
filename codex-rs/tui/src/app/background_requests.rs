@@ -138,21 +138,21 @@ impl App {
         &mut self,
         app_server: &AppServerSession,
         request_id: u64,
-        redeem_request_id: String,
+        idempotency_key: String,
     ) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
             let result = tokio::time::timeout(
                 RATE_LIMIT_RESET_REQUEST_TIMEOUT,
-                consume_rate_limit_reset_credit_request(request_handle, redeem_request_id.clone()),
+                consume_rate_limit_reset_credit_request(request_handle, idempotency_key.clone()),
             )
             .await
             .map_err(|_| "account/rateLimitResetCredit/consume timed out in TUI".to_string())
             .and_then(|result| result.map_err(|err| err.to_string()));
             app_event_tx.send(AppEvent::RateLimitResetCreditConsumed {
                 request_id,
-                redeem_request_id,
+                idempotency_key,
                 result,
             });
         });
@@ -784,13 +784,13 @@ pub(super) async fn fetch_rate_limit_reset_credits(
 
 pub(super) async fn consume_rate_limit_reset_credit_request(
     request_handle: AppServerRequestHandle,
-    redeem_request_id: String,
+    idempotency_key: String,
 ) -> Result<ConsumeAccountRateLimitResetCreditResponse> {
     let request_id = RequestId::String(format!("consume-rate-limit-reset-{}", Uuid::new_v4()));
     request_handle
         .request_typed(ClientRequest::ConsumeAccountRateLimitResetCredit {
             request_id,
-            params: ConsumeAccountRateLimitResetCreditParams { redeem_request_id },
+            params: ConsumeAccountRateLimitResetCreditParams { idempotency_key },
         })
         .await
         .wrap_err("account/rateLimitResetCredit/consume failed in TUI")
