@@ -87,10 +87,11 @@ impl SuspendContext {
             ),
         }
         super::flush_terminal_input_buffer();
+        super::reapply_raw_mode_after_resume()?;
         tracing::trace!(
             event = "tui_suspend_stage_changed",
-            stage = "terminal_input_flushed",
-            "flushed terminal input after resume"
+            stage = "terminal_input_flushed_and_raw_mode_reapplied",
+            "flushed terminal input and reapplied raw mode after resume"
         );
 
         Ok(())

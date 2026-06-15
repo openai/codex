@@ -283,11 +283,21 @@ pub fn restore() -> Result<()> {
 
 /// Restore the terminal before yielding control to the parent process during suspend.
 ///
-/// Uses a stronger keyboard reset than [`restore`] so the parent shell recovers even if a
-/// terminal missed the stack pop that normally pairs with [`set_modes`]. After `fg`, suspend
-/// handling calls [`set_modes`] again to re-enable the TUI's keyboard reporting.
+/// This must preserve keyboard enhancement stack entries owned by the parent, so it only pops
+/// the entry pushed by [`set_modes`] rather than using the exit-only keyboard reset.
 pub(super) fn restore_for_suspend() -> Result<()> {
-    restore_common(RawModeRestore::Disable, KeyboardRestore::ResetReporting)
+    restore_common(RawModeRestore::Disable, KeyboardRestore::PopStack)
+}
+
+/// Force crossterm's cached raw-mode state back in sync with the terminal after `fg`.
+///
+/// A shell may restore the job's saved termios after the process receives `SIGCONT`. When that
+/// races with [`set_modes`], crossterm still believes raw mode is enabled even though the terminal
+/// has returned to canonical, echoing mode. Clearing crossterm's saved state before enabling raw
+/// mode again makes the kernel state authoritative once the shell has completed its handoff.
+pub(super) fn reapply_raw_mode_after_resume() -> Result<()> {
+    disable_raw_mode()?;
+    enable_raw_mode()
 }
 
 /// Restore the terminal after Codex is exiting.
