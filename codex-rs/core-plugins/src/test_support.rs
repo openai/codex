@@ -115,6 +115,7 @@ pub(crate) async fn load_plugins_config(codex_home: &Path, cwd: &Path) -> Plugin
             /*default_enabled*/ false,
         ),
         "https://chatgpt.com/backend-api/".to_string(),
+        /*auth_route_config*/ None,
     )
 }
 

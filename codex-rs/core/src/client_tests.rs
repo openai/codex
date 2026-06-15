@@ -16,7 +16,9 @@ use crate::test_support::responses_metadata as test_responses_metadata;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
+use codex_login::AuthCredentialsStoreMode;
 use codex_login::AuthManager;
+use codex_login::AuthRouteConfig;
 use codex_login::CodexAuth;
 use codex_model_provider::BearerAuthProvider;
 use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
@@ -78,6 +80,34 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
         /*beta_features_header*/ None,
         /*attestation_provider*/ None,
     )
+}
+
+#[tokio::test]
+async fn route_aware_model_client_uses_http_instead_of_direct_websocket() {
+    let codex_home = TempDir::new().expect("temporary Codex home");
+    let auth_manager = Arc::new(
+        AuthManager::new_with_auth_route_config(
+            codex_home.path().to_path_buf(),
+            /*enable_codex_api_key_env*/ false,
+            AuthCredentialsStoreMode::File,
+            /*chatgpt_base_url*/ None,
+            Some(AuthRouteConfig::system()),
+        )
+        .await,
+    );
+    let model_client = ModelClient::new(
+        Some(auth_manager),
+        ThreadId::new(),
+        ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+        SessionSource::Exec,
+        /*model_verbosity*/ None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+        /*attestation_provider*/ None,
+    );
+
+    assert!(!model_client.responses_websocket_enabled());
 }
 
 fn test_responses_metadata_for_client(

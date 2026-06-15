@@ -885,8 +885,12 @@ impl AccountRequestProcessor {
             ));
         }
 
-        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
-            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
+        let client = BackendClient::from_auth_with_route_config(
+            self.config.chatgpt_base_url.clone(),
+            &auth,
+            self.auth_manager.auth_route_config(),
+        )
+        .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
         let profile = tokio::time::timeout(
             ACCOUNT_TOKEN_USAGE_FETCH_TIMEOUT,
             client.get_token_usage_profile(),
@@ -944,8 +948,12 @@ impl AccountRequestProcessor {
             ));
         }
 
-        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
-            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
+        let client = BackendClient::from_auth_with_route_config(
+            self.config.chatgpt_base_url.clone(),
+            &auth,
+            self.auth_manager.auth_route_config(),
+        )
+        .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
 
         match client
             .send_add_credits_nudge_email(Self::backend_credit_type(params.credit_type))
@@ -989,8 +997,12 @@ impl AccountRequestProcessor {
             ));
         }
 
-        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
-            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
+        let client = BackendClient::from_auth_with_route_config(
+            self.config.chatgpt_base_url.clone(),
+            &auth,
+            self.auth_manager.auth_route_config(),
+        )
+        .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
 
         let snapshots = client
             .get_rate_limits_many()

@@ -6,7 +6,7 @@
 
 use codex_client::BuildCustomCaTransportError;
 use codex_client::BuildRouteAwareHttpClientError;
-use codex_client::ClientRouteClass;
+pub use codex_client::ClientRouteClass;
 use codex_client::CodexHttpClient;
 pub use codex_client::CodexRequestBuilder;
 use codex_client::build_reqwest_client_for_route;
@@ -248,6 +248,15 @@ pub(crate) fn build_default_reqwest_client_for_auth_route(
     endpoint: &str,
     auth_route_config: Option<&AuthRouteConfig>,
 ) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
+    build_default_reqwest_client_for_route(endpoint, ClientRouteClass::Auth, auth_route_config)
+}
+
+/// Builds the standard Codex reqwest client for a known destination.
+pub fn build_default_reqwest_client_for_route(
+    endpoint: &str,
+    route_class: ClientRouteClass,
+    auth_route_config: Option<&AuthRouteConfig>,
+) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
     let Some(route_config) = auth_route_config.and_then(AuthRouteConfig::route_config) else {
         return Ok(build_reqwest_client());
     };
@@ -256,16 +265,20 @@ pub(crate) fn build_default_reqwest_client_for_auth_route(
     if is_sandboxed() {
         return build_reqwest_client_with_custom_ca(builder).map_err(Into::into);
     }
-    build_reqwest_client_for_route(
-        builder,
-        endpoint,
-        ClientRouteClass::Auth,
-        Some(route_config),
-    )
+    build_reqwest_client_for_route(builder, endpoint, route_class, Some(route_config))
 }
 
 pub(crate) fn create_client_for_auth_route(
     endpoint: &str,
+    auth_route_config: Option<&AuthRouteConfig>,
+) -> Result<CodexHttpClient, BuildRouteAwareHttpClientError> {
+    create_client_for_route(endpoint, ClientRouteClass::Auth, auth_route_config)
+}
+
+/// Creates the standard traced Codex HTTP client for a known destination.
+pub fn create_client_for_route(
+    endpoint: &str,
+    route_class: ClientRouteClass,
     auth_route_config: Option<&AuthRouteConfig>,
 ) -> Result<CodexHttpClient, BuildRouteAwareHttpClientError> {
     if auth_route_config
@@ -275,7 +288,7 @@ pub(crate) fn create_client_for_auth_route(
         return Ok(create_client());
     }
 
-    build_default_reqwest_client_for_auth_route(endpoint, auth_route_config)
+    build_default_reqwest_client_for_route(endpoint, route_class, auth_route_config)
         .map(CodexHttpClient::new)
 }
 

@@ -117,12 +117,40 @@ fn auth_route_client_without_proxy_config_preserves_default_client_fallback() {
     );
     assert!(raw_no_proxy_client.is_ok());
 
+    let api_no_proxy_client = build_default_reqwest_client_for_route(
+        "https://api.openai.com/v1/models",
+        ClientRouteClass::Api,
+        /*auth_route_config*/ None,
+    );
+    assert!(api_no_proxy_client.is_ok());
+
+    let traced_api_no_proxy_client = create_client_for_route(
+        "https://api.openai.com/v1/models",
+        ClientRouteClass::Api,
+        /*auth_route_config*/ None,
+    );
+    assert!(traced_api_no_proxy_client.is_ok());
+
     let auth_route_config = AuthRouteConfig::direct();
     let explicit_proxy_client = create_client_for_auth_route(
         "https://auth.openai.com/oauth/token",
         Some(&auth_route_config),
     );
     assert!(explicit_proxy_client.is_err());
+
+    let explicit_api_client = build_default_reqwest_client_for_route(
+        "https://api.openai.com/v1/models",
+        ClientRouteClass::Api,
+        Some(&auth_route_config),
+    );
+    assert!(explicit_api_client.is_err());
+
+    let traced_explicit_api_client = create_client_for_route(
+        "https://api.openai.com/v1/models",
+        ClientRouteClass::Api,
+        Some(&auth_route_config),
+    );
+    assert!(traced_explicit_api_client.is_err());
 }
 
 #[test]

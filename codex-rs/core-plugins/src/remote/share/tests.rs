@@ -25,6 +25,7 @@ use wiremock::matchers::query_param_is_missing;
 fn test_config(server: &MockServer) -> RemotePluginServiceConfig {
     RemotePluginServiceConfig {
         chatgpt_base_url: format!("{}/backend-api", server.uri()),
+        auth_route_config: None,
     }
 }
 

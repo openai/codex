@@ -178,6 +178,7 @@ async fn run_sync_with_transport_overrides(
             &git_binary,
             &api_base_url,
             &backup_archive_api_url,
+            /*auth_route_config*/ None,
         )
     })
     .await
@@ -190,7 +191,11 @@ async fn run_http_sync(
 ) -> Result<String, String> {
     let api_base_url = api_base_url.into();
     tokio::task::spawn_blocking(move || {
-        sync_openai_plugins_repo_via_http(codex_home.as_path(), &api_base_url)
+        sync_openai_plugins_repo_via_http(
+            codex_home.as_path(),
+            &api_base_url,
+            /*auth_route_config*/ None,
+        )
     })
     .await
     .expect("sync task should join")
@@ -329,6 +334,7 @@ exit 1
                 git_path.to_str().expect("utf8 path"),
                 "http://127.0.0.1:9",
                 "http://127.0.0.1:9/backend-api/plugins/export/curated",
+                /*auth_route_config*/ None,
             )
         };
         let first = scope.spawn(run_sync);

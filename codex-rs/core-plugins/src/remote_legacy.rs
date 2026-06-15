@@ -1,6 +1,5 @@
 use crate::remote::RemotePluginServiceConfig;
 use codex_login::CodexAuth;
-use codex_login::default_client::build_reqwest_client;
 use codex_protocol::protocol::Product;
 use serde::Deserialize;
 use std::time::Duration;
@@ -34,6 +33,13 @@ pub enum RemotePluginMutationError {
 
     #[error("chatgpt base url cannot be used for plugin mutation")]
     InvalidBaseUrlPath,
+
+    #[error("failed to configure remote plugin mutation client for {url}: {source}")]
+    HttpClient {
+        url: String,
+        #[source]
+        source: anyhow::Error,
+    },
 
     #[error("failed to send remote plugin mutation request to {url}: {source}")]
     Request {
@@ -73,6 +79,13 @@ pub enum RemotePluginMutationError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum RemotePluginFetchError {
+    #[error("failed to configure remote featured plugin client for {url}: {source}")]
+    HttpClient {
+        url: String,
+        #[source]
+        source: anyhow::Error,
+    },
+
     #[error("failed to send remote featured plugin request to {url}: {source}")]
     Request {
         url: String,
@@ -102,7 +115,13 @@ pub async fn fetch_remote_featured_plugin_ids(
 ) -> Result<Vec<String>, RemotePluginFetchError> {
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/plugins/featured");
-    let client = build_reqwest_client();
+    let client =
+        config
+            .build_http_client(&url)
+            .map_err(|source| RemotePluginFetchError::HttpClient {
+                url: url.clone(),
+                source,
+            })?;
     let mut request = client
         .get(&url)
         .query(&[(
@@ -173,7 +192,13 @@ async fn post_remote_plugin_mutation(
 ) -> Result<RemotePluginMutationResponse, RemotePluginMutationError> {
     let auth = ensure_codex_backend_auth(auth)?;
     let url = remote_plugin_mutation_url(config, plugin_id, action)?;
-    let client = build_reqwest_client();
+    let client =
+        config
+            .build_http_client(&url)
+            .map_err(|source| RemotePluginMutationError::HttpClient {
+                url: url.clone(),
+                source,
+            })?;
     let request = client
         .post(url.clone())
         .timeout(REMOTE_PLUGIN_MUTATION_TIMEOUT)

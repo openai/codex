@@ -13,6 +13,7 @@ use codex_client::OutboundProxyConfig;
 use codex_client::build_reqwest_client_for_route;
 use codex_client::build_reqwest_client_with_custom_ca;
 use codex_client::with_chatgpt_cloudflare_cookie_store;
+use codex_login::AuthRouteConfig;
 use codex_login::CodexAuth;
 use codex_login::default_client::get_codex_user_agent;
 use codex_protocol::account::PlanType as AccountPlanType;
@@ -189,7 +190,23 @@ impl Client {
     }
 
     pub fn from_auth(base_url: impl Into<String>, auth: &CodexAuth) -> Result<Self> {
-        Ok(Self::new(base_url)?
+        Self::from_auth_with_route_config(base_url, auth, /*auth_route_config*/ None)
+    }
+
+    /// Creates an authenticated backend client using the configured outbound route policy.
+    pub fn from_auth_with_route_config(
+        base_url: impl Into<String>,
+        auth: &CodexAuth,
+        auth_route_config: Option<&AuthRouteConfig>,
+    ) -> Result<Self> {
+        let base_url = normalize_base_url(base_url.into());
+        let http = build_reqwest_client_for_route(
+            with_chatgpt_cloudflare_cookie_store(reqwest::Client::builder()),
+            &base_url,
+            ClientRouteClass::Api,
+            auth_route_config.and_then(AuthRouteConfig::route_config),
+        )?;
+        Ok(Self::with_http_client(base_url, http)
             .with_user_agent(get_codex_user_agent())
             .with_auth_provider(codex_model_provider::auth_provider_from_auth(auth)))
     }

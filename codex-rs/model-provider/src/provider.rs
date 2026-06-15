@@ -5,6 +5,7 @@ use std::sync::Arc;
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
 use codex_login::AuthManager;
+use codex_login::AuthRouteConfig;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::manager::OpenAiModelsManager;
@@ -190,14 +191,20 @@ pub fn create_model_provider(
 struct ConfiguredModelProvider {
     info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
+    auth_route_config: Option<AuthRouteConfig>,
 }
 
 impl ConfiguredModelProvider {
     fn new(provider_info: ModelProviderInfo, auth_manager: Option<Arc<AuthManager>>) -> Self {
+        let auth_route_config = auth_manager
+            .as_ref()
+            .and_then(|manager| manager.auth_route_config())
+            .cloned();
         let auth_manager = auth_manager_for_provider(auth_manager, &provider_info);
         Self {
             info: provider_info,
             auth_manager,
+            auth_route_config,
         }
     }
 }
@@ -282,6 +289,7 @@ impl ModelProvider for ConfiguredModelProvider {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
+                    self.auth_route_config.clone(),
                 ));
                 Arc::new(OpenAiModelsManager::new(
                     codex_home,

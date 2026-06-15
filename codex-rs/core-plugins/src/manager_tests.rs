@@ -1412,6 +1412,7 @@ async fn plugin_cache_ignores_unrelated_session_overrides() {
             /*plugins_enabled*/ true,
             /*remote_plugin_enabled*/ false,
             "https://chatgpt.com".to_string(),
+            /*auth_route_config*/ None,
         )
     };
     let manager = PluginsManager::new(codex_home.path().to_path_buf());

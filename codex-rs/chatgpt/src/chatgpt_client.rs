@@ -1,6 +1,7 @@
 use codex_core::config::Config;
 use codex_login::AuthManager;
-use codex_login::default_client::create_client;
+use codex_login::default_client::ClientRouteClass;
+use codex_login::default_client::create_client_for_route;
 
 use anyhow::Context;
 use serde::de::DeserializeOwned;
@@ -38,13 +39,17 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
         "ChatGPT account ID not available, please re-run `codex login`"
     );
 
-    // Make direct HTTP request to ChatGPT backend API with the token
-    let client = create_client();
     let url = format!(
         "{}/{}",
         chatgpt_base_url.trim_end_matches('/'),
         path.trim_start_matches('/')
     );
+    let client = create_client_for_route(
+        &url,
+        ClientRouteClass::Api,
+        auth_manager.auth_route_config(),
+    )
+    .context("Failed to configure ChatGPT backend client")?;
 
     let mut request = client
         .get(&url)

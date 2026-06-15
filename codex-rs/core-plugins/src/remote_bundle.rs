@@ -5,7 +5,9 @@ use crate::store::PluginInstallResult;
 use crate::store::PluginStore;
 use crate::store::PluginStoreError;
 use crate::store::validate_plugin_version_segment;
-use codex_login::default_client::build_reqwest_client;
+use codex_login::AuthRouteConfig;
+use codex_login::default_client::ClientRouteClass;
+use codex_login::default_client::build_default_reqwest_client_for_route;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -86,6 +88,13 @@ pub enum RemotePluginBundleInstallError {
         url: String,
         #[source]
         source: reqwest::Error,
+    },
+
+    #[error("failed to configure remote plugin bundle client for {url}: {source}")]
+    DownloadClient {
+        url: String,
+        #[source]
+        source: anyhow::Error,
     },
 
     #[error("remote plugin bundle download from {url} failed with status {status}: {body}")]
@@ -226,10 +235,12 @@ fn is_loopback_url(url: &Url) -> bool {
 pub async fn download_and_install_remote_plugin_bundle(
     codex_home: PathBuf,
     bundle: ValidatedRemotePluginBundle,
+    auth_route_config: Option<&AuthRouteConfig>,
 ) -> Result<PluginInstallResult, RemotePluginBundleInstallError> {
     let bundle_bytes = download_remote_plugin_bundle_with_limit(
         &bundle.bundle_download_url,
         /*max_bytes*/ REMOTE_PLUGIN_BUNDLE_MAX_DOWNLOAD_BYTES,
+        auth_route_config,
     )
     .await?;
     tokio::task::spawn_blocking(move || {
@@ -246,10 +257,12 @@ pub async fn download_and_install_remote_plugin_bundle(
 pub(crate) async fn download_and_extract_remote_plugin_bundle_to_path(
     bundle: ValidatedRemotePluginBundle,
     destination: AbsolutePathBuf,
+    auth_route_config: Option<&AuthRouteConfig>,
 ) -> Result<AbsolutePathBuf, RemotePluginBundleInstallError> {
     let bundle_bytes = download_remote_plugin_bundle_with_limit(
         &bundle.bundle_download_url,
         /*max_bytes*/ REMOTE_PLUGIN_BUNDLE_MAX_DOWNLOAD_BYTES,
+        auth_route_config,
     )
     .await?;
     tokio::task::spawn_blocking(move || {
@@ -266,8 +279,17 @@ pub(crate) async fn download_and_extract_remote_plugin_bundle_to_path(
 async fn download_remote_plugin_bundle_with_limit(
     bundle_download_url: &str,
     max_bytes: u64,
+    auth_route_config: Option<&AuthRouteConfig>,
 ) -> Result<Vec<u8>, RemotePluginBundleInstallError> {
-    let client = build_reqwest_client();
+    let client = build_default_reqwest_client_for_route(
+        bundle_download_url,
+        ClientRouteClass::Api,
+        auth_route_config,
+    )
+    .map_err(|source| RemotePluginBundleInstallError::DownloadClient {
+        url: bundle_download_url.to_string(),
+        source: source.into(),
+    })?;
     let response = client
         .get(bundle_download_url)
         .timeout(REMOTE_PLUGIN_BUNDLE_DOWNLOAD_TIMEOUT)

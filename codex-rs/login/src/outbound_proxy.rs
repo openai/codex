@@ -3,9 +3,9 @@ use codex_client::OutboundProxyMode;
 use codex_config::types::SystemProxyFeatureConfigToml;
 use codex_config::types::SystemProxyFeatureModeToml;
 
-/// Stable route-selection policy for auth-owned clients.
+/// Stable route-selection policy for Codex-owned clients.
 ///
-/// Auth call sites should accept this type instead of lower-level resolver
+/// Call sites should accept this type instead of lower-level resolver
 /// details. Config parsing decides whether to construct one, and the client
 /// layer remains responsible for platform-specific proxy resolution.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -33,6 +33,13 @@ impl AuthRouteConfig {
     /// Returns the shared outbound proxy policy for route-aware clients.
     pub fn route_config(&self) -> Option<&OutboundProxyConfig> {
         self.route_config.as_ref()
+    }
+
+    /// Returns whether clients need a proxy-aware transport rather than a direct socket.
+    pub fn requires_route_aware_transport(&self) -> bool {
+        self.route_config
+            .as_ref()
+            .is_some_and(|config| config.mode() != OutboundProxyMode::Direct)
     }
 
     fn from_outbound_proxy_mode(mode: OutboundProxyMode) -> Self {
@@ -102,5 +109,11 @@ mod tests {
                 Some(expected_config)
             );
         }
+
+        assert!(AuthRouteConfig::auto().requires_route_aware_transport());
+        assert!(AuthRouteConfig::env().requires_route_aware_transport());
+        assert!(AuthRouteConfig::system().requires_route_aware_transport());
+        assert!(!AuthRouteConfig::direct().requires_route_aware_transport());
+        assert!(!AuthRouteConfig::default().requires_route_aware_transport());
     }
 }

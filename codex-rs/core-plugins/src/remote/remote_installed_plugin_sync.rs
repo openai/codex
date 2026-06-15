@@ -227,6 +227,7 @@ pub async fn sync_remote_installed_plugin_bundles_once(
             match crate::remote_bundle::download_and_install_remote_plugin_bundle(
                 codex_home.clone(),
                 bundle,
+                config.auth_route_config.as_ref(),
             )
             .await
             {
