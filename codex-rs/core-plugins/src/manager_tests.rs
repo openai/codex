@@ -781,11 +781,15 @@ remote_plugin = true
 [plugins."linear@openai-curated"]
 enabled = true
 
+[plugins."linear@openai-api-curated"]
+enabled = true
+
 [plugins."calendar@openai-curated"]
 enabled = true
 "#,
     );
     write_cached_plugin(codex_home.path(), "openai-curated", "linear");
+    write_cached_plugin(codex_home.path(), "openai-api-curated", "linear");
     write_cached_plugin(codex_home.path(), "openai-curated", "calendar");
     write_cached_plugin(codex_home.path(), "openai-curated-remote", "linear");
     write_cached_plugin(codex_home.path(), "openai-curated-remote", "remote-only");

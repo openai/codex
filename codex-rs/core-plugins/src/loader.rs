@@ -199,18 +199,21 @@ fn merge_configured_plugins_with_remote_installed(
     store: &PluginStore,
     prefer_remote_curated_conflicts: bool,
 ) -> HashMap<String, PluginConfig> {
-    let local_curated_installed_plugin_keys = configured_plugins
-        .keys()
-        .filter_map(|plugin_key| {
-            let plugin_id = PluginId::parse(plugin_key).ok()?;
-            if !is_openai_curated_marketplace_name(&plugin_id.marketplace_name) {
-                return None;
-            }
-            store
-                .active_plugin_version(&plugin_id)
-                .map(|_| (plugin_id.plugin_name, plugin_key.clone()))
-        })
-        .collect::<HashMap<_, _>>();
+    let mut local_curated_installed_plugin_keys = HashMap::<String, Vec<String>>::new();
+    for plugin_key in configured_plugins.keys() {
+        let Ok(plugin_id) = PluginId::parse(plugin_key) else {
+            continue;
+        };
+        if !is_openai_curated_marketplace_name(&plugin_id.marketplace_name)
+            || store.active_plugin_version(&plugin_id).is_none()
+        {
+            continue;
+        }
+        local_curated_installed_plugin_keys
+            .entry(plugin_id.plugin_name)
+            .or_default()
+            .push(plugin_key.clone());
+    }
 
     for (plugin_key, plugin_config) in extra_plugins {
         let remote_curated_plugin_name = installed_plugin_name_for_marketplace(
@@ -218,13 +221,15 @@ fn merge_configured_plugins_with_remote_installed(
             REMOTE_GLOBAL_MARKETPLACE_NAME,
             store,
         );
-        let local_curated_plugin_key = remote_curated_plugin_name
+        let local_curated_plugin_keys = remote_curated_plugin_name
             .as_ref()
             .and_then(|plugin_name| local_curated_installed_plugin_keys.get(plugin_name));
 
-        if let Some(local_curated_plugin_key) = local_curated_plugin_key {
+        if let Some(local_curated_plugin_keys) = local_curated_plugin_keys {
             if prefer_remote_curated_conflicts {
-                configured_plugins.remove(local_curated_plugin_key);
+                for local_curated_plugin_key in local_curated_plugin_keys {
+                    configured_plugins.remove(local_curated_plugin_key);
+                }
             } else {
                 continue;
             }

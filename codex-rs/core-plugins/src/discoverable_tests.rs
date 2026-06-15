@@ -13,6 +13,7 @@ use crate::test_support::load_plugins_config;
 use crate::test_support::write_curated_plugin;
 use crate::test_support::write_curated_plugin_sha_with;
 use crate::test_support::write_file;
+use crate::test_support::write_openai_api_curated_marketplace;
 use crate::test_support::write_openai_curated_marketplace;
 use codex_config::CONFIG_TOML_FILE;
 use codex_login::CodexAuth;
@@ -55,6 +56,34 @@ async fn returns_fallback_plugins_without_installed_apps() {
         vec![
             "openai-developers@openai-curated".to_string(),
             "slack@openai-curated".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn returns_api_curated_fallback_plugins_for_direct_provider_auth() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let curated_root = curated_plugins_repo_path(codex_home.path());
+    write_openai_api_curated_marketplace(&curated_root, &["sample", "slack", "openai-developers"]);
+
+    let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let auth = CodexAuth::from_api_key("test-api-key");
+    let discoverable_plugins = list_discoverable_plugins(
+        &plugins_manager,
+        discovery_input(plugins, &[], &[], &[]),
+        Some(&auth),
+    )
+    .await;
+
+    assert_eq!(
+        discoverable_plugins
+            .into_iter()
+            .map(|plugin| plugin.id)
+            .collect::<Vec<_>>(),
+        vec![
+            "openai-developers@openai-api-curated".to_string(),
+            "slack@openai-api-curated".to_string(),
         ]
     );
 }
