@@ -1364,53 +1364,6 @@
             },
             "method": {
               "enum": [
-                "runtime/install"
-              ],
-              "title": "Runtime/installRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/RuntimeInstallParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Runtime/installRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
-                "runtime/install/cancel"
-              ],
-              "title": "Runtime/install/cancelRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "type": "null"
-            }
-          },
-          "required": [
-            "id",
-            "method"
-          ],
-          "title": "Runtime/install/cancelRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
                 "plugin/uninstall"
               ],
               "title": "Plugin/uninstallRequestMethod",
@@ -15167,19 +15120,6 @@
           }
         ]
       },
-      "RuntimeInstallCancelResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "status": {
-            "$ref": "#/definitions/v2/RuntimeInstallCancelStatus"
-          }
-        },
-        "required": [
-          "status"
-        ],
-        "title": "RuntimeInstallCancelResponse",
-        "type": "object"
-      },
       "RuntimeInstallCancelStatus": {
         "enum": [
           "canceled",
@@ -15240,29 +15180,6 @@
           "archiveSha256",
           "archiveUrl"
         ],
-        "type": "object"
-      },
-      "RuntimeInstallParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "environmentId": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "manifest": {
-            "$ref": "#/definitions/v2/RuntimeInstallManifestParams"
-          },
-          "release": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "manifest",
-          "release"
-        ],
-        "title": "RuntimeInstallParams",
         "type": "object"
       },
       "RuntimeInstallPaths": {
@@ -15351,29 +15268,6 @@
           "configuring"
         ],
         "type": "string"
-      },
-      "RuntimeInstallResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "bundleVersion": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "paths": {
-            "$ref": "#/definitions/v2/RuntimeInstallPaths"
-          },
-          "status": {
-            "$ref": "#/definitions/v2/RuntimeInstallStatus"
-          }
-        },
-        "required": [
-          "paths",
-          "status"
-        ],
-        "title": "RuntimeInstallResponse",
-        "type": "object"
       },
       "RuntimeInstallStatus": {
         "enum": [

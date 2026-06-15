@@ -4,6 +4,7 @@ use std::sync::atomic::Ordering;
 
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
+use codex_utils_home_dir::find_codex_home;
 use serde_json::to_value;
 use std::collections::HashSet;
 use tokio::sync::Mutex;
@@ -129,7 +130,8 @@ impl ExecServerHandler {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(session);
         Ok(InitializeResponse {
             session_id,
-            codex_home: crate::codex_home::default_codex_home()?,
+            codex_home: find_codex_home()
+                .map_err(|err| internal_error(format!("failed to locate Codex home: {err}")))?,
         })
     }
 

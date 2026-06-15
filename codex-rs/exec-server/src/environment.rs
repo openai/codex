@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use codex_app_server_protocol::JSONRPCErrorError;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_home_dir::find_codex_home;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 
@@ -14,7 +14,6 @@ use crate::HttpClient;
 use crate::client::LazyRemoteExecServerClient;
 use crate::client::http_client::ReqwestHttpClient;
 use crate::client_api::ExecServerTransportParams;
-use crate::codex_home::default_codex_home_path;
 use crate::environment_provider::DefaultEnvironmentProvider;
 use crate::environment_provider::EnvironmentDefault;
 use crate::environment_provider::EnvironmentProvider;
@@ -28,7 +27,6 @@ use crate::protocol::EnvironmentInfo;
 use crate::protocol::ShellInfo;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
-use crate::rpc::internal_error;
 use codex_shell_command::shell_detect::DetectedShell;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
@@ -354,16 +352,6 @@ impl EnvironmentInfoProvider for RemoteEnvironmentInfoProvider {
         async move { self.client.environment_info().await }.boxed()
     }
 }
-fn exec_server_error_to_jsonrpc(err: ExecServerError) -> JSONRPCErrorError {
-    match err {
-        ExecServerError::Server { code, message } => JSONRPCErrorError {
-            code,
-            data: None,
-            message,
-        },
-        _ => internal_error(err.to_string()),
-    }
-}
 
 impl Environment {
     /// Builds a test-only local environment without configured sandbox helper paths.
@@ -519,24 +507,24 @@ impl Environment {
         Arc::clone(&self.filesystem)
     }
 
-    pub async fn codex_home(&self) -> Result<AbsolutePathBuf, JSONRPCErrorError> {
+    pub async fn codex_home(&self) -> Result<AbsolutePathBuf, ExecServerError> {
         if let Some(codex_home) = self.codex_home.clone() {
             return Ok(codex_home);
         }
         let client = self.remote_client.as_ref().ok_or_else(|| {
-            internal_error("failed to locate local codex home for runtime install")
+            ExecServerError::Protocol(
+                "failed to locate local codex home for runtime install".to_string(),
+            )
         })?;
-        let client = client.get().await.map_err(exec_server_error_to_jsonrpc)?;
-        client
-            .codex_home()
-            .ok_or_else(|| internal_error("remote exec-server did not report a codex home"))
+        let client = client.get().await?;
+        client.codex_home().ok_or_else(|| {
+            ExecServerError::Protocol("remote exec-server did not report a codex home".to_string())
+        })
     }
 }
 
 fn default_local_codex_home() -> Option<AbsolutePathBuf> {
-    default_codex_home_path()
-        .ok()
-        .and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok())
+    find_codex_home().ok()
 }
 
 impl EnvironmentInfo {

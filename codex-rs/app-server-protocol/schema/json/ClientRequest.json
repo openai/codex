@@ -2982,27 +2982,6 @@
       ],
       "type": "object"
     },
-    "RuntimeInstallParams": {
-      "properties": {
-        "environmentId": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "manifest": {
-          "$ref": "#/definitions/RuntimeInstallManifestParams"
-        },
-        "release": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "manifest",
-        "release"
-      ],
-      "type": "object"
-    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -5682,53 +5661,6 @@
         "params"
       ],
       "title": "Plugin/installRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "runtime/install"
-          ],
-          "title": "Runtime/installRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/RuntimeInstallParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Runtime/installRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "runtime/install/cancel"
-          ],
-          "title": "Runtime/install/cancelRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "type": "null"
-        }
-      },
-      "required": [
-        "id",
-        "method"
-      ],
-      "title": "Runtime/install/cancelRequest",
       "type": "object"
     },
     {

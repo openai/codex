@@ -791,11 +791,13 @@ client_request_definitions! {
         serialization: global("config"),
         response: v2::PluginInstallResponse,
     },
+    #[experimental("runtime/install")]
     RuntimeInstall => "runtime/install" {
         params: v2::RuntimeInstallParams,
         serialization: global("runtime-install"),
         response: v2::RuntimeInstallResponse,
     },
+    #[experimental("runtime/install/cancel")]
     RuntimeInstallCancel => "runtime/install/cancel" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         serialization: None,

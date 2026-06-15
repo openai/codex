@@ -17,6 +17,7 @@ use codex_utils_path_uri::PathUri;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::errors::exec_server_error_to_jsonrpc;
 use crate::errors::internal_error;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,7 +56,10 @@ pub(crate) struct RuntimeExecutor {
 
 impl RuntimeExecutor {
     pub(crate) async fn new(environment: &Environment) -> Result<Self, JSONRPCErrorError> {
-        let codex_home = environment.codex_home().await?;
+        let codex_home = environment
+            .codex_home()
+            .await
+            .map_err(exec_server_error_to_jsonrpc)?;
         Ok(Self {
             backend: environment.get_exec_backend(),
             filesystem: environment.get_filesystem(),

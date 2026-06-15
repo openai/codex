@@ -11,6 +11,7 @@ use codex_app_server_protocol::RuntimeInstallResponse;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
+use codex_exec_server::ExecServerError;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -33,10 +34,24 @@ pub(crate) async fn finalize_runtime_install(
         return Ok(response);
     }
 
-    let codex_home = environment.codex_home().await?;
+    let codex_home = environment
+        .codex_home()
+        .await
+        .map_err(exec_server_error_to_jsonrpc)?;
     response.paths =
         finalize_runtime_paths(environment.get_filesystem(), &codex_home, response.paths).await?;
     Ok(response)
+}
+
+fn exec_server_error_to_jsonrpc(err: ExecServerError) -> JSONRPCErrorError {
+    match err {
+        ExecServerError::Server { code, message } => JSONRPCErrorError {
+            code,
+            message,
+            data: None,
+        },
+        _ => internal_error(err.to_string()),
+    }
 }
 
 async fn finalize_runtime_paths(
