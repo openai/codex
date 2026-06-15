@@ -170,7 +170,9 @@ fn tool_with_model_visible_input_schema_masks_file_params() {
         .clone(),
     ));
 
-    let tool = tool_with_model_visible_input_schema(&tool);
+    let tool = tool_with_model_visible_input_schema(
+        &tool, /*honor_openai_file_params*/ true, /*mcp_file_transfer_enabled*/ false,
+    );
 
     assert_eq!(
         *tool.input_schema,
@@ -198,7 +200,11 @@ fn tool_with_model_visible_input_schema_masks_file_params() {
 fn tool_with_model_visible_input_schema_leaves_tools_without_file_params_unchanged() {
     let original_tool = create_test_tool("custom", "upload").tool;
 
-    let tool = tool_with_model_visible_input_schema(&original_tool);
+    let tool = tool_with_model_visible_input_schema(
+        &original_tool,
+        /*honor_openai_file_params*/ true,
+        /*mcp_file_transfer_enabled*/ false,
+    );
 
     assert_eq!(tool, original_tool);
 }
@@ -831,6 +837,31 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_while_client_is_pending()
         .expect("tool from startup cache");
     assert_eq!(tool.server_name, CODEX_APPS_MCP_SERVER_NAME);
     assert_eq!(tool.callable_name, "calendar_create_event");
+}
+
+#[tokio::test]
+async fn file_methods_are_rejected_while_feature_is_disabled() {
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+
+    let error = manager
+        .prepare_file_upload(
+            "server",
+            PrepareUploadParams {
+                name: "file.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+                size: 4,
+            },
+        )
+        .await
+        .expect_err("disabled file methods must fail");
+
+    assert_eq!(error.to_string(), "MCP file transfer is disabled");
 }
 
 #[tokio::test]

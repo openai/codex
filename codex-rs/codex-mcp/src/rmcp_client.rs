@@ -27,6 +27,7 @@ use crate::codex_apps::normalize_codex_apps_callable_namespace;
 use crate::codex_apps::normalize_codex_apps_tool_title;
 use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
 use crate::elicitation::ElicitationRequestManager;
+use crate::file_transfer::McpFileCapabilities;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
 use crate::runtime::McpRuntimeContext;
@@ -36,7 +37,6 @@ use crate::server::McpServerLaunch;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
-use crate::tools::tool_with_model_visible_input_schema;
 use anyhow::Result;
 use anyhow::anyhow;
 use async_channel::Sender;
@@ -94,6 +94,7 @@ pub(crate) struct ManagedClient {
     pub(crate) tool_timeout: Option<Duration>,
     pub(crate) server_instructions: Option<String>,
     pub(crate) server_supports_sandbox_state_meta_capability: bool,
+    pub(crate) file_capabilities: McpFileCapabilities,
     pub(crate) codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
 }
 
@@ -262,10 +263,6 @@ impl AsyncManagedClient {
         let annotate_tools = |tools: Vec<ToolInfo>| {
             let mut tools = tools;
             for tool in &mut tools {
-                if tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
-                    tool.tool = tool_with_model_visible_input_schema(&tool.tool);
-                }
-
                 let plugin_names = match tool.connector_id.as_deref() {
                     Some(connector_id) => self
                         .tool_plugin_provenance
@@ -536,6 +533,8 @@ async fn start_server_task(
     }
     let tools = filter_tools(tools, &tool_filter);
 
+    let file_capabilities =
+        McpFileCapabilities::from_server_and_tools(&initialize_result.capabilities, &tools);
     let managed = ManagedClient {
         client: Arc::clone(&client),
         server_info,
@@ -544,6 +543,7 @@ async fn start_server_task(
         tool_filter,
         server_instructions: initialize_result.instructions,
         server_supports_sandbox_state_meta_capability,
+        file_capabilities,
         codex_apps_tools_cache_context,
     };
 

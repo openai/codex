@@ -7,7 +7,6 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use codex_config::McpServerConfig;
 use codex_protocol::ToolName;
@@ -20,6 +19,7 @@ use sha1::Digest;
 use sha1::Sha1;
 use tracing::warn;
 
+use crate::file_transfer::tool_with_file_input_schema;
 use crate::mcp::sanitize_responses_api_tool_name;
 
 pub(crate) const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str =
@@ -116,19 +116,12 @@ impl ToolFilter {
 /// Returns the model-visible view of a tool while preserving the raw metadata
 /// used by execution. Keep cache entries raw and call this at manager return
 /// boundaries.
-pub(crate) fn tool_with_model_visible_input_schema(tool: &Tool) -> Tool {
-    let file_params = declared_openai_file_input_param_names(tool.meta.as_deref());
-    if file_params.is_empty() {
-        return tool.clone();
-    }
-
-    let mut tool = tool.clone();
-    let mut input_schema = JsonValue::Object(tool.input_schema.as_ref().clone());
-    mask_input_schema_for_file_path_params(&mut input_schema, &file_params);
-    if let JsonValue::Object(input_schema) = input_schema {
-        tool.input_schema = Arc::new(input_schema);
-    }
-    tool
+pub(crate) fn tool_with_model_visible_input_schema(
+    tool: &Tool,
+    honor_openai_file_params: bool,
+    mcp_file_transfer_enabled: bool,
+) -> Tool {
+    tool_with_file_input_schema(tool, honor_openai_file_params, mcp_file_transfer_enabled)
 }
 
 pub(crate) fn filter_tools(tools: Vec<ToolInfo>, filter: &ToolFilter) -> Vec<ToolInfo> {
@@ -267,52 +260,6 @@ fn callable_namespace_with_prefix(namespace: &str, prefix_mcp_tool_names: bool) 
         namespace.to_string()
     } else {
         format!("{LEGACY_MCP_TOOL_NAME_PREFIX}{namespace}")
-    }
-}
-
-fn mask_input_schema_for_file_path_params(input_schema: &mut JsonValue, file_params: &[String]) {
-    let Some(properties) = input_schema
-        .as_object_mut()
-        .and_then(|schema| schema.get_mut("properties"))
-        .and_then(JsonValue::as_object_mut)
-    else {
-        return;
-    };
-
-    for field_name in file_params {
-        let Some(property_schema) = properties.get_mut(field_name) else {
-            continue;
-        };
-        mask_input_property_schema(property_schema);
-    }
-}
-
-fn mask_input_property_schema(schema: &mut JsonValue) {
-    let Some(object) = schema.as_object_mut() else {
-        return;
-    };
-
-    let mut description = object
-        .get("description")
-        .and_then(JsonValue::as_str)
-        .map(str::to_string)
-        .unwrap_or_default();
-    let guidance = "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here.";
-    if description.is_empty() {
-        description = guidance.to_string();
-    } else if !description.contains(guidance) {
-        description = format!("{description} {guidance}");
-    }
-
-    let is_array = object.get("type").and_then(JsonValue::as_str) == Some("array")
-        || object.get("items").is_some();
-    object.clear();
-    object.insert("description".to_string(), JsonValue::String(description));
-    if is_array {
-        object.insert("type".to_string(), JsonValue::String("array".to_string()));
-        object.insert("items".to_string(), serde_json::json!({ "type": "string" }));
-    } else {
-        object.insert("type".to_string(), JsonValue::String("string".to_string()));
     }
 }
 

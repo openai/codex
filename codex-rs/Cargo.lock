@@ -2645,6 +2645,7 @@ dependencies = [
  "insta",
  "libc",
  "maplit",
+ "mime_guess",
  "once_cell",
  "openssl-sys",
  "opentelemetry",

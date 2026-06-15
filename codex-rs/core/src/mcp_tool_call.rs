@@ -15,6 +15,8 @@ use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian_with_reviewer;
 use crate::hook_runtime::run_permission_request_hooks;
+use crate::mcp_file_transfer::materialize_mcp_file_outputs;
+use crate::mcp_file_transfer::rewrite_mcp_file_arguments;
 use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
@@ -333,18 +335,58 @@ async fn handle_approved_mcp_tool_call(
         .map(str::to_string);
 
     let start = Instant::now();
-    let rewrite = rewrite_mcp_tool_arguments_for_openai_files(
-        sess,
-        turn_context,
-        arguments_value.clone(),
-        metadata.and_then(|metadata| metadata.openai_file_input_params.as_deref()),
-    )
-    .await;
-    let tool_input = match &rewrite {
-        Ok(Some(rewritten_arguments)) => rewritten_arguments.clone(),
-        Ok(None) | Err(_) => arguments_value
+    let mcp_file_transfer_enabled = turn_context.features.enabled(Feature::McpFileTransfer);
+    let mcp_rewrite = if mcp_file_transfer_enabled {
+        rewrite_mcp_file_arguments(
+            sess,
+            turn_context,
+            &server,
+            arguments_value.clone(),
+            metadata.map_or(&[], |metadata| metadata.file_input_specs.as_slice()),
+        )
+        .await
+    } else {
+        Ok(arguments_value.clone())
+    };
+    let legacy_params = metadata.map(|metadata| {
+        metadata
+            .openai_file_input_params
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|path| {
+                !mcp_file_transfer_enabled
+                    || !metadata
+                        .file_input_specs
+                        .iter()
+                        .any(|spec| spec.path == path.as_str() && spec.is_mcp())
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    let rewrite = match mcp_rewrite {
+        Ok(arguments) => {
+            rewrite_mcp_tool_arguments_for_openai_files(
+                sess,
+                turn_context,
+                arguments,
+                legacy_params.as_deref(),
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    };
+    let tool_input = if mcp_file_transfer_enabled {
+        arguments_value
             .clone()
-            .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new())),
+            .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()))
+    } else {
+        match &rewrite {
+            Ok(Some(rewritten_arguments)) => rewritten_arguments.clone(),
+            Ok(None) | Err(_) => arguments_value
+                .clone()
+                .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new())),
+        }
     };
     let result = async {
         let rewritten_arguments = rewrite?;
@@ -585,6 +627,12 @@ async fn execute_mcp_tool_call(
         )
         .await
         .map_err(|e| format!("tool call error: {e:?}"))?;
+    let result = if turn_context.features.enabled(Feature::McpFileTransfer) {
+        materialize_mcp_file_outputs(sess, turn_context, &invocation.server, call_id, result)
+            .await?
+    } else {
+        result
+    };
     let result = sanitize_mcp_tool_result_for_model(
         turn_context
             .model_info
@@ -974,6 +1022,7 @@ pub(crate) struct McpToolApprovalMetadata {
     mcp_app_resource_uri: Option<String>,
     codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
     openai_file_input_params: Option<Vec<String>>,
+    file_input_specs: Vec<codex_mcp::FileInputSpec>,
 }
 
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
@@ -1458,6 +1507,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         None
     };
 
+    let file_input_specs = codex_mcp::file_input_specs(&tool_info.tool);
     Some(McpToolApprovalMetadata {
         annotations: tool_info.tool.annotations,
         connector_id: tool_info.connector_id,
@@ -1479,6 +1529,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
             server,
             tool_info.tool.meta.as_deref(),
         ),
+        file_input_specs,
     })
 }
 

@@ -1163,6 +1163,9 @@ impl Session {
                 otel.name = "session_init.mcp_manager_init",
             ))
             .await;
+            mcp_connection_manager.set_mcp_file_transfer_enabled(
+                config.features.enabled(Feature::McpFileTransfer),
+            );
             sess.services
                 .install_mcp_connection_manager(mcp_connection_manager)
                 .await?;

@@ -84,6 +84,7 @@ fn approval_metadata(
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        file_input_specs: Vec::new(),
     }
 }
 
@@ -1175,6 +1176,7 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
             .expect("_codex_apps metadata should be an object"),
         ),
         openai_file_input_params: None,
+        file_input_specs: Vec::new(),
     };
 
     assert_eq!(
@@ -1630,6 +1632,7 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        file_input_specs: Vec::new(),
     };
 
     let request = build_guardian_mcp_tool_review_request("call-1", &invocation, Some(&metadata));
@@ -2295,6 +2298,7 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        file_input_specs: Vec::new(),
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -2369,6 +2373,7 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        file_input_specs: Vec::new(),
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -2426,6 +2431,7 @@ async fn permission_request_hook_allows_mcp_tool_call() {
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        file_input_specs: Vec::new(),
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -2562,6 +2568,7 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        file_input_specs: Vec::new(),
     };
     let remembered_key =
         session_mcp_tool_approval_key(&invocation, Some(&metadata), AppToolApproval::Auto)
@@ -2649,6 +2656,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        file_input_specs: Vec::new(),
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -2703,6 +2711,7 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        file_input_specs: Vec::new(),
     };
 
     let mut approval_task = {
@@ -2758,6 +2767,7 @@ async fn full_access_mode_skips_mcp_tool_approval_for_all_approval_modes() {
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        file_input_specs: Vec::new(),
     };
 
     for approval_mode in [
@@ -2811,6 +2821,7 @@ async fn approve_mode_skips_guardian_in_every_permission_mode() {
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        file_input_specs: Vec::new(),
     };
 
     for approval_policy in [

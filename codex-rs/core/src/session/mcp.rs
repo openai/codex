@@ -356,6 +356,8 @@ impl Session {
             elicitation_reviewer,
         )
         .await;
+        refreshed_manager
+            .set_mcp_file_transfer_enabled(config.features.enabled(Feature::McpFileTransfer));
         {
             let current_manager = self.services.mcp_connection_manager.load_full();
             refreshed_manager.set_elicitations_auto_deny(current_manager.elicitations_auto_deny());

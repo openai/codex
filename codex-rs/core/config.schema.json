@@ -524,6 +524,9 @@
             "local_thread_store_compression": {
               "type": "boolean"
             },
+            "mcp_file_transfer": {
+              "type": "boolean"
+            },
             "memories": {
               "type": "boolean"
             },
@@ -4677,6 +4680,9 @@
           "type": "boolean"
         },
         "local_thread_store_compression": {
+          "type": "boolean"
+        },
+        "mcp_file_transfer": {
           "type": "boolean"
         },
         "memories": {
