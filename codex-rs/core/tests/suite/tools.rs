@@ -30,6 +30,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
+use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
@@ -126,6 +127,54 @@ async fn turn_environment_selection_keeps_environment_backed_tools() -> Result<(
         tools.contains(&"exec_command".to_string()),
         "environment tool should remain available with selected local environment; got {tools:?}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_specs_stay_stable_across_follow_up_sampling_requests() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let first_call_args = json!({
+        "plan": [{"step": "Inspect tools", "status": "in_progress"}],
+    })
+    .to_string();
+    let second_call_args = json!({
+        "plan": [{"step": "Inspect tools", "status": "completed"}],
+    })
+    .to_string();
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call("call-1", "update_plan", &first_call_args),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_function_call("call-2", "update_plan", &second_call_args),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+    let mut builder = test_codex();
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("inspect the available tools").await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let first_request_tools = requests[0].body_json()["tools"].clone();
+    assert_eq!(requests[1].body_json()["tools"], first_request_tools);
+    assert_eq!(requests[2].body_json()["tools"], first_request_tools);
 
     Ok(())
 }
