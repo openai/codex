@@ -344,7 +344,7 @@ absolute path strings and normalize them to `file:` URIs:
 
 - `fs/readFile`
 - `fs/open`, `fs/readBlock`, and `fs/close` (internal transport for
-  `ExecServerClient::stream` and `ExecutorFileSystem::read_file_stream`)
+  `ExecutorFileSystem::read_file_stream`)
 - `fs/writeFile`
 - `fs/createDirectory`
 - `fs/getMetadata`
@@ -383,7 +383,6 @@ The crate exports:
 
 - `ExecServerClient`
 - `ExecServerError`
-- `FileReadStream`
 - `ExecServerClientConnectOptions`
 - `RemoteExecServerConnectArgs`
 - protocol request/response structs for process and filesystem RPCs

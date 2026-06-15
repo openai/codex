@@ -5,11 +5,10 @@ use base64::Engine as _;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_exec_server::ExecServerClient;
+use codex_exec_server::Environment;
+use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FileSystemSandboxContext;
-use codex_exec_server::FsReadFileParams;
 use codex_exec_server::InitializeParams;
-use codex_exec_server::RemoteExecServerConnectArgs;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -22,6 +21,7 @@ use futures::TryStreamExt;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -48,16 +48,13 @@ struct ReadBlockResponse {
 #[tokio::test]
 async fn stream_stops_after_an_exact_block_boundary() -> Result<()> {
     let server = exec_server().await?;
-    let client = connect_client(server.websocket_url()).await?;
+    let file_system = connect_file_system(server.websocket_url())?;
     let tmp = TempDir::new()?;
     let path = tmp.path().join("exact-blocks.bin");
     std::fs::write(&path, vec![b'x'; BLOCK_SIZE * 2])?;
 
-    let chunks = client
-        .stream(FsReadFileParams {
-            path: PathUri::from_path(path)?,
-            sandbox: None,
-        })
+    let chunks = file_system
+        .read_file_stream(&PathUri::from_path(path)?, /*sandbox*/ None)
         .await?
         .try_collect::<Vec<_>>()
         .await?;
@@ -72,18 +69,15 @@ async fn stream_stops_after_an_exact_block_boundary() -> Result<()> {
 #[tokio::test]
 async fn completed_streams_release_handle_capacity() -> Result<()> {
     let server = exec_server().await?;
-    let client = connect_client(server.websocket_url()).await?;
+    let file_system = connect_file_system(server.websocket_url())?;
     let tmp = TempDir::new()?;
     let path = tmp.path().join("repeated.txt");
     std::fs::write(&path, b"repeated")?;
     let path = PathUri::from_path(path)?;
 
     for _ in 0..=OPEN_FILE_LIMIT {
-        let chunks = client
-            .stream(FsReadFileParams {
-                path: path.clone(),
-                sandbox: None,
-            })
+        let chunks = file_system
+            .read_file_stream(&path, /*sandbox*/ None)
             .await?
             .try_collect::<Vec<_>>()
             .await?;
@@ -96,24 +90,25 @@ async fn completed_streams_release_handle_capacity() -> Result<()> {
 #[tokio::test]
 async fn stream_rejects_platform_sandbox() -> Result<()> {
     let server = exec_server().await?;
-    let client = connect_client(server.websocket_url()).await?;
+    let file_system = connect_file_system(server.websocket_url())?;
     let tmp = TempDir::new()?;
     let path = tmp.path().join("sandboxed.txt");
     std::fs::write(&path, "sandboxed hello")?;
 
-    let result = client
-        .stream(FsReadFileParams {
-            path: PathUri::from_path(&path)?,
-            sandbox: Some(read_only_sandbox(tmp.path().to_path_buf())),
-        })
+    let result = file_system
+        .read_file_stream(
+            &PathUri::from_path(&path)?,
+            Some(&read_only_sandbox(tmp.path().to_path_buf())),
+        )
         .await;
 
     let Err(error) = result else {
         panic!("sandboxed stream should be rejected");
     };
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
     assert_eq!(
         error.to_string(),
-        "exec-server rejected request (-32600): streaming file reads do not support platform sandboxing"
+        "streaming file reads do not support platform sandboxing"
     );
     Ok(())
 }
@@ -122,7 +117,7 @@ async fn stream_rejects_platform_sandbox() -> Result<()> {
 #[tokio::test]
 async fn stream_rejects_fifo_without_waiting_for_a_writer() -> Result<()> {
     let server = exec_server().await?;
-    let client = connect_client(server.websocket_url()).await?;
+    let file_system = connect_file_system(server.websocket_url())?;
     let tmp = TempDir::new()?;
     let path = tmp.path().join("named-pipe");
     let output = std::process::Command::new("mkfifo").arg(&path).output()?;
@@ -136,10 +131,7 @@ async fn stream_rejects_fifo_without_waiting_for_a_writer() -> Result<()> {
 
     let result = timeout(
         Duration::from_secs(1),
-        client.stream(FsReadFileParams {
-            path: PathUri::from_path(&path)?,
-            sandbox: None,
-        }),
+        file_system.read_file_stream(&PathUri::from_path(&path)?, /*sandbox*/ None),
     )
     .await
     .expect("opening a FIFO should not wait for a writer");
@@ -148,10 +140,7 @@ async fn stream_rejects_fifo_without_waiting_for_a_writer() -> Result<()> {
     };
     assert_eq!(
         error.to_string(),
-        format!(
-            "exec-server rejected request (-32600): path `{}` is not a file",
-            path.display()
-        )
+        format!("path `{}` is not a file", path.display())
     );
     Ok(())
 }
@@ -160,15 +149,12 @@ async fn stream_rejects_fifo_without_waiting_for_a_writer() -> Result<()> {
 #[tokio::test]
 async fn stream_keeps_reading_the_open_file_after_path_replacement() -> Result<()> {
     let server = exec_server().await?;
-    let client = connect_client(server.websocket_url()).await?;
+    let file_system = connect_file_system(server.websocket_url())?;
     let tmp = TempDir::new()?;
     let path = tmp.path().join("replaceable.bin");
     std::fs::write(&path, vec![b'a'; BLOCK_SIZE + 1])?;
-    let mut stream = client
-        .stream(FsReadFileParams {
-            path: PathUri::from_path(&path)?,
-            sandbox: None,
-        })
+    let mut stream = file_system
+        .read_file_stream(&PathUri::from_path(&path)?, /*sandbox*/ None)
         .await?;
 
     assert_eq!(
@@ -384,14 +370,9 @@ async fn rpc_message(
         .await
 }
 
-async fn connect_client(websocket_url: &str) -> Result<ExecServerClient> {
-    Ok(
-        ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
-            websocket_url.to_string(),
-            "file-stream-test".to_string(),
-        ))
-        .await?,
-    )
+fn connect_file_system(websocket_url: &str) -> Result<Arc<dyn ExecutorFileSystem>> {
+    let environment = Environment::create_for_tests(Some(websocket_url.to_string()))?;
+    Ok(environment.get_filesystem())
 }
 
 fn read_only_sandbox(path: std::path::PathBuf) -> FileSystemSandboxContext {

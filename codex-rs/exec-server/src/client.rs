@@ -1,22 +1,15 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
-use std::task::Context;
-use std::task::Poll;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
-use bytes::Bytes;
 use codex_app_server_protocol::JSONRPCNotification;
 use futures::FutureExt;
-use futures::Stream;
-use futures::StreamExt;
 use futures::future::BoxFuture;
-use futures::stream::BoxStream;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
@@ -25,7 +18,6 @@ use tokio::sync::watch;
 
 use tokio::time::timeout;
 use tracing::debug;
-use uuid::Uuid;
 
 use crate::ProcessId;
 use crate::client_api::ExecServerClientConnectOptions;
@@ -111,26 +103,6 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const PROCESS_EVENT_CHANNEL_CAPACITY: usize = 256;
 const PROCESS_EVENT_RETAINED_BYTES: usize = 1024 * 1024;
-
-/// Stream of immutable file blocks returned by [`ExecServerClient::stream`].
-pub struct FileReadStream {
-    inner: BoxStream<'static, Result<Bytes, ExecServerError>>,
-}
-
-impl Stream for FileReadStream {
-    type Item = Result<Bytes, ExecServerError>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.inner.as_mut().poll_next(cx)
-    }
-}
-
-struct FileReadRegistration {
-    client: ExecServerClient,
-    handle_id: String,
-    runtime: Option<tokio::runtime::Handle>,
-    active: bool,
-}
 
 impl Default for ExecServerClientConnectOptions {
     fn default() -> Self {
@@ -466,89 +438,24 @@ impl ExecServerClient {
         self.call(FS_READ_FILE_METHOD, &params).await
     }
 
-    /// Opens an unsandboxed file and returns a demand-driven stream of 1 MiB blocks.
-    pub async fn stream(
+    pub(crate) async fn fs_open(
         &self,
-        params: FsReadFileParams,
-    ) -> Result<FileReadStream, ExecServerError> {
-        let registration = FileReadRegistration {
-            client: self.clone(),
-            handle_id: Uuid::new_v4().to_string(),
-            runtime: tokio::runtime::Handle::try_current().ok(),
-            active: true,
-        };
-        self.fs_open(FsOpenParams {
-            handle_id: registration.handle_id.clone(),
-            path: params.path,
-            sandbox: params.sandbox,
-        })
-        .await?;
-        Ok(FileReadStream {
-            inner: futures::stream::try_unfold(Some((registration, 0_u64)), |state| async move {
-                let Some((mut registration, offset)) = state else {
-                    return Ok(None);
-                };
-                let response = registration
-                    .client
-                    .fs_read_block(FsReadBlockParams {
-                        handle_id: registration.handle_id.clone(),
-                        offset,
-                        len: crate::FILE_READ_CHUNK_SIZE,
-                    })
-                    .await?;
-                let chunk = Bytes::from(response.chunk.into_inner());
-                if chunk.len() > crate::FILE_READ_CHUNK_SIZE {
-                    return Err(ExecServerError::Protocol(format!(
-                        "{FS_READ_BLOCK_METHOD} returned {} bytes, maximum is {}",
-                        chunk.len(),
-                        crate::FILE_READ_CHUNK_SIZE
-                    )));
-                }
-                if response.eof {
-                    if registration
-                        .client
-                        .fs_close(FsCloseParams {
-                            handle_id: registration.handle_id.clone(),
-                        })
-                        .await
-                        .is_ok()
-                    {
-                        registration.active = false;
-                    }
-                    return if chunk.is_empty() {
-                        Ok(None)
-                    } else {
-                        Ok(Some((chunk, None)))
-                    };
-                }
-                if chunk.is_empty() {
-                    return Err(ExecServerError::Protocol(format!(
-                        "{FS_READ_BLOCK_METHOD} returned an empty non-terminal block"
-                    )));
-                }
-                let next_offset = offset.checked_add(chunk.len() as u64).ok_or_else(|| {
-                    ExecServerError::Protocol(format!(
-                        "{FS_READ_BLOCK_METHOD} offset overflowed after {offset} bytes"
-                    ))
-                })?;
-                Ok(Some((chunk, Some((registration, next_offset)))))
-            })
-            .boxed(),
-        })
-    }
-
-    async fn fs_open(&self, params: FsOpenParams) -> Result<FsOpenResponse, ExecServerError> {
+        params: FsOpenParams,
+    ) -> Result<FsOpenResponse, ExecServerError> {
         self.call(FS_OPEN_METHOD, &params).await
     }
 
-    async fn fs_read_block(
+    pub(crate) async fn fs_read_block(
         &self,
         params: FsReadBlockParams,
     ) -> Result<FsReadBlockResponse, ExecServerError> {
         self.call(FS_READ_BLOCK_METHOD, &params).await
     }
 
-    async fn fs_close(&self, params: FsCloseParams) -> Result<FsCloseResponse, ExecServerError> {
+    pub(crate) async fn fs_close(
+        &self,
+        params: FsCloseParams,
+    ) -> Result<FsCloseResponse, ExecServerError> {
         self.call(FS_CLOSE_METHOD, &params).await
     }
 
@@ -720,25 +627,6 @@ impl ExecServerClient {
                     Err(error)
                 }
             }
-        }
-    }
-}
-
-impl Drop for FileReadRegistration {
-    fn drop(&mut self) {
-        if !self.active {
-            return;
-        }
-        let client = self.client.clone();
-        let handle_id = self.handle_id.clone();
-        let runtime = self
-            .runtime
-            .clone()
-            .or_else(|| tokio::runtime::Handle::try_current().ok());
-        if let Some(runtime) = runtime {
-            runtime.spawn(async move {
-                let _ = client.fs_close(FsCloseParams { handle_id }).await;
-            });
         }
     }
 }

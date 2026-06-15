@@ -1,7 +1,6 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_utils_path_uri::PathUri;
-use futures::TryStreamExt;
 use tokio::io;
 use tracing::trace;
 
@@ -28,6 +27,9 @@ use crate::protocol::FsWriteFileParams;
 
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 const NOT_FOUND_ERROR_CODE: i64 = -32004;
+
+#[path = "remote_file_stream.rs"]
+mod file_stream;
 
 pub(crate) struct RemoteFileSystem {
     client: LazyRemoteExecServerClient,
@@ -91,14 +93,7 @@ impl RemoteFileSystem {
         }
         trace!("remote fs read_file_stream");
         let client = self.client.get().await.map_err(map_remote_error)?;
-        let stream = client
-            .stream(FsReadFileParams {
-                path: path.clone(),
-                sandbox: remote_sandbox_context(sandbox),
-            })
-            .await
-            .map_err(map_remote_error)?;
-        Ok(FileSystemReadStream::new(stream.map_err(map_remote_error)))
+        file_stream::open(client, path.clone(), remote_sandbox_context(sandbox)).await
     }
 
     async fn write_file(
