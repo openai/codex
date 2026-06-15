@@ -22,6 +22,7 @@ use crate::mcp_types::AppToolApproval;
 use crate::permissions_toml::PermissionProfileToml;
 use crate::types::AuthCredentialsStoreMode;
 use crate::types::FeedbackConfigToml;
+use crate::types::OtelConfigToml;
 use crate::types::WindowsSandboxModeToml;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,6 +153,7 @@ pub struct ConfigRequirements {
     pub log_dir: Option<Sourced<AbsolutePathBuf>>,
     pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
     pub check_for_update_on_startup: Option<Sourced<bool>>,
+    pub otel: Option<Sourced<OtelConfigToml>>,
     pub allow_login_shell: Option<Sourced<bool>>,
     pub feedback: Option<Sourced<FeedbackConfigToml>>,
     pub approval_policy: ConstrainedWithSource<AskForApproval>,
@@ -189,6 +191,7 @@ impl Default for ConfigRequirements {
             log_dir: None,
             model_catalog_json: None,
             check_for_update_on_startup: None,
+            otel: None,
             allow_login_shell: None,
             feedback: None,
             approval_policy: ConstrainedWithSource::new(
@@ -854,6 +857,7 @@ pub struct ConfigRequirementsToml {
     pub log_dir: Option<AbsolutePathBuf>,
     pub model_catalog_json: Option<AbsolutePathBuf>,
     pub check_for_update_on_startup: Option<bool>,
+    pub otel: Option<OtelConfigToml>,
     pub allow_login_shell: Option<bool>,
     pub feedback: Option<FeedbackConfigToml>,
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
@@ -920,6 +924,7 @@ pub struct ConfigRequirementsWithSources {
     pub log_dir: Option<Sourced<AbsolutePathBuf>>,
     pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
     pub check_for_update_on_startup: Option<Sourced<bool>>,
+    pub otel: Option<Sourced<OtelConfigToml>>,
     pub allow_login_shell: Option<Sourced<bool>>,
     pub feedback: Option<Sourced<FeedbackConfigToml>>,
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
@@ -972,6 +977,7 @@ impl ConfigRequirementsWithSources {
             log_dir: _,
             model_catalog_json: _,
             check_for_update_on_startup: _,
+            otel: _,
             allow_login_shell: _,
             feedback: _,
             allowed_approval_policies: _,
@@ -1019,6 +1025,7 @@ impl ConfigRequirementsWithSources {
                 log_dir,
                 model_catalog_json,
                 check_for_update_on_startup,
+                otel,
                 allow_login_shell,
                 feedback,
                 allowed_approval_policies,
@@ -1063,6 +1070,7 @@ impl ConfigRequirementsWithSources {
             log_dir,
             model_catalog_json,
             check_for_update_on_startup,
+            otel,
             allow_login_shell,
             feedback,
             allowed_approval_policies,
@@ -1096,6 +1104,7 @@ impl ConfigRequirementsWithSources {
             log_dir: log_dir.map(|sourced| sourced.value),
             model_catalog_json: model_catalog_json.map(|sourced| sourced.value),
             check_for_update_on_startup: check_for_update_on_startup.map(|sourced| sourced.value),
+            otel: otel.map(|sourced| sourced.value),
             allow_login_shell: allow_login_shell.map(|sourced| sourced.value),
             feedback: feedback.map(|sourced| sourced.value),
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
@@ -1196,6 +1205,10 @@ impl ConfigRequirementsToml {
             && self.log_dir.is_none()
             && self.model_catalog_json.is_none()
             && self.check_for_update_on_startup.is_none()
+            && self
+                .otel
+                .as_ref()
+                .is_none_or(|otel| otel == &OtelConfigToml::default())
             && self.allow_login_shell.is_none()
             && self
                 .feedback
@@ -1263,6 +1276,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             log_dir,
             model_catalog_json,
             check_for_update_on_startup,
+            otel,
             allow_login_shell,
             feedback,
             allowed_approval_policies,
@@ -1602,6 +1616,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             log_dir,
             model_catalog_json,
             check_for_update_on_startup,
+            otel,
             allow_login_shell,
             feedback,
             approval_policy,
@@ -1703,6 +1718,7 @@ mod tests {
             log_dir,
             model_catalog_json,
             check_for_update_on_startup,
+            otel,
             allow_login_shell,
             feedback,
             allowed_approval_policies,
@@ -1743,6 +1759,7 @@ mod tests {
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             check_for_update_on_startup: check_for_update_on_startup
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            otel: otel.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allow_login_shell: allow_login_shell
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             feedback: feedback.map(|value| Sourced::new(value, RequirementSource::Unknown)),

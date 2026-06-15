@@ -6,6 +6,7 @@
 //!
 //! A few fields carry domain-specific meaning that raw TOML replacement would
 //! break:
+//! - `otel` combines recursively merged metadata with atomic exporter leaves.
 //! - `remote_sandbox_config` is evaluated within each layer before merging.
 //! - `rules.prefix_rules` append high-priority rules first.
 //! - `hooks` append high-priority event groups first while failing closed on
@@ -132,11 +133,11 @@ impl RequirementsLayerStack {
         let mut hooks = HookMergeState::new(hook_directory_field);
         let mut hooks_output = None;
         let mut deny_read = DenyReadMergeState::default();
-        // Regular TOML fields are folded low-to-high like config. These custom
-        // fields append or union values, so process them high-to-low to keep
-        // priority order visible in the output.
+        // Domain-specific fields are processed high-to-low so exact leaves and
+        // keyed values naturally retain the highest-priority contribution.
         for layer in layers.iter().rev() {
             let domain_fields = &layer.domain_fields;
+            super::otel::merge(&mut output.otel, domain_fields.otel.clone(), &layer.source);
             super::rules::merge(&mut rules, domain_fields.rules.clone(), &layer.source);
             hooks.merge(
                 &mut hooks_output,
@@ -181,6 +182,7 @@ fn populate_merged_regular_fields_with_sources(
         log_dir,
         model_catalog_json,
         check_for_update_on_startup,
+        otel: _,
         allow_login_shell,
         feedback,
         allowed_approval_policies,

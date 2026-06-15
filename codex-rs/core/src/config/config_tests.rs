@@ -8338,6 +8338,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         log_dir: None,
         model_catalog_json: None,
         check_for_update_on_startup: None,
+        otel: None,
         allow_login_shell: None,
         feedback: None,
         allowed_approval_policies: None,
@@ -11046,5 +11047,97 @@ secret_auth_storage = true
             AuthKeyringBackendKind::Secrets,
         )
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_otel_requirements_merge_keyed_metadata() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[otel]
+environment = "configured"
+
+[otel.span_attributes]
+configured = "kept"
+managed = "old"
+"#,
+    )?;
+    let config = load_with_enterprise_requirement(
+        &codex_home,
+        r#"
+[otel]
+environment = "managed"
+
+[otel.span_attributes]
+managed = "required"
+"#,
+    )
+    .await?;
+
+    assert_eq!(config.otel.environment, "managed");
+    assert_eq!(
+        config.otel.span_attributes,
+        BTreeMap::from([
+            ("configured".to_string(), "kept".to_string()),
+            ("managed".to_string(), "required".to_string()),
+        ])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_required_otel_trace_metadata_fails_closed() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let err = load_with_enterprise_requirement(
+        &codex_home,
+        "[otel.span_attributes]\n\"\" = \"missing-key\"\n",
+    )
+    .await
+    .expect_err("invalid managed OTEL metadata should fail startup");
+
+    assert_eq!(err.kind(), ErrorKind::InvalidInput);
+    assert!(
+        err.to_string()
+            .contains("invalid required `otel.span_attributes`")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn required_otel_tracestate_survives_invalid_user_merge() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let configured_overflow = "u".repeat(/*n*/ 120);
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"
+[otel.tracestate.vendor]
+required = "configured"
+keep = "kept"
+zz_overflow = {configured_overflow:?}
+"#
+        ),
+    )?;
+    let required_value = "r".repeat(/*n*/ 120);
+    let requirements = format!("[otel.tracestate.vendor]\nrequired = {required_value:?}\n");
+
+    let config = load_with_enterprise_requirement(&codex_home, requirements).await?;
+
+    assert_eq!(
+        config.otel.tracestate,
+        BTreeMap::from([(
+            "vendor".to_string(),
+            BTreeMap::from([
+                ("keep".to_string(), "kept".to_string()),
+                ("required".to_string(), required_value),
+            ]),
+        )])
+    );
+    assert!(config.startup_warnings.iter().any(|warning| {
+        warning.contains("otel.tracestate.vendor.zz_overflow")
+            && warning.contains("would invalidate tracestate required by")
+    }));
     Ok(())
 }

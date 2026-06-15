@@ -2714,6 +2714,7 @@ impl Config {
             log_dir: _,
             model_catalog_json: _,
             check_for_update_on_startup: _,
+            otel: _,
             allow_login_shell: _,
             feedback: _,
             approval_policy: mut constrained_approval_policy,

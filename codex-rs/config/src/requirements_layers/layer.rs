@@ -2,6 +2,7 @@ use crate::ConfigRequirementsToml;
 use crate::ManagedHooksRequirementsToml;
 use crate::RequirementSource;
 use crate::RequirementsExecPolicyToml;
+use crate::types::OtelConfigToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use toml::Value as TomlValue;
@@ -80,6 +81,7 @@ impl ComposableRequirementsLayer {
             domain_fields: DomainMergedRequirementsFields {
                 rules: requirements.rules,
                 hooks: requirements.hooks,
+                otel: requirements.otel,
                 permissions: requirements.permissions,
             },
         })
@@ -90,6 +92,7 @@ impl ComposableRequirementsLayer {
 pub(super) struct DomainMergedRequirementsFields {
     pub(super) rules: Option<RequirementsExecPolicyToml>,
     pub(super) hooks: Option<ManagedHooksRequirementsToml>,
+    pub(super) otel: Option<OtelConfigToml>,
     pub(super) permissions: Option<crate::config_requirements::PermissionsRequirementsToml>,
 }
 
@@ -163,6 +166,7 @@ fn toml_value_from_serializable<T: serde::Serialize>(
 fn strip_special_fields(layer_toml: &mut TomlValue) {
     remove_top_level_field(layer_toml, "rules");
     remove_top_level_field(layer_toml, "hooks");
+    remove_top_level_field(layer_toml, "otel");
     remove_nested_field_and_prune_empty(layer_toml, &["permissions", "filesystem", "deny_read"]);
 }
 
