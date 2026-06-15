@@ -16,7 +16,6 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
@@ -787,50 +786,29 @@ fn build_remote_marketplace(
     installed_plugins: Vec<RemotePluginInstalledItem>,
     include_installed_only: bool,
 ) -> Result<Option<RemoteMarketplace>, RemotePluginCatalogError> {
-    let directory_plugin_order = directory_plugins
-        .iter()
-        .enumerate()
-        .map(|(index, plugin)| (plugin.id.clone(), index))
-        .collect::<HashMap<_, _>>();
-    let directory_plugins = directory_plugins
-        .into_iter()
-        .map(|plugin| (plugin.id.clone(), plugin))
-        .collect::<BTreeMap<_, _>>();
-    let installed_plugins = installed_plugins
+    let mut installed_plugins = installed_plugins
         .into_iter()
         .map(|plugin| (plugin.plugin.id.clone(), plugin))
         .collect::<BTreeMap<_, _>>();
-    let plugin_ids = directory_plugins
-        .keys()
-        .chain(
-            include_installed_only
-                .then_some(&installed_plugins)
-                .into_iter()
-                .flat_map(|plugins| plugins.keys()),
-        )
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    if plugin_ids.is_empty() {
+    let mut plugins = directory_plugins
+        .into_iter()
+        .map(|plugin| {
+            let installed_plugin = installed_plugins.remove(&plugin.id);
+            build_remote_plugin_summary(&plugin, installed_plugin.as_ref())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if include_installed_only {
+        plugins.extend(
+            installed_plugins
+                .into_values()
+                .map(|plugin| build_remote_plugin_summary(&plugin.plugin, Some(&plugin)))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+    }
+    if plugins.is_empty() {
         return Ok(None);
     }
 
-    let mut plugins = plugin_ids
-        .into_iter()
-        .filter_map(|plugin_id| {
-            let directory_plugin = directory_plugins.get(&plugin_id);
-            let installed_plugin = installed_plugins.get(&plugin_id);
-            directory_plugin
-                .or_else(|| installed_plugin.map(|plugin| &plugin.plugin))
-                .map(|plugin| (plugin, installed_plugin))
-        })
-        .map(|(plugin, installed_plugin)| build_remote_plugin_summary(plugin, installed_plugin))
-        .collect::<Result<Vec<_>, _>>()?;
-    plugins.sort_by_key(|plugin| {
-        directory_plugin_order
-            .get(&plugin.remote_plugin_id)
-            .copied()
-            .map_or((true, 0), |index| (false, index))
-    });
     Ok(Some(RemoteMarketplace {
         name: name.to_string(),
         display_name: display_name.to_string(),
