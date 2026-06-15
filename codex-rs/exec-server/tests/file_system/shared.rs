@@ -487,14 +487,6 @@ async fn file_system_sandboxed_metadata_and_read_allow_readable_root(
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(contents, b"sandboxed hello");
 
-    let chunks = file_system
-        .read_file_stream(&PathUri::from_path(file_path)?, Some(&sandbox))
-        .await
-        .with_context(|| format!("mode={implementation}"))?
-        .try_collect::<Vec<_>>()
-        .await?;
-    assert_eq!(chunks, vec![bytes::Bytes::from_static(b"sandboxed hello")]);
-
     Ok(())
 }
 

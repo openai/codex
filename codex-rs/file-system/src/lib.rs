@@ -158,20 +158,6 @@ impl FileSystemReadStream {
             inner: Box::pin(stream),
         }
     }
-
-    /// Splits an already-buffered file into standard-sized chunks.
-    pub fn from_bytes(bytes: Vec<u8>) -> Self {
-        Self::new(futures::stream::try_unfold(
-            Bytes::from(bytes),
-            |mut remaining| async move {
-                if remaining.is_empty() {
-                    return Ok(None);
-                }
-                let chunk = remaining.split_to(remaining.len().min(FILE_READ_CHUNK_SIZE));
-                Ok(Some((chunk, remaining)))
-            },
-        ))
-    }
 }
 
 impl Stream for FileSystemReadStream {
@@ -199,20 +185,11 @@ pub trait ExecutorFileSystem: Send + Sync {
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>>;
 
     /// Reads a file as a stream of chunks no larger than [`FILE_READ_CHUNK_SIZE`].
-    ///
-    /// Implementations that cannot keep an open file handle may buffer the file
-    /// before returning the stream.
     fn read_file_stream<'a>(
         &'a self,
         path: &'a PathUri,
         sandbox: Option<&'a FileSystemSandboxContext>,
-    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
-        Box::pin(async move {
-            Ok(FileSystemReadStream::from_bytes(
-                self.read_file(path, sandbox).await?,
-            ))
-        })
-    }
+    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream>;
 
     /// Reads a file and decodes it as UTF-8 text.
     fn read_file_text<'a>(

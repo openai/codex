@@ -84,8 +84,9 @@ impl RemoteFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileSystemReadStream> {
         if sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox) {
-            return Ok(FileSystemReadStream::from_bytes(
-                self.read_file(path, sandbox).await?,
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "streaming file reads do not support platform sandboxing",
             ));
         }
         trace!("remote fs read_file_stream");
