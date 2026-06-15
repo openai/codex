@@ -273,11 +273,11 @@ where
                             }
                         };
                         let frame = RelayMessageFrame::data(stream_id.clone(), seq, ciphertext);
-                        if websocket
+                        if let Err(error) = websocket
                             .send(Message::Binary(encode_relay_message_frame(&frame).into()))
                             .await
-                            .is_err()
                         {
+                            warn!("failed to write Noise relay websocket: {error}");
                             break 'relay;
                         }
                     }
