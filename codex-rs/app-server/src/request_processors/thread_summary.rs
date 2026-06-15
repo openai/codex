@@ -138,37 +138,6 @@ fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
     }
 }
 
-pub(super) fn with_thread_spawn_agent_metadata(
-    source: codex_protocol::protocol::SessionSource,
-    agent_nickname: Option<String>,
-    agent_role: Option<String>,
-) -> codex_protocol::protocol::SessionSource {
-    if agent_nickname.is_none() && agent_role.is_none() {
-        return source;
-    }
-
-    match source {
-        codex_protocol::protocol::SessionSource::SubAgent(
-            codex_protocol::protocol::SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth,
-                agent_path,
-                agent_nickname: existing_agent_nickname,
-                agent_role: existing_agent_role,
-            },
-        ) => codex_protocol::protocol::SessionSource::SubAgent(
-            codex_protocol::protocol::SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth,
-                agent_path,
-                agent_nickname: agent_nickname.or(existing_agent_nickname),
-                agent_role: agent_role.or(existing_agent_role),
-            },
-        ),
-        _ => source,
-    }
-}
-
 pub(crate) fn thread_response_active_permission_profile(
     active_permission_profile: Option<codex_protocol::models::ActivePermissionProfile>,
 ) -> Option<codex_app_server_protocol::ActivePermissionProfile> {
