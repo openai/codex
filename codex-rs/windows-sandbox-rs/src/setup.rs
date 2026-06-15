@@ -13,6 +13,8 @@ use std::process::Stdio;
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths_for_permissions;
 use crate::helper_materialization::bundled_executable_path_for_exe;
+use crate::helper_materialization::resolve_helper_for_launch;
+use crate::helper_materialization::HelperExecutable;
 use crate::helper_materialization::helper_bin_dir;
 use crate::identity::sandbox_setup_is_complete;
 use crate::logging::current_log_file_path;
@@ -209,7 +211,7 @@ fn run_setup_refresh_inner(
     };
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
-    let exe = find_setup_exe();
+    let exe = find_setup_exe(request.codex_home);
     let sbx_dir = sandbox_dir(request.codex_home);
     let log_path = current_log_file_path(&sbx_dir);
     let cleared_report = match clear_setup_error_report(request.codex_home) {
@@ -662,13 +664,12 @@ fn quote_arg(arg: &str) -> String {
     out
 }
 
-fn find_setup_exe() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(setup_exe) = find_setup_exe_for_current_exe(&exe)
-    {
-        return setup_exe;
-    }
-    PathBuf::from(SETUP_EXE_FILENAME)
+fn find_setup_exe(codex_home: &Path) -> PathBuf {
+    resolve_helper_for_launch(
+        HelperExecutable::Setup,
+        codex_home,
+        Some(&sandbox_dir(codex_home)),
+    )
 }
 
 fn find_setup_exe_for_current_exe(exe: &Path) -> Option<PathBuf> {
@@ -716,7 +717,7 @@ fn run_setup_exe(
     use windows_sys::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS;
     use windows_sys::Win32::UI::Shell::SHELLEXECUTEINFOW;
     use windows_sys::Win32::UI::Shell::ShellExecuteExW;
-    let exe = find_setup_exe();
+    let exe = find_setup_exe(codex_home);
     let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
             SetupErrorCode::OrchestratorPayloadSerializeFailed,
