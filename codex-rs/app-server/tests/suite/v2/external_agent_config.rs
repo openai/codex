@@ -385,15 +385,13 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     let completed: ExternalAgentConfigImportCompletedNotification =
         serde_json::from_value(notification.params.expect("completed params"))?;
     assert_eq!(completed.import_id, import_id);
-    assert_eq!(completed.item_results.len(), 1);
-    let session_result = &completed.item_results[0];
+    assert_eq!(completed.item_type_results.len(), 1);
+    let session_result = &completed.item_type_results[0];
     assert_eq!(
         session_result.item_type,
         ExternalAgentConfigMigrationItemType::Sessions
     );
-    assert_eq!(session_result.success_count, 1);
-    assert_eq!(session_result.error_count, 0);
-    assert_eq!(session_result.raw_errors, Vec::new());
+    assert_eq!(session_result.failures, Vec::new());
     assert_eq!(session_result.successes.len(), 1);
     let session_success = &session_result.successes[0];
     assert_eq!(

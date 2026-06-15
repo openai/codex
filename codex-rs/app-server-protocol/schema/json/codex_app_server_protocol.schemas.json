@@ -8918,7 +8918,7 @@
           "importId": {
             "type": "string"
           },
-          "itemResults": {
+          "itemTypeResults": {
             "items": {
               "$ref": "#/definitions/v2/ExternalAgentConfigImportTypeResult"
             },
@@ -8927,28 +8927,12 @@
         },
         "required": [
           "importId",
-          "itemResults"
+          "itemTypeResults"
         ],
         "title": "ExternalAgentConfigImportCompletedNotification",
         "type": "object"
       },
-      "ExternalAgentConfigImportParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "migrationItems": {
-            "items": {
-              "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItem"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "migrationItems"
-        ],
-        "title": "ExternalAgentConfigImportParams",
-        "type": "object"
-      },
-      "ExternalAgentConfigImportRawError": {
+      "ExternalAgentConfigImportItemTypeFailure": {
         "properties": {
           "cwd": {
             "type": [
@@ -8979,20 +8963,7 @@
         ],
         "type": "object"
       },
-      "ExternalAgentConfigImportResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "importId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "importId"
-        ],
-        "title": "ExternalAgentConfigImportResponse",
-        "type": "object"
-      },
-      "ExternalAgentConfigImportSuccess": {
+      "ExternalAgentConfigImportItemTypeSuccess": {
         "properties": {
           "cwd": {
             "type": [
@@ -9021,39 +8992,56 @@
         ],
         "type": "object"
       },
-      "ExternalAgentConfigImportTypeResult": {
+      "ExternalAgentConfigImportParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
-          "errorCount": {
-            "format": "uint32",
-            "minimum": 0.0,
-            "type": "integer"
-          },
-          "itemType": {
-            "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItemType"
-          },
-          "rawErrors": {
+          "migrationItems": {
             "items": {
-              "$ref": "#/definitions/v2/ExternalAgentConfigImportRawError"
-            },
-            "type": "array"
-          },
-          "successCount": {
-            "format": "uint32",
-            "minimum": 0.0,
-            "type": "integer"
-          },
-          "successes": {
-            "items": {
-              "$ref": "#/definitions/v2/ExternalAgentConfigImportSuccess"
+              "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItem"
             },
             "type": "array"
           }
         },
         "required": [
-          "errorCount",
+          "migrationItems"
+        ],
+        "title": "ExternalAgentConfigImportParams",
+        "type": "object"
+      },
+      "ExternalAgentConfigImportResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "importId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "importId"
+        ],
+        "title": "ExternalAgentConfigImportResponse",
+        "type": "object"
+      },
+      "ExternalAgentConfigImportTypeResult": {
+        "properties": {
+          "failures": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportItemTypeFailure"
+            },
+            "type": "array"
+          },
+          "itemType": {
+            "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItemType"
+          },
+          "successes": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportItemTypeSuccess"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "failures",
           "itemType",
-          "rawErrors",
-          "successCount",
           "successes"
         ],
         "type": "object"

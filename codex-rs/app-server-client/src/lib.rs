@@ -2166,7 +2166,7 @@ mod tests {
                 codex_app_server_protocol::ServerNotification::ExternalAgentConfigImportCompleted(
                     codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification {
                         import_id: "import".to_string(),
-                        item_results: Vec::new(),
+                        item_type_results: Vec::new(),
                     },
                 )
             )

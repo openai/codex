@@ -675,7 +675,7 @@ pub struct ExternalAgentConfigImportResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ExternalAgentConfigImportRawError {
+pub struct ExternalAgentConfigImportItemTypeFailure {
     pub item_type: ExternalAgentConfigMigrationItemType,
     pub failure_stage: String,
     pub message: String,
@@ -686,7 +686,7 @@ pub struct ExternalAgentConfigImportRawError {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ExternalAgentConfigImportSuccess {
+pub struct ExternalAgentConfigImportItemTypeSuccess {
     pub item_type: ExternalAgentConfigMigrationItemType,
     pub cwd: Option<PathBuf>,
     pub source: Option<String>,
@@ -698,10 +698,8 @@ pub struct ExternalAgentConfigImportSuccess {
 #[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigImportTypeResult {
     pub item_type: ExternalAgentConfigMigrationItemType,
-    pub success_count: u32,
-    pub error_count: u32,
-    pub successes: Vec<ExternalAgentConfigImportSuccess>,
-    pub raw_errors: Vec<ExternalAgentConfigImportRawError>,
+    pub successes: Vec<ExternalAgentConfigImportItemTypeSuccess>,
+    pub failures: Vec<ExternalAgentConfigImportItemTypeFailure>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -709,7 +707,7 @@ pub struct ExternalAgentConfigImportTypeResult {
 #[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigImportCompletedNotification {
     pub import_id: String,
-    pub item_results: Vec<ExternalAgentConfigImportTypeResult>,
+    pub item_type_results: Vec<ExternalAgentConfigImportTypeResult>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

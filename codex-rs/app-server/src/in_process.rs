@@ -900,7 +900,7 @@ mod tests {
             &ServerNotification::ExternalAgentConfigImportCompleted(
                 ExternalAgentConfigImportCompletedNotification {
                     import_id: "import".to_string(),
-                    item_results: Vec::new(),
+                    item_type_results: Vec::new(),
                 },
             )
         ));

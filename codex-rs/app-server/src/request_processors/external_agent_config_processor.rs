@@ -19,10 +19,10 @@ use codex_app_server_protocol::CommandMigration;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
+use codex_app_server_protocol::ExternalAgentConfigImportItemTypeFailure as ProtocolImportFailure;
+use codex_app_server_protocol::ExternalAgentConfigImportItemTypeSuccess as ProtocolImportSuccess;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
-use codex_app_server_protocol::ExternalAgentConfigImportRawError as ProtocolImportRawError;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
-use codex_app_server_protocol::ExternalAgentConfigImportSuccess as ProtocolImportSuccess;
 use codex_app_server_protocol::ExternalAgentConfigImportTypeResult as ProtocolImportTypeResult;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
@@ -501,21 +501,13 @@ fn completed_notification(
             .iter_mut()
             .find(|type_result| type_result.item_type == item_type)
         {
-            type_result.success_count = type_result
-                .success_count
-                .saturating_add(item_result.success_count);
-            type_result.error_count = type_result
-                .error_count
-                .saturating_add(item_result.error_count);
             type_result.successes.extend(item_successes);
-            type_result.raw_errors.extend(item_raw_errors);
+            type_result.failures.extend(item_raw_errors);
         } else {
             protocol_type_results.push(ProtocolImportTypeResult {
                 item_type,
-                success_count: item_result.success_count,
-                error_count: item_result.error_count,
                 successes: item_successes,
-                raw_errors: item_raw_errors,
+                failures: item_raw_errors,
             });
         }
     }
@@ -533,7 +525,7 @@ fn completed_notification(
 
     ExternalAgentConfigImportCompletedNotification {
         import_id,
-        item_results: protocol_type_results,
+        item_type_results: protocol_type_results,
     }
 }
 
@@ -548,8 +540,8 @@ fn protocol_import_success(
     }
 }
 
-fn protocol_import_raw_error(raw_error: &CoreImportRawError) -> ProtocolImportRawError {
-    ProtocolImportRawError {
+fn protocol_import_raw_error(raw_error: &CoreImportRawError) -> ProtocolImportFailure {
+    ProtocolImportFailure {
         item_type: protocol_migration_item_type(raw_error.item_type),
         failure_stage: raw_error.failure_stage.clone(),
         message: raw_error.message.clone(),
