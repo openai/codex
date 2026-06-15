@@ -63,7 +63,19 @@ pub fn collect_code_mode_tool_definitions<'a>(
 ) -> Vec<CodeModeToolDefinition> {
     let mut tool_definitions = specs
         .into_iter()
-        .flat_map(code_mode_tool_definitions_for_spec)
+        .flat_map(|spec| {
+            let mut definitions = code_mode_tool_definitions_for_spec(spec);
+            if let ToolSpec::Namespace(namespace) = spec {
+                let namespace_description = namespace.description.trim();
+                if !namespace_description.is_empty() {
+                    for definition in &mut definitions {
+                        definition.description =
+                            format!("{namespace_description}\n\n{}", definition.description);
+                    }
+                }
+            }
+            definitions
+        })
         .filter(|definition| codex_code_mode::is_code_mode_nested_tool(&definition.name))
         .map(codex_code_mode::augment_tool_definition)
         .collect::<Vec<_>>();
