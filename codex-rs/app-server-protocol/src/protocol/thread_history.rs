@@ -83,12 +83,35 @@ pub fn build_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
     builder.finish()
 }
 
+/// Convert persisted [`RolloutItem`] entries into at most the newest `limit`
+/// turns.
+///
+/// Returns `None` when a rollback occurs after older turns have been discarded,
+/// because those turns may become visible again and require a full replay.
+pub fn build_last_turns_from_rollout_items(
+    items: &[RolloutItem],
+    limit: usize,
+) -> Option<Vec<Turn>> {
+    if limit == 0 {
+        return Some(Vec::new());
+    }
+
+    let mut builder = ThreadHistoryBuilder::with_turn_limit(limit);
+    for item in items {
+        builder.handle_rollout_item(item);
+    }
+    builder.finish_bounded()
+}
+
 pub struct ThreadHistoryBuilder {
     turns: Vec<Turn>,
     current_turn: Option<PendingTurn>,
     next_item_index: i64,
     current_rollout_index: usize,
     next_rollout_index: usize,
+    turn_limit: Option<usize>,
+    discarded_turns: bool,
+    bounded_history_invalidated: bool,
 }
 
 impl Default for ThreadHistoryBuilder {
@@ -105,6 +128,16 @@ impl ThreadHistoryBuilder {
             next_item_index: 1,
             current_rollout_index: 0,
             next_rollout_index: 0,
+            turn_limit: None,
+            discarded_turns: false,
+            bounded_history_invalidated: false,
+        }
+    }
+
+    fn with_turn_limit(turn_limit: usize) -> Self {
+        Self {
+            turn_limit: Some(turn_limit),
+            ..Self::new()
         }
     }
 
@@ -115,6 +148,11 @@ impl ThreadHistoryBuilder {
     pub fn finish(mut self) -> Vec<Turn> {
         self.finish_current_turn();
         self.turns
+    }
+
+    fn finish_bounded(mut self) -> Option<Vec<Turn>> {
+        self.finish_current_turn();
+        (!self.bounded_history_invalidated).then_some(self.turns)
     }
 
     pub fn active_turn_snapshot(&self) -> Option<Turn> {
@@ -937,6 +975,11 @@ impl ThreadHistoryBuilder {
                 turn.duration_ms = payload.duration_ms;
                 return;
             }
+
+            if self.discarded_turns {
+                self.bounded_history_invalidated = true;
+                return;
+            }
         }
 
         // If the event has no ID (or refers to an unknown turn), fall back to the active turn.
@@ -988,6 +1031,11 @@ impl ThreadHistoryBuilder {
             return;
         }
 
+        if self.discarded_turns {
+            self.bounded_history_invalidated = true;
+            return;
+        }
+
         // If the completion event cannot be matched, apply it to the active turn.
         if let Some(current_turn) = self.current_turn.as_mut() {
             mark_completed(current_turn);
@@ -1007,6 +1055,10 @@ impl ThreadHistoryBuilder {
     fn handle_thread_rollback(&mut self, payload: &ThreadRolledBackEvent) {
         self.finish_current_turn();
 
+        if self.discarded_turns {
+            self.bounded_history_invalidated = true;
+        }
+
         let n = usize::try_from(payload.num_turns).unwrap_or(usize::MAX);
         if n >= self.turns.len() {
             self.turns.clear();
@@ -1024,6 +1076,13 @@ impl ThreadHistoryBuilder {
                 return;
             }
             self.turns.push(Turn::from(turn));
+            if let Some(turn_limit) = self.turn_limit
+                && self.turns.len() > turn_limit
+            {
+                let discard_count = self.turns.len() - turn_limit;
+                self.turns.drain(..discard_count);
+                self.discarded_turns = true;
+            }
         }
     }
 
@@ -1075,10 +1134,12 @@ impl ThreadHistoryBuilder {
             return;
         }
 
-        warn!(
-            item_id = item.id(),
-            "dropping turn-scoped item for unknown turn id `{turn_id}`"
-        );
+        if !self.discarded_turns {
+            warn!(
+                item_id = item.id(),
+                "dropping turn-scoped item for unknown turn id `{turn_id}`"
+            );
+        }
     }
 
     fn upsert_item_in_current_turn(&mut self, item: ThreadItem) {
@@ -1872,6 +1933,68 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn bounded_history_matches_the_full_history_tail() {
+        let events = ["First", "Second", "Third", "Fourth"]
+            .into_iter()
+            .flat_map(|message| {
+                [
+                    EventMsg::UserMessage(UserMessageEvent {
+                        client_id: None,
+                        message: message.to_string(),
+                        images: None,
+                        text_elements: Vec::new(),
+                        local_images: Vec::new(),
+                        ..Default::default()
+                    }),
+                    EventMsg::AgentMessage(AgentMessageEvent {
+                        message: format!("Answer to {message}"),
+                        phase: None,
+                        memory_citation: None,
+                    }),
+                ]
+            })
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+
+        let full_history = build_turns_from_rollout_items(&events);
+
+        assert_eq!(
+            build_last_turns_from_rollout_items(&events, 2),
+            Some(full_history[2..].to_vec())
+        );
+    }
+
+    #[test]
+    fn bounded_history_falls_back_when_rollback_exposes_discarded_turns() {
+        let mut events = ["First", "Second", "Third"]
+            .into_iter()
+            .flat_map(|message| {
+                [
+                    EventMsg::UserMessage(UserMessageEvent {
+                        client_id: None,
+                        message: message.to_string(),
+                        images: None,
+                        text_elements: Vec::new(),
+                        local_images: Vec::new(),
+                        ..Default::default()
+                    }),
+                    EventMsg::AgentMessage(AgentMessageEvent {
+                        message: format!("Answer to {message}"),
+                        phase: None,
+                        memory_citation: None,
+                    }),
+                ]
+            })
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        events.push(RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+            ThreadRolledBackEvent { num_turns: 1 },
+        )));
+
+        assert_eq!(build_last_turns_from_rollout_items(&events, 2), None);
     }
 
     #[test]

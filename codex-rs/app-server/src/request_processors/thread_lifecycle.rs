@@ -575,7 +575,6 @@ pub(super) async fn handle_pending_thread_resume_request(
         thread_status,
         has_live_in_progress_turn,
     );
-    let token_usage_thread = pending.include_turns.then(|| thread.clone());
     let mut initial_turns_page = if let Some(params) = pending.initial_turns_page.as_ref() {
         match super::thread_processor::build_thread_resume_initial_turns_page(
             &pending.history_items,
@@ -592,6 +591,26 @@ pub(super) async fn handle_pending_thread_resume_request(
         }
     } else {
         None
+    };
+    let token_usage_turn_id = if pending.include_turns {
+        Some(
+            latest_token_usage_turn_id_from_rollout_items(
+                &pending.history_items,
+                thread.turns.as_slice(),
+            )
+            .unwrap_or_else(|| latest_token_usage_turn_id(thread.turns.as_slice())),
+        )
+    } else {
+        pending
+            .initial_turns_page
+            .as_ref()
+            .zip(initial_turns_page.as_ref())
+            .map(|(params, page)| {
+                latest_token_usage_turn_id_from_page(
+                    page.data.as_slice(),
+                    params.sort_direction.unwrap_or(SortDirection::Desc),
+                )
+            })
     };
     if pending.redact_resume_payloads {
         redact_thread_resume_payloads(&mut thread.turns);
@@ -664,20 +683,13 @@ pub(super) async fn handle_pending_thread_resume_request(
         initial_turns_page,
     };
     outgoing.send_response(request_id, response).await;
-    // Match cold resume: metadata-only resume should attach the listener without
-    // paying the cost of turn reconstruction for historical usage replay.
-    if let Some(token_usage_thread) = token_usage_thread {
-        let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-            &pending.history_items,
-            token_usage_thread.turns.as_slice(),
-        );
+    if let Some(token_usage_turn_id) = token_usage_turn_id {
         // Rejoining a loaded thread has the same UI contract as a cold resume, but
         // uses the live conversation state instead of reconstructing a new session.
         send_thread_token_usage_update_to_connection(
             outgoing,
             connection_id,
             conversation_id,
-            &token_usage_thread,
             conversation.as_ref(),
             token_usage_turn_id,
         )

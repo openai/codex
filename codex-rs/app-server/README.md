@@ -299,7 +299,7 @@ Valid `personality` values are `"friendly"`, `"pragmatic"`, and `"none"`. When `
 
 To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`. When the stored session includes persisted token usage, the server emits `thread/tokenUsage/updated` immediately after the response so clients can render restored usage before the next turn starts. You can also pass the same configuration overrides supported by `thread/start`, including `approvalsReviewer`.
 
-By default, `thread/resume` includes the reconstructed turn history in `thread.turns`. Experimental clients can pass `excludeTurns: true` to return only thread metadata and live resume state, then call `thread/turns/list` separately if they want to page the turn history over the network. In that mode the server also skips replaying restored `thread/tokenUsage/updated`, which avoids rebuilding turns just to attribute historical usage.
+By default, `thread/resume` includes the reconstructed turn history in `thread.turns`. Experimental clients can pass `excludeTurns: true` to return only thread metadata and live resume state, then call `thread/turns/list` separately if they want to page the turn history over the network. In that mode the server skips replaying restored `thread/tokenUsage/updated` unless `initialTurnsPage` supplies a turn to own the update.
 
 Experimental clients that want the live resume subscription plus a turns page in one round trip can pass `initialTurnsPage`. It accepts the same `limit`, `sortDirection`, and `itemsView` controls as `thread/turns/list`; omitted controls use its defaults. The response includes `initialTurnsPage` with `nextCursor` and `backwardsCursor` for follow-up pagination.
 

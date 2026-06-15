@@ -480,6 +480,7 @@ impl Session {
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
+        session_configured_initial_messages: SessionConfiguredInitialMessages,
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
         plugins_manager: Arc<PluginsManager>,
@@ -1065,9 +1066,13 @@ impl Session {
                 let mut guard = network_policy_decider_session.write().await;
                 *guard = Arc::downgrade(&sess);
             }
-            // Dispatch the SessionConfiguredEvent first and then report any errors.
-            // If resuming, include converted initial messages in the payload so UIs can render them immediately.
-            let initial_messages = initial_history.get_event_msgs();
+            // Dispatch the SessionConfiguredEvent first and then report any errors. Direct core
+            // clients use initial messages to replay a resume. App-server clients reconstruct
+            // turns separately and can omit this otherwise redundant full-history clone.
+            let initial_messages = match session_configured_initial_messages {
+                SessionConfiguredInitialMessages::Include => initial_history.get_event_msgs(),
+                SessionConfiguredInitialMessages::Omit => None,
+            };
             let events = std::iter::once(Event {
                 id: INITIAL_SUBMIT_ID.to_owned(),
                 msg: EventMsg::SessionConfigured(SessionConfiguredEvent {

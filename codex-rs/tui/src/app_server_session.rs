@@ -47,6 +47,7 @@ use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadApproveGuardianDeniedActionParams;
 use codex_app_server_protocol::ThreadApproveGuardianDeniedActionResponse;
@@ -81,6 +82,7 @@ use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadResumeInitialTurnsPageParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
@@ -102,6 +104,7 @@ use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
+use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
@@ -133,6 +136,8 @@ use uuid::Uuid;
 
 const JSONRPC_INVALID_REQUEST: i64 = -32600;
 const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
+// Replayed turns are retained both as structured thread state and rendered transcript cells.
+const TUI_RESUME_TURN_LIMIT: u32 = 100;
 pub(crate) const EXTERNAL_AGENT_CONFIG_IMPORT_IN_PROGRESS_MESSAGE: &str =
     "A previous Claude Code import is still running. Wait for it to finish before importing again.";
 const THREAD_SETTINGS_UPDATE_METHOD: &str = "thread/settings/update";
@@ -199,6 +204,7 @@ impl ThreadParamsMode {
 pub(crate) struct AppServerStartedThread {
     pub(crate) session: ThreadSessionState,
     pub(crate) turns: Vec<Turn>,
+    pub(crate) history_truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1432,6 +1438,12 @@ fn thread_resume_params_from_config(
         developer_instructions: with_terminal_visualization_instructions(
             &config, /*control_instructions*/ None,
         ),
+        exclude_turns: true,
+        initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
+            limit: Some(TUI_RESUME_TURN_LIMIT),
+            sort_direction: Some(SortDirection::Desc),
+            items_view: Some(TurnItemsView::Full),
+        }),
         ..ThreadResumeParams::default()
     }
 }
@@ -1500,6 +1512,7 @@ async fn started_thread_from_start_response(
     Ok(AppServerStartedThread {
         session,
         turns: response.thread.turns,
+        history_truncated: false,
     })
 }
 
@@ -1512,9 +1525,17 @@ async fn started_thread_from_resume_response(
         thread_session_state_from_thread_resume_response(&response, config, thread_params_mode)
             .await
             .map_err(color_eyre::eyre::Report::msg)?;
+    let (turns, history_truncated) = if let Some(mut page) = response.initial_turns_page {
+        let history_truncated = page.next_cursor.is_some();
+        page.data.reverse();
+        (page.data, history_truncated)
+    } else {
+        (response.thread.turns, false)
+    };
     Ok(AppServerStartedThread {
         session,
-        turns: response.thread.turns,
+        turns,
+        history_truncated,
     })
 }
 
@@ -1530,6 +1551,7 @@ async fn started_thread_from_fork_response(
     Ok(AppServerStartedThread {
         session,
         turns: response.thread.turns,
+        history_truncated: false,
     })
 }
 
@@ -2026,6 +2048,29 @@ mod tests {
         assert_eq!(fork.thread_source, Some(ThreadSource::User));
     }
 
+    #[tokio::test]
+    async fn thread_resume_requests_recent_full_turns() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+
+        let params = thread_resume_params_from_config(
+            config,
+            ThreadId::new(),
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+        );
+
+        assert!(params.exclude_turns);
+        assert_eq!(
+            params.initial_turns_page,
+            Some(ThreadResumeInitialTurnsPageParams {
+                limit: Some(TUI_RESUME_TURN_LIMIT),
+                sort_direction: Some(SortDirection::Desc),
+                items_view: Some(TurnItemsView::Full),
+            })
+        );
+    }
+
     #[test]
     fn sandbox_mode_does_not_project_non_cwd_write_roots_for_remote_sessions() {
         let cwd = test_path_buf("/workspace/project").abs();
@@ -2393,6 +2438,25 @@ mod tests {
         assert_eq!(started.session.permission_profile, read_only_profile);
         assert_eq!(started.turns.len(), 1);
         assert_eq!(started.turns[0], response.thread.turns[0]);
+        assert!(!started.history_truncated);
+
+        let first_turn = response.thread.turns[0].clone();
+        let mut second_turn = first_turn.clone();
+        second_turn.id = "turn-2".to_string();
+        let mut paged_response = response.clone();
+        paged_response.thread.turns.clear();
+        paged_response.initial_turns_page = Some(codex_app_server_protocol::TurnsPage {
+            data: vec![second_turn.clone(), first_turn.clone()],
+            next_cursor: Some("older-turns".to_string()),
+            backwards_cursor: Some("newer-turns".to_string()),
+        });
+
+        let started =
+            started_thread_from_resume_response(paged_response, &config, ThreadParamsMode::Remote)
+                .await
+                .expect("paged resume response should map");
+        assert_eq!(started.turns, vec![first_turn, second_turn]);
+        assert!(started.history_truncated);
 
         let embedded_config = ConfigBuilder::default()
             .codex_home(temp_dir.path().join("embedded-codex-home"))

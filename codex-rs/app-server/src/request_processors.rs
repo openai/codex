@@ -274,6 +274,7 @@ use codex_app_server_protocol::WindowsSandboxSetupCompletedNotification;
 use codex_app_server_protocol::WindowsSandboxSetupMode;
 use codex_app_server_protocol::WindowsSandboxSetupStartParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartResponse;
+use codex_app_server_protocol::build_last_turns_from_rollout_items;
 use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::AddCreditsNudgeCreditType as BackendAddCreditsNudgeCreditType;
 use codex_backend_client::Client as BackendClient;
@@ -521,6 +522,8 @@ use crate::thread_state::ConnectionCapabilities;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
+use token_usage_replay::latest_token_usage_turn_id;
+use token_usage_replay::latest_token_usage_turn_id_from_page;
 use token_usage_replay::latest_token_usage_turn_id_from_rollout_items;
 use token_usage_replay::send_thread_token_usage_update_to_connection;
 

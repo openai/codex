@@ -12,6 +12,7 @@ use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
 use crate::session::INITIAL_SUBMIT_ID;
+use crate::session::SessionConfiguredInitialMessages;
 use crate::session::resolve_multi_agent_version;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::tasks::InterruptedTurnHistoryMarker;
@@ -631,6 +632,7 @@ impl ThreadManager {
         Box::pin(self.state.spawn_thread_with_source(
             options.config,
             options.initial_history,
+            SessionConfiguredInitialMessages::Include,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
             session_source,
@@ -711,6 +713,41 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
+        self.resume_thread_with_history_initial_messages(
+            config,
+            initial_history,
+            auth_manager,
+            parent_trace,
+            SessionConfiguredInitialMessages::Include,
+        )
+        .await
+    }
+
+    pub async fn resume_thread_with_history_omitting_initial_messages(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        auth_manager: Arc<AuthManager>,
+        parent_trace: Option<W3cTraceContext>,
+    ) -> CodexResult<NewThread> {
+        self.resume_thread_with_history_initial_messages(
+            config,
+            initial_history,
+            auth_manager,
+            parent_trace,
+            SessionConfiguredInitialMessages::Omit,
+        )
+        .await
+    }
+
+    async fn resume_thread_with_history_initial_messages(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        auth_manager: Arc<AuthManager>,
+        parent_trace: Option<W3cTraceContext>,
+        initial_messages: SessionConfiguredInitialMessages,
+    ) -> CodexResult<NewThread> {
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
@@ -721,6 +758,7 @@ impl ThreadManager {
         Box::pin(self.state.spawn_thread_with_source(
             config,
             initial_history,
+            initial_messages,
             auth_manager,
             self.agent_control(),
             session_source,
@@ -784,6 +822,7 @@ impl ThreadManager {
         Box::pin(self.state.spawn_thread_with_source(
             config,
             initial_history,
+            SessionConfiguredInitialMessages::Include,
             auth_manager,
             self.agent_control(),
             session_source,
@@ -1209,6 +1248,7 @@ impl ThreadManagerState {
         Box::pin(self.spawn_thread_with_source(
             config,
             InitialHistory::New,
+            SessionConfiguredInitialMessages::Include,
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
@@ -1246,6 +1286,7 @@ impl ThreadManagerState {
         Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
+            SessionConfiguredInitialMessages::Include,
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
@@ -1284,6 +1325,7 @@ impl ThreadManagerState {
         Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
+            SessionConfiguredInitialMessages::Include,
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
@@ -1323,6 +1365,7 @@ impl ThreadManagerState {
         Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
+            SessionConfiguredInitialMessages::Include,
             auth_manager,
             agent_control,
             self.session_source.clone(),
@@ -1346,6 +1389,7 @@ impl ThreadManagerState {
         &self,
         config: Config,
         initial_history: InitialHistory,
+        session_configured_initial_messages: SessionConfiguredInitialMessages,
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
         session_source: SessionSource,
@@ -1415,6 +1459,7 @@ impl ThreadManagerState {
             mcp_manager: Arc::clone(&self.mcp_manager),
             extensions: Arc::clone(&self.extensions),
             conversation_history: initial_history,
+            session_configured_initial_messages,
             session_source,
             forked_from_thread_id,
             parent_thread_id,
@@ -1464,9 +1509,16 @@ impl ThreadManagerState {
         {
             let mut threads = self.threads.write().await;
             if let std::collections::hash_map::Entry::Vacant(e) = threads.entry(thread_id) {
+                // The caller receives the initial messages in `NewThread`. Retaining them in the
+                // thread metadata would keep a second copy of the resumed transcript alive even
+                // though later `session_configured()` callers only need session metadata.
+                let retained_session_configured = SessionConfiguredEvent {
+                    initial_messages: None,
+                    ..session_configured.clone()
+                };
                 let thread = Arc::new(CodexThread::new(
                     codex,
-                    session_configured.clone(),
+                    retained_session_configured,
                     session_configured.rollout_path.clone(),
                     session_source,
                 ));

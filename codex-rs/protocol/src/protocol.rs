@@ -2439,10 +2439,15 @@ impl InitialHistory {
     }
 
     pub fn get_rollout_items(&self) -> Vec<RolloutItem> {
+        self.rollout_items().to_vec()
+    }
+
+    /// Returns the persisted rollout items without cloning them.
+    pub fn rollout_items(&self) -> &[RolloutItem] {
         match self {
-            InitialHistory::New | InitialHistory::Cleared => Vec::new(),
-            InitialHistory::Resumed(resumed) => resumed.history.clone(),
-            InitialHistory::Forked(items) => items.clone(),
+            InitialHistory::New | InitialHistory::Cleared => &[],
+            InitialHistory::Resumed(resumed) => resumed.history.as_slice(),
+            InitialHistory::Forked(items) => items.as_slice(),
         }
     }
 

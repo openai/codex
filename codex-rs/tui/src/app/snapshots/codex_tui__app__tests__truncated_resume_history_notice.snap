@@ -1,0 +1,6 @@
+---
+source: tui/src/app/tests.rs
+assertion_line: 392
+expression: "truncated_history_notice.expect(\"expected truncated history notice\")"
+---
+• Earlier turns are omitted from this transcript to limit memory use.

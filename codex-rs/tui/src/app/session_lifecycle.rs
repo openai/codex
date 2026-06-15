@@ -513,8 +513,12 @@ impl App {
             .set_queue_submissions_until_session_configured(/*queue*/ false);
         match result {
             Ok(started) => {
-                self.enqueue_primary_thread_session(started.session, started.turns)
-                    .await?;
+                self.enqueue_primary_thread_session(
+                    started.session,
+                    started.turns,
+                    started.history_truncated,
+                )
+                .await?;
                 self.chat_widget.maybe_send_next_queued_input();
             }
             Err(err) => {
@@ -611,8 +615,12 @@ impl App {
             initial_user_message,
         );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
-        self.enqueue_primary_thread_session(started.session, started.turns)
-            .await?;
+        self.enqueue_primary_thread_session(
+            started.session,
+            started.turns,
+            started.history_truncated,
+        )
+        .await?;
         self.backfill_loaded_subagent_threads(app_server).await;
         Ok(())
     }

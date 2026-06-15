@@ -29,6 +29,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SessionSource;
+use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadGoalClearResponse;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
@@ -1564,7 +1565,7 @@ async fn thread_resume_emits_restored_token_usage_before_next_turn() -> Result<(
 }
 
 #[tokio::test]
-async fn thread_resume_skips_restored_token_usage_when_turns_are_excluded() -> Result<()> {
+async fn thread_resume_replays_usage_for_initial_page_but_not_metadata_only() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -1583,6 +1584,12 @@ async fn thread_resume_skips_restored_token_usage_when_turns_are_excluded() -> R
     let first_resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: conversation_id.clone(),
+            exclude_turns: true,
+            initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
+                limit: Some(1),
+                sort_direction: Some(SortDirection::Desc),
+                items_view: Some(TurnItemsView::NotLoaded),
+            }),
             ..Default::default()
         })
         .await?;
@@ -1591,9 +1598,17 @@ async fn thread_resume_skips_restored_token_usage_when_turns_are_excluded() -> R
         mcp.read_stream_until_response_message(RequestId::Integer(first_resume_id)),
     )
     .await??;
-    let ThreadResumeResponse { thread, .. } =
-        to_response::<ThreadResumeResponse>(first_resume_resp)?;
-    let expected_turn_id = thread.turns[0].id.clone();
+    let ThreadResumeResponse {
+        thread,
+        initial_turns_page,
+        ..
+    } = to_response::<ThreadResumeResponse>(first_resume_resp)?;
+    assert!(thread.turns.is_empty());
+    let expected_turn_id = initial_turns_page
+        .expect("resume should include the requested initial turns page")
+        .data[0]
+        .id
+        .clone();
 
     let first_note = timeout(
         DEFAULT_READ_TIMEOUT,

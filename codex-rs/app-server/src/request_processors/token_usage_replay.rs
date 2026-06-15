@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
@@ -37,16 +37,15 @@ pub(super) async fn send_thread_token_usage_update_to_connection(
     outgoing: &Arc<OutgoingMessageSender>,
     connection_id: ConnectionId,
     thread_id: ThreadId,
-    thread: &Thread,
     conversation: &CodexThread,
-    token_usage_turn_id: Option<String>,
+    token_usage_turn_id: String,
 ) {
     let Some(info) = conversation.token_usage_info().await else {
         return;
     };
     let notification = ThreadTokenUsageUpdatedNotification {
         thread_id: thread_id.to_string(),
-        turn_id: token_usage_turn_id.unwrap_or_else(|| latest_token_usage_turn_id(thread)),
+        turn_id: token_usage_turn_id,
         token_usage: ThreadTokenUsage::from(info),
     };
     outgoing
@@ -102,15 +101,29 @@ pub(super) fn latest_token_usage_turn_id_from_rollout_items(
 /// Normal replay derives the owner from the rollout position of the latest
 /// `TokenCount` event. This fallback only preserves a stable wire shape for
 /// unusual histories where that rollout information cannot be read.
-fn latest_token_usage_turn_id(thread: &Thread) -> String {
-    thread
-        .turns
+pub(super) fn latest_token_usage_turn_id(turns: &[Turn]) -> String {
+    turns
         .iter()
         .rev()
         .find(|turn| matches!(turn.status, TurnStatus::Completed | TurnStatus::Failed))
-        .or_else(|| thread.turns.last())
+        .or_else(|| turns.last())
         .map(|turn| turn.id.clone())
         .unwrap_or_default()
+}
+
+pub(super) fn latest_token_usage_turn_id_from_page(
+    turns: &[Turn],
+    sort_direction: SortDirection,
+) -> String {
+    match sort_direction {
+        SortDirection::Asc => latest_token_usage_turn_id(turns),
+        SortDirection::Desc => turns
+            .iter()
+            .find(|turn| matches!(turn.status, TurnStatus::Completed | TurnStatus::Failed))
+            .or_else(|| turns.first())
+            .map(|turn| turn.id.clone())
+            .unwrap_or_default(),
+    }
 }
 
 #[cfg(test)]

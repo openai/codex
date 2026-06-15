@@ -7,6 +7,9 @@
 use super::*;
 use crate::session_resume::read_session_model;
 
+pub(super) const TRUNCATED_HISTORY_NOTICE: &str =
+    "Earlier turns are omitted from this transcript to limit memory use.";
+
 impl App {
     pub(super) async fn shutdown_current_thread(&mut self, app_server: &mut AppServerSession) {
         if let Some(thread_id) = self.chat_widget.thread_id() {
@@ -1081,6 +1084,7 @@ impl App {
         &mut self,
         session: ThreadSessionState,
         turns: Vec<Turn>,
+        history_truncated: bool,
     ) -> Result<()> {
         let thread_id = session.thread_id;
         self.primary_thread_id = Some(thread_id);
@@ -1103,6 +1107,10 @@ impl App {
         if should_buffer_initial_replay {
             self.app_event_tx
                 .send(AppEvent::BeginInitialHistoryReplayBuffer);
+        }
+        if history_truncated {
+            self.chat_widget
+                .add_info_message(TRUNCATED_HISTORY_NOTICE.to_string(), /*hint*/ None);
         }
         self.chat_widget
             .replay_thread_turns(turns, ReplayKind::ResumeInitialMessages);
@@ -1209,7 +1217,11 @@ impl App {
         started: AppServerStartedThread,
         snapshot: &mut ThreadEventSnapshot,
     ) {
-        let AppServerStartedThread { session, turns } = started;
+        let AppServerStartedThread {
+            session,
+            turns,
+            history_truncated: _,
+        } = started;
         if let Some(channel) = self.thread_event_channels.get(&thread_id) {
             let mut store = channel.store.lock().await;
             store.set_session(session.clone(), turns.clone());

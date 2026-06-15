@@ -209,6 +209,7 @@ async fn enqueue_primary_thread_session_replays_buffered_approval_after_attach()
     app.enqueue_primary_thread_session(
         test_thread_session(thread_id, test_path_buf("/tmp/project")),
         Vec::new(),
+        /*history_truncated*/ false,
     )
     .await?;
 
@@ -257,6 +258,7 @@ async fn resolved_buffered_approval_does_not_become_actionable_after_drain() -> 
     app.enqueue_primary_thread_session(
         test_thread_session(thread_id, test_path_buf("/tmp/project")),
         Vec::new(),
+        /*history_truncated*/ false,
     )
     .await?;
     while app_event_rx.try_recv().is_ok() {}
@@ -354,16 +356,21 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
                 }],
             }],
         )],
+        /*history_truncated*/ true,
     )
     .await?;
 
     let mut saw_replayed_answer = false;
+    let mut truncated_history_notice = None;
     let mut submitted_items = None;
     while let Ok(event) = app_event_rx.try_recv() {
         match event {
             AppEvent::InsertHistoryCell(cell) => {
                 let transcript = lines_to_single_string(&cell.transcript_lines(/*width*/ 80));
                 saw_replayed_answer |= transcript.contains("earlier prompt");
+                if transcript.contains(super::thread_routing::TRUNCATED_HISTORY_NOTICE) {
+                    truncated_history_notice = Some(transcript);
+                }
             }
             AppEvent::SubmitThreadOp {
                 thread_id: op_thread_id,
@@ -381,6 +388,10 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
     assert!(
         saw_replayed_answer,
         "expected replayed history before initial prompt submit"
+    );
+    insta::assert_snapshot!(
+        "truncated_resume_history_notice",
+        truncated_history_notice.expect("expected truncated history notice")
     );
     assert_eq!(
         submitted_items,
@@ -3512,6 +3523,7 @@ async fn primary_thread_ignores_child_mcp_startup_notifications() {
         AppServerStartedThread {
             session: test_thread_session(child_thread_id, test_path_buf("/tmp/child")),
             turns: Vec::new(),
+            history_truncated: false,
         },
         &mut child_snapshot,
     )
@@ -4165,7 +4177,7 @@ async fn set_thread_goal_draft_materializes_long_objective_and_confirms_before_p
         .start_thread(app.chat_widget.config_ref())
         .await?;
     let thread_id = started.session.thread_id;
-    app.enqueue_primary_thread_session(started.session, started.turns)
+    app.enqueue_primary_thread_session(started.session, started.turns, started.history_truncated)
         .await?;
     let objective = "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1);
 
@@ -5512,6 +5524,7 @@ async fn refreshed_snapshot_session_persists_resumed_turns() {
         AppServerStartedThread {
             session: resumed_session.clone(),
             turns: resumed_turns.clone(),
+            history_truncated: false,
         },
         &mut snapshot,
     )
@@ -5772,9 +5785,13 @@ async fn interrupt_without_active_turn_is_treated_as_handled() {
             .await
             .expect("thread/start should succeed");
         let thread_id = started.session.thread_id;
-        app.enqueue_primary_thread_session(started.session, started.turns)
-            .await
-            .expect("primary thread should be registered");
+        app.enqueue_primary_thread_session(
+            started.session,
+            started.turns,
+            started.history_truncated,
+        )
+        .await
+        .expect("primary thread should be registered");
         let op = AppCommand::interrupt();
 
         let handled = Box::pin(app.try_submit_active_thread_op_via_app_server(
@@ -5805,9 +5822,13 @@ async fn override_turn_context_sends_thread_settings_update() {
         let thread_id = started.session.thread_id;
         let initial_model = started.session.model.clone();
         let initial_effort = started.session.reasoning_effort.clone();
-        app.enqueue_primary_thread_session(started.session, started.turns)
-            .await
-            .expect("primary thread should be registered");
+        app.enqueue_primary_thread_session(
+            started.session,
+            started.turns,
+            started.history_truncated,
+        )
+        .await
+        .expect("primary thread should be registered");
         let service_tier = ServiceTier::Fast.request_value().to_string();
         let collaboration_mode = CollaborationMode {
             mode: ModeKind::Plan,

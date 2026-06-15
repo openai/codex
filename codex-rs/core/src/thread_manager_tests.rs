@@ -986,7 +986,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
         .join("rollouts/source.jsonl")
         .to_path_buf();
     let resumed = manager
-        .resume_thread_with_history(
+        .resume_thread_with_history_omitting_initial_messages(
             config.clone(),
             InitialHistory::Resumed(ResumedHistory {
                 conversation_id: source.thread_id,
@@ -998,6 +998,15 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
         )
         .await
         .expect("seed rollout path in store");
+    assert_eq!(
+        resumed.session_configured.initial_messages, None,
+        "app-server resumes should not materialize replay-only initial messages"
+    );
+    assert_eq!(
+        resumed.thread.session_configured().initial_messages,
+        None,
+        "the live thread should not retain replay-only initial messages"
+    );
     resumed
         .thread
         .shutdown_and_wait()

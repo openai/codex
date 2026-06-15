@@ -660,7 +660,7 @@ async fn thread_resume_initial_turns_page_matches_requested_turns_list_page() ->
             thread_id: conversation_id.clone(),
             cursor: None,
             limit: Some(2),
-            sort_direction: Some(SortDirection::Asc),
+            sort_direction: Some(SortDirection::Desc),
             items_view: Some(TurnItemsView::NotLoaded),
         })
         .await?;
@@ -677,7 +677,7 @@ async fn thread_resume_initial_turns_page_matches_requested_turns_list_page() ->
             exclude_turns: true,
             initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
                 limit: Some(2),
-                sort_direction: Some(SortDirection::Asc),
+                sort_direction: Some(SortDirection::Desc),
                 items_view: Some(TurnItemsView::NotLoaded),
             }),
             ..Default::default()

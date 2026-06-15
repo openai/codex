@@ -401,6 +401,12 @@ pub struct CodexSpawnOk {
     pub thread_id: ThreadId,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum SessionConfiguredInitialMessages {
+    Include,
+    Omit,
+}
+
 pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
     pub(crate) user_instructions: LoadedUserInstructions,
@@ -413,6 +419,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     pub(crate) conversation_history: InitialHistory,
+    pub(crate) session_configured_initial_messages: SessionConfiguredInitialMessages,
     pub(crate) session_source: SessionSource,
     pub(crate) forked_from_thread_id: Option<ThreadId>,
     pub(crate) parent_thread_id: Option<ThreadId>,
@@ -499,6 +506,7 @@ impl Codex {
             mcp_manager,
             extensions,
             conversation_history,
+            session_configured_initial_messages,
             session_source,
             forked_from_thread_id,
             parent_thread_id,
@@ -653,6 +661,7 @@ impl Codex {
             tx_event.clone(),
             agent_status_tx.clone(),
             conversation_history,
+            session_configured_initial_messages,
             session_source_clone,
             skills_manager,
             plugins_manager,

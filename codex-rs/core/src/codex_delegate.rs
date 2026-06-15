@@ -48,6 +48,7 @@ use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
 use crate::session::SUBMISSION_CHANNEL_CAPACITY;
+use crate::session::SessionConfiguredInitialMessages;
 use crate::session::emit_subagent_session_started;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -96,6 +97,7 @@ pub(crate) async fn run_codex_thread_interactive(
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
         extensions: Arc::clone(&parent_session.services.extensions),
         conversation_history,
+        session_configured_initial_messages: SessionConfiguredInitialMessages::Include,
         session_source: SessionSource::SubAgent(subagent_source.clone()),
         forked_from_thread_id,
         parent_thread_id: Some(parent_session.thread_id),
