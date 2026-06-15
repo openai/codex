@@ -124,6 +124,7 @@ pub fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::RawResponseItem(_)
         | EventMsg::SessionConfigured(_)
         | EventMsg::ThreadSettingsApplied(_)
+        | EventMsg::ThreadQueueChanged(_)
         | EventMsg::McpToolCallBegin(_)
         | EventMsg::ExecCommandBegin(_)
         | EventMsg::TerminalInteraction(_)

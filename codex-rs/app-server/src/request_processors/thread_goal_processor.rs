@@ -68,10 +68,9 @@ impl ThreadGoalRequestProcessor {
         thread_id: ThreadId,
         thread: &CodexThread,
     ) {
-        if !self.config.features.enabled(Feature::Goals) {
-            return;
+        if self.config.features.enabled(Feature::Goals) {
+            self.emit_thread_goal_snapshot(thread_id).await;
         }
-        self.emit_thread_goal_snapshot(thread_id).await;
         // App-server owns resume response and snapshot ordering, so wait until
         // those are sent before letting extensions react to the idle thread.
         thread.emit_thread_idle_lifecycle_if_idle().await;
