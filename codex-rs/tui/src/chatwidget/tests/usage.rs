@@ -26,7 +26,7 @@ async fn usage_command_opens_menu_when_reset_is_available_snapshot() {
 }
 
 #[tokio::test]
-async fn usage_command_opens_token_activity_when_no_reset_is_available() {
+async fn usage_command_shows_disabled_reset_when_none_is_available_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
     let request_id = chat.start_rate_limit_reset_startup_check();
@@ -37,18 +37,26 @@ async fn usage_command_opens_token_activity_when_no_reset_is_available() {
 
     chat.dispatch_command(SlashCommand::Usage);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::RefreshTokenActivity { .. }));
+    assert_chatwidget_snapshot!(
+        "usage_command_menu_without_resets",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenTokenActivity));
 }
 
 #[tokio::test]
-async fn usage_command_opens_token_activity_for_workspace_accounts() {
+async fn usage_command_disables_reset_for_workspace_accounts() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
     chat.plan_type = Some(PlanType::Business);
 
     chat.dispatch_command(SlashCommand::Usage);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::RefreshTokenActivity { .. }));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenTokenActivity));
 }
 
 #[tokio::test]

@@ -6,6 +6,6 @@ expression: "render_bottom_popup(&chat, 80)"
   View account usage or redeem an earned reset.
 
 › 1. Show usage               View recent account token usage.
-  2. Redeem rate limit reset  You have 2 rate-limit resets available.
+     Redeem rate limit reset  No rate-limit resets available.
 
   Press enter to confirm or esc to go back

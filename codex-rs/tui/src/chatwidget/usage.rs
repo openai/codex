@@ -11,6 +11,18 @@ const RATE_LIMIT_RESET_VIEW_ID: &str = "rate-limit-reset";
 impl ChatWidget {
     pub(super) fn open_usage_menu(&mut self) {
         self.clear_pending_rate_limit_reset_hint();
+        let reset_available = self.has_chatgpt_account
+            && !self.plan_type.is_some_and(PlanType::is_workspace_account)
+            && self.available_rate_limit_reset_credits > 0;
+        let reset_description = if reset_available {
+            format!(
+                "You have {} {} available.",
+                self.available_rate_limit_reset_credits,
+                reset_label(self.available_rate_limit_reset_credits)
+            )
+        } else {
+            "No rate-limit resets available.".to_string()
+        };
         self.bottom_pane.show_selection_view(SelectionViewParams {
             view_id: Some(USAGE_MENU_VIEW_ID),
             title: Some("Usage".to_string()),
@@ -18,7 +30,7 @@ impl ChatWidget {
             footer_hint: Some(standard_popup_hint_line()),
             items: vec![
                 SelectionItem {
-                    name: "Token activity".to_string(),
+                    name: "Show usage".to_string(),
                     description: Some("View recent account token usage.".to_string()),
                     actions: vec![Box::new(|tx| {
                         tx.send(AppEvent::OpenTokenActivity);
@@ -27,8 +39,9 @@ impl ChatWidget {
                     ..Default::default()
                 },
                 SelectionItem {
-                    name: "Rate-limit resets".to_string(),
-                    description: Some("View and redeem earned rate-limit resets.".to_string()),
+                    name: "Redeem rate limit reset".to_string(),
+                    description: Some(reset_description),
+                    is_disabled: !reset_available,
                     actions: vec![Box::new(|tx| {
                         tx.send(AppEvent::OpenRateLimitResetCredits);
                     })],

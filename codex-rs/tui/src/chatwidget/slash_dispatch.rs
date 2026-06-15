@@ -435,14 +435,7 @@ impl ChatWidget {
             }
             SlashCommand::Usage => {
                 if self.ensure_usage_command_available() {
-                    if self.has_chatgpt_account
-                        && !self.plan_type.is_some_and(PlanType::is_workspace_account)
-                        && self.available_rate_limit_reset_credits > 0
-                    {
-                        self.open_usage_menu();
-                    } else {
-                        self.add_token_activity_output(tokens::TokenActivityView::Daily);
-                    }
+                    self.open_usage_menu();
                 }
             }
             SlashCommand::Ide => {
