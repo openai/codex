@@ -1851,10 +1851,28 @@ mod tests {
         });
         let server = tokio::spawn(async move {
             let (mut unauthorized, _) = listener.accept().await.expect("listener should accept");
+            {
+                let mut lines = BufReader::new(&mut unauthorized).lines();
+                while let Some(line) = lines
+                    .next_line()
+                    .await
+                    .expect("handshake request should read")
+                {
+                    if line.is_empty() {
+                        break;
+                    }
+                }
+            }
             unauthorized
-                .write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")
+                .write_all(
+                    b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
                 .await
                 .expect("unauthorized response should write");
+            unauthorized
+                .flush()
+                .await
+                .expect("unauthorized response should flush");
             drop(unauthorized);
 
             let mut authorized = accept_websocket(&listener).await;
