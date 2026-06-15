@@ -21,10 +21,16 @@ pub const CODEX_WINDOWS_SANDBOX_ARG1: &str = "--run-as-windows-sandbox";
 
 const COMMAND_CWD_FLAG: &str = "--command-cwd";
 const CODEX_HOME_FLAG: &str = "--codex-home";
+const DENY_READ_PATHS_JSON_FLAG: &str = "--deny-read-paths-json";
+const DENY_WRITE_PATHS_JSON_FLAG: &str = "--deny-write-paths-json";
 const ENV_JSON_FLAG: &str = "--env-json";
 const PERMISSION_PROFILE_FLAG: &str = "--permission-profile";
 const PRIVATE_DESKTOP_FLAG: &str = "--windows-sandbox-private-desktop";
+const PROXY_ENFORCED_FLAG: &str = "--proxy-enforced";
+const READ_ROOTS_INCLUDE_PLATFORM_DEFAULTS_FLAG: &str = "--read-roots-include-platform-defaults";
+const READ_ROOTS_JSON_FLAG: &str = "--read-roots-json";
 const SANDBOX_LEVEL_FLAG: &str = "--windows-sandbox-level";
+const WRITE_ROOTS_JSON_FLAG: &str = "--write-roots-json";
 const WORKSPACE_ROOT_FLAG: &str = "--workspace-root";
 
 #[allow(clippy::too_many_arguments)]
@@ -36,6 +42,12 @@ pub fn create_windows_sandbox_command_args_for_permission_profile(
     permission_profile: &PermissionProfile,
     windows_sandbox_level: WindowsSandboxLevel,
     windows_sandbox_private_desktop: bool,
+    proxy_enforced: bool,
+    read_roots_override: Option<&[PathBuf]>,
+    read_roots_include_platform_defaults: bool,
+    write_roots_override: Option<&[PathBuf]>,
+    deny_read_paths_override: &[AbsolutePathBuf],
+    deny_write_paths_override: &[AbsolutePathBuf],
     codex_home: &Path,
 ) -> Vec<String> {
     let permission_profile_json = serde_json::to_string(permission_profile)
@@ -67,9 +79,43 @@ pub fn create_windows_sandbox_command_args_for_permission_profile(
     if windows_sandbox_private_desktop {
         args.push(PRIVATE_DESKTOP_FLAG.to_string());
     }
+    if proxy_enforced {
+        args.push(PROXY_ENFORCED_FLAG.to_string());
+    }
+    if let Some(read_roots_override) = read_roots_override {
+        push_json_arg(&mut args, READ_ROOTS_JSON_FLAG, &read_roots_override);
+    }
+    if read_roots_include_platform_defaults {
+        args.push(READ_ROOTS_INCLUDE_PLATFORM_DEFAULTS_FLAG.to_string());
+    }
+    if let Some(write_roots_override) = write_roots_override {
+        push_json_arg(&mut args, WRITE_ROOTS_JSON_FLAG, &write_roots_override);
+    }
+    if !deny_read_paths_override.is_empty() {
+        push_json_arg(
+            &mut args,
+            DENY_READ_PATHS_JSON_FLAG,
+            &deny_read_paths_override,
+        );
+    }
+    if !deny_write_paths_override.is_empty() {
+        push_json_arg(
+            &mut args,
+            DENY_WRITE_PATHS_JSON_FLAG,
+            &deny_write_paths_override,
+        );
+    }
     args.push("--".to_string());
     args.extend(command);
     args
+}
+
+fn push_json_arg<T: serde::Serialize>(args: &mut Vec<String>, flag: &str, value: &T) {
+    args.push(flag.to_string());
+    args.push(
+        serde_json::to_string(value)
+            .unwrap_or_else(|err| panic!("failed to serialize {flag}: {err}")),
+    );
 }
 
 pub fn run_windows_sandbox_wrapper_main() -> ! {
@@ -107,6 +153,12 @@ struct WindowsSandboxWrapperRequest {
     permission_profile: PermissionProfile,
     windows_sandbox_level: WindowsSandboxLevel,
     windows_sandbox_private_desktop: bool,
+    proxy_enforced: bool,
+    read_roots_override: Option<Vec<PathBuf>>,
+    read_roots_include_platform_defaults: bool,
+    write_roots_override: Option<Vec<PathBuf>>,
+    deny_read_paths_override: Vec<AbsolutePathBuf>,
+    deny_write_paths_override: Vec<AbsolutePathBuf>,
     command: Vec<String>,
 }
 
@@ -114,7 +166,6 @@ async fn run_windows_sandbox_wrapper_request(request: WindowsSandboxWrapperReque
     if request.command.is_empty() {
         bail!("missing sandboxed command in windows sandbox wrapper request");
     }
-    let empty_paths: &[AbsolutePathBuf] = &[];
     let spawned =
         crate::spawn_windows_sandbox_session_for_level(crate::WindowsSandboxSessionRequest {
             permission_profile: &request.permission_profile,
@@ -124,12 +175,13 @@ async fn run_windows_sandbox_wrapper_request(request: WindowsSandboxWrapperReque
             cwd: request.command_cwd.as_path(),
             env_map: request.env_map,
             windows_sandbox_level: request.windows_sandbox_level,
+            proxy_enforced: request.proxy_enforced,
             timeout_ms: None,
-            read_roots_override: None,
-            read_roots_include_platform_defaults: false,
-            write_roots_override: None,
-            deny_read_paths_override: empty_paths,
-            deny_write_paths_override: empty_paths,
+            read_roots_override: request.read_roots_override.as_deref(),
+            read_roots_include_platform_defaults: request.read_roots_include_platform_defaults,
+            write_roots_override: request.write_roots_override.as_deref(),
+            deny_read_paths_override: request.deny_read_paths_override.as_slice(),
+            deny_write_paths_override: request.deny_write_paths_override.as_slice(),
             tty: false,
             stdin_open: true,
             use_private_desktop: request.windows_sandbox_private_desktop,
@@ -148,6 +200,12 @@ fn parse_windows_sandbox_wrapper_args(args: Vec<String>) -> Result<WindowsSandbo
     let mut permission_profile = None;
     let mut windows_sandbox_level = None;
     let mut windows_sandbox_private_desktop = false;
+    let mut proxy_enforced = false;
+    let mut read_roots_override = None;
+    let mut read_roots_include_platform_defaults = false;
+    let mut write_roots_override = None;
+    let mut deny_read_paths_override = Vec::new();
+    let mut deny_write_paths_override = Vec::new();
     let mut command = None;
 
     while let Some(arg) = args.next() {
@@ -163,6 +221,14 @@ fn parse_windows_sandbox_wrapper_args(args: Vec<String>) -> Result<WindowsSandbo
                 let value = next_flag_value(&mut args, &arg)?;
                 env_map = Some(serde_json::from_str(&value).context("failed to parse env json")?);
             }
+            DENY_READ_PATHS_JSON_FLAG => {
+                deny_read_paths_override =
+                    json_flag_value(next_flag_value(&mut args, &arg)?, &arg)?;
+            }
+            DENY_WRITE_PATHS_JSON_FLAG => {
+                deny_write_paths_override =
+                    json_flag_value(next_flag_value(&mut args, &arg)?, &arg)?;
+            }
             PERMISSION_PROFILE_FLAG => {
                 let value = next_flag_value(&mut args, &arg)?;
                 permission_profile = Some(
@@ -174,6 +240,18 @@ fn parse_windows_sandbox_wrapper_args(args: Vec<String>) -> Result<WindowsSandbo
                 windows_sandbox_level = Some(parse_windows_sandbox_level(&value)?);
             }
             PRIVATE_DESKTOP_FLAG => windows_sandbox_private_desktop = true,
+            PROXY_ENFORCED_FLAG => proxy_enforced = true,
+            READ_ROOTS_INCLUDE_PLATFORM_DEFAULTS_FLAG => {
+                read_roots_include_platform_defaults = true;
+            }
+            READ_ROOTS_JSON_FLAG => {
+                read_roots_override =
+                    Some(json_flag_value(next_flag_value(&mut args, &arg)?, &arg)?);
+            }
+            WRITE_ROOTS_JSON_FLAG => {
+                write_roots_override =
+                    Some(json_flag_value(next_flag_value(&mut args, &arg)?, &arg)?);
+            }
             "--" => {
                 command = Some(args.collect::<Vec<_>>());
                 break;
@@ -203,6 +281,12 @@ fn parse_windows_sandbox_wrapper_args(args: Vec<String>) -> Result<WindowsSandbo
         windows_sandbox_level: windows_sandbox_level
             .ok_or_else(|| anyhow!("missing required {SANDBOX_LEVEL_FLAG}"))?,
         windows_sandbox_private_desktop,
+        proxy_enforced,
+        read_roots_override,
+        read_roots_include_platform_defaults,
+        write_roots_override,
+        deny_read_paths_override,
+        deny_write_paths_override,
         command: command.ok_or_else(|| anyhow!("missing sandboxed command separator --"))?,
     })
 }
@@ -216,6 +300,10 @@ fn absolute_path_arg(value: String, flag: &str) -> Result<AbsolutePathBuf> {
     let path = PathBuf::from(value);
     AbsolutePathBuf::from_absolute_path(path.as_path())
         .with_context(|| format!("{flag} must be absolute: {}", path.display()))
+}
+
+fn json_flag_value<T: serde::de::DeserializeOwned>(value: String, flag: &str) -> Result<T> {
+    serde_json::from_str(&value).with_context(|| format!("failed to parse {flag}"))
 }
 
 fn parse_windows_sandbox_level(value: &str) -> Result<WindowsSandboxLevel> {

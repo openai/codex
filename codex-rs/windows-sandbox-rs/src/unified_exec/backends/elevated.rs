@@ -31,6 +31,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
     command: Vec<String>,
     cwd: &Path,
     mut env_map: HashMap<String, String>,
+    proxy_enforced: bool,
     timeout_ms: Option<u64>,
     read_roots_override: Option<&[PathBuf]>,
     read_roots_include_platform_defaults: bool,
@@ -65,6 +66,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         write_roots_override,
         &deny_read_paths_override,
         &deny_write_paths_override,
+        proxy_enforced,
     )?;
 
     let spawn_request = SpawnRequest {

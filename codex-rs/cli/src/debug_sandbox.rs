@@ -382,6 +382,7 @@ async fn run_command_under_windows_session(
         cwd: cwd.as_path(),
         env_map: env,
         windows_sandbox_level: WindowsSandboxLevel::from_config(config),
+        proxy_enforced: false,
         timeout_ms: None,
         read_roots_override: None,
         read_roots_include_platform_defaults: false,
