@@ -10,8 +10,8 @@ impl AccountRequestProcessor {
         &self,
         params: ConsumeAccountRateLimitResetCreditParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        if params.redeem_request_id.is_empty() {
-            return Err(invalid_request("redeemRequestId must not be empty"));
+        if params.idempotency_key.is_empty() {
+            return Err(invalid_request("idempotencyKey must not be empty"));
         }
 
         let client = self.rate_limit_reset_backend_client().await?;
@@ -24,7 +24,7 @@ impl AccountRequestProcessor {
             .unwrap_or(request_timeout);
         let response = tokio::time::timeout(
             request_timeout,
-            client.consume_rate_limit_reset_credit(&params.redeem_request_id),
+            client.consume_rate_limit_reset_credit(&params.idempotency_key),
         )
         .await
         .map_err(|_| internal_error("rate limit reset consume timed out"))?

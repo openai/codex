@@ -43,7 +43,7 @@ async fn consume_rate_limit_reset_credit_requires_chatgpt_auth() -> Result<()> {
     let consume_id = mcp
         .send_consume_account_rate_limit_reset_credit_request(
             ConsumeAccountRateLimitResetCreditParams {
-                redeem_request_id: "request-1".to_string(),
+                idempotency_key: "request-1".to_string(),
             },
         )
         .await?;
@@ -94,12 +94,12 @@ async fn consume_account_rate_limit_reset_credit_maps_backend_codes() -> Result<
             0,
         ),
     ];
-    for (redeem_request_id, backend_code, _, windows_reset) in cases {
+    for (idempotency_key, backend_code, _, windows_reset) in cases {
         Mock::given(method("POST"))
             .and(path("/api/codex/rate-limit-reset-credits/consume"))
             .and(header("authorization", "Bearer chatgpt-token"))
             .and(header("chatgpt-account-id", "account-123"))
-            .and(body_json(json!({ "redeem_request_id": redeem_request_id })))
+            .and(body_json(json!({ "redeem_request_id": idempotency_key })))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "code": backend_code,
                 "windows_reset": windows_reset
@@ -109,9 +109,9 @@ async fn consume_account_rate_limit_reset_credit_maps_backend_codes() -> Result<
     }
 
     let mut mcp = initialized_app_server(codex_home.path()).await?;
-    for (redeem_request_id, _, expected_code, windows_reset) in cases {
+    for (idempotency_key, _, expected_code, windows_reset) in cases {
         assert_eq!(
-            consume_reset_credit(&mut mcp, redeem_request_id).await?,
+            consume_reset_credit(&mut mcp, idempotency_key).await?,
             ConsumeAccountRateLimitResetCreditResponse {
                 code: expected_code,
                 windows_reset,
@@ -122,21 +122,21 @@ async fn consume_account_rate_limit_reset_credit_maps_backend_codes() -> Result<
 }
 
 #[tokio::test]
-async fn consume_account_rate_limit_reset_credit_rejects_empty_request_id() -> Result<()> {
+async fn consume_account_rate_limit_reset_credit_rejects_empty_idempotency_key() -> Result<()> {
     let (codex_home, _server) = chatgpt_test_context().await?;
     let mut mcp = initialized_app_server(codex_home.path()).await?;
 
     let request_id = mcp
         .send_consume_account_rate_limit_reset_credit_request(
             ConsumeAccountRateLimitResetCreditParams {
-                redeem_request_id: String::new(),
+                idempotency_key: String::new(),
             },
         )
         .await?;
     let error = read_error_response(&mut mcp, request_id).await?;
 
     assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
-    assert_eq!(error.error.message, "redeemRequestId must not be empty");
+    assert_eq!(error.error.message, "idempotencyKey must not be empty");
     Ok(())
 }
 
@@ -236,19 +236,16 @@ async fn initialized_app_server(codex_home: &Path) -> Result<TestAppServer> {
 
 async fn consume_reset_credit(
     mcp: &mut TestAppServer,
-    redeem_request_id: &str,
+    idempotency_key: &str,
 ) -> Result<ConsumeAccountRateLimitResetCreditResponse> {
-    let request_id = send_consume_reset_credit(mcp, redeem_request_id).await?;
+    let request_id = send_consume_reset_credit(mcp, idempotency_key).await?;
     read_response(mcp, request_id).await
 }
 
-async fn send_consume_reset_credit(
-    mcp: &mut TestAppServer,
-    redeem_request_id: &str,
-) -> Result<i64> {
+async fn send_consume_reset_credit(mcp: &mut TestAppServer, idempotency_key: &str) -> Result<i64> {
     mcp.send_consume_account_rate_limit_reset_credit_request(
         ConsumeAccountRateLimitResetCreditParams {
-            redeem_request_id: redeem_request_id.to_string(),
+            idempotency_key: idempotency_key.to_string(),
         },
     )
     .await

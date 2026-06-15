@@ -1839,7 +1839,7 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 - `account/logout` — sign out; triggers `account/updated`.
 - `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, `personalAccessToken`, or `null`) and includes the current ChatGPT `planType` when available.
 - `account/rateLimits/read` — fetch ChatGPT rate limits, an optional effective monthly credit limit, and the number of earned rate-limit resets currently available. Rate-limit updates arrive via `account/rateLimits/updated` (notify); the reset count is snapshot-only.
-- `account/rateLimitResetCredit/consume` — consume one earned reset using a caller-provided redemption request ID.
+- `account/rateLimitResetCredit/consume` — consume one earned reset using a caller-provided idempotency key.
 - `account/usage/read` — fetch ChatGPT account token-activity summary and daily buckets.
 - `account/rateLimits/updated` (notify) — emitted whenever a user's ChatGPT rate limits change. This is a sparse rolling update; merge available values into the most recent `account/rateLimits/read` response or refetch that snapshot.
 - `account/sendAddCreditsNudgeEmail` — ask ChatGPT to email the workspace owner about depleted credits or a reached usage limit.
@@ -1951,13 +1951,13 @@ Field notes:
 ### 8) Earned rate-limit resets (ChatGPT)
 
 ```json
-{ "method": "account/rateLimitResetCredit/consume", "id": 8, "params": { "redeemRequestId": "8ae96ff3-3425-4f4c-8772-b6fd61502868" } }
+{ "method": "account/rateLimitResetCredit/consume", "id": 8, "params": { "idempotencyKey": "8ae96ff3-3425-4f4c-8772-b6fd61502868" } }
 { "id": 8, "result": { "code": "reset", "windowsReset": 2 } }
 ```
 
 Field notes:
 
-- `redeemRequestId` must be non-empty. Reuse the same value when retrying the same redemption attempt.
+- `idempotencyKey` must be non-empty. A UUID is recommended for each logical redemption attempt; reuse the same value when retrying that attempt.
 - `reset` means a credit was consumed.
 - `already_redeemed` means the same redemption completed previously. Treat it as an idempotent success and refresh account limits.
 - `nothing_to_reset` means there is no eligible rate-limit window to reset.
