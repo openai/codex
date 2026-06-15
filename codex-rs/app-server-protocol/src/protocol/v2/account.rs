@@ -280,7 +280,6 @@ pub struct ConsumeAccountRateLimitResetCreditParams {
 #[ts(export_to = "v2/")]
 pub struct ConsumeAccountRateLimitResetCreditResponse {
     pub outcome: ConsumeAccountRateLimitResetCreditOutcome,
-    pub windows_reset: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

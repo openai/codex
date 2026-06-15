@@ -1952,7 +1952,7 @@ Field notes:
 
 ```json
 { "method": "account/rateLimitResetCredit/consume", "id": 8, "params": { "idempotencyKey": "8ae96ff3-3425-4f4c-8772-b6fd61502868" } }
-{ "id": 8, "result": { "outcome": "reset", "windowsReset": 2 } }
+{ "id": 8, "result": { "outcome": "reset" } }
 ```
 
 Field notes:
@@ -1962,6 +1962,7 @@ Field notes:
 - `already_redeemed` means the same redemption completed previously. Treat it as an idempotent success and refresh account limits.
 - `nothing_to_reset` means there is no eligible rate-limit window to reset.
 - `no_credit` means the account has no earned reset credits available.
+- Refetch `account/rateLimits/read` after consuming a reset instead of inferring updated windows from this response.
 
 ### 9) Notify a workspace owner about a limit
 

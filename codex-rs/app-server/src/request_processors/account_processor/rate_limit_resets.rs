@@ -44,11 +44,7 @@ impl AccountRequestProcessor {
             }
         };
         Ok(Some(
-            ConsumeAccountRateLimitResetCreditResponse {
-                outcome,
-                windows_reset: response.windows_reset,
-            }
-            .into(),
+            ConsumeAccountRateLimitResetCreditResponse { outcome }.into(),
         ))
     }
 

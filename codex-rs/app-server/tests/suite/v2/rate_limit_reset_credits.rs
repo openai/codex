@@ -109,12 +109,11 @@ async fn consume_account_rate_limit_reset_credit_maps_backend_outcomes() -> Resu
     }
 
     let mut mcp = initialized_app_server(codex_home.path()).await?;
-    for (idempotency_key, _, expected_outcome, windows_reset) in cases {
+    for (idempotency_key, _, expected_outcome, _) in cases {
         assert_eq!(
             consume_reset_credit(&mut mcp, idempotency_key).await?,
             ConsumeAccountRateLimitResetCreditResponse {
                 outcome: expected_outcome,
-                windows_reset,
             }
         );
     }

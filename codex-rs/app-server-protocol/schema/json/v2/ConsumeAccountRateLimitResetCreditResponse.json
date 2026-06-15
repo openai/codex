@@ -14,15 +14,10 @@
   "properties": {
     "outcome": {
       "$ref": "#/definitions/ConsumeAccountRateLimitResetCreditOutcome"
-    },
-    "windowsReset": {
-      "format": "int64",
-      "type": "integer"
     }
   },
   "required": [
-    "outcome",
-    "windowsReset"
+    "outcome"
   ],
   "title": "ConsumeAccountRateLimitResetCreditResponse",
   "type": "object"
