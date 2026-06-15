@@ -1,57 +1,99 @@
-name: rust-release-prepare
+name: rust-release-prepare-diagnostic
+
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 */4 * * *"
-
-concurrency:
-  group: ${{ github.workflow }}
-  cancel-in-progress: false
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
-  prepare:
-    # Prevent scheduled runs on forks (no secrets, wastes Actions minutes)
+  probe-models-endpoint:
     if: github.repository == 'openai/codex'
     environment:
       name: rust-release-prepare
       deployment: false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: main
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Update models.json
+      - name: Probe models endpoint without exposing credentials
         env:
           OPENAI_API_KEY: ${{ secrets.CODEX_OPENAI_API_KEY }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
+
+          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "::error::CODEX_OPENAI_API_KEY is unavailable"
+            exit 1
+          fi
 
           client_version="99.99.99"
           terminal_info="github-actions"
           user_agent="codex_cli_rs/99.99.99 (Linux $(uname -r); $(uname -m)) ${terminal_info}"
           base_url="${OPENAI_BASE_URL:-https://chatgpt.com/backend-api/codex}"
+          url="${base_url%/}/models?client_version=${client_version}"
+          attempts=10
+          successes=0
+          failures=0
 
           headers=(
             -H "Authorization: Bearer ${OPENAI_API_KEY}"
             -H "User-Agent: ${user_agent}"
           )
 
-          url="${base_url%/}/models?client_version=${client_version}"
-          curl --http1.1 --fail --show-error --location "${headers[@]}" "${url}" | jq '.' > codex-rs/models-manager/models.json
+          {
+            echo "## models endpoint diagnostic"
+            echo
+            echo "| attempt | curl exit | HTTP | seconds | remote IP | bytes |"
+            echo "| ---: | ---: | ---: | ---: | --- | ---: |"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Open pull request (if changed)
-        uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 # v8.1.0
-        with:
-          commit-message: "Update models.json"
-          title: "Update models.json"
-          body: "Automated update of models.json."
-          branch: "bot/update-models-json"
-          reviewers: "pakrym-oai,aibrahim-oai"
-          delete-branch: true
+          for attempt in $(seq 1 "${attempts}"); do
+            headers_file="${RUNNER_TEMP}/models-headers-${attempt}.txt"
+            body_file="${RUNNER_TEMP}/models-body-${attempt}.txt"
+
+            metrics="$(curl --http1.1 --silent --show-error --location \
+              --dump-header "${headers_file}" \
+              --output "${body_file}" \
+              --write-out $'%{http_code}\t%{time_total}\t%{remote_ip}\t%{size_download}' \
+              "${headers[@]}" \
+              "${url}")"
+            curl_exit=$?
+
+            IFS=$'\t' read -r status total_time remote_ip size_download <<< "${metrics}"
+            status="${status:-000}"
+            total_time="${total_time:-unknown}"
+            remote_ip="${remote_ip:-unknown}"
+            size_download="${size_download:-0}"
+
+            echo "attempt=${attempt} curl_exit=${curl_exit} http_status=${status} time_total=${total_time} remote_ip=${remote_ip} size_download=${size_download}"
+            printf '| %s | %s | %s | %s | %s | %s |\n' \
+              "${attempt}" "${curl_exit}" "${status}" "${total_time}" "${remote_ip}" "${size_download}" \
+              >> "${GITHUB_STEP_SUMMARY}"
+
+            if [[ "${curl_exit}" -eq 0 && "${status}" =~ ^2[0-9][0-9]$ ]] \
+              && jq -e 'type == "object"' "${body_file}" >/dev/null; then
+              successes=$((successes + 1))
+            else
+              failures=$((failures + 1))
+              echo "::group::attempt ${attempt} diagnostic response"
+              echo "Selected response headers:"
+              awk 'BEGIN { IGNORECASE = 1 }
+                /^(date|content-type|content-length|cf-ray|x-request-id|traceparent|server-timing|x-openai-[^:]*):/ { print }' \
+                "${headers_file}" | tr -d '\r'
+              echo "Response body (first 4096 bytes):"
+              head -c 4096 "${body_file}"
+              echo
+              echo "::endgroup::"
+            fi
+
+            sleep 1
+          done
+
+          echo "successes=${successes} failures=${failures}"
+          {
+            echo
+            echo "**Result:** ${successes} succeeded, ${failures} failed."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [[ "${failures}" -ne 0 ]]; then
+            exit 1
+          fi
