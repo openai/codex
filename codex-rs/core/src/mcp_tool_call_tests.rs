@@ -369,6 +369,17 @@ fn connector_link_id_is_only_honored_for_codex_apps() {
         Some("link_123".to_string())
     );
     assert_eq!(connector_link_id_for_server("custom_server", meta), None);
+
+    let synthetic_link_meta = serde_json::json!({
+        MCP_TOOL_APPROVAL_LINK_ID_KEY: "synthetic_link::calendar",
+        MCP_TOOL_CODEX_APPS_META_KEY: {
+            "synthetic_link": true,
+        },
+    });
+    assert_eq!(
+        connector_link_id_for_server(CODEX_APPS_MCP_SERVER_NAME, synthetic_link_meta.as_object()),
+        None
+    );
 }
 
 #[test]

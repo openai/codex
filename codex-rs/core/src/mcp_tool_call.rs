@@ -1498,7 +1498,13 @@ fn connector_link_id_for_server(
     server: &str,
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Option<String> {
-    if server != CODEX_APPS_MCP_SERVER_NAME {
+    if server != CODEX_APPS_MCP_SERVER_NAME
+        || meta
+            .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
+            .and_then(|codex_apps_meta| codex_apps_meta.get("synthetic_link"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    {
         return None;
     }
 
