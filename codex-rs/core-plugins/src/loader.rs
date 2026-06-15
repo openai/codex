@@ -25,6 +25,7 @@ use codex_exec_server::LOCAL_FS;
 use codex_mcp::PluginMcpServerPlacement;
 use codex_mcp::parse_plugin_mcp_config;
 use codex_plugin::AppConnectorId;
+use codex_plugin::AppDeclaration;
 use codex_plugin::LoadedPlugin;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginHookSource;
@@ -32,6 +33,7 @@ use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_plugin::PluginLoadOutcome;
 use codex_plugin::PluginTelemetryMetadata;
+use codex_plugin::app_connector_ids_from_declarations;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -46,6 +48,7 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use tempfile::TempDir;
+use tracing::instrument;
 use tracing::warn;
 
 const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
@@ -60,12 +63,6 @@ const CURATED_PLUGIN_CACHE_VERSION_SHA_PREFIX_LEN: usize = 8;
 pub struct PluginHookLoadOutcome {
     pub hook_sources: Vec<PluginHookSource>,
     pub hook_load_warnings: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginAppMetadata {
-    pub id: AppConnectorId,
-    pub category: Option<String>,
 }
 
 enum PluginLoadScope<'a> {
@@ -111,6 +108,7 @@ struct PluginAppConfig {
     category: Option<String>,
 }
 
+#[instrument(level = "trace", skip_all)]
 pub async fn load_plugins_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
     extra_plugins: HashMap<String, PluginConfig>,
@@ -826,15 +824,7 @@ fn default_mcp_config_paths(plugin_root: &Path) -> Vec<AbsolutePathBuf> {
     paths
 }
 
-pub async fn load_plugin_apps(plugin_root: &Path) -> Vec<AppConnectorId> {
-    load_plugin_app_metadata(plugin_root)
-        .await
-        .into_iter()
-        .map(|app| app.id)
-        .collect()
-}
-
-pub async fn load_plugin_app_metadata(plugin_root: &Path) -> Vec<PluginAppMetadata> {
+pub async fn load_plugin_apps(plugin_root: &Path) -> Vec<AppDeclaration> {
     if let Some(manifest) = load_plugin_manifest(plugin_root) {
         return load_apps_from_paths(
             plugin_root,
@@ -845,13 +835,13 @@ pub async fn load_plugin_app_metadata(plugin_root: &Path) -> Vec<PluginAppMetada
     load_apps_from_paths(plugin_root, default_app_config_paths(plugin_root)).await
 }
 
-pub fn plugin_app_metadata_from_value(value: &JsonValue) -> Vec<PluginAppMetadata> {
+pub fn plugin_app_declarations_from_value(value: &JsonValue) -> Vec<AppDeclaration> {
     let Ok(parsed) = serde_json::from_value::<PluginAppFile>(value.clone()) else {
         return Vec::new();
     };
-    let mut apps = plugin_app_metadata_from_file(parsed, /*plugin_root*/ None);
+    let mut apps = app_declarations_from_file(parsed, /*plugin_root*/ None);
     let mut seen_connector_ids = HashSet::new();
-    apps.retain(|app| seen_connector_ids.insert(app.id.0.clone()));
+    apps.retain(|app| seen_connector_ids.insert(app.connector_id.0.clone()));
     apps
 }
 
@@ -991,8 +981,8 @@ fn append_plugin_hook_file(
 async fn load_apps_from_paths(
     plugin_root: &Path,
     app_config_paths: Vec<AbsolutePathBuf>,
-) -> Vec<PluginAppMetadata> {
-    let mut apps = Vec::new();
+) -> Vec<AppDeclaration> {
+    let mut app_declarations = Vec::new();
     for app_config_path in app_config_paths {
         let Ok(contents) = tokio::fs::read_to_string(app_config_path.as_path()).await else {
             continue;
@@ -1008,21 +998,19 @@ async fn load_apps_from_paths(
             }
         };
 
-        apps.extend(plugin_app_metadata_from_file(parsed, Some(plugin_root)));
+        app_declarations.extend(app_declarations_from_file(parsed, Some(plugin_root)));
     }
-    let mut seen_connector_ids = HashSet::new();
-    apps.retain(|app| seen_connector_ids.insert(app.id.0.clone()));
-    apps
+    app_declarations
 }
 
-fn plugin_app_metadata_from_file(
+fn app_declarations_from_file(
     parsed: PluginAppFile,
     plugin_root: Option<&Path>,
-) -> Vec<PluginAppMetadata> {
+) -> Vec<AppDeclaration> {
     parsed
         .apps
-        .into_values()
-        .filter_map(|app| {
+        .into_iter()
+        .filter_map(|(name, app)| {
             if app.id.trim().is_empty() {
                 if let Some(plugin_root) = plugin_root {
                     warn!(
@@ -1032,16 +1020,20 @@ fn plugin_app_metadata_from_file(
                 }
                 None
             } else {
-                Some(PluginAppMetadata {
-                    id: AppConnectorId(app.id),
-                    category: app
-                        .category
-                        .map(|category| category.trim().to_string())
-                        .filter(|category| !category.is_empty()),
+                Some(AppDeclaration {
+                    name,
+                    connector_id: AppConnectorId(app.id),
+                    category: cleaned_app_category(app.category),
                 })
             }
         })
         .collect()
+}
+
+fn cleaned_app_category(category: Option<String>) -> Option<String> {
+    category
+        .map(|category| category.trim().to_string())
+        .filter(|category| !category.is_empty())
 }
 
 pub async fn plugin_telemetry_metadata_from_root(
@@ -1066,6 +1058,13 @@ pub async fn plugin_telemetry_metadata_from_root(
     mcp_server_names.sort_unstable();
     mcp_server_names.dedup();
 
+    let app_declarations = load_apps_from_paths(
+        plugin_root.as_path(),
+        plugin_app_config_paths(plugin_root.as_path(), manifest_paths),
+    )
+    .await;
+    let app_connector_ids = app_connector_ids_from_declarations(&app_declarations);
+
     PluginTelemetryMetadata {
         plugin_id: plugin_id.clone(),
         remote_plugin_id: None,
@@ -1075,14 +1074,7 @@ pub async fn plugin_telemetry_metadata_from_root(
             description: None,
             has_skills,
             mcp_server_names,
-            app_connector_ids: load_apps_from_paths(
-                plugin_root.as_path(),
-                plugin_app_config_paths(plugin_root.as_path(), manifest_paths),
-            )
-            .await
-            .into_iter()
-            .map(|app| app.id)
-            .collect(),
+            app_connector_ids,
         }),
     }
 }

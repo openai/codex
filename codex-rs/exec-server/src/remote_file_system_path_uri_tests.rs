@@ -2,6 +2,13 @@
 
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_path_uri::PathUri;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -25,9 +32,9 @@ use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeResponse;
 
 #[tokio::test]
-async fn remote_file_system_sends_path_uris_without_native_conversion() {
-    let (websocket_url, captured_paths, server) =
-        record_read_file_paths(/*expected_requests*/ 2).await;
+async fn remote_file_system_sends_path_and_sandbox_cwd_uris_without_native_conversion() {
+    let (websocket_url, captured_params, server) =
+        record_read_file_params(/*expected_requests*/ 2).await;
     let file_system = RemoteFileSystem::new(LazyRemoteExecServerClient::new(
         ExecServerTransportParams::websocket_url(websocket_url),
     ));
@@ -35,33 +42,54 @@ async fn remote_file_system_sends_path_uris_without_native_conversion() {
         PathUri::parse("file:///C:/Users/Alice/src/main.rs").expect("valid drive URI"),
         PathUri::parse("file://server/share/src/main.rs").expect("valid UNC URI"),
     ];
+    let sandbox_cwd = non_native_cwd();
+    let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+        path: FileSystemPath::Special {
+            value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+        },
+        access: FileSystemAccessMode::Write,
+    }]);
+    let sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+        sandbox_cwd,
+    );
 
     for path in &paths {
         assert_eq!(
             file_system
-                .read_file(path, /*sandbox*/ None)
+                .read_file(path, Some(&sandbox))
                 .await
                 .expect("remote read should succeed"),
             Vec::<u8>::new()
         );
     }
 
-    assert_eq!(captured_paths.await.expect("captured paths"), paths);
+    let expected_params = paths
+        .into_iter()
+        .map(|path| FsReadFileParams {
+            path,
+            sandbox: Some(sandbox.clone()),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        captured_params.await.expect("captured params"),
+        expected_params
+    );
     server.await.expect("recording server should succeed");
 }
 
-async fn record_read_file_paths(
+async fn record_read_file_params(
     expected_requests: usize,
 ) -> (
     String,
-    oneshot::Receiver<Vec<PathUri>>,
+    oneshot::Receiver<Vec<FsReadFileParams>>,
     tokio::task::JoinHandle<()>,
 ) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
     let websocket_url = format!("ws://{}", listener.local_addr().expect("listener address"));
-    let (captured_paths_tx, captured_paths_rx) = oneshot::channel();
+    let (captured_params_tx, captured_params_rx) = oneshot::channel();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.expect("listener should accept");
         let mut websocket = accept_async(stream)
@@ -69,7 +97,7 @@ async fn record_read_file_paths(
             .expect("websocket handshake should succeed");
         complete_websocket_initialize(&mut websocket).await;
 
-        let mut captured_paths = Vec::with_capacity(expected_requests);
+        let mut captured_params = Vec::with_capacity(expected_requests);
         for _ in 0..expected_requests {
             let request = match read_jsonrpc_websocket(&mut websocket).await {
                 JSONRPCMessage::Request(request) if request.method == FS_READ_FILE_METHOD => {
@@ -80,7 +108,7 @@ async fn record_read_file_paths(
             let params: FsReadFileParams =
                 serde_json::from_value(request.params.expect("fs/readFile params should exist"))
                     .expect("fs/readFile params should deserialize");
-            captured_paths.push(params.path);
+            captured_params.push(params);
             write_jsonrpc_websocket(
                 &mut websocket,
                 JSONRPCMessage::Response(JSONRPCResponse {
@@ -93,12 +121,21 @@ async fn record_read_file_paths(
             )
             .await;
         }
-        captured_paths_tx
-            .send(captured_paths)
-            .expect("captured paths receiver should stay open");
+        captured_params_tx
+            .send(captured_params)
+            .expect("captured params receiver should stay open");
     });
 
-    (websocket_url, captured_paths_rx, server)
+    (websocket_url, captured_params_rx, server)
+}
+
+fn non_native_cwd() -> PathUri {
+    #[cfg(unix)]
+    let uri = "file://server/share/checkout";
+    #[cfg(windows)]
+    let uri = "file:///usr/local/checkout";
+
+    PathUri::parse(uri).expect("non-native cwd URI")
 }
 
 async fn complete_websocket_initialize(websocket: &mut WebSocketStream<TcpStream>) {

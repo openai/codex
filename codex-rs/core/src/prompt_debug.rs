@@ -98,5 +98,5 @@ pub(crate) async fn build_prompt_input_from_session(
         base_instructions,
     );
 
-    Ok(prompt.get_formatted_input())
+    Ok(prompt.input)
 }

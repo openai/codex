@@ -86,6 +86,8 @@ impl McpManager {
         };
         let mut selected_plugin_registrations = Vec::new();
         let mut overlays = Vec::new();
+        // A contributor can emit multiple ordered actions, so order each action globally rather
+        // than enumerating contributors.
         let mut contribution_order = 0;
         for contributor in self.extensions.mcp_server_contributors() {
             for contribution in contributor.contribute(context).await {

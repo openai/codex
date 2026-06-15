@@ -474,6 +474,7 @@ fn image_generation_call_renders_saved_path() {
     );
     let cell = new_image_generation_call(
         "call-image-generation".to_string(),
+        "completed",
         Some("A tiny blue square".to_string()),
         Some(saved_path),
     );

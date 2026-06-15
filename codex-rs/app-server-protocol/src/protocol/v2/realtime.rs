@@ -1,4 +1,6 @@
+use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
+use codex_protocol::protocol::RealtimeConversationArchitecture;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
@@ -65,6 +67,9 @@ impl From<ThreadRealtimeAudioChunk> for CoreRealtimeAudioFrame {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartParams {
     pub thread_id: String,
+    /// Overrides the configured realtime architecture for this session only.
+    #[ts(optional = nullable)]
+    pub architecture: Option<RealtimeConversationArchitecture>,
     /// Overrides the configured realtime model for this session only.
     #[ts(optional = nullable)]
     pub model: Option<String>,
@@ -131,6 +136,8 @@ pub struct ThreadRealtimeAppendAudioResponse {}
 pub struct ThreadRealtimeAppendTextParams {
     pub thread_id: String,
     pub text: String,
+    #[serde(default)]
+    pub role: ConversationTextRole,
 }
 
 /// EXPERIMENTAL - response for appending realtime text input.

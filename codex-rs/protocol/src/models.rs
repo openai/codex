@@ -719,6 +719,7 @@ pub enum ContentItem {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentMessageInputContent {
+    InputText { text: String },
     EncryptedContent { encrypted_content: String },
 }
 

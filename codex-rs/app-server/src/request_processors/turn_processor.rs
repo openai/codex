@@ -4,6 +4,7 @@ use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_utils_path_uri::PathUri;
 
 const DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR: &str =
     "direct app-server input is not allowed for multi-agent v2 sub-agents";
@@ -339,7 +340,7 @@ impl TurnRequestProcessor {
                 .into_iter()
                 .map(|environment| TurnEnvironmentSelection {
                     environment_id: environment.environment_id,
-                    cwd: environment.cwd,
+                    cwd: PathUri::from_abs_path(&environment.cwd),
                 })
                 .collect::<Vec<_>>()
         });
@@ -523,7 +524,7 @@ impl TurnRequestProcessor {
             environment_selections
                 .iter()
                 .find(|selection| selection.environment_id == LOCAL_ENVIRONMENT_ID)
-                .map(|selection| selection.cwd.clone())
+                .and_then(|selection| selection.cwd.to_abs_path().ok())
                 .unwrap_or_else(|| snapshot.cwd().clone())
         });
         Some(TurnEnvironmentSelections::new(
@@ -934,6 +935,7 @@ impl TurnRequestProcessor {
             request_id,
             thread.as_ref(),
             Op::RealtimeConversationStart(ConversationStartParams {
+                architecture: params.architecture,
                 model: params.model,
                 output_modality: params.output_modality,
                 prompt: params.prompt,
@@ -996,7 +998,10 @@ impl TurnRequestProcessor {
         self.submit_core_op(
             request_id,
             thread.as_ref(),
-            Op::RealtimeConversationText(ConversationTextParams { text: params.text }),
+            Op::RealtimeConversationText(ConversationTextParams {
+                text: params.text,
+                role: params.role,
+            }),
         )
         .await
         .map_err(|err| {

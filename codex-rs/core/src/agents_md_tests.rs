@@ -258,14 +258,16 @@ fn resolved_local_environments<const N: usize>(
     ResolvedTurnEnvironments {
         turn_environments: environments
             .into_iter()
-            .map(|(environment_id, cwd)| TurnEnvironment {
-                environment_id: environment_id.to_string(),
-                environment: Arc::new(
-                    Environment::create_for_tests(/*exec_server_url*/ None)
-                        .expect("local environment"),
-                ),
-                cwd,
-                shell: None,
+            .map(|(environment_id, cwd)| {
+                TurnEnvironment::new(
+                    environment_id.to_string(),
+                    Arc::new(
+                        Environment::create_for_tests(/*exec_server_url*/ None)
+                            .expect("local environment"),
+                    ),
+                    cwd,
+                    /*shell*/ None,
+                )
             })
             .collect(),
     }
