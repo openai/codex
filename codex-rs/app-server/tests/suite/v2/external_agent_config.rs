@@ -7,6 +7,7 @@ use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
+use codex_app_server_protocol::ExternalAgentConfigImportProgressNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
 use codex_app_server_protocol::JSONRPCError;
@@ -42,10 +43,17 @@ fn assert_import_response(response: ExternalAgentConfigImportResponse) -> String
 async fn external_agent_config_import_sends_completion_notification_for_sync_only_import()
 -> Result<()> {
     let codex_home = TempDir::new()?;
+    let sqlite_home = TempDir::new()?;
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let sqlite_home_dir = sqlite_home.path().display().to_string();
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.path(),
+        &[
+            ("HOME", Some(home_dir.as_str())),
+            ("CODEX_SQLITE_HOME", Some(sqlite_home_dir.as_str())),
+        ],
+    )
+    .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -68,6 +76,21 @@ async fn external_agent_config_import_sends_completion_notification_for_sync_onl
     .await??;
     let response: ExternalAgentConfigImportResponse = to_response(response)?;
     let import_id = assert_import_response(response);
+    let progress = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("externalAgentConfig/import/progress"),
+    )
+    .await??;
+    assert_eq!(progress.method, "externalAgentConfig/import/progress");
+    let progress: ExternalAgentConfigImportProgressNotification =
+        serde_json::from_value(progress.params.expect("progress params"))?;
+    assert_eq!(progress.import_id, import_id);
+    assert_eq!(progress.item_type_results.len(), 1);
+    assert_eq!(
+        progress.item_type_results[0].item_type,
+        ExternalAgentConfigMigrationItemType::Config
+    );
+
     let notification = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
@@ -77,6 +100,31 @@ async fn external_agent_config_import_sends_completion_notification_for_sync_onl
     let completed: ExternalAgentConfigImportCompletedNotification =
         serde_json::from_value(notification.params.expect("completed params"))?;
     assert_eq!(completed.import_id, import_id);
+    let state_db =
+        codex_state::StateRuntime::init(sqlite_home.path().to_path_buf(), "mock_provider".into())
+            .await?;
+    let details_record = state_db
+        .external_agent_config_import_details_record(&import_id)
+        .await?
+        .expect("completed import details should be recorded by import id");
+    let expected_successes = completed
+        .item_type_results
+        .iter()
+        .flat_map(|type_result| type_result.successes.iter())
+        .collect::<Vec<_>>();
+    let expected_failures = completed
+        .item_type_results
+        .iter()
+        .flat_map(|type_result| type_result.failures.iter())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        serde_json::to_value(&details_record.successes)?,
+        serde_json::to_value(&expected_successes)?
+    );
+    assert_eq!(
+        serde_json::to_value(&details_record.failures)?,
+        serde_json::to_value(&expected_failures)?
+    );
 
     Ok(())
 }

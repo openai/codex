@@ -5478,6 +5478,26 @@
       "title": "ExternalAgentConfigImportParams",
       "type": "object"
     },
+    "ExternalAgentConfigImportProgressNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "importId": {
+          "type": "string"
+        },
+        "itemTypeResults": {
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportTypeResult"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "importId",
+        "itemTypeResults"
+      ],
+      "title": "ExternalAgentConfigImportProgressNotification",
+      "type": "object"
+    },
     "ExternalAgentConfigImportResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -13009,6 +13029,26 @@
             "params"
           ],
           "title": "RemoteControl/status/changedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "externalAgentConfig/import/progress"
+              ],
+              "title": "ExternalAgentConfig/import/progressNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ExternalAgentConfigImportProgressNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "ExternalAgentConfig/import/progressNotification",
           "type": "object"
         },
         {

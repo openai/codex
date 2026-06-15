@@ -52,6 +52,20 @@ fn assert_single_plugin_raw_error(
     assert!(!raw_error.message.is_empty());
 }
 
+fn import_success(
+    item_type: ExternalAgentConfigMigrationItemType,
+    cwd: Option<PathBuf>,
+    source: impl Into<String>,
+    target: impl Into<String>,
+) -> ExternalAgentConfigImportSuccess {
+    ExternalAgentConfigImportSuccess {
+        item_type,
+        cwd,
+        source: Some(source.into()),
+        target: Some(target.into()),
+    }
+}
+
 #[tokio::test]
 async fn detect_home_lists_config_skills_and_agents_md() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
@@ -1232,7 +1246,15 @@ async fn import_repo_agents_md_rewrites_terms_and_skips_non_empty_targets() {
                 cwd: Some(repo_root.clone()),
                 success_count: 1,
                 error_count: 0,
-                successes: Vec::new(),
+                successes: vec![import_success(
+                    ExternalAgentConfigMigrationItemType::AgentsMd,
+                    Some(repo_root.clone()),
+                    repo_root
+                        .join(EXTERNAL_AGENT_CONFIG_MD)
+                        .display()
+                        .to_string(),
+                    repo_root.join("AGENTS.md").display().to_string(),
+                )],
                 raw_errors: Vec::new(),
             },
             ExternalAgentConfigImportItemResult {
@@ -1290,7 +1312,15 @@ async fn import_repo_agents_md_overwrites_empty_targets() {
             cwd: Some(repo_root.clone()),
             success_count: 1,
             error_count: 0,
-            successes: Vec::new(),
+            successes: vec![import_success(
+                ExternalAgentConfigMigrationItemType::AgentsMd,
+                Some(repo_root.clone()),
+                repo_root
+                    .join(EXTERNAL_AGENT_CONFIG_MD)
+                    .display()
+                    .to_string(),
+                repo_root.join("AGENTS.md").display().to_string(),
+            )],
             raw_errors: Vec::new(),
         }]
     );
@@ -1383,7 +1413,12 @@ async fn import_repo_hooks_preserves_disabled_codex_hooks_feature() {
             cwd: Some(repo_root.clone()),
             success_count: 1,
             error_count: 0,
-            successes: Vec::new(),
+            successes: vec![import_success(
+                ExternalAgentConfigMigrationItemType::Hooks,
+                Some(repo_root.clone()),
+                "Stop",
+                "Stop",
+            )],
             raw_errors: Vec::new(),
         }]
     );
@@ -1456,7 +1491,12 @@ async fn import_repo_mcp_uses_home_settings_toggles_when_repo_settings_missing()
             cwd: Some(repo_root.clone()),
             success_count: 1,
             error_count: 0,
-            successes: Vec::new(),
+            successes: vec![import_success(
+                ExternalAgentConfigMigrationItemType::McpServerConfig,
+                Some(repo_root.clone()),
+                "allowed",
+                "allowed",
+            )],
             raw_errors: Vec::new(),
         }]
     );
@@ -2745,7 +2785,7 @@ async fn import_plugins_supports_project_relative_external_agent_plugin_marketpl
 }
 
 #[test]
-fn import_skills_returns_only_new_skill_directory_count() {
+fn import_skills_returns_only_new_skill_directory_names() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
     let agents_skills = codex_home
         .parent()
@@ -2757,9 +2797,9 @@ fn import_skills_returns_only_new_skill_directory_count() {
         .expect("create source b");
     fs::create_dir_all(agents_skills.join("skill-a")).expect("create existing target");
 
-    let copied_count = service_for_paths(external_agent_home, codex_home)
+    let copied_names = service_for_paths(external_agent_home, codex_home)
         .import_skills(/*cwd*/ None)
         .expect("import skills");
 
-    assert_eq!(copied_count, 1);
+    assert_eq!(copied_names, vec!["skill-b".to_string()]);
 }

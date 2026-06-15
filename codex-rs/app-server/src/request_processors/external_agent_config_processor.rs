@@ -22,6 +22,7 @@ use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportItemTypeFailure as ProtocolImportFailure;
 use codex_app_server_protocol::ExternalAgentConfigImportItemTypeSuccess as ProtocolImportSuccess;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
+use codex_app_server_protocol::ExternalAgentConfigImportProgressNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportTypeResult as ProtocolImportTypeResult;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
@@ -35,6 +36,9 @@ use codex_app_server_protocol::ServerNotification;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::ThreadManager;
 use codex_external_agent_sessions::ExternalAgentSessionMigration as CoreSessionMigration;
+use codex_rollout::StateDbHandle;
+use codex_state::ExternalAgentConfigImportFailureRecord;
+use codex_state::ExternalAgentConfigImportSuccessRecord;
 use codex_thread_store::ThreadStore;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -50,18 +54,32 @@ pub(crate) struct ExternalAgentConfigRequestProcessor {
     session_importer: ExternalAgentSessionImporter,
     thread_manager: Arc<ThreadManager>,
     config_processor: ConfigRequestProcessor,
+    state_db: Option<StateDbHandle>,
+}
+
+pub(crate) struct ExternalAgentConfigRequestProcessorArgs {
+    pub(crate) outgoing: Arc<OutgoingMessageSender>,
+    pub(crate) thread_manager: Arc<ThreadManager>,
+    pub(crate) thread_store: Arc<dyn ThreadStore>,
+    pub(crate) config_manager: ConfigManager,
+    pub(crate) config_processor: ConfigRequestProcessor,
+    pub(crate) state_db: Option<StateDbHandle>,
+    pub(crate) arg0_paths: Arg0DispatchPaths,
+    pub(crate) codex_home: PathBuf,
 }
 
 impl ExternalAgentConfigRequestProcessor {
-    pub(crate) fn new(
-        outgoing: Arc<OutgoingMessageSender>,
-        thread_manager: Arc<ThreadManager>,
-        thread_store: Arc<dyn ThreadStore>,
-        config_manager: ConfigManager,
-        config_processor: ConfigRequestProcessor,
-        arg0_paths: Arg0DispatchPaths,
-        codex_home: PathBuf,
-    ) -> Self {
+    pub(crate) fn new(args: ExternalAgentConfigRequestProcessorArgs) -> Self {
+        let ExternalAgentConfigRequestProcessorArgs {
+            outgoing,
+            thread_manager,
+            thread_store,
+            config_manager,
+            config_processor,
+            state_db,
+            arg0_paths,
+            codex_home,
+        } = args;
         let session_importer = ExternalAgentSessionImporter::new(
             codex_home.clone(),
             Arc::clone(&thread_manager),
@@ -75,6 +93,7 @@ impl ExternalAgentConfigRequestProcessor {
             session_importer,
             thread_manager,
             config_processor,
+            state_db,
         }
     }
 
@@ -207,23 +226,31 @@ impl ExternalAgentConfigRequestProcessor {
 
         let mut completed_item_results = Vec::new();
         if let Some(session_validation_result) = session_validation_result {
+            send_import_progress(&self.outgoing, &import_id, &session_validation_result).await;
             completed_item_results.push(session_validation_result);
         }
         for item_result in import_outcome.item_results {
+            send_import_progress(&self.outgoing, &import_id, &item_result).await;
             completed_item_results.push(item_result);
         }
 
         let has_background_imports = !import_outcome.pending_plugin_imports.is_empty()
             || !pending_session_imports.is_empty();
         if !has_background_imports {
-            send_completed_import_notification(&self.outgoing, import_id, &completed_item_results)
-                .await;
+            send_completed_import_notification(
+                &self.outgoing,
+                self.state_db.as_ref(),
+                import_id,
+                &completed_item_results,
+            )
+            .await;
             return Ok(());
         }
 
         let session_importer = self.session_importer.clone();
         let plugin_processor = self.clone();
         let outgoing = Arc::clone(&self.outgoing);
+        let state_db = self.state_db.clone();
         let thread_manager = Arc::clone(&self.thread_manager);
         let session_import_result = (!pending_session_imports.is_empty()).then(|| {
             CoreImportItemResult::new(
@@ -234,13 +261,19 @@ impl ExternalAgentConfigRequestProcessor {
         });
         let pending_plugin_imports = import_outcome.pending_plugin_imports;
         tokio::spawn(async move {
+            let session_progress_outgoing = Arc::clone(&outgoing);
+            let session_import_id = import_id.clone();
             let session_imports = async move {
                 let session_import_result = session_import_result?;
                 let item_result = session_importer
                     .import_sessions(pending_session_imports, session_import_result)
                     .await;
+                send_import_progress(&session_progress_outgoing, &session_import_id, &item_result)
+                    .await;
                 Some(item_result)
             };
+            let plugin_progress_outgoing = Arc::clone(&outgoing);
+            let plugin_import_id = import_id.clone();
             let plugin_imports = async move {
                 let mut item_results = Vec::new();
                 for pending_plugin_import in pending_plugin_imports {
@@ -265,6 +298,12 @@ impl ExternalAgentConfigRequestProcessor {
                             );
                         }
                     }
+                    send_import_progress(
+                        &plugin_progress_outgoing,
+                        &plugin_import_id,
+                        &item_result,
+                    )
+                    .await;
                     item_results.push(item_result);
                 }
                 item_results
@@ -280,7 +319,13 @@ impl ExternalAgentConfigRequestProcessor {
                 thread_manager.plugins_manager().clear_cache();
                 thread_manager.skills_manager().clear_cache();
             }
-            send_completed_import_notification(&outgoing, import_id, &completed_item_results).await;
+            send_completed_import_notification(
+                &outgoing,
+                state_db.as_ref(),
+                import_id,
+                &completed_item_results,
+            )
+            .await;
         });
 
         Ok(())
@@ -467,17 +512,88 @@ impl ExternalAgentConfigRequestProcessor {
     }
 }
 
+async fn send_import_progress(
+    outgoing: &OutgoingMessageSender,
+    import_id: &str,
+    item_result: &CoreImportItemResult,
+) {
+    outgoing
+        .send_server_notification(ServerNotification::ExternalAgentConfigImportProgress(
+            ExternalAgentConfigImportProgressNotification {
+                import_id: import_id.to_string(),
+                item_type_results: vec![protocol_import_type_result(item_result)],
+            },
+        ))
+        .await;
+}
+
 async fn send_completed_import_notification(
     outgoing: &OutgoingMessageSender,
+    state_db: Option<&StateDbHandle>,
     import_id: String,
     item_results: &[CoreImportItemResult],
 ) {
     let notification = completed_notification(import_id, item_results);
+    if let Some(state_db) = state_db
+        && let Err(err) = record_completed_import_notification(state_db, &notification).await
+    {
+        tracing::warn!(
+            import_id = %notification.import_id,
+            error = %err,
+            "failed to record external agent config import completion"
+        );
+    }
     outgoing
         .send_server_notification(ServerNotification::ExternalAgentConfigImportCompleted(
             notification,
         ))
         .await;
+}
+
+async fn record_completed_import_notification(
+    state_db: &StateDbHandle,
+    notification: &ExternalAgentConfigImportCompletedNotification,
+) -> anyhow::Result<()> {
+    let successes = notification
+        .item_type_results
+        .iter()
+        .flat_map(|type_result| type_result.successes.iter())
+        .map(|success| {
+            Ok(ExternalAgentConfigImportSuccessRecord {
+                item_type: serde_json::to_value(success.item_type)?
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                cwd: success.cwd.clone(),
+                source: success.source.clone(),
+                target: success.target.clone(),
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let failures = notification
+        .item_type_results
+        .iter()
+        .flat_map(|type_result| type_result.failures.iter())
+        .map(|failure| {
+            Ok(ExternalAgentConfigImportFailureRecord {
+                item_type: serde_json::to_value(failure.item_type)?
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                failure_stage: failure.failure_stage.clone(),
+                message: failure.message.clone(),
+                cwd: failure.cwd.clone(),
+                source: failure.source.clone(),
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    state_db
+        .record_external_agent_config_import_completed(
+            notification.import_id.as_str(),
+            &successes,
+            &failures,
+        )
+        .await
 }
 
 fn completed_notification(
@@ -526,6 +642,22 @@ fn completed_notification(
     ExternalAgentConfigImportCompletedNotification {
         import_id,
         item_type_results: protocol_type_results,
+    }
+}
+
+fn protocol_import_type_result(item_result: &CoreImportItemResult) -> ProtocolImportTypeResult {
+    ProtocolImportTypeResult {
+        item_type: protocol_migration_item_type(item_result.item_type),
+        successes: item_result
+            .successes
+            .iter()
+            .map(protocol_import_success)
+            .collect(),
+        failures: item_result
+            .raw_errors
+            .iter()
+            .map(protocol_import_raw_error)
+            .collect(),
     }
 }
 

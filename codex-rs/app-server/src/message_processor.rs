@@ -24,6 +24,7 @@ use crate::request_processors::CommandExecRequestProcessor;
 use crate::request_processors::ConfigRequestProcessor;
 use crate::request_processors::EnvironmentRequestProcessor;
 use crate::request_processors::ExternalAgentConfigRequestProcessor;
+use crate::request_processors::ExternalAgentConfigRequestProcessorArgs;
 use crate::request_processors::FeedbackRequestProcessor;
 use crate::request_processors::FsRequestProcessor;
 use crate::request_processors::GitRequestProcessor;
@@ -475,7 +476,7 @@ impl MessageProcessor {
             thread_watch_manager.clone(),
             Arc::clone(&thread_list_state_permit),
             thread_goal_processor.clone(),
-            state_db,
+            state_db.clone(),
             log_db,
             Arc::clone(&skills_watcher),
         );
@@ -511,15 +512,17 @@ impl MessageProcessor {
             thread_manager.clone(),
             analytics_events_client,
         );
-        let external_agent_config_processor = ExternalAgentConfigRequestProcessor::new(
-            outgoing.clone(),
-            Arc::clone(&thread_manager),
-            Arc::clone(&thread_store),
-            config_manager.clone(),
-            config_processor.clone(),
-            arg0_paths,
-            config.codex_home.to_path_buf(),
-        );
+        let external_agent_config_processor =
+            ExternalAgentConfigRequestProcessor::new(ExternalAgentConfigRequestProcessorArgs {
+                outgoing: outgoing.clone(),
+                thread_manager: Arc::clone(&thread_manager),
+                thread_store: Arc::clone(&thread_store),
+                config_manager: config_manager.clone(),
+                config_processor: config_processor.clone(),
+                state_db,
+                arg0_paths,
+                codex_home: config.codex_home.to_path_buf(),
+            });
         let environment_processor =
             EnvironmentRequestProcessor::new(thread_manager.environment_manager());
         let fs_processor = FsRequestProcessor::new(
