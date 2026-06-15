@@ -60,7 +60,10 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
     // 1) shell command should list the file
     let list_cmd = "ls".to_string();
     codex
-        .submit(Op::RunUserShellCommand { command: list_cmd })
+        .submit(Op::RunUserShellCommand {
+            environment_id: None,
+            command: list_cmd,
+        })
         .await
         .unwrap();
     let msg = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandEnd(_))).await;
@@ -79,7 +82,10 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
     // 2) shell command should print the file contents verbatim
     let cat_cmd = format!("cat {file_name}");
     codex
-        .submit(Op::RunUserShellCommand { command: cat_cmd })
+        .submit(Op::RunUserShellCommand {
+            environment_id: None,
+            command: cat_cmd,
+        })
         .await
         .unwrap();
     let msg = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandEnd(_))).await;
@@ -113,7 +119,10 @@ async fn user_shell_cmd_can_be_interrupted() {
     // Start a long-running command and then interrupt it.
     let sleep_cmd = "sleep 5".to_string();
     codex
-        .submit(Op::RunUserShellCommand { command: sleep_cmd })
+        .submit(Op::RunUserShellCommand {
+            environment_id: None,
+            command: sleep_cmd,
+        })
         .await
         .unwrap();
 
@@ -216,6 +225,7 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
     fixture
         .codex
         .submit(Op::RunUserShellCommand {
+            environment_id: None,
             command: user_shell_command,
         })
         .await?;
@@ -281,6 +291,7 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
 
     test.codex
         .submit(Op::RunUserShellCommand {
+            environment_id: None,
             command: command.clone(),
         })
         .await?;
@@ -367,7 +378,10 @@ async fn user_shell_command_does_not_set_network_sandbox_env_var() -> anyhow::Re
         r#"sh -c "printf '%s' \"${CODEX_SANDBOX_NETWORK_DISABLED:-not-set}\"""#.to_string();
 
     test.codex
-        .submit(Op::RunUserShellCommand { command })
+        .submit(Op::RunUserShellCommand {
+            environment_id: None,
+            command,
+        })
         .await?;
 
     let ExecCommandEndEvent {
@@ -391,6 +405,61 @@ async fn user_shell_command_does_not_set_network_sandbox_env_var() -> anyhow::Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_shell_command_with_unknown_environment_records_failure_without_local_fallback()
+-> anyhow::Result<()> {
+    let cwd = TempDir::new()?;
+    let marker_name = "unexpected-local-user-shell-output.txt";
+    let marker_path = cwd.path().join(marker_name);
+    let server = responses::start_mock_server().await;
+    let cwd_path = cwd.path().to_path_buf();
+    let mut builder = core_test_support::test_codex::test_codex().with_config(move |config| {
+        config.cwd = cwd_path.abs();
+    });
+    let test = builder.build(&server).await?;
+    let command = format!("printf should-not-run > {marker_name}");
+
+    test.codex
+        .submit(Op::RunUserShellCommand {
+            environment_id: Some("missing-env".to_string()),
+            command: command.clone(),
+        })
+        .await?;
+
+    let _ = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    assert!(
+        !marker_path.exists(),
+        "unknown explicit environment must not fall back to local execution"
+    );
+
+    let responses = vec![responses::sse(vec![
+        responses::ev_response_created("resp-unknown-env-follow-up"),
+        responses::ev_assistant_message("msg-unknown-env-follow-up", "done"),
+        responses::ev_completed("resp-unknown-env-follow-up"),
+    ])];
+    let mock = responses::mount_sse_sequence(&server, responses).await;
+
+    test.submit_turn("follow-up after failed user shell command")
+        .await?;
+
+    let request = mock.single_request();
+    let command_message = request
+        .message_input_texts("user")
+        .into_iter()
+        .find(|text| text.contains("<user_shell_command>"))
+        .expect("failed command should be recorded in history");
+    assert!(
+        command_message.contains("unknown turn environment id `missing-env`"),
+        "unexpected recorded command message: {command_message}"
+    );
+    assert!(
+        command_message.contains(&command),
+        "recorded command should include the original command: {command_message}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(not(target_os = "windows"))] // TODO: unignore on windows
 async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
@@ -409,6 +478,7 @@ async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<(
 
     test.codex
         .submit(Op::RunUserShellCommand {
+            environment_id: None,
             command: command.clone(),
         })
         .await?;

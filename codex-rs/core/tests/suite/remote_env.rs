@@ -19,6 +19,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
@@ -47,6 +48,7 @@ use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::test_env;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -375,6 +377,101 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     assert!(
         !multi_env_output.contains("local-routing"),
         "multi-env command should not route to local: {multi_env_output}",
+    );
+
+    test.fs()
+        .remove(
+            &remote_cwd_uri,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_shell_command_routes_to_explicit_remote_environment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let server = start_mock_server().await;
+    let test = unified_exec_test(&server).await?;
+    let local_cwd = TempDir::new()?;
+    let marker_name = "user-shell-marker.txt";
+    fs::write(local_cwd.path().join(marker_name), "local-user-shell")?;
+    let local_selection = local(local_cwd.path().abs());
+    let remote_cwd = PathBuf::from(format!(
+        "/tmp/codex-remote-user-shell-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    ))
+    .abs();
+    let remote_cwd_uri = PathUri::from_path(&remote_cwd)?;
+    let remote_marker_uri = PathUri::from_path(remote_cwd.join(marker_name))?;
+    test.fs()
+        .create_directory(
+            &remote_cwd_uri,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+    test.fs()
+        .write_file(
+            &remote_marker_uri,
+            b"remote-user-shell".to_vec(),
+            /*sandbox*/ None,
+        )
+        .await?;
+    let remote_selection = TurnEnvironmentSelection {
+        environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+        cwd: remote_cwd.clone(),
+    };
+
+    let _select_env_mock = mount_sse_sequence(
+        &server,
+        vec![sse(vec![
+            ev_response_created("resp-user-shell-env-select"),
+            ev_assistant_message("msg-user-shell-env-select", "ready"),
+            ev_completed("resp-user-shell-env-select"),
+        ])],
+    )
+    .await;
+    test.submit_turn_with_environments(
+        "select user shell environments",
+        Some(vec![local_selection, remote_selection]),
+    )
+    .await?;
+    let _ = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .submit(Op::RunUserShellCommand {
+            environment_id: Some(REMOTE_ENVIRONMENT_ID.to_string()),
+            command: format!("printf 'remote:' && cat {marker_name} | cat"),
+        })
+        .await?;
+
+    let end = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ExecCommandEnd(event) if event.source == ExecCommandSource::UserShell => {
+            Some(event.clone())
+        }
+        _ => None,
+    })
+    .await;
+    assert_eq!(end.exit_code, 0, "stderr={}", end.stderr);
+    assert_eq!(end.cwd, remote_cwd);
+    assert_eq!(end.stdout, "remote:remote-user-shell");
+    assert!(
+        !end.stdout.contains("local-user-shell"),
+        "explicit remote shell command should not read from local cwd: {}",
+        end.stdout
     );
 
     test.fs()

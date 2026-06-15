@@ -1,11 +1,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
+use codex_exec_server::ExecEnvPolicy as ExecServerEnvPolicy;
+use codex_exec_server::ExecOutputStream as ExecServerOutputStream;
+use codex_exec_server::ExecParams as ExecServerParams;
 use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use uuid::Uuid;
@@ -26,14 +32,18 @@ use crate::tools::runtimes::apply_package_path_prepend;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::runtimes::strip_managed_proxy_env;
 use crate::turn_timing::now_unix_timestamp_ms;
+use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 use crate::user_shell_command::user_shell_command_record_item;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
+use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExecCommandStatus;
+use codex_protocol::protocol::ExecOutputStream as ProtocolExecOutputStream;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_sandboxing::SandboxType;
 use codex_shell_command::parse_command::parse_command;
@@ -41,9 +51,11 @@ use codex_shell_command::parse_command::parse_command;
 use super::SessionTask;
 use super::SessionTaskContext;
 use crate::session::session::Session;
+use crate::session::turn_context::TurnEnvironment;
 use codex_protocol::models::PermissionProfile;
 
 const USER_SHELL_TIMEOUT_MS: u64 = 60 * 60 * 1000; // 1 hour
+const REMOTE_USER_SHELL_READ_MAX_BYTES: usize = 8 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum UserShellCommandMode {
@@ -57,12 +69,16 @@ pub(crate) enum UserShellCommandMode {
 
 #[derive(Clone)]
 pub(crate) struct UserShellCommandTask {
+    environment_id: Option<String>,
     command: String,
 }
 
 impl UserShellCommandTask {
-    pub(crate) fn new(command: String) -> Self {
-        Self { command }
+    pub(crate) fn new(environment_id: Option<String>, command: String) -> Self {
+        Self {
+            environment_id,
+            command,
+        }
     }
 }
 
@@ -85,6 +101,7 @@ impl SessionTask for UserShellCommandTask {
         execute_user_shell_command(
             session.clone_session(),
             turn_context,
+            self.environment_id.clone(),
             self.command.clone(),
             cancellation_token,
             UserShellCommandMode::StandaloneTurn,
@@ -97,6 +114,7 @@ impl SessionTask for UserShellCommandTask {
 pub(crate) async fn execute_user_shell_command(
     session: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    environment_id: Option<String>,
     command: String,
     cancellation_token: CancellationToken,
     mode: UserShellCommandMode,
@@ -122,6 +140,19 @@ pub(crate) async fn execute_user_shell_command(
             collaboration_mode_kind: turn_context.collaboration_mode.mode,
         });
         session.send_event(turn_context.as_ref(), event).await;
+    }
+
+    if let Some(environment_id) = environment_id {
+        execute_remote_user_shell_command(
+            session,
+            turn_context,
+            environment_id,
+            command,
+            cancellation_token,
+            mode,
+        )
+        .await;
+        return;
     }
 
     // Execute the user's script under their default shell when known; this
@@ -334,6 +365,353 @@ pub(crate) async fn execute_user_shell_command(
                 mode,
             )
             .await;
+        }
+    }
+}
+
+async fn execute_remote_user_shell_command(
+    session: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    environment_id: String,
+    command: String,
+    cancellation_token: CancellationToken,
+    mode: UserShellCommandMode,
+) {
+    let Some(turn_environment) = turn_context
+        .environments
+        .turn_environments
+        .iter()
+        .find(|environment| environment.environment_id == environment_id)
+        .cloned()
+    else {
+        let message = format!("unknown turn environment id `{environment_id}`");
+        emit_user_shell_failed_without_begin(
+            &session,
+            turn_context.as_ref(),
+            &command,
+            &message,
+            mode,
+        )
+        .await;
+        return;
+    };
+
+    if !turn_environment.environment.is_remote() {
+        let message = format!("user shell environment `{environment_id}` is not remote");
+        emit_user_shell_failed_without_begin(
+            &session,
+            turn_context.as_ref(),
+            &command,
+            &message,
+            mode,
+        )
+        .await;
+        return;
+    }
+
+    let remote_shell = match remote_user_shell(&turn_environment).await {
+        Ok(shell) => shell,
+        Err(message) => {
+            emit_user_shell_failed_without_begin(
+                &session,
+                turn_context.as_ref(),
+                &command,
+                &message,
+                mode,
+            )
+            .await;
+            return;
+        }
+    };
+    let use_login_shell = true;
+    let display_command = remote_shell.derive_exec_args(&command, use_login_shell);
+    let parsed_cmd = parse_command(&display_command);
+    let call_id = Uuid::new_v4().to_string();
+    let raw_command = command;
+    let cwd = turn_environment.cwd.clone();
+    let cwd_uri = cwd.clone().into();
+
+    session
+        .send_event(
+            turn_context.as_ref(),
+            EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                call_id: call_id.clone(),
+                process_id: None,
+                turn_id: turn_context.sub_id.clone(),
+                started_at_ms: now_unix_timestamp_ms(),
+                command: display_command.clone(),
+                cwd: cwd.clone(),
+                parsed_cmd: parsed_cmd.clone(),
+                source: ExecCommandSource::UserShell,
+                interaction_input: None,
+            }),
+        )
+        .await;
+
+    let process_id = Uuid::new_v4().to_string();
+    let exec_params = ExecServerParams {
+        process_id: codex_exec_server::ProcessId::new(process_id),
+        argv: display_command.clone(),
+        cwd: cwd_uri,
+        env_policy: Some(exec_server_env_policy(
+            &turn_context.shell_environment_policy,
+        )),
+        env: HashMap::new(),
+        tty: false,
+        pipe_stdin: false,
+        arg0: None,
+    };
+    let start = Instant::now();
+    let exec_result = collect_remote_user_shell_output(
+        turn_environment.environment.get_exec_backend(),
+        exec_params,
+        StdoutStream {
+            sub_id: turn_context.sub_id.clone(),
+            call_id: call_id.clone(),
+            tx_event: session.get_tx_event(),
+        },
+        cancellation_token,
+    )
+    .await;
+
+    let (exec_output, status) = match exec_result {
+        RemoteUserShellResult::Output {
+            exit_code,
+            stdout,
+            stderr,
+            aggregated_output,
+        } => {
+            let output = ExecToolCallOutput {
+                exit_code,
+                stdout: StreamOutput::new(String::from_utf8_lossy(&stdout).into_owned()),
+                stderr: StreamOutput::new(String::from_utf8_lossy(&stderr).into_owned()),
+                aggregated_output: StreamOutput::new(
+                    String::from_utf8_lossy(&aggregated_output).into_owned(),
+                ),
+                duration: start.elapsed(),
+                timed_out: false,
+            };
+            let status = if exit_code == 0 {
+                ExecCommandStatus::Completed
+            } else {
+                ExecCommandStatus::Failed
+            };
+            (output, status)
+        }
+        RemoteUserShellResult::Cancelled => {
+            let aborted_message = "command aborted by user".to_string();
+            (
+                ExecToolCallOutput {
+                    exit_code: -1,
+                    stdout: StreamOutput::new(String::new()),
+                    stderr: StreamOutput::new(aborted_message.clone()),
+                    aggregated_output: StreamOutput::new(aborted_message),
+                    duration: start.elapsed(),
+                    timed_out: false,
+                },
+                ExecCommandStatus::Failed,
+            )
+        }
+        RemoteUserShellResult::TimedOut => {
+            let timeout_message = format!("command timed out after {USER_SHELL_TIMEOUT_MS}ms");
+            (
+                ExecToolCallOutput {
+                    exit_code: -1,
+                    stdout: StreamOutput::new(String::new()),
+                    stderr: StreamOutput::new(timeout_message.clone()),
+                    aggregated_output: StreamOutput::new(timeout_message),
+                    duration: start.elapsed(),
+                    timed_out: true,
+                },
+                ExecCommandStatus::Failed,
+            )
+        }
+        RemoteUserShellResult::Error(message) => (
+            ExecToolCallOutput {
+                exit_code: -1,
+                stdout: StreamOutput::new(String::new()),
+                stderr: StreamOutput::new(message.clone()),
+                aggregated_output: StreamOutput::new(message),
+                duration: start.elapsed(),
+                timed_out: false,
+            },
+            ExecCommandStatus::Failed,
+        ),
+    };
+
+    session
+        .send_event(
+            turn_context.as_ref(),
+            EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                call_id,
+                process_id: None,
+                turn_id: turn_context.sub_id.clone(),
+                completed_at_ms: now_unix_timestamp_ms(),
+                command: display_command,
+                cwd,
+                parsed_cmd,
+                source: ExecCommandSource::UserShell,
+                interaction_input: None,
+                stdout: exec_output.stdout.text.clone(),
+                stderr: exec_output.stderr.text.clone(),
+                aggregated_output: exec_output.aggregated_output.text.clone(),
+                exit_code: exec_output.exit_code,
+                duration: exec_output.duration,
+                formatted_output: format_exec_output_str(
+                    &exec_output,
+                    turn_context.truncation_policy,
+                ),
+                status,
+            }),
+        )
+        .await;
+    persist_user_shell_output(
+        &session,
+        turn_context.as_ref(),
+        &raw_command,
+        &exec_output,
+        mode,
+    )
+    .await;
+}
+
+async fn emit_user_shell_failed_without_begin(
+    session: &Session,
+    turn_context: &TurnContext,
+    raw_command: &str,
+    message: &str,
+    mode: UserShellCommandMode,
+) {
+    let exec_output = ExecToolCallOutput {
+        exit_code: -1,
+        stdout: StreamOutput::new(String::new()),
+        stderr: StreamOutput::new(message.to_string()),
+        aggregated_output: StreamOutput::new(message.to_string()),
+        duration: Duration::ZERO,
+        timed_out: false,
+    };
+    persist_user_shell_output(session, turn_context, raw_command, &exec_output, mode).await;
+}
+
+async fn remote_user_shell(turn_environment: &TurnEnvironment) -> Result<Shell, String> {
+    let info = turn_environment
+        .environment
+        .info()
+        .await
+        .map_err(|err| format!("failed to read environment shell info: {err}"))?;
+    Ok(crate::shell::get_shell_by_model_provided_path(
+        &info.shell.path.into(),
+    ))
+}
+
+fn exec_server_env_policy(policy: &ShellEnvironmentPolicy) -> ExecServerEnvPolicy {
+    ExecServerEnvPolicy {
+        inherit: policy.inherit.clone(),
+        ignore_default_excludes: policy.ignore_default_excludes,
+        exclude: policy.exclude.iter().map(ToString::to_string).collect(),
+        r#set: policy.r#set.clone(),
+        include_only: policy
+            .include_only
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+    }
+}
+
+enum RemoteUserShellResult {
+    Output {
+        exit_code: i32,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+        aggregated_output: Vec<u8>,
+    },
+    Cancelled,
+    TimedOut,
+    Error(String),
+}
+
+async fn collect_remote_user_shell_output(
+    exec_backend: Arc<dyn codex_exec_server::ExecBackend>,
+    exec_params: ExecServerParams,
+    stream: StdoutStream,
+    cancellation_token: CancellationToken,
+) -> RemoteUserShellResult {
+    let process = match exec_backend.start(exec_params).await {
+        Ok(started) => started.process,
+        Err(err) => return RemoteUserShellResult::Error(format!("execution error: {err}")),
+    };
+    let mut after_seq = None;
+    let mut stdout = HeadTailBuffer::new(DEFAULT_OUTPUT_BYTES_CAP);
+    let mut stderr = HeadTailBuffer::new(DEFAULT_OUTPUT_BYTES_CAP);
+    let mut aggregated_output = HeadTailBuffer::new(DEFAULT_OUTPUT_BYTES_CAP);
+    let mut exit_code = None;
+    let mut emitted_deltas = 0;
+    let timeout = tokio::time::sleep(Duration::from_millis(USER_SHELL_TIMEOUT_MS));
+    tokio::pin!(timeout);
+
+    loop {
+        let read = tokio::select! {
+            _ = cancellation_token.cancelled() => {
+                let _ = process.terminate().await;
+                return RemoteUserShellResult::Cancelled;
+            }
+            _ = &mut timeout => {
+                let _ = process.terminate().await;
+                return RemoteUserShellResult::TimedOut;
+            }
+            read = process.read(
+                after_seq,
+                Some(REMOTE_USER_SHELL_READ_MAX_BYTES),
+                Some(100),
+            ) => read,
+        };
+        let read = match read {
+            Ok(read) => read,
+            Err(err) => {
+                let _ = process.terminate().await;
+                return RemoteUserShellResult::Error(format!("execution error: {err}"));
+            }
+        };
+        after_seq = Some(read.next_seq);
+        if let Some(code) = read.exit_code {
+            exit_code = Some(code);
+        }
+        if let Some(failure) = read.failure {
+            let _ = process.terminate().await;
+            return RemoteUserShellResult::Error(failure);
+        }
+        for chunk in read.chunks {
+            let (protocol_stream, target) = match chunk.stream {
+                ExecServerOutputStream::Stdout | ExecServerOutputStream::Pty => {
+                    (ProtocolExecOutputStream::Stdout, &mut stdout)
+                }
+                ExecServerOutputStream::Stderr => (ProtocolExecOutputStream::Stderr, &mut stderr),
+            };
+            let bytes = chunk.chunk.into_inner();
+            aggregated_output.push_chunk(bytes.clone());
+            target.push_chunk(bytes.clone());
+            if emitted_deltas < crate::exec::MAX_EXEC_OUTPUT_DELTAS_PER_CALL {
+                let _ = stream
+                    .tx_event
+                    .send(Event {
+                        id: stream.sub_id.clone(),
+                        msg: EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+                            call_id: stream.call_id.clone(),
+                            stream: protocol_stream,
+                            chunk: bytes,
+                        }),
+                    })
+                    .await;
+                emitted_deltas += 1;
+            }
+        }
+        if read.closed {
+            return RemoteUserShellResult::Output {
+                exit_code: exit_code.unwrap_or(-1),
+                stdout: stdout.to_bytes(),
+                stderr: stderr.to_bytes(),
+                aggregated_output: aggregated_output.to_bytes(),
+            };
         }
     }
 }
