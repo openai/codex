@@ -125,6 +125,7 @@ chatgpt_base_url = "{}/backend-api/"
 
 [features]
 plugins = true
+apps = true
 "#,
             server.uri()
         ),
@@ -205,6 +206,33 @@ plugins = true
         .respond_with(ResponseTemplate::new(200).set_body_string(installed_body))
         .mount(&server)
         .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/connectors/directory/list"))
+        .and(query_param("external_logos", "true"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "apps": [
+                AppInfo {
+                    id: "example-app".to_string(),
+                    name: "Example App".to_string(),
+                    description: Some("Example app connector".to_string()),
+                    logo_url: Some("https://example.com/example.png".to_string()),
+                    logo_url_dark: None,
+                    distribution_channel: Some("featured".to_string()),
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
+                    install_url: None,
+                    is_accessible: false,
+                    is_enabled: true,
+                    plugin_display_names: Vec::new(),
+                }
+            ],
+            "next_token": null
+        })))
+        .mount(&server)
+        .await;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -248,6 +276,15 @@ plugins = true
     assert_eq!(
         response.plugin.mcp_servers,
         vec!["other-server".to_string()]
+    );
+    assert_eq!(
+        response
+            .plugin
+            .apps
+            .iter()
+            .map(|app| app.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["example-app"]
     );
     Ok(())
 }

@@ -15,6 +15,7 @@ use codex_login::default_client::build_reqwest_client;
 use codex_plugin::AppConnectorId;
 use codex_plugin::AppDeclaration;
 use codex_plugin::PluginId;
+use codex_plugin::app_connector_ids_from_declarations;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use reqwest::RequestBuilder;
 use serde::Deserialize;
@@ -1083,13 +1084,17 @@ async fn build_remote_plugin_detail(
         .iter()
         .map(|server| (server.key.clone(), ()))
         .collect::<HashMap<_, _>>();
-    let mut mcp_servers = resolve_plugin_capabilities(
+    let capability_context =
+        PluginCapabilityContext::new(Some(auth.api_auth_mode()), /*plugin_active*/ true);
+    let projected = resolve_plugin_capabilities(
         PluginCapabilities::new(app_declarations, mcp_servers),
-        PluginCapabilityContext::new(Some(auth.api_auth_mode()), /*plugin_active*/ true),
-    )
-    .mcp_servers
-    .into_keys()
-    .collect::<Vec<_>>();
+        capability_context,
+    );
+    let app_ids = app_connector_ids_from_declarations(&projected.apps)
+        .into_iter()
+        .map(|app_id| app_id.0)
+        .collect();
+    let mut mcp_servers = projected.mcp_servers.into_keys().collect::<Vec<_>>();
     mcp_servers.sort_unstable();
     mcp_servers.dedup();
 
@@ -1103,7 +1108,7 @@ async fn build_remote_plugin_detail(
         bundle_download_url: plugin.release.bundle_download_url,
         app_manifest: plugin.release.app_manifest,
         skills,
-        app_ids: plugin.release.app_ids,
+        app_ids,
         app_templates: plugin
             .release
             .app_templates
