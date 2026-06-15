@@ -101,6 +101,39 @@ fn create_test_server_info(title: &str) -> McpServerInfo {
     }
 }
 
+#[test]
+fn tool_inventory_revision_tracks_cross_process_apps_cache_updates() {
+    let codex_home = tempdir().expect("create tempdir");
+    let cache_context = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        Some("account"),
+        Some("user"),
+    );
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = PermissionProfile::default();
+    let mut manager = McpConnectionManager::new_uninitialized_with_permission_profile(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.tool_inventory_cache = ToolInventoryCache::new(Some(cache_context.tools_cache_path()));
+
+    let missing_revision = manager
+        .tool_inventory_cache
+        .revision(&manager.clients)
+        .expect("missing cache file has a stable revision");
+    write_cached_codex_apps_tools(
+        &cache_context,
+        &[create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "search")],
+    );
+    let populated_revision = manager
+        .tool_inventory_cache
+        .revision(&manager.clients)
+        .expect("populated cache file has a stable revision");
+
+    assert_ne!(missing_revision, populated_revision);
+}
+
 fn model_tool_names(tools: &[ToolInfo]) -> HashSet<ToolName> {
     tools
         .iter()

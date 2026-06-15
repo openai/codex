@@ -75,6 +75,10 @@ use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
 
+mod tool_inventory_cache;
+
+use tool_inventory_cache::ToolInventoryCache;
+
 const MCP_UI_META_KEY: &str = "ui";
 const MCP_UI_VISIBILITY_META_KEY: &str = "visibility";
 const MCP_UI_MODEL_VISIBILITY: &str = "model";
@@ -113,6 +117,7 @@ pub struct McpConnectionManager {
     prefix_mcp_tool_names: bool,
     elicitation_requests: ElicitationRequestManager,
     startup_cancellation_token: CancellationToken,
+    tool_inventory_cache: ToolInventoryCache,
 }
 
 impl McpConnectionManager {
@@ -156,6 +161,14 @@ impl McpConnectionManager {
         let codex_apps_auth_provider = auth
             .filter(|auth| auth.uses_codex_backend())
             .map(codex_model_provider::auth_provider_from_auth);
+        let codex_apps_tools_cache_path = mcp_servers
+            .get(CODEX_APPS_MCP_SERVER_NAME)
+            .filter(|server| server.enabled())
+            .map(|_| CodexAppsToolsCacheContext {
+                codex_home: codex_home.clone(),
+                user_key: codex_apps_tools_cache_key.clone(),
+            })
+            .map(|context| context.tools_cache_path());
         let mcp_servers = mcp_servers.clone();
         for (server_name, server) in mcp_servers
             .into_iter()
@@ -254,6 +267,7 @@ impl McpConnectionManager {
             prefix_mcp_tool_names,
             elicitation_requests: elicitation_requests.clone(),
             startup_cancellation_token: startup_cancellation_token.clone(),
+            tool_inventory_cache: ToolInventoryCache::new(codex_apps_tools_cache_path),
         };
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
@@ -344,6 +358,7 @@ impl McpConnectionManager {
                 /*reviewer*/ None,
             ),
             startup_cancellation_token: CancellationToken::new(),
+            tool_inventory_cache: ToolInventoryCache::new(/*codex_apps_cache_path*/ None),
         }
     }
 
@@ -446,6 +461,13 @@ impl McpConnectionManager {
     /// Returns all tools with model-visible names normalized.
     #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
+        let revision_before = self.tool_inventory_cache.revision(&self.clients);
+        if let Some(revision) = revision_before.as_ref()
+            && let Some(tools) = self.tool_inventory_cache.get(revision)
+        {
+            return tools;
+        }
+
         let mut tools = Vec::new();
         for (server_name, managed_client) in &self.clients {
             let has_cached_tool_info_snapshot = managed_client.cached_tool_info_snapshot.is_some();
@@ -481,7 +503,10 @@ impl McpConnectionManager {
                     .map(|tool| self.with_server_metadata(tool)),
             );
         }
-        normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
+        let tools = normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names);
+        self.tool_inventory_cache
+            .insert_if_unchanged(revision_before, &self.clients, &tools);
+        tools
     }
 
     /// Force-refresh codex apps tools by bypassing the in-process cache.
@@ -522,6 +547,7 @@ impl McpConnectionManager {
             &managed_client.server_info,
             &tools,
         );
+        self.tool_inventory_cache.clear();
         emit_duration(
             MCP_TOOLS_LIST_DURATION_METRIC,
             list_start.elapsed(),
