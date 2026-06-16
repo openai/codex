@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use crate::app_server_session::AppServerSession;
 use crate::clipboard_paste::normalize_pasted_search_query;
@@ -33,10 +32,7 @@ use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
 use chrono::DateTime;
 use chrono::Utc;
-use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadItem;
-use codex_app_server_protocol::ThreadListCwdFilter;
-use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_config::types::SessionPickerViewMode;
 use codex_protocol::ThreadId;
@@ -63,7 +59,16 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::warn;
 use unicode_width::UnicodeWidthStr;
 
-const PAGE_SIZE: usize = 25;
+mod loading;
+
+use loading::BackgroundEvent;
+use loading::PageCursor;
+use loading::PageLoadRequest;
+use loading::PickerLoadRequest;
+use loading::PickerLoader;
+use loading::PickerPage;
+use loading::spawn_app_server_page_loader;
+
 const LOAD_NEAR_THRESHOLD: usize = 5;
 const SESSION_META_INDENT_WIDTH: usize = 2;
 const SESSION_META_DATE_WIDTH: usize = 12;
@@ -135,22 +140,6 @@ impl SessionPickerAction {
             SessionPickerAction::Fork => SessionSelection::Fork(target_session),
         }
     }
-}
-
-#[derive(Clone)]
-struct PageLoadRequest {
-    cursor: Option<PageCursor>,
-    request_token: usize,
-    search_token: Option<usize>,
-    cwd_filter: Option<PathBuf>,
-    provider_filter: ProviderFilter,
-    sort_key: ThreadSortKey,
-}
-
-enum PickerLoadRequest {
-    Page(PageLoadRequest),
-    Preview { thread_id: ThreadId },
-    Transcript { thread_id: ThreadId },
 }
 
 #[derive(Clone)]
@@ -236,35 +225,6 @@ impl From<SessionListDensity> for SessionPickerViewMode {
             SessionListDensity::Dense => Self::Dense,
         }
     }
-}
-
-type PickerLoader = Arc<dyn Fn(PickerLoadRequest) + Send + Sync>;
-enum BackgroundEvent {
-    Page {
-        request_token: usize,
-        search_token: Option<usize>,
-        page: std::io::Result<PickerPage>,
-    },
-    Preview {
-        thread_id: ThreadId,
-        preview: std::io::Result<Vec<TranscriptPreviewLine>>,
-    },
-    Transcript {
-        thread_id: ThreadId,
-        transcript: std::io::Result<TranscriptCells>,
-    },
-}
-
-#[derive(Clone)]
-enum PageCursor {
-    AppServer(String),
-}
-
-struct PickerPage {
-    rows: Vec<Row>,
-    next_cursor: Option<PageCursor>,
-    num_scanned_files: usize,
-    reached_scan_cap: bool,
 }
 
 #[derive(Clone)]
@@ -547,63 +507,6 @@ fn picker_cwd_filter(
     }
 }
 
-fn spawn_app_server_page_loader(
-    app_server: AppServerSession,
-    include_non_interactive: bool,
-    raw_reasoning_visibility: RawReasoningVisibility,
-    bg_tx: mpsc::UnboundedSender<BackgroundEvent>,
-) -> PickerLoader {
-    let (request_tx, mut request_rx) = mpsc::unbounded_channel::<PickerLoadRequest>();
-
-    tokio::spawn(async move {
-        let mut app_server = app_server;
-        while let Some(request) = request_rx.recv().await {
-            match request {
-                PickerLoadRequest::Page(request) => {
-                    let cursor = request.cursor.map(|PageCursor::AppServer(cursor)| cursor);
-                    let page = load_app_server_page(
-                        &mut app_server,
-                        cursor,
-                        request.cwd_filter.as_deref(),
-                        request.provider_filter,
-                        request.sort_key,
-                        include_non_interactive,
-                    )
-                    .await;
-                    let _ = bg_tx.send(BackgroundEvent::Page {
-                        request_token: request.request_token,
-                        search_token: request.search_token,
-                        page,
-                    });
-                }
-                PickerLoadRequest::Preview { thread_id } => {
-                    let preview = load_transcript_preview(&mut app_server, thread_id).await;
-                    let _ = bg_tx.send(BackgroundEvent::Preview { thread_id, preview });
-                }
-                PickerLoadRequest::Transcript { thread_id } => {
-                    let transcript = load_session_transcript(
-                        &mut app_server,
-                        thread_id,
-                        raw_reasoning_visibility,
-                    )
-                    .await;
-                    let _ = bg_tx.send(BackgroundEvent::Transcript {
-                        thread_id,
-                        transcript,
-                    });
-                }
-            }
-        }
-        if let Err(err) = app_server.shutdown().await {
-            warn!(%err, "Failed to shut down app-server picker session");
-        }
-    });
-
-    Arc::new(move |request: PickerLoadRequest| {
-        let _ = request_tx.send(request);
-    })
-}
-
 /// Returns the human-readable column header for the given sort key.
 fn sort_key_label(sort_key: ThreadSortKey) -> &'static str {
     match sort_key {
@@ -728,38 +631,6 @@ impl LoadingState {
     fn is_pending(&self) -> bool {
         matches!(self, LoadingState::Pending(_))
     }
-}
-
-async fn load_app_server_page(
-    app_server: &mut AppServerSession,
-    cursor: Option<String>,
-    cwd_filter: Option<&Path>,
-    provider_filter: ProviderFilter,
-    sort_key: ThreadSortKey,
-    include_non_interactive: bool,
-) -> std::io::Result<PickerPage> {
-    let response = app_server
-        .thread_list(thread_list_params(
-            cursor,
-            cwd_filter,
-            provider_filter,
-            sort_key,
-            include_non_interactive,
-        ))
-        .await
-        .map_err(std::io::Error::other)?;
-    let num_scanned_files = response.data.len();
-
-    Ok(PickerPage {
-        rows: response
-            .data
-            .into_iter()
-            .filter_map(row_from_app_server_thread)
-            .collect(),
-        next_cursor: response.next_cursor.map(PageCursor::AppServer),
-        num_scanned_files,
-        reached_scan_cap: false,
-    })
 }
 
 async fn load_transcript_preview(
@@ -1279,65 +1150,6 @@ impl PickerState {
         }));
     }
 
-    async fn handle_background_event(&mut self, event: BackgroundEvent) -> Result<()> {
-        match event {
-            BackgroundEvent::Page {
-                request_token,
-                search_token,
-                page,
-            } => {
-                let pending = match self.pagination.loading {
-                    LoadingState::Pending(pending) => pending,
-                    LoadingState::Idle => return Ok(()),
-                };
-                if pending.request_token != request_token {
-                    return Ok(());
-                }
-                self.pagination.loading = LoadingState::Idle;
-                let page = page.map_err(color_eyre::Report::from)?;
-                self.ingest_page(page);
-                self.complete_pending_page_down();
-                let completed_token = pending.search_token.or(search_token);
-                self.continue_search_if_token_matches(completed_token);
-            }
-            BackgroundEvent::Preview { thread_id, preview } => {
-                self.transcript_previews.insert(
-                    thread_id,
-                    match preview {
-                        Ok(lines) => TranscriptPreviewState::Loaded(lines),
-                        Err(_) => TranscriptPreviewState::Failed,
-                    },
-                );
-                self.request_frame();
-            }
-            BackgroundEvent::Transcript {
-                thread_id,
-                transcript,
-            } => match transcript {
-                Ok(cells) => {
-                    let should_open = self.pending_transcript_open == Some(thread_id);
-                    self.transcript_cells
-                        .insert(thread_id, SessionTranscriptState::Loaded(cells.clone()));
-                    if should_open {
-                        self.open_pending_transcript_if_ready();
-                    }
-                    self.request_frame();
-                }
-                Err(_) => {
-                    self.transcript_cells
-                        .insert(thread_id, SessionTranscriptState::Failed);
-                    if self.pending_transcript_open == Some(thread_id) {
-                        self.pending_transcript_open = None;
-                        self.transcript_loading_frame_shown = false;
-                        self.inline_error = Some("Could not load transcript preview".to_string());
-                    }
-                    self.request_frame();
-                }
-            },
-        }
-        Ok(())
-    }
-
     fn reset_pagination(&mut self) {
         self.pagination.next_cursor = None;
         self.pagination.num_scanned_files = 0;
@@ -1773,58 +1585,6 @@ impl PickerState {
             SessionListDensity::Comfortable => 1,
             SessionListDensity::Dense => 0,
         }
-    }
-}
-
-fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
-    let thread_id = match ThreadId::from_string(&thread.id) {
-        Ok(thread_id) => thread_id,
-        Err(err) => {
-            warn!(thread_id = thread.id, %err, "Skipping app-server picker row with invalid id");
-            return None;
-        }
-    };
-    let preview = thread.preview.trim();
-    Some(Row {
-        path: thread.path,
-        preview: if preview.is_empty() {
-            String::from("(no message yet)")
-        } else {
-            preview.to_string()
-        },
-        thread_id: Some(thread_id),
-        thread_name: thread.name,
-        created_at: chrono::DateTime::from_timestamp(thread.created_at, 0)
-            .map(|dt| dt.with_timezone(&Utc)),
-        updated_at: chrono::DateTime::from_timestamp(thread.updated_at, 0)
-            .map(|dt| dt.with_timezone(&Utc)),
-        cwd: Some(thread.cwd.to_path_buf()),
-        git_branch: thread.git_info.and_then(|git_info| git_info.branch),
-    })
-}
-
-fn thread_list_params(
-    cursor: Option<String>,
-    cwd_filter: Option<&Path>,
-    provider_filter: ProviderFilter,
-    sort_key: ThreadSortKey,
-    include_non_interactive: bool,
-) -> ThreadListParams {
-    ThreadListParams {
-        cursor,
-        limit: Some(PAGE_SIZE as u32),
-        sort_key: Some(sort_key),
-        sort_direction: None,
-        model_providers: match provider_filter {
-            ProviderFilter::Any => None,
-            ProviderFilter::MatchDefault(default_provider) => Some(vec![default_provider]),
-        },
-        source_kinds: Some(crate::resume_source_kinds(include_non_interactive)),
-        archived: Some(false),
-        parent_thread_id: None,
-        cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().into_owned())),
-        use_state_db_only: false,
-        search_term: None,
     }
 }
 
@@ -3197,7 +2957,7 @@ fn render_empty_state_line(state: &PickerState) -> Line<'static> {
 mod tests {
     use super::*;
     use chrono::Duration;
-    use codex_app_server_protocol::ThreadSourceKind;
+    use codex_app_server_protocol::Thread;
     use codex_config::CONFIG_TOML_FILE;
     use codex_protocol::ThreadId;
     use codex_utils_absolute_path::test_support::PathBufExt;
@@ -3296,28 +3056,6 @@ mod tests {
         };
 
         assert_eq!(row.display_preview(), "My session");
-    }
-
-    #[test]
-    fn local_picker_thread_list_params_include_cwd_filter() {
-        let cwd_filter = picker_cwd_filter(
-            Path::new("/tmp/project"),
-            /*show_all*/ false,
-            /*uses_remote_workspace*/ false,
-            /*remote_cwd_override*/ None,
-        );
-        let params = thread_list_params(
-            Some(String::from("cursor-1")),
-            cwd_filter.as_deref(),
-            ProviderFilter::MatchDefault(String::from("openai")),
-            ThreadSortKey::UpdatedAt,
-            /*include_non_interactive*/ false,
-        );
-
-        assert_eq!(
-            params.cwd,
-            Some(ThreadListCwdFilter::One(String::from("/tmp/project")))
-        );
     }
 
     #[test]
@@ -3527,44 +3265,6 @@ mod tests {
         let first_index = rendered.find(first).expect("first metadata item");
         let second_index = rendered.find(second).expect("second metadata item");
         assert!(first_index < second_index);
-    }
-
-    #[test]
-    fn remote_thread_list_params_omit_provider_filter() {
-        let params = thread_list_params(
-            Some(String::from("cursor-1")),
-            Some(Path::new("repo/on/server")),
-            ProviderFilter::Any,
-            ThreadSortKey::UpdatedAt,
-            /*include_non_interactive*/ false,
-        );
-
-        assert_eq!(params.cursor, Some(String::from("cursor-1")));
-        assert_eq!(params.model_providers, None);
-        assert_eq!(
-            params.source_kinds,
-            Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode])
-        );
-        assert_eq!(
-            params.cwd,
-            Some(ThreadListCwdFilter::One(String::from("repo/on/server")))
-        );
-    }
-
-    #[test]
-    fn remote_thread_list_params_can_include_non_interactive_sources() {
-        let params = thread_list_params(
-            Some(String::from("cursor-1")),
-            /*cwd_filter*/ None,
-            ProviderFilter::Any,
-            ThreadSortKey::UpdatedAt,
-            /*include_non_interactive*/ true,
-        );
-
-        assert_eq!(params.cursor, Some(String::from("cursor-1")));
-        assert_eq!(params.model_providers, None);
-        let source_kinds = crate::resume_source_kinds(/*include_non_interactive*/ true);
-        assert_eq!(params.source_kinds, Some(source_kinds));
     }
 
     #[test]
@@ -5713,39 +5413,6 @@ session_picker_view = "dense"
             })) => assert_eq!(selected_thread_id, thread_id),
             other => panic!("unexpected selection: {other:?}"),
         }
-    }
-
-    #[test]
-    fn app_server_row_keeps_pathless_threads() {
-        let thread_id = ThreadId::new();
-        let thread = Thread {
-            id: thread_id.to_string(),
-            session_id: thread_id.to_string(),
-            forked_from_id: None,
-            parent_thread_id: None,
-            preview: String::from("remote thread"),
-            ephemeral: false,
-            model_provider: String::from("openai"),
-            created_at: 1,
-            updated_at: 2,
-            status: codex_app_server_protocol::ThreadStatus::Idle,
-            path: None,
-            cwd: test_path_buf("/tmp").abs(),
-            cli_version: String::from("0.0.0"),
-            source: codex_app_server_protocol::SessionSource::Cli,
-            thread_source: None,
-            agent_nickname: None,
-            agent_role: None,
-            git_info: None,
-            name: Some(String::from("Named thread")),
-            turns: Vec::new(),
-        };
-
-        let row = row_from_app_server_thread(thread).expect("row should be preserved");
-
-        assert_eq!(row.path, None);
-        assert_eq!(row.thread_id, Some(thread_id));
-        assert_eq!(row.thread_name, Some(String::from("Named thread")));
     }
 
     #[test]
