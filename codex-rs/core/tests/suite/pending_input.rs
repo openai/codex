@@ -345,6 +345,7 @@ async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
 async fn any_new_input_interrupts_sleep() {
     const FIRST_SLEEP_CALL_ID: &str = "sleep-call-1";
     const SECOND_SLEEP_CALL_ID: &str = "sleep-call-2";
+    const SLEEP_DURATION_MS: u64 = 60_000;
     const INITIAL_PROMPT: &str = "sleep for a while";
     const STEER_PROMPT: &str = "stop sleeping and continue";
 
@@ -386,14 +387,14 @@ async fn any_new_input_interrupts_sleep() {
         .codex;
 
     submit_user_input(&codex, INITIAL_PROMPT).await;
-    wait_for_sleep_item_started(&codex, FIRST_SLEEP_CALL_ID, 60_000).await;
+    wait_for_sleep_item_started(&codex, FIRST_SLEEP_CALL_ID, SLEEP_DURATION_MS).await;
 
     steer_user_input(&codex, STEER_PROMPT).await;
-    wait_for_sleep_item_completed(&codex, FIRST_SLEEP_CALL_ID, 60_000).await;
-    wait_for_sleep_item_started(&codex, SECOND_SLEEP_CALL_ID, 60_000).await;
+    wait_for_sleep_item_completed(&codex, FIRST_SLEEP_CALL_ID, SLEEP_DURATION_MS).await;
+    wait_for_sleep_item_started(&codex, SECOND_SLEEP_CALL_ID, SLEEP_DURATION_MS).await;
 
     submit_queue_only_agent_mail(&codex, "new mailbox input").await;
-    wait_for_sleep_item_completed(&codex, SECOND_SLEEP_CALL_ID, 60_000).await;
+    wait_for_sleep_item_completed(&codex, SECOND_SLEEP_CALL_ID, SLEEP_DURATION_MS).await;
     wait_for_turn_complete(&codex).await;
 
     let requests = server.requests().await;
