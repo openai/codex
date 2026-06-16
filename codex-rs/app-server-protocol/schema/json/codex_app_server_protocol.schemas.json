@@ -2131,6 +2131,29 @@
             },
             "method": {
               "enum": [
+                "externalAgentConfig/import/readHistories"
+              ],
+              "title": "ExternalAgentConfig/import/readHistoriesRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "ExternalAgentConfig/import/readHistoriesRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "config/value/write"
               ],
               "title": "Config/value/writeRequestMethod",
@@ -4832,6 +4855,26 @@
             "params"
           ],
           "title": "RemoteControl/status/changedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "externalAgentConfig/import/progress"
+              ],
+              "title": "ExternalAgentConfig/import/progressNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportProgressNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "ExternalAgentConfig/import/progressNotification",
           "type": "object"
         },
         {
@@ -9089,9 +9132,61 @@
         "title": "ExternalAgentConfigImportCompletedNotification",
         "type": "object"
       },
+      "ExternalAgentConfigImportHistoriesReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportHistory"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "ExternalAgentConfigImportHistoriesReadResponse",
+        "type": "object"
+      },
+      "ExternalAgentConfigImportHistory": {
+        "properties": {
+          "completedAtMs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "failures": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportItemTypeFailure"
+            },
+            "type": "array"
+          },
+          "importId": {
+            "type": "string"
+          },
+          "successes": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportItemTypeSuccess"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "completedAtMs",
+          "failures",
+          "importId",
+          "successes"
+        ],
+        "type": "object"
+      },
       "ExternalAgentConfigImportItemTypeFailure": {
         "properties": {
           "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "errorType": {
             "type": [
               "string",
               "null"
@@ -9163,6 +9258,26 @@
           "migrationItems"
         ],
         "title": "ExternalAgentConfigImportParams",
+        "type": "object"
+      },
+      "ExternalAgentConfigImportProgressNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "importId": {
+            "type": "string"
+          },
+          "itemTypeResults": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportTypeResult"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "importId",
+          "itemTypeResults"
+        ],
+        "title": "ExternalAgentConfigImportProgressNotification",
         "type": "object"
       },
       "ExternalAgentConfigImportResponse": {

@@ -1,6 +1,36 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "ExternalAgentConfigImportHistory": {
+      "properties": {
+        "completedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "failures": {
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportItemTypeFailure"
+          },
+          "type": "array"
+        },
+        "importId": {
+          "type": "string"
+        },
+        "successes": {
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportItemTypeSuccess"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "completedAtMs",
+        "failures",
+        "importId",
+        "successes"
+      ],
+      "type": "object"
+    },
     "ExternalAgentConfigImportItemTypeFailure": {
       "properties": {
         "cwd": {
@@ -67,31 +97,6 @@
       ],
       "type": "object"
     },
-    "ExternalAgentConfigImportTypeResult": {
-      "properties": {
-        "failures": {
-          "items": {
-            "$ref": "#/definitions/ExternalAgentConfigImportItemTypeFailure"
-          },
-          "type": "array"
-        },
-        "itemType": {
-          "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
-        },
-        "successes": {
-          "items": {
-            "$ref": "#/definitions/ExternalAgentConfigImportItemTypeSuccess"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "failures",
-        "itemType",
-        "successes"
-      ],
-      "type": "object"
-    },
     "ExternalAgentConfigMigrationItemType": {
       "enum": [
         "AGENTS_MD",
@@ -108,20 +113,16 @@
     }
   },
   "properties": {
-    "importId": {
-      "type": "string"
-    },
-    "itemTypeResults": {
+    "data": {
       "items": {
-        "$ref": "#/definitions/ExternalAgentConfigImportTypeResult"
+        "$ref": "#/definitions/ExternalAgentConfigImportHistory"
       },
       "type": "array"
     }
   },
   "required": [
-    "importId",
-    "itemTypeResults"
+    "data"
   ],
-  "title": "ExternalAgentConfigImportCompletedNotification",
+  "title": "ExternalAgentConfigImportHistoriesReadResponse",
   "type": "object"
 }
