@@ -5,6 +5,7 @@ use super::plugin_analytics_capture::validate_mutation_events;
 use super::plugin_analytics_smoke::ANALYTICS_CAPTURE_ENV_VAR;
 use super::plugin_analytics_smoke::prepare_capture_file;
 use super::plugin_analytics_smoke::wait_until_capture_is_ready;
+use super::shell_quote;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -96,7 +97,7 @@ pub(super) fn run(
             if let Err(err) = sequence_result {
                 eprintln!("mutation smoke failed before cleanup: {err:#}");
             }
-            print_dirty_recovery(codex_bin, remote_plugin_id, &cleanup_err);
+            print_dirty_recovery(codex_bin, config_overrides, remote_plugin_id, &cleanup_err);
             Err(cleanup_err)
         }
         (sequence_result, RestorationStatus::Unknown(cleanup_err)) => {
@@ -106,7 +107,7 @@ pub(super) fn run(
             eprintln!(
                 "FAIL-UNKNOWN: could not verify whether `{remote_plugin_id}` is installed: {cleanup_err:#}"
             );
-            print_recovery_command(codex_bin, remote_plugin_id);
+            print_recovery_command(codex_bin, config_overrides, remote_plugin_id);
             Err(cleanup_err)
         }
     }
@@ -117,20 +118,16 @@ pub(super) fn run_cleanup(
     config_overrides: &[String],
     remote_plugin_id: &str,
     confirmation: AccountMutationConfirmation,
-    capture_file: Option<PathBuf>,
 ) -> Result<()> {
     require_confirmation(confirmation)?;
-    let capture_path = capture_file.unwrap_or_else(|| {
-        std::env::temp_dir().join(format!(
-            "codex-plugin-remote-uninstall-{}.jsonl",
-            process::id()
-        ))
-    });
-    prepare_capture_file(&capture_path)?;
-    let mut client = spawn_client(codex_bin, config_overrides, &capture_path)?;
-    wait_until_capture_is_ready(&capture_path)?;
+    let mut overrides = config_overrides.to_vec();
+    overrides.extend([
+        "analytics.enabled=false".to_string(),
+        "features.plugins=true".to_string(),
+        "features.remote_plugin=true".to_string(),
+    ]);
+    let mut client = CodexClient::spawn_stdio(codex_bin, &overrides)?;
     client.initialize()?;
-    println!("capture file: {}", capture_path.display());
 
     match restore_uninstalled_state(&mut client, remote_plugin_id) {
         RestorationStatus::Clean => {
@@ -144,7 +141,7 @@ pub(super) fn run_cleanup(
             Err(err)
         }
         RestorationStatus::Dirty(err) => {
-            print_dirty_recovery(codex_bin, remote_plugin_id, &err);
+            print_dirty_recovery(codex_bin, config_overrides, remote_plugin_id, &err);
             Err(err)
         }
         RestorationStatus::Unknown(err) => {
@@ -295,7 +292,7 @@ fn run_mutation_sequence(
             &expected.remote_plugin_id,
             ExpectedInstalledState::Installed,
         )?;
-        let install_event = wait_for_remote_plugin_event(
+        wait_for_remote_plugin_event(
             capture_path,
             &expected.remote_plugin_id,
             "codex_plugin_installed",
@@ -316,8 +313,10 @@ fn run_mutation_sequence(
             }
         })?;
 
+        let captured_events =
+            read_events_for_remote_plugin(capture_path, &expected.remote_plugin_id)?;
         let events = validate_mutation_events(
-            vec![install_event],
+            captured_events,
             PluginEventIdentity {
                 plugin_id: &expected.remote_plugin_id,
                 plugin_name: &expected.plugin_name,
@@ -437,15 +436,12 @@ fn wait_for_remote_plugin_event(
     path: &Path,
     remote_plugin_id: &str,
     event_type: &str,
-) -> Result<Value> {
+) -> Result<()> {
     let deadline = Instant::now() + CAPTURE_TIMEOUT;
     loop {
         let events = read_events_for_remote_plugin(path, remote_plugin_id)?;
-        if let Some(event) = events
-            .into_iter()
-            .find(|event| event["event_type"] == event_type)
-        {
-            return Ok(event);
+        if events.iter().any(|event| event["event_type"] == event_type) {
+            return Ok(());
         }
         if Instant::now() >= deadline {
             bail!("timed out waiting for `{event_type}` for remote plugin `{remote_plugin_id}`");
@@ -454,20 +450,34 @@ fn wait_for_remote_plugin_event(
     }
 }
 
-fn print_dirty_recovery(codex_bin: &Path, remote_plugin_id: &str, err: &anyhow::Error) {
+fn print_dirty_recovery(
+    codex_bin: &Path,
+    config_overrides: &[String],
+    remote_plugin_id: &str,
+    err: &anyhow::Error,
+) {
     eprintln!(
         "FAIL-DIRTY: remote plugin `{remote_plugin_id}` still appears installed after cleanup: {err:#}"
     );
-    print_recovery_command(codex_bin, remote_plugin_id);
+    print_recovery_command(codex_bin, config_overrides, remote_plugin_id);
 }
 
-fn print_recovery_command(codex_bin: &Path, remote_plugin_id: &str) {
+fn print_recovery_command(codex_bin: &Path, config_overrides: &[String], remote_plugin_id: &str) {
     let test_client = std::env::current_exe()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|_| "codex-app-server-test-client".to_string());
-    eprintln!("Recovery command:");
-    eprintln!(
-        "  {test_client} --codex-bin {} plugin-remote-uninstall --remote-plugin-id {remote_plugin_id} --confirm-account-mutation",
-        codex_bin.display()
+    let mut command = format!(
+        "{} --codex-bin {}",
+        shell_quote(&test_client),
+        shell_quote(&codex_bin.display().to_string())
     );
+    for override_kv in config_overrides {
+        command.push_str(&format!(" --config {}", shell_quote(override_kv)));
+    }
+    command.push_str(&format!(
+        " plugin-remote-uninstall --remote-plugin-id {} --confirm-account-mutation",
+        shell_quote(remote_plugin_id)
+    ));
+    eprintln!("Recovery command:");
+    eprintln!("  {command}");
 }

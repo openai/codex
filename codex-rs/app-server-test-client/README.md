@@ -97,6 +97,10 @@ cargo run -p codex-app-server-test-client -- \
   --confirm-account-mutation
 ```
 
+Cleanup does not require analytics capture or a debug Codex binary. When the
+smoke uses global `--config` overrides, its printed recovery command preserves
+them so cleanup targets the same backend and account.
+
 ## Watching Raw Inbound Traffic
 
 Initialize a connection, then print every inbound JSON-RPC message until you stop it with

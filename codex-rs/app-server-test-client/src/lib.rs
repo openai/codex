@@ -309,9 +309,6 @@ enum CliCommand {
         /// Acknowledge that this command mutates the active account's plugin state.
         #[arg(long)]
         confirm_account_mutation: bool,
-        /// JSONL output path. Defaults to a PID-specific file under the system temp directory.
-        #[arg(long)]
-        capture_file: Option<PathBuf>,
     },
 }
 
@@ -501,7 +498,6 @@ pub async fn run() -> Result<()> {
         CliCommand::PluginRemoteUninstall {
             remote_plugin_id,
             confirm_account_mutation,
-            capture_file,
         } => {
             ensure_dynamic_tools_unused(&dynamic_tools, "plugin-remote-uninstall")?;
             if url.is_some() {
@@ -515,7 +511,6 @@ pub async fn run() -> Result<()> {
                 plugin_analytics_mutation_smoke::AccountMutationConfirmation::from_flag(
                     confirm_account_mutation,
                 ),
-                capture_file,
             )
         }
     }
