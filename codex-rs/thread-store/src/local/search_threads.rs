@@ -23,6 +23,10 @@ use crate::ThreadSortKey;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 
+#[cfg(test)]
+#[path = "search_threads_tests.rs"]
+mod tests;
+
 struct ThreadSearchItem {
     item: codex_rollout::ThreadItem,
     snippet: String,
@@ -187,7 +191,10 @@ fn cursor_from_thread_search_item(
             .or(item.item.updated_at.as_deref())
             .or(item.item.created_at.as_deref())?,
     };
-    parse_cursor(timestamp)
+    match sort_key {
+        ThreadSortKey::RecencyAt => parse_cursor(&format!("{timestamp}|{}", item.item.thread_id?)),
+        ThreadSortKey::CreatedAt | ThreadSortKey::UpdatedAt => parse_cursor(timestamp),
+    }
 }
 
 async fn set_thread_search_result_names(

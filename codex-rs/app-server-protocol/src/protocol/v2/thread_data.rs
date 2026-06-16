@@ -153,7 +153,7 @@ pub struct Thread {
     #[ts(type = "number")]
     pub updated_at: i64,
     /// Unix timestamp (in seconds) used for thread recency ordering.
-    #[ts(optional, type = "number")]
+    #[ts(type = "number | null")]
     pub recency_at: Option<i64>,
     /// Current runtime status for the thread.
     pub status: ThreadStatus,

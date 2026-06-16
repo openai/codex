@@ -44,7 +44,7 @@ updatedAt: number,
 /**
  * Unix timestamp (in seconds) used for thread recency ordering.
  */
-recencyAt?: number,
+recencyAt: number | null,
 /**
  * Current runtime status for the thread.
  */
