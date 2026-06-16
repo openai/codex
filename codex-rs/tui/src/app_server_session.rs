@@ -2163,7 +2163,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thread_lifecycle_params_forward_config_overrides_and_service_tier() {
+    async fn thread_lifecycle_params_forward_config_overrides_service_tier_and_paths() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let mut config = build_config(&temp_dir).await;
         config.model_reasoning_effort = Some(ReasoningEffort::High);
@@ -2177,6 +2177,7 @@ mod tests {
         config.bypass_hook_trust = true;
         config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
         let thread_id = ThreadId::new();
+        let rollout_path = temp_dir.path().join("rollout.jsonl");
 
         let start = thread_start_params_from_config(
             &config,
@@ -2187,14 +2188,14 @@ mod tests {
         let resume = thread_resume_params_from_config(
             config.clone(),
             thread_id,
-            /*path*/ None,
+            Some(rollout_path.clone()),
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
         );
         let fork = thread_fork_params_from_config(
             config,
             thread_id,
-            /*path*/ None,
+            Some(rollout_path.clone()),
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
         );
@@ -2203,6 +2204,8 @@ mod tests {
         assert_eq!(start.service_tier, expected_service_tier);
         assert_eq!(resume.service_tier, expected_service_tier);
         assert_eq!(fork.service_tier, expected_service_tier);
+        assert_eq!(resume.path.as_deref(), Some(rollout_path.as_path()));
+        assert_eq!(fork.path.as_deref(), Some(rollout_path.as_path()));
         let string = |value: &str| serde_json::Value::String(value.to_string());
         let expected_config = HashMap::from([
             ("model_reasoning_effort".to_string(), string("high")),
