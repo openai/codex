@@ -813,6 +813,7 @@ impl Session {
             };
             let turn_environments = Arc::new(ThreadEnvironments::new(
                 environment_manager,
+                default_shell.clone(),
                 shell_snapshot,
                 inherited_environments.unwrap_or_default(),
             ));
