@@ -4,8 +4,8 @@ use crate::session::session::Session;
 use chrono::Utc;
 use codex_exec_server::LOCAL_FS;
 use codex_git_utils::resolve_root_git_project_for_trust;
-use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::plaintext_agent_message_content;
 use codex_thread_store::ListThreadsParams;
 use codex_thread_store::SortDirection;
 use codex_thread_store::StoredThread;
@@ -243,16 +243,10 @@ fn build_current_thread_section(items: &[ResponseItem]) -> Option<String> {
             ResponseItem::AgentMessage {
                 author, content, ..
             } => {
-                let text = content
-                    .iter()
-                    .filter_map(|content| match content {
-                        AgentMessageInputContent::InputText { text } => Some(text.as_str()),
-                        AgentMessageInputContent::EncryptedContent { .. } => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if text.trim().is_empty() || current_user.is_empty() && current_assistant.is_empty()
-                {
+                let Some(text) = plaintext_agent_message_content(content) else {
+                    continue;
+                };
+                if current_user.is_empty() && current_assistant.is_empty() {
                     continue;
                 }
                 current_assistant.push(format!("Agent message from {author}:\n{text}"));
