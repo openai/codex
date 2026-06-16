@@ -5,6 +5,7 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
+use codex_core_skills::SkillRootLoader;
 use codex_plugin::PluginId;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -155,11 +156,13 @@ enabled = true
     )
     .expect("valid config layer stack");
     let store = PluginStore::new(temp_dir.path().to_path_buf());
+    let skill_root_loader = SkillRootLoader::default();
 
     let full = load_plugins_from_layer_stack(
         &stack,
         HashMap::new(),
         &store,
+        &skill_root_loader,
         Some(Product::Codex),
         /*prefer_remote_curated_conflicts*/ false,
     )

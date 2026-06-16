@@ -60,6 +60,7 @@ use codex_config::types::PluginConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_skills::SkillMetadata;
+use codex_core_skills::SkillRootLoader;
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_hooks::plugin_hook_declarations;
@@ -354,6 +355,7 @@ pub struct PluginsManager {
     // Keep the cache auth-independent so auth changes only need to resolve capabilities again.
     loaded_plugins_cache: RwLock<LoadedPluginsCache>,
     loaded_plugins_load_semaphore: Semaphore,
+    skill_root_loader: Arc<SkillRootLoader>,
     remote_installed_plugins_cache: RwLock<Option<Vec<RemoteInstalledPlugin>>>,
     remote_installed_plugins_cache_refresh_state: RwLock<RemoteInstalledPluginsCacheRefreshState>,
     global_remote_catalog_cache_refresh_state: RwLock<GlobalRemoteCatalogCacheRefreshState>,
@@ -410,6 +412,7 @@ impl PluginsManager {
             non_curated_cache_refresh_state: RwLock::new(NonCuratedCacheRefreshState::default()),
             loaded_plugins_cache: RwLock::new(LoadedPluginsCache::default()),
             loaded_plugins_load_semaphore: Semaphore::new(/*permits*/ 1),
+            skill_root_loader: Arc::new(SkillRootLoader::default()),
             remote_installed_plugins_cache: RwLock::new(None),
             remote_installed_plugins_cache_refresh_state: RwLock::new(
                 RemoteInstalledPluginsCacheRefreshState::default(),
@@ -433,6 +436,11 @@ impl PluginsManager {
         }
         *stored_auth_mode = auth_mode;
         true
+    }
+
+    /// Returns the loader whose plugin-root snapshots are populated while loading plugins.
+    pub fn skill_root_loader(&self) -> Arc<SkillRootLoader> {
+        Arc::clone(&self.skill_root_loader)
     }
 
     pub fn auth_mode(&self) -> Option<AuthMode> {
@@ -505,6 +513,7 @@ impl PluginsManager {
             &config.config_layer_stack,
             self.remote_installed_plugin_configs(),
             &self.store,
+            self.skill_root_loader.as_ref(),
             self.restriction_product,
             config.remote_plugin_enabled,
         )
@@ -551,6 +560,7 @@ impl PluginsManager {
     }
 
     fn clear_loaded_plugins_cache(&self) {
+        self.skill_root_loader.clear_cache();
         let mut cache = match self.loaded_plugins_cache.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
@@ -572,6 +582,7 @@ impl PluginsManager {
             config_layer_stack,
             self.remote_installed_plugin_configs(),
             &self.store,
+            self.skill_root_loader.as_ref(),
             self.restriction_product,
             config.remote_plugin_enabled,
         )
@@ -1596,6 +1607,7 @@ impl PluginsManager {
             &codex_core_skills::config_rules::skill_config_rules_from_stack(
                 &config.config_layer_stack,
             ),
+            self.skill_root_loader.as_ref(),
         )
         .await;
         let plugin_data_root = self.store.plugin_data_root(&plugin_id);
