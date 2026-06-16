@@ -3720,11 +3720,13 @@ command = "python3 /enterprise/hooks/pre.py"
     #[test]
     fn normalize_rejects_unknown_login_method() -> Result<()> {
         let source = RequirementSource::Unknown;
-        let mut requirements = ConfigRequirementsWithSources::default();
-        requirements.allowed_login_methods = Some(Sourced::new(
-            BTreeMap::from([("sso".to_string(), true)]),
-            source.clone(),
-        ));
+        let requirements = ConfigRequirementsWithSources {
+            allowed_login_methods: Some(Sourced::new(
+                BTreeMap::from([("sso".to_string(), true)]),
+                source.clone(),
+            )),
+            ..Default::default()
+        };
 
         assert_eq!(
             ConfigRequirements::try_from(requirements),
@@ -3741,11 +3743,13 @@ command = "python3 /enterprise/hooks/pre.py"
     #[test]
     fn normalize_rejects_blank_chatgpt_workspace_id() -> Result<()> {
         let source = RequirementSource::Unknown;
-        let mut requirements = ConfigRequirementsWithSources::default();
-        requirements.allowed_chatgpt_workspaces = Some(Sourced::new(
-            BTreeMap::from([(" ".to_string(), true)]),
-            source.clone(),
-        ));
+        let requirements = ConfigRequirementsWithSources {
+            allowed_chatgpt_workspaces: Some(Sourced::new(
+                BTreeMap::from([(" ".to_string(), true)]),
+                source.clone(),
+            )),
+            ..Default::default()
+        };
 
         assert_eq!(
             ConfigRequirements::try_from(requirements),

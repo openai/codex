@@ -2,8 +2,8 @@ use codex_config::ConfigRequirements;
 use codex_config::RequirementSource;
 use codex_config::Sourced;
 use codex_config::config_toml::ConfigToml;
-use codex_config::types::FeedbackConfigToml;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_config::types::FeedbackConfigToml;
 use codex_protocol::config_types::ForcedLoginMethod;
 
 /// Runtime values that cannot be applied by mutating [`ConfigToml`] alone.
