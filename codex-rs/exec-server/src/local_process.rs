@@ -156,12 +156,17 @@ impl LocalProcess {
             .argv
             .split_first()
             .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
-        let native_cwd = params.cwd.to_abs_path().map_err(|err| {
-            invalid_params(format!(
-                "cwd URI `{}` is not valid on this exec-server host: {err}",
-                params.cwd
-            ))
-        })?;
+        let native_cwd = match &params.cwd {
+            Some(cwd) => cwd.to_abs_path().map_err(|err| {
+                invalid_params(format!(
+                    "cwd URI `{cwd}` is not valid on this exec-server host: {err}"
+                ))
+            })?,
+            None => std::env::current_dir()
+                .map_err(|err| internal_error(format!("failed to read exec-server cwd: {err}")))?
+                .try_into()
+                .map_err(|err| internal_error(format!("exec-server cwd is not absolute: {err}")))?,
+        };
 
         {
             let mut process_map = self.inner.processes.lock().await;
@@ -799,7 +804,7 @@ mod tests {
         ExecParams {
             process_id: ProcessId::from("env-test"),
             argv: vec!["true".to_string()],
-            cwd: PathUri::from_path(std::env::current_dir().expect("cwd")).expect("cwd URI"),
+            cwd: Some(PathUri::from_path(std::env::current_dir().expect("cwd")).expect("cwd URI")),
             env_policy: None,
             env,
             tty: false,
@@ -822,7 +827,7 @@ mod tests {
             "cwd URI `{cwd}` is not valid on this exec-server host: {source}"
         ));
         let mut params = test_exec_params(HashMap::new());
-        params.cwd = cwd;
+        params.cwd = Some(cwd);
 
         let result = LocalProcess::default().start_process(params).await;
         let Err(error) = result else {

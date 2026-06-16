@@ -116,7 +116,7 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
         exec_server_params_for_request(/*process_id*/ 123, &request, /*tty*/ true);
 
     assert_eq!(params.process_id.as_str(), "123");
-    assert_eq!(params.cwd, PathUri::from_abs_path(&request.cwd));
+    assert_eq!(params.cwd, Some(PathUri::from_abs_path(&request.cwd)));
     assert!(params.env_policy.is_some());
     assert_eq!(
         params.env,

@@ -115,7 +115,7 @@ async fn noise_environment_refreshes_bundle_for_each_connection_attempt() -> Res
             .start(ExecParams {
                 process_id: ProcessId::new(format!("proc-{attempt}")),
                 argv: vec!["true".to_string()],
-                cwd: PathUri::from_path(std::env::current_dir()?)?,
+                cwd: Some(PathUri::from_path(std::env::current_dir()?)?),
                 env_policy: None,
                 env: HashMap::new(),
                 tty: false,
@@ -209,7 +209,7 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
         .exec(ExecParams {
             process_id: ProcessId::from("proc-1"),
             argv: vec!["true".to_string()],
-            cwd: PathUri::from_path(std::env::current_dir()?)?,
+            cwd: Some(PathUri::from_path(std::env::current_dir()?)?),
             env_policy: None,
             env: HashMap::new(),
             tty: false,

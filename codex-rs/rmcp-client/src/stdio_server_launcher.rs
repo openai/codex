@@ -497,7 +497,7 @@ impl ExecutorStdioServerLauncher {
             .start(ExecParams {
                 process_id,
                 argv,
-                cwd,
+                cwd: Some(cwd),
                 env_policy: Some(Self::remote_env_policy(&remote_env_vars)),
                 env,
                 tty: false,

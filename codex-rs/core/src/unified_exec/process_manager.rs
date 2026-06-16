@@ -157,7 +157,7 @@ fn exec_server_params_for_request(
     codex_exec_server::ExecParams {
         process_id: exec_server_process_id(process_id).into(),
         argv: request.command.clone(),
-        cwd: PathUri::from_abs_path(&request.cwd),
+        cwd: Some(PathUri::from_abs_path(&request.cwd)),
         env_policy,
         env,
         tty,

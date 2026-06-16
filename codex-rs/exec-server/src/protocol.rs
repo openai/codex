@@ -89,7 +89,8 @@ pub struct ExecParams {
     pub process_id: ProcessId,
     pub argv: Vec<String>,
     /// Working directory URI, interpreted using the exec-server host's path rules at launch time.
-    pub cwd: PathUri,
+    /// Defaults to the exec-server process working directory when omitted.
+    pub cwd: Option<PathUri>,
     #[serde(default)]
     pub env_policy: Option<ExecEnvPolicy>,
     pub env: HashMap<String, String>,

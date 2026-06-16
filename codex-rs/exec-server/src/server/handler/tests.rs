@@ -27,7 +27,7 @@ fn exec_params_with_argv(process_id: &str, argv: Vec<String>) -> ExecParams {
     ExecParams {
         process_id: ProcessId::from(process_id),
         argv,
-        cwd: PathUri::from_path(std::env::current_dir().expect("cwd")).expect("cwd URI"),
+        cwd: Some(PathUri::from_path(std::env::current_dir().expect("cwd")).expect("cwd URI")),
         env_policy: None,
         env: inherited_path_env(),
         tty: false,
