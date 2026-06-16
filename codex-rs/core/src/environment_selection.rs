@@ -97,7 +97,7 @@ impl ThreadEnvironments {
             }
             let turn_environment = match current.turn_environments.iter().find(|environment| {
                 environment.environment_id == selected_environment.environment_id
-                    && environment.cwd_uri() == &selected_environment.cwd
+                    && environment.cwd() == &selected_environment.cwd
             }) {
                 Some(environment) => environment.clone(),
                 None => match Self::resolve_selection(
@@ -157,12 +157,7 @@ impl ThreadEnvironments {
         let mut turn_environment = TurnEnvironment::new(
             environment_id,
             environment,
-            selected_environment.cwd.to_abs_path().map_err(|err| {
-                CodexErr::InvalidRequest(format!(
-                    "turn environment cwd `{}` is not valid on this host: {err}",
-                    selected_environment.cwd
-                ))
-            })?,
+            selected_environment.cwd.clone(),
             shell,
         );
         let task = shell_snapshot
@@ -226,8 +221,10 @@ impl TurnEnvironmentSnapshot {
         (!environment.environment.is_remote()).then_some(environment)
     }
 
-    pub(crate) fn single_local_environment_cwd(&self) -> Option<&AbsolutePathBuf> {
-        self.single_local_environment().map(TurnEnvironment::cwd)
+    pub(crate) fn single_local_environment_cwd(&self) -> Option<AbsolutePathBuf> {
+        // TODO(anp): Migrate local-environment consumers to PathUri so this compatibility
+        // conversion can be removed.
+        self.single_local_environment()?.cwd().to_abs_path().ok()
     }
 }
 
@@ -560,7 +557,7 @@ url = "ws://127.0.0.1:8765"
             Arc::clone(&local_manager),
             &[TurnEnvironmentSelection {
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                cwd: cwd_uri,
+                cwd: cwd_uri.clone(),
             }],
         )
         .await;
@@ -573,7 +570,7 @@ url = "ws://127.0.0.1:8765"
             turn_environments: vec![TurnEnvironment::new(
                 REMOTE_ENVIRONMENT_ID.to_string(),
                 remote_environment.clone(),
-                cwd.clone(),
+                cwd_uri.clone(),
                 /*shell*/ None,
             )],
         };
@@ -583,13 +580,13 @@ url = "ws://127.0.0.1:8765"
                 TurnEnvironment::new(
                     REMOTE_ENVIRONMENT_ID.to_string(),
                     remote_environment,
-                    cwd.clone(),
+                    cwd_uri,
                     /*shell*/ None,
                 ),
             ],
         };
 
-        assert_eq!(local.single_local_environment_cwd(), Some(&cwd));
+        assert_eq!(local.single_local_environment_cwd(), Some(cwd));
         assert_eq!(remote.single_local_environment_cwd(), None);
         assert_eq!(multiple.single_local_environment_cwd(), None);
     }

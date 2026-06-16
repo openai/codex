@@ -122,7 +122,13 @@ async fn build_uploaded_argument_value(
             "no primary turn environment is available".to_string(),
         ));
     };
-    let resolved_path = turn_environment.cwd().join(file_path);
+    // TODO(anp): Resolve app tool file arguments using the selected environment's native path
+    // convention so uploads can read relative paths from foreign environments.
+    let native_environment_cwd = turn_environment
+        .cwd()
+        .to_abs_path()
+        .map_err(|error| contextualize_error(error.to_string()))?;
+    let resolved_path = native_environment_cwd.join(file_path);
     let path_uri = PathUri::from_abs_path(&resolved_path);
     let fs = turn_environment.environment.get_filesystem();
     let metadata = fs
@@ -178,6 +184,7 @@ mod tests {
     use crate::session::tests::make_session_and_context;
     use crate::session::turn_context::TurnEnvironment;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
     use std::path::Path;
     use std::sync::Arc;
@@ -194,7 +201,7 @@ mod tests {
         *primary = TurnEnvironment::new(
             primary.environment_id.clone(),
             Arc::clone(&primary.environment),
-            cwd,
+            PathUri::from_abs_path(&cwd),
             primary.shell.clone(),
         );
     }

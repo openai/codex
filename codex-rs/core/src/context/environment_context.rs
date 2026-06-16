@@ -44,14 +44,18 @@ impl EnvironmentContextEnvironment {
     fn from_turn_environments(environments: &[TurnEnvironment], shell: &Shell) -> Vec<Self> {
         environments
             .iter()
-            .map(|environment| Self {
-                id: environment.environment_id.clone(),
-                cwd: environment.cwd().clone(),
-                shell: environment
-                    .shell
-                    .as_ref()
-                    .map(|shell| shell.name().to_string())
-                    .unwrap_or_else(|| shell.name().to_string()),
+            .filter_map(|environment| {
+                // TODO(anp): Migrate EnvironmentContextEnvironment to PathUri so foreign
+                // environments remain visible in model context.
+                Some(Self {
+                    id: environment.environment_id.clone(),
+                    cwd: environment.cwd().to_abs_path().ok()?,
+                    shell: environment
+                        .shell
+                        .as_ref()
+                        .map(|shell| shell.name().to_string())
+                        .unwrap_or_else(|| shell.name().to_string()),
+                })
             })
             .collect()
     }

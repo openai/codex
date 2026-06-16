@@ -1119,9 +1119,12 @@ impl Session {
             };
             let mcp_runtime_context = {
                 let turn_environments = sess.services.turn_environments.snapshot().await;
+                // TODO(anp): Migrate MCP runtime cwd plumbing to PathUri so foreign environment
+                // cwd values can be used without falling back to the session host cwd.
                 let cwd = turn_environments
                     .primary()
-                    .map(|turn_environment| turn_environment.cwd().to_path_buf())
+                    .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
+                    .map(|cwd| cwd.to_path_buf())
                     .unwrap_or_else(|| session_configuration.cwd().to_path_buf());
                 McpRuntimeContext::new(
                     sess.services.turn_environments.environment_manager(),

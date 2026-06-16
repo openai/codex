@@ -114,10 +114,15 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
         ConversationHistory::new(invocation.session.clone_history().await.into_raw_items());
     let mut environments = Vec::with_capacity(invocation.turn.environments.turn_environments.len());
     for environment in &invocation.turn.environments.turn_environments {
+        // TODO(anp): Migrate extension ToolEnvironment and granted-permission lookup to PathUri
+        // so extensions can receive foreign environment cwd values.
+        let Ok(native_cwd) = environment.cwd().to_abs_path() else {
+            continue;
+        };
         let additional_permissions = apply_granted_turn_permissions(
             invocation.session.as_ref(),
             &environment.environment_id,
-            environment.cwd().as_path(),
+            native_cwd.as_path(),
             SandboxPermissions::UseDefault,
             /*additional_permissions*/ None,
         )
@@ -125,10 +130,10 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
         .additional_permissions;
         let file_system_sandbox_context = invocation
             .turn
-            .file_system_sandbox_context(additional_permissions, environment.cwd_uri());
+            .file_system_sandbox_context(additional_permissions, environment.cwd());
         environments.push(ToolEnvironment {
             environment_id: environment.environment_id.clone(),
-            cwd: environment.cwd().clone(),
+            cwd: native_cwd,
             file_system: environment.environment.get_filesystem(),
             file_system_sandbox_context,
         });
@@ -315,7 +320,7 @@ mod tests {
             .environments
             .turn_environments
             .iter()
-            .map(|environment| Some(environment.cwd_uri().clone()))
+            .map(|environment| Some(environment.cwd().clone()))
             .collect::<Vec<_>>();
         let history_item = ResponseItem::Message {
             id: None,

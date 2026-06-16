@@ -76,7 +76,9 @@ impl ShellSnapshot {
         }
 
         let shell = environment.shell.clone()?;
-        let cwd = environment.cwd().clone();
+        // TODO(anp): Migrate shell snapshot creation to accept PathUri and defer native
+        // conversion to the spawned shell process.
+        let cwd = environment.cwd().to_abs_path().ok()?;
         Self::build_for_cwd(Arc::clone(config), cwd, shell).await
     }
 

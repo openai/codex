@@ -318,17 +318,18 @@ impl Session {
         )
         .await;
         let environment_manager = self.services.turn_environments.environment_manager();
-        let mcp_runtime_context = match turn_context.environments.primary() {
-            Some(turn_environment) => McpRuntimeContext::new(
-                Arc::clone(&environment_manager),
-                turn_environment.cwd().to_path_buf(),
-            ),
-            None => McpRuntimeContext::new(
-                environment_manager,
+        // TODO(anp): Migrate MCP runtime cwd plumbing to PathUri so foreign environment cwd
+        // values can be used without falling back to the legacy host cwd.
+        let cwd = turn_context
+            .environments
+            .primary()
+            .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
+            .map(|cwd| cwd.to_path_buf())
+            .unwrap_or_else(|| {
                 #[allow(deprecated)]
-                turn_context.cwd.to_path_buf(),
-            ),
-        };
+                turn_context.cwd.to_path_buf()
+            });
+        let mcp_runtime_context = McpRuntimeContext::new(environment_manager, cwd);
         let mcp_startup_cancellation_token = {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             guard.cancel();
