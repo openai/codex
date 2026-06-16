@@ -31,7 +31,7 @@ use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
-use crate::environment_selection::ThreadEnvironments;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::ExecPolicyManager;
 use crate::image_preparation::prepare_response_items;
 use crate::parse_turn_item;
@@ -304,7 +304,6 @@ use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::rollout::map_session_init_error;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
-use crate::shell_snapshot::ShellSnapshot;
 use crate::state::AutoCompactWindowSnapshot;
 use crate::state::PendingRequestPermissions;
 use crate::state::SessionServices;
@@ -421,8 +420,8 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) agent_control: AgentControl,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) metrics_service_name: Option<String>,
-    pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
+    pub(crate) inherited_environments: Option<TurnEnvironmentSnapshot>,
     /// Parent rollout trace used only to derive fresh spawned child traces.
     ///
     /// Root sessions and non-thread-spawn subagents pass a disabled context;
@@ -507,9 +506,9 @@ impl Codex {
             agent_control,
             dynamic_tools,
             metrics_service_name,
-            inherited_shell_snapshot,
             user_shell_override,
             inherited_exec_policy,
+            inherited_environments,
             parent_rollout_thread_trace,
             parent_trace: _,
             environment_selections,
@@ -519,9 +518,6 @@ impl Codex {
             attestation_provider,
             inherited_multi_agent_version,
         } = args;
-        let turn_environments = Arc::new(ThreadEnvironments::new(environment_manager));
-        turn_environments.update_selections(&environment_selections);
-        let resolved_environments = turn_environments.snapshot().await;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
@@ -533,9 +529,6 @@ impl Codex {
         config
             .startup_warnings
             .extend(user_instruction_provider_warnings);
-        let loaded_agents_md =
-            load_project_instructions(&mut config, user_instructions, &resolved_environments).await;
-
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
             // not on caller-provided exec-policy rules that could shape the
@@ -614,7 +607,7 @@ impl Codex {
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier,
             developer_instructions: config.developer_instructions.clone(),
-            loaded_agents_md,
+            loaded_agents_md: None,
             personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
@@ -624,7 +617,7 @@ impl Codex {
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             environments: TurnEnvironmentSelections::new(
                 config.cwd.clone(),
-                resolved_environments.to_selections(),
+                environment_selections,
             ),
             workspace_roots: config.workspace_roots.clone(),
             codex_home: config.codex_home.clone(),
@@ -638,7 +631,6 @@ impl Codex {
             parent_thread_id,
             thread_source,
             dynamic_tools,
-            inherited_shell_snapshot,
             user_shell_override,
         };
 
@@ -649,6 +641,7 @@ impl Codex {
         let session = Box::pin(Session::new(
             session_configuration,
             config.clone(),
+            user_instructions,
             installation_id,
             auth_manager.clone(),
             models_manager.clone(),
@@ -663,7 +656,8 @@ impl Codex {
             extensions,
             thread_extension_init,
             agent_control,
-            turn_environments,
+            environment_manager,
+            inherited_environments,
             analytics_events_client,
             thread_store,
             parent_rollout_thread_trace,
@@ -1399,50 +1393,12 @@ impl Session {
         state.set_previous_turn_settings(previous_turn_settings);
     }
 
-    fn maybe_refresh_shell_snapshot_for_cwd(
-        &self,
-        previous_cwd: &AbsolutePathBuf,
-        next_cwd: &AbsolutePathBuf,
-        codex_home: &AbsolutePathBuf,
-        session_source: &SessionSource,
-    ) {
-        if previous_cwd == next_cwd {
-            return;
-        }
-
-        if matches!(
-            session_source,
-            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
-        ) {
-            return;
-        }
-
-        if self.services.shell_snapshot.load().is_some() {
-            self.services.shell_snapshot.store(Some(ShellSnapshot::new(
-                codex_home.clone(),
-                self.thread_id,
-                next_cwd.clone(),
-                self.services.user_shell.as_ref(),
-                self.services.session_telemetry.clone(),
-                self.services.state_db.clone(),
-            )));
-        }
-    }
-
     pub(crate) async fn update_settings(
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
-        let (
-            previous_config,
-            new_config,
-            previous_cwd,
-            permission_profile_changed,
-            next_cwd,
-            codex_home,
-            session_source,
-        ) = {
+        let (previous_config, new_config, permission_profile_changed) = {
             let mut state = self.state.lock().await;
             let updated = match state.session_configuration.apply(&updates) {
                 Ok(updated) => updated,
@@ -1456,37 +1412,19 @@ impl Session {
                 .then(|| Self::build_effective_session_config(&state.session_configuration));
             let new_config =
                 notify_config_contributors.then(|| Self::build_effective_session_config(&updated));
-            let previous_cwd = state.session_configuration.cwd().clone();
             let previous_permission_profile = state.session_configuration.permission_profile();
             let updated_permission_profile = updated.permission_profile();
             let permission_profile_changed =
                 previous_permission_profile != updated_permission_profile;
-            let next_cwd = updated.cwd().clone();
-            let codex_home = updated.codex_home.clone();
-            let session_source = updated.session_source.clone();
             if updates.environments.is_some() {
                 self.services
                     .turn_environments
                     .update_selections(updated.environment_selections());
             }
             state.session_configuration = updated;
-            (
-                previous_config,
-                new_config,
-                previous_cwd,
-                permission_profile_changed,
-                next_cwd,
-                codex_home,
-                session_source,
-            )
+            (previous_config, new_config, permission_profile_changed)
         };
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
-        self.maybe_refresh_shell_snapshot_for_cwd(
-            &previous_cwd,
-            &next_cwd,
-            &codex_home,
-            &session_source,
-        );
         if permission_profile_changed {
             self.refresh_managed_network_proxy_for_current_permission_profile()
                 .await;
