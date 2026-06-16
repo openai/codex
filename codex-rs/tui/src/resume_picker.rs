@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
+mod loading;
 
 use crate::app_server_session::AppServerSession;
 use crate::clipboard_paste::normalize_pasted_search_query;
@@ -58,9 +59,8 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::warn;
 use unicode_width::UnicodeWidthStr;
 
-mod loading;
-
 use loading::BackgroundEvent;
+use loading::InitialPageLoad;
 use loading::PageCursor;
 use loading::PageLoadRequest;
 use loading::PickerLoadRequest;
@@ -242,6 +242,7 @@ struct SessionPickerRunOptions {
     view_persistence: Option<SessionPickerViewPersistence>,
     pager_keymap: PagerKeymap,
     list_keymap: ListKeymap,
+    initial_page_load: InitialPageLoad,
 }
 
 /// Interactive session picker that lists app-server threads with simple search,
@@ -256,6 +257,10 @@ struct SessionPickerRunOptions {
 /// `thread/list` API returns pages ordered by the selected sort key, and the
 /// picker deduplicates across pages to handle overlapping windows when new
 /// sessions appear during pagination.
+///
+/// For local workspaces, the picker seeds its first page from the State DB,
+/// then replaces those provisional rows when the normal scan-and-repair lookup
+/// completes. Remote workspaces use the normal lookup directly.
 ///
 /// Filtering happens in two layers:
 /// 1. Provider, source, and eligible working-directory filtering at the backend.
@@ -328,6 +333,11 @@ async fn run_resume_picker_with_launch_context(
         }),
         pager_keymap: runtime_keymap.pager,
         list_keymap: runtime_keymap.list,
+        initial_page_load: if uses_remote_workspace {
+            InitialPageLoad::default()
+        } else {
+            InitialPageLoad::state_db_first()
+        },
     };
     run_session_picker_with_loader(
         tui,
@@ -373,6 +383,11 @@ pub async fn run_fork_picker_with_app_server(
         }),
         pager_keymap: runtime_keymap.pager,
         list_keymap: runtime_keymap.list,
+        initial_page_load: if uses_remote_workspace {
+            InitialPageLoad::default()
+        } else {
+            InitialPageLoad::state_db_first()
+        },
     };
     run_session_picker_with_loader(
         tui,
@@ -409,6 +424,7 @@ async fn run_session_picker_with_loader(
     state.pager_keymap = options.pager_keymap;
     state.list_keymap = options.list_keymap;
     state.launch_context = options.launch_context;
+    state.initial_page_load = options.initial_page_load;
     state.start_initial_load();
     state.request_frame();
 
@@ -569,6 +585,7 @@ struct PickerState {
     overlay: Option<Overlay>,
     pager_keymap: PagerKeymap,
     list_keymap: ListKeymap,
+    initial_page_load: InitialPageLoad,
 }
 
 struct PaginationState {
@@ -806,6 +823,7 @@ impl PickerState {
             overlay: None,
             pager_keymap: RuntimeKeymap::defaults().pager,
             list_keymap: RuntimeKeymap::defaults().list,
+            initial_page_load: InitialPageLoad::default(),
         }
     }
 
@@ -970,6 +988,12 @@ impl PickerState {
                 self.toggle_density().await;
             }
             _ if self.list_keymap.accept.is_pressed(key) => {
+                if self.initial_page_load.is_provisional() {
+                    self.inline_error =
+                        Some(String::from("Wait for session verification to finish"));
+                    self.request_frame();
+                    return Ok(None);
+                }
                 if let Some(row) = self.filtered_rows.get(self.selected) {
                     let path = row.path.clone();
                     let thread_id = match row.thread_id {
@@ -1110,6 +1134,7 @@ impl PickerState {
 
     fn start_initial_load(&mut self) {
         self.relative_time_reference = Some(Utc::now());
+        let seed_from_state_db = self.initial_page_load.begin_load();
         self.reset_pagination();
         self.all_rows.clear();
         self.filtered_rows.clear();
@@ -1141,6 +1166,7 @@ impl PickerState {
             cwd_filter: self.active_cwd_filter(),
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
+            seed_from_state_db,
         }));
     }
 
@@ -1241,15 +1267,20 @@ impl PickerState {
         self.query = new_query;
         self.selected = 0;
         self.apply_filter();
-        if self.query.is_empty() {
-            self.search_state = SearchState::Idle;
-            return;
-        }
-        if !self.filtered_rows.is_empty() {
-            self.search_state = SearchState::Idle;
-            return;
-        }
-        if self.pagination.reached_scan_cap || self.pagination.next_cursor.is_none() {
+        self.reevaluate_search();
+    }
+
+    /// Restarts cursor-based search when the current rows contain no match and
+    /// more pages remain.
+    ///
+    /// This must also run after reconciliation because replacing the provisional
+    /// State DB page can invalidate the previous search result.
+    fn reevaluate_search(&mut self) {
+        if self.query.is_empty()
+            || !self.filtered_rows.is_empty()
+            || self.pagination.reached_scan_cap
+            || self.pagination.next_cursor.is_none()
+        {
             self.search_state = SearchState::Idle;
             return;
         }
@@ -1392,6 +1423,7 @@ impl PickerState {
             cwd_filter: self.active_cwd_filter(),
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
+            seed_from_state_db: false,
         }));
     }
 
@@ -1911,7 +1943,6 @@ fn footer_hint_lines(state: &PickerState, width: u16) -> Vec<Line<'static>> {
             .unwrap_or_default();
         return vec![line, Line::default()];
     }
-
     let action_label = state.action.action_label();
     let (esc_label, esc_compact_label) = if state.query.is_empty() {
         match state.launch_context {
@@ -1933,13 +1964,23 @@ fn footer_hint_lines(state: &PickerState, width: u16) -> Vec<Line<'static>> {
         SessionListDensity::Comfortable => "dense",
         SessionListDensity::Dense => "comfy",
     };
-    let first_row_hints = vec![
+    let primary_hint = if state.initial_page_load.is_provisional() {
+        PickerFooterHint {
+            key: "verifying",
+            wide_label: String::from("sessions"),
+            compact_label: String::from("sessions"),
+            priority: 0,
+        }
+    } else {
         PickerFooterHint {
             key: "enter",
             wide_label: action_label.to_string(),
             compact_label: action_label.to_string(),
             priority: 0,
-        },
+        }
+    };
+    let first_row_hints = vec![
+        primary_hint,
         PickerFooterHint {
             key: "esc",
             wide_label: esc_label.to_string(),
@@ -3414,7 +3455,7 @@ mod tests {
             SessionPickerAction::Resume,
         );
         state.inline_error = Some(String::from(
-            "Failed to read session metadata from /tmp/missing.jsonl",
+            "Could not refresh sessions; showing the first page of indexed results",
         ));
 
         let width: u16 = 80;
@@ -5407,6 +5448,25 @@ session_picker_view = "dense"
             })) => assert_eq!(selected_thread_id, thread_id),
             other => panic!("unexpected selection: {other:?}"),
         }
+    }
+
+    #[test]
+    fn hint_line_snapshot_blocks_accept_for_provisional_rows() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.initial_page_load = InitialPageLoad::Provisional;
+
+        assert_snapshot!(
+            "resume_picker_footer_verifying",
+            footer_snapshot(&state, /*width*/ 220, /*list_height*/ 20)
+        );
     }
 
     #[test]
