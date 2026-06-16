@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use anyhow::Result;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
@@ -34,6 +33,7 @@ use rmcp::transport::StreamableHttpServerConfig;
 use rmcp::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use serde_json::json;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -256,7 +256,11 @@ startup_timeout_sec = 10
     );
 
     let selected_server_names = mcp_server_names(&mut app_server, selected_thread).await?;
-    assert!(selected_server_names.iter().any(|name| name == MCP_SERVER_NAME));
+    assert!(
+        selected_server_names
+            .iter()
+            .any(|name| name == MCP_SERVER_NAME)
+    );
     assert!(
         selected_server_names
             .iter()
@@ -266,9 +270,11 @@ startup_timeout_sec = 10
     let unselected_thread =
         start_thread(&mut app_server, /*selected_capability_roots*/ None).await?;
     let unselected_server_names = mcp_server_names(&mut app_server, unselected_thread).await?;
-    assert!(unselected_server_names.iter().all(|name| {
-        name != MCP_SERVER_NAME && name != HTTP_MCP_SERVER_NAME
-    }));
+    assert!(
+        unselected_server_names
+            .iter()
+            .all(|name| { name != MCP_SERVER_NAME && name != HTTP_MCP_SERVER_NAME })
+    );
 
     http_server_handle.abort();
     let _ = http_server_handle.await;
