@@ -3,7 +3,7 @@ use std::time::Duration;
 use crate::AuthProvider;
 use bytes::Bytes;
 use codex_client::build_reqwest_client_with_custom_ca;
-use futures::TryStream;
+use futures::Stream;
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_LENGTH;
 use serde::Deserialize;
@@ -81,17 +81,13 @@ pub fn openai_file_uri(file_id: &str) -> String {
     format!("{OPENAI_FILE_URI_PREFIX}{file_id}")
 }
 
-pub async fn upload_openai_file<S, E>(
+pub async fn upload_openai_file(
     base_url: &str,
     auth: &dyn AuthProvider,
     file_name: String,
     file_size_bytes: u64,
-    contents: S,
-) -> Result<UploadedOpenAiFile, OpenAiFileError>
-where
-    S: TryStream<Ok = Bytes, Error = E> + Send + 'static,
-    E: Into<Box<dyn std::error::Error + Send + Sync>>,
-{
+    contents: impl Stream<Item = std::io::Result<Bytes>> + Send + 'static,
+) -> Result<UploadedOpenAiFile, OpenAiFileError> {
     if file_size_bytes > OPENAI_FILE_UPLOAD_LIMIT_BYTES {
         return Err(OpenAiFileError::FileTooLarge {
             file_name,
