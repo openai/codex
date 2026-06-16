@@ -1,7 +1,6 @@
 use std::any::Any;
-use std::collections::HashMap;
-use std::future::Future;
 use std::fs;
+use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::path::PathBuf;
@@ -10,7 +9,6 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_utils_pty::SpawnedProcess;
 use codex_utils_pty::TerminalSize;
 use futures::FutureExt;
 use pretty_assertions::assert_eq;
@@ -20,10 +18,13 @@ use tokio::io::BufReader;
 use tokio::process::Command as TokioCommand;
 use tokio::time::timeout;
 
+use super::WineCommandOutput;
+use super::WineRuntimePaths;
 use super::WineTestCommand;
 use super::WineTestProcess;
-use super::WineRuntimePaths;
+use super::collect_wine_command_output;
 use super::install_powershell_runtime;
+use super::wine_pty_environment;
 
 async fn waiting_smoke_process() -> Result<WineTestProcess> {
     let executable = codex_utils_cargo_bin::cargo_bin("wine-smoke")?;
@@ -149,18 +150,21 @@ async fn scope_returns_value_and_tears_down() -> Result<()> {
 }
 
 #[tokio::test]
-async fn exported_command_context_reuses_active_prefix() -> Result<()> {
+async fn exported_command_context_runs_commands_in_active_prefix() -> Result<()> {
     let process = waiting_smoke_process().await?;
     let prefix = prefix_path(&process);
     let prefix_after_scope = prefix.clone();
     let marker = prefix.join("drive_c").join("shared-prefix-marker");
+    let powershell_marker = prefix
+        .join("drive_c")
+        .join("shared-powershell-prefix-marker");
     let context = process.command_context();
     let wrapper = codex_utils_cargo_bin::cargo_bin("wine-test-exec")?;
     let smoke = codex_utils_cargo_bin::cargo_bin("wine-smoke")?;
 
     process
         .scope(async move {
-            let mut command = TokioCommand::new(wrapper);
+            let mut command = TokioCommand::new(&wrapper);
             context.apply_to_command(&mut command);
             let output = command
                 .arg(smoke)
@@ -175,6 +179,37 @@ async fn exported_command_context_reuses_active_prefix() -> Result<()> {
                 String::from_utf8_lossy(&output.stderr).trim(),
             );
             assert_eq!(fs::read(&marker)?, b"shared prefix");
+
+            let mut command = TokioCommand::new(wrapper);
+            context.apply_to_command(&mut command);
+            let output = command
+                .args([
+                    "--powershell",
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    r#"[System.IO.File]::WriteAllText('C:\shared-powershell-prefix-marker', 'shared powershell prefix')"#,
+                ])
+                .output()
+                .await
+                .context("run PowerShell through exported Wine test context")?;
+            anyhow::ensure!(
+                output.status.success(),
+                "shared-prefix PowerShell command failed: stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout).trim(),
+                String::from_utf8_lossy(&output.stderr).trim(),
+            );
+            assert_eq!(
+                fs::read(&powershell_marker).with_context(|| {
+                    format!(
+                        "read PowerShell marker; stdout={} stderr={}",
+                        String::from_utf8_lossy(&output.stdout).trim(),
+                        String::from_utf8_lossy(&output.stderr).trim(),
+                    )
+                })?,
+                b"shared powershell prefix"
+            );
             Ok(())
         })
         .await?;
@@ -345,41 +380,9 @@ async fn pinned_powershell_runs_under_wine_with_a_pty() -> Result<()> {
     );
     let runtime = WineRuntimePaths::from_runfiles()?;
     let prefix = TempDir::new()?;
-    install_powershell_runtime(prefix.path(), &runtime.powershell_runtime)?;
-    let mut env = std::env::vars().collect::<HashMap<_, _>>();
-    env.remove("DISPLAY");
-    env.extend([
-        ("HOME".to_string(), prefix.path().to_string_lossy().into_owned()),
-        (
-            "XDG_RUNTIME_DIR".to_string(),
-            prefix.path().to_string_lossy().into_owned(),
-        ),
-        ("WINEARCH".to_string(), "win64".to_string()),
-        (
-            "WINEPREFIX".to_string(),
-            prefix.path().to_string_lossy().into_owned(),
-        ),
-        (
-            "WINEDLLPATH".to_string(),
-            runtime.dll_path.to_string_lossy().into_owned(),
-        ),
-        (
-            "WINESERVER".to_string(),
-            runtime.wineserver.to_string_lossy().into_owned(),
-        ),
-        ("WINEDEBUG".to_string(), "-all".to_string()),
-        (
-            "WINEDLLOVERRIDES".to_string(),
-            "mscoree,mshtml,winegstreamer=".to_string(),
-        ),
-        ("LANG".to_string(), "C.UTF-8".to_string()),
-        ("LC_ALL".to_string(), "C.UTF-8".to_string()),
-        ("LC_CTYPE".to_string(), "C.UTF-8".to_string()),
-        ("TEMP".to_string(), r"C:\windows\temp".to_string()),
-        ("TMP".to_string(), r"C:\windows\temp".to_string()),
-    ]);
+    let env = wine_pty_environment(&runtime, prefix.path());
     let args = [
-        r"C:\Program Files\PowerShell\7\pwsh.exe".to_string(),
+        runtime.powershell_executable.to_string_lossy().into_owned(),
         "-NoLogo".to_string(),
         "-NoProfile".to_string(),
         "-NonInteractive".to_string(),
@@ -387,12 +390,7 @@ async fn pinned_powershell_runs_under_wine_with_a_pty() -> Result<()> {
         POWERSHELL_SMOKE_SCRIPT.to_string(),
     ];
     let wine = runtime.wine.to_string_lossy().into_owned();
-    let SpawnedProcess {
-        session,
-        mut stdout_rx,
-        mut stderr_rx,
-        exit_rx,
-    } = codex_utils_pty::spawn_pty_process(
+    let spawned = codex_utils_pty::spawn_pty_process(
         &wine,
         &args,
         prefix.path(),
@@ -401,28 +399,13 @@ async fn pinned_powershell_runs_under_wine_with_a_pty() -> Result<()> {
         TerminalSize::default(),
     )
     .await?;
-    let command_result = timeout(Duration::from_secs(30), async {
-        let stdout = async {
-            let mut output = Vec::new();
-            while let Some(chunk) = stdout_rx.recv().await {
-                output.extend(chunk);
-            }
-            output
-        };
-        let stderr = async {
-            let mut output = Vec::new();
-            while let Some(chunk) = stderr_rx.recv().await {
-                output.extend(chunk);
-            }
-            output
-        };
-        let (stdout, stderr, exit_code) = tokio::join!(stdout, stderr, exit_rx);
-        Ok::<_, anyhow::Error>((stdout, stderr, exit_code.context("wait for PowerShell")?))
-    })
+    let command_result = timeout(
+        Duration::from_secs(30),
+        collect_wine_command_output(spawned),
+    )
     .await
     .context("PowerShell smoke test timed out")
     .and_then(std::convert::identity);
-    drop(session);
     let shutdown_result = timeout(Duration::from_secs(10), async {
         let mut command = TokioCommand::new(&runtime.wineserver);
         command
@@ -441,7 +424,11 @@ async fn pinned_powershell_runs_under_wine_with_a_pty() -> Result<()> {
     .await
     .context("stop isolated wineserver timed out")
     .and_then(std::convert::identity);
-    let (stdout, stderr, exit_code) = match (command_result, shutdown_result) {
+    let WineCommandOutput {
+        stdout,
+        stderr,
+        exit_code,
+    } = match (command_result, shutdown_result) {
         (Ok(output), Ok(())) => output,
         (Err(error), Ok(())) => return Err(error),
         (Ok(_), Err(error)) => return Err(error),
@@ -465,7 +452,11 @@ async fn pinned_powershell_runs_under_wine_with_a_pty() -> Result<()> {
         .context("PowerShell smoke marker line was incomplete")?
         .trim_end_matches('\r');
     let fields = smoke.split('|').collect::<Vec<_>>();
-    assert_eq!(fields.len(), 5, "unexpected PowerShell smoke output: {smoke}");
+    assert_eq!(
+        fields.len(),
+        5,
+        "unexpected PowerShell smoke output: {smoke}"
+    );
     assert_eq!(fields[0], POWERSHELL_SMOKE_MARKER);
     assert_eq!(
         fields[1].split('.').next(),

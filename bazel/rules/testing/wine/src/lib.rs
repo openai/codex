@@ -1,6 +1,7 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("wine_test_support can only run on Linux");
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fs;
@@ -14,6 +15,8 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_utils_pty::SpawnedProcess;
+use codex_utils_pty::TerminalSize;
 use tempfile::TempDir;
 use tokio::process::Child;
 use tokio::process::ChildStdout;
@@ -47,6 +50,17 @@ pub struct WineTestCommandContext {
     prefix: PathBuf,
 }
 
+/// Captured output and exit status from a Wine test command.
+#[derive(Debug, PartialEq, Eq)]
+pub struct WineCommandOutput {
+    /// Bytes captured from standard output.
+    pub stdout: Vec<u8>,
+    /// Bytes captured from standard error.
+    pub stderr: Vec<u8>,
+    /// Process exit code reported by the PTY backend.
+    pub exit_code: i32,
+}
+
 struct WineProcesses {
     child: Child,
     cleanup_complete: bool,
@@ -56,6 +70,7 @@ struct WineProcesses {
 
 struct WineRuntimePaths {
     dll_path: PathBuf,
+    powershell_executable: PathBuf,
     powershell_runtime: PathBuf,
     wine: PathBuf,
     wineserver: PathBuf,
@@ -180,15 +195,116 @@ impl WineTestCommandContext {
 
 /// Builds a Wine command that joins the prefix exported by [`WineTestCommandContext`].
 pub fn ambient_wine_command(executable: impl AsRef<OsStr>) -> Result<StdCommand> {
-    let prefix = PathBuf::from(
-        std::env::var_os(WINE_TEST_PREFIX_ENV_VAR)
-            .with_context(|| format!("{WINE_TEST_PREFIX_ENV_VAR} must be set"))?,
-    );
     let runtime = WineRuntimePaths::from_runfiles()?;
+    ambient_wine_command_with_runtime(executable, &runtime)
+}
+
+/// Runs pinned PowerShell in the exported Wine test prefix.
+///
+/// PowerShell runs through a PTY because it is a Windows console application
+/// under Wine. The returned output is complete when this function returns.
+pub async fn run_ambient_powershell(args: &[String]) -> Result<WineCommandOutput> {
+    let prefix = ambient_wine_prefix()?;
+    let runtime = WineRuntimePaths::from_runfiles()?;
+    let env = wine_pty_environment(&runtime, &prefix);
+    let mut powershell_args = Vec::with_capacity(args.len() + 1);
+    powershell_args.push(runtime.powershell_executable.to_string_lossy().into_owned());
+    powershell_args.extend_from_slice(args);
+    let spawned = codex_utils_pty::spawn_pty_process(
+        runtime.wine.to_string_lossy().as_ref(),
+        &powershell_args,
+        &prefix,
+        &env,
+        /*arg0*/ &None,
+        TerminalSize::default(),
+    )
+    .await?;
+    collect_wine_command_output(spawned).await
+}
+
+async fn collect_wine_command_output(spawned: SpawnedProcess) -> Result<WineCommandOutput> {
+    let SpawnedProcess {
+        session,
+        mut stdout_rx,
+        mut stderr_rx,
+        exit_rx,
+    } = spawned;
+    let stdout = async {
+        let mut output = Vec::new();
+        while let Some(chunk) = stdout_rx.recv().await {
+            output.extend(chunk);
+        }
+        output
+    };
+    let stderr = async {
+        let mut output = Vec::new();
+        while let Some(chunk) = stderr_rx.recv().await {
+            output.extend(chunk);
+        }
+        output
+    };
+    let (stdout, stderr, exit_code) = tokio::join!(stdout, stderr, exit_rx);
+    drop(session);
+    Ok(WineCommandOutput {
+        stdout,
+        stderr,
+        exit_code: exit_code.context("wait for PowerShell")?,
+    })
+}
+
+fn wine_pty_environment(runtime: &WineRuntimePaths, prefix: &Path) -> HashMap<String, String> {
+    let mut env = std::env::vars().collect::<HashMap<_, _>>();
+    env.remove("DISPLAY");
+    env.extend([
+        ("HOME".to_string(), prefix.to_string_lossy().into_owned()),
+        (
+            "XDG_RUNTIME_DIR".to_string(),
+            prefix.to_string_lossy().into_owned(),
+        ),
+        ("WINEARCH".to_string(), "win64".to_string()),
+        (
+            "WINEPREFIX".to_string(),
+            prefix.to_string_lossy().into_owned(),
+        ),
+        (
+            "WINEDLLPATH".to_string(),
+            runtime.dll_path.to_string_lossy().into_owned(),
+        ),
+        (
+            "WINESERVER".to_string(),
+            runtime.wineserver.to_string_lossy().into_owned(),
+        ),
+        ("WINEDEBUG".to_string(), "-all".to_string()),
+        (
+            "WINEDLLOVERRIDES".to_string(),
+            "mscoree,mshtml,winegstreamer=".to_string(),
+        ),
+        ("LANG".to_string(), "C.UTF-8".to_string()),
+        ("LC_ALL".to_string(), "C.UTF-8".to_string()),
+        ("LC_CTYPE".to_string(), "C.UTF-8".to_string()),
+        ("TEMP".to_string(), r"C:\windows\temp".to_string()),
+        ("TMP".to_string(), r"C:\windows\temp".to_string()),
+    ]);
+    env
+}
+
+fn ambient_wine_command_with_runtime(
+    executable: impl AsRef<OsStr>,
+    runtime: &WineRuntimePaths,
+) -> Result<StdCommand> {
+    let executable = executable.as_ref();
+    let prefix = ambient_wine_prefix()?;
     let mut command = StdCommand::new(&runtime.wine);
-    configure_wine_environment(&mut command, &runtime, &prefix);
+    configure_wine_environment(&mut command, runtime, &prefix);
     command.arg(executable);
     Ok(command)
+}
+
+fn ambient_wine_prefix() -> Result<PathBuf> {
+    Ok(PathBuf::from(
+        std::env::var_os(WINE_TEST_PREFIX_ENV_VAR)
+            .with_context(|| format!("{WINE_TEST_PREFIX_ENV_VAR} must be set"))?,
+    ))
 }
 
 impl Drop for WineTestProcess {
@@ -210,12 +326,14 @@ impl WineRuntimePaths {
             .context("locate Wine runtime directory")?
             .to_path_buf();
         let wineserver = codex_utils_cargo_bin::cargo_bin("wineserver")?;
+        let powershell_executable = codex_utils_cargo_bin::cargo_bin("pwsh")?;
         let powershell_runtime = codex_utils_cargo_bin::cargo_bin("pwsh-runtime-marker")?
             .parent()
             .context("locate PowerShell runtime directory")?
             .to_path_buf();
         Ok(Self {
             dll_path,
+            powershell_executable,
             powershell_runtime,
             wine,
             wineserver,

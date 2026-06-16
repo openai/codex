@@ -39,6 +39,7 @@ rust_binary(
     deps = [
         ":wine_test_support",
         "@crates//:anyhow",
+        "@crates//:tokio",
     ],
 )
 

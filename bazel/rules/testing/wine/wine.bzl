@@ -22,7 +22,8 @@ def wine_rust_test(
       `CARGO_BIN_EXE_<binary_name>` for its executable.
     * `CARGO_BIN_EXE_wine` and `CARGO_BIN_EXE_wineserver` identify Wine tools.
     * `CARGO_BIN_EXE_wine-test-exec` identifies the host wrapper for running an
-      additional Windows command in an exported test prefix.
+      additional Windows command in an exported test prefix. Pass
+      `--powershell` as its first argument to use the pinned PowerShell runtime.
     * `CARGO_BIN_EXE_wine-runtime-marker` identifies a file whose parent is the
       Wine DLL directory to use as `WINEDLLPATH`.
     * `CARGO_BIN_EXE_pwsh` identifies the pinned PowerShell executable and
