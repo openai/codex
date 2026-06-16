@@ -1001,6 +1001,34 @@ async fn rate_limit_switch_prompt_skips_non_codex_limit() {
 }
 
 #[tokio::test]
+async fn rate_limit_usage_warnings_skip_when_workspace_credits_are_available() {
+    let (mut chat, mut rx, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.has_chatgpt_account = true;
+
+    let mut rate_limit_snapshot = snapshot(/*percent*/ 95.0);
+    rate_limit_snapshot.credits = Some(CreditsSnapshot {
+        has_credits: true,
+        unlimited: false,
+        balance: Some("25.00".to_string()),
+    });
+
+    chat.on_rate_limit_snapshot(Some(rate_limit_snapshot));
+
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "workspace credits should suppress proactive usage warnings"
+    );
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+    assert_eq!(
+        chat.rate_limit_warnings.primary_index, 0,
+        "suppressed warnings should not consume warning thresholds"
+    );
+}
+
+#[tokio::test]
 async fn rate_limit_switch_prompt_shows_once_per_session() {
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.has_chatgpt_account = true;
