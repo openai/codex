@@ -541,7 +541,7 @@ fn resolve_request_cwd(cwd: Option<PathBuf>) -> Result<Option<AbsolutePathBuf>, 
     .transpose()
 }
 
-async fn resolve_turn_environment_selections(
+fn resolve_turn_environment_selections(
     thread_manager: &ThreadManager,
     environments: Option<Vec<TurnEnvironmentParams>>,
 ) -> Result<Option<Vec<TurnEnvironmentSelection>>, JSONRPCErrorError> {
@@ -551,20 +551,16 @@ async fn resolve_turn_environment_selections(
     let mut selections = Vec::with_capacity(environments.len());
     for environment in environments {
         let environment_id = environment.environment_id;
-        let convention = environment
+        let cwd = environment
             .cwd
             .infer_absolute_path_convention()
+            .and_then(|convention| environment.cwd.to_path_uri(convention).ok())
             .ok_or_else(|| {
                 invalid_request(format!(
                     "invalid cwd for environment `{environment_id}`: path `{}` does not use absolute POSIX or Windows path syntax",
                     environment.cwd
                 ))
             })?;
-        let cwd = environment.cwd.to_path_uri(convention).map_err(|err| {
-            invalid_request(format!(
-                "invalid cwd for environment `{environment_id}`: {err}"
-            ))
-        })?;
         selections.push(TurnEnvironmentSelection {
             environment_id,
             cwd,

@@ -906,7 +906,7 @@ impl ThreadRequestProcessor {
             ));
         }
         let environment_selections =
-            resolve_turn_environment_selections(self.thread_manager.as_ref(), environments).await?;
+            resolve_turn_environment_selections(self.thread_manager.as_ref(), environments)?;
         let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,

@@ -412,8 +412,7 @@ impl TurnRequestProcessor {
         })?;
 
         let environment_selections =
-            resolve_turn_environment_selections(self.thread_manager.as_ref(), params.environments)
-                .await?;
+            resolve_turn_environment_selections(self.thread_manager.as_ref(), params.environments)?;
 
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params
