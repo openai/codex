@@ -31,17 +31,6 @@ pub struct WineTestCommand {
     env: Vec<(OsString, OsString)>,
 }
 
-/// Captured output and exit status from a Wine test command.
-#[derive(Debug, PartialEq, Eq)]
-pub struct WineCommandOutput {
-    /// Bytes captured from standard output.
-    pub stdout: Vec<u8>,
-    /// Bytes captured from standard error.
-    pub stderr: Vec<u8>,
-    /// Process exit code reported by the PTY backend.
-    pub exit_code: i32,
-}
-
 /// Owns a Wine process and its isolated wineserver.
 ///
 /// Call [`Self::scope`] or [`Self::shutdown`] on every successful path. A
@@ -191,6 +180,17 @@ impl WineTestCommandContext {
     pub fn apply_to_command(&self, command: &mut TokioCommand) {
         command.env(WINE_TEST_PREFIX_ENV_VAR, &self.prefix);
     }
+}
+
+/// Captured output and exit status from a Wine test command.
+#[derive(Debug, PartialEq, Eq)]
+pub struct WineCommandOutput {
+    /// Bytes captured from standard output.
+    pub stdout: Vec<u8>,
+    /// Bytes captured from standard error.
+    pub stderr: Vec<u8>,
+    /// Process exit code reported by the PTY backend.
+    pub exit_code: i32,
 }
 
 /// Builds a Wine command that joins the prefix exported by [`WineTestCommandContext`].
