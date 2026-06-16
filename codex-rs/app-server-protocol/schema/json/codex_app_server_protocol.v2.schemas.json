@@ -18024,6 +18024,7 @@
       "enum": [
         "disabled",
         "cached",
+        "index_gated",
         "live"
       ],
       "type": "string"
