@@ -127,8 +127,8 @@ fn truncates_before_requested_user_message() {
         RolloutItem::ResponseItem(items[2].clone()),
     ];
     assert_eq!(
-        (truncated.forked_from_id(), got_items),
-        (Some(parent_id), expected_items)
+        serde_json::to_value((truncated.forked_from_id(), got_items)).unwrap(),
+        serde_json::to_value((Some(parent_id), expected_items)).unwrap()
     );
 
     let initial2: Vec<RolloutItem> = items
