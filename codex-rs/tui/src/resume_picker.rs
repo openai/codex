@@ -24,7 +24,6 @@ use crate::terminal_palette::default_bg;
 use crate::text_formatting::truncate_text;
 use crate::thread_transcript::RawReasoningVisibility;
 use crate::thread_transcript::TranscriptCells;
-use crate::thread_transcript::load_session_transcript;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
@@ -633,16 +632,11 @@ impl LoadingState {
     }
 }
 
-async fn load_transcript_preview(
-    app_server: &mut AppServerSession,
-    thread_id: ThreadId,
-) -> std::io::Result<Vec<TranscriptPreviewLine>> {
+fn transcript_preview_lines(
+    thread: &codex_app_server_protocol::Thread,
+) -> Vec<TranscriptPreviewLine> {
     const MAX_PREVIEW_LINES: usize = 6;
 
-    let thread = app_server
-        .thread_read(thread_id, /*include_turns*/ true)
-        .await
-        .map_err(std::io::Error::other)?;
     let cwd = thread.cwd.as_path();
     let mut lines = thread
         .turns
@@ -682,7 +676,7 @@ async fn load_transcript_preview(
     if lines.len() > MAX_PREVIEW_LINES {
         lines.drain(..lines.len() - MAX_PREVIEW_LINES);
     }
-    Ok(lines)
+    lines
 }
 
 impl SearchState {
