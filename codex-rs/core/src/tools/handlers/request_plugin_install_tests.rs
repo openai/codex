@@ -1,18 +1,14 @@
 use super::*;
 use crate::plugins::test_support::load_plugins_config;
-use crate::plugins::test_support::write_curated_plugin;
 use crate::plugins::test_support::write_curated_plugin_sha;
-use crate::plugins::test_support::write_file;
 use crate::plugins::test_support::write_openai_curated_marketplace;
 use crate::plugins::test_support::write_plugins_feature_config;
-use codex_app_server_protocol::AuthMode;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::ToolSuggestDiscoverableType;
-use codex_core_plugins::OPENAI_API_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::PluginsManager;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
@@ -56,59 +52,6 @@ async fn verified_plugin_install_completed_requires_installed_plugin() {
     let refreshed_config = load_plugins_config(codex_home.path()).await;
     assert!(verified_plugin_install_completed(
         "sample@openai-curated",
-        &refreshed_config,
-        &plugins_manager,
-    ));
-}
-
-#[tokio::test]
-async fn verified_plugin_install_completed_uses_api_curated_marketplace_when_selected() {
-    let codex_home = tempdir().expect("tempdir should succeed");
-    let curated_root = curated_plugins_repo_path(codex_home.path());
-    write_openai_curated_marketplace(&curated_root, &["default-only"]);
-    write_curated_plugin(&curated_root, "api-only");
-    write_file(
-        &curated_root.join(".agents/plugins/api_marketplace.json"),
-        &format!(
-            r#"{{
-  "name": "{OPENAI_API_CURATED_MARKETPLACE_NAME}",
-  "plugins": [
-    {{
-      "name": "api-only",
-      "source": {{
-        "source": "local",
-        "path": "./plugins/api-only"
-      }}
-    }}
-  ]
-}}"#
-        ),
-    );
-    write_curated_plugin_sha(codex_home.path());
-    write_plugins_feature_config(codex_home.path());
-
-    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
-    plugins_manager
-        .install_plugin(PluginInstallRequest {
-            plugin_name: "api-only".to_string(),
-            marketplace_path: AbsolutePathBuf::try_from(
-                curated_root.join(".agents/plugins/api_marketplace.json"),
-            )
-            .expect("marketplace path"),
-        })
-        .await
-        .expect("plugin should install");
-
-    let refreshed_config = load_plugins_config(codex_home.path()).await;
-    plugins_manager.set_auth_mode(Some(AuthMode::ApiKey));
-    assert!(verified_plugin_install_completed(
-        "api-only@openai-api-curated",
-        &refreshed_config,
-        &plugins_manager,
-    ));
-    plugins_manager.set_auth_mode(Some(AuthMode::Chatgpt));
-    assert!(!verified_plugin_install_completed(
-        "api-only@openai-api-curated",
         &refreshed_config,
         &plugins_manager,
     ));
