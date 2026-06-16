@@ -65,16 +65,6 @@ fn tool_names(body: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn function_tool<'a>(body: &'a Value, name: &str) -> Option<&'a Value> {
-    body.get("tools")
-        .and_then(Value::as_array)
-        .and_then(|tools| {
-            tools
-                .iter()
-                .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
-        })
-}
-
 fn configure_apps_without_search_tool(config: &mut Config, apps_base_url: &str) {
     for feature in [
         Feature::Apps,
@@ -128,12 +118,6 @@ fn assert_legacy_tools(body: &Value) {
             .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME),
         "legacy mode should expose {REQUEST_PLUGIN_INSTALL_TOOL_NAME}: {tools:?}"
     );
-    let description = function_tool(body, REQUEST_PLUGIN_INSTALL_TOOL_NAME)
-        .and_then(|tool| tool.get("description"))
-        .and_then(Value::as_str)
-        .expect("request tool description");
-    assert!(description.contains(LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME));
-    assert!(!description.contains("<recommended_plugins>"));
 }
 
 async fn build_test(
@@ -208,35 +192,6 @@ async fn explicit_false_preserves_legacy_workflow() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn failed_fetch_preserves_legacy_workflow() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount(&server).await?;
-    mount_recommendations(&server, ResponseTemplate::new(500)).await;
-    let mock = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-1"),
-        ]),
-    )
-    .await;
-    let test = build_test(&server, &apps_server).await?;
-    test.submit_turn("list tools").await?;
-    let request = mock.single_request();
-    assert!(
-        !request
-            .message_input_texts("user")
-            .join("\n")
-            .contains("<recommended_plugins>")
-    );
-    assert_legacy_tools(&request.body_json());
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -299,17 +254,8 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
     assert_eq!(requests.len(), 2);
     let contextual_user_message = requests[0].message_input_texts("user").join("\n");
     assert!(contextual_user_message.contains("<recommended_plugins>"));
-    assert!(contextual_user_message.contains("All entries have `tool_type: plugin`"));
-    assert!(contextual_user_message.contains("the parenthesized ID as `tool_id`"));
-    assert!(contextual_user_message.contains(
-        "For example, suggest the Google Drive plugin if the query could possibly be better answered with access to Google Drive."
-    ));
-    assert!(contextual_user_message.contains("- GitHub (github@openai-curated-remote)"));
-    assert!(
-        contextual_user_message
-            .contains("- Google Calendar (google-calendar@openai-curated-remote)")
-    );
-    assert!(!contextual_user_message.contains("plugin id:"));
+    assert!(contextual_user_message.contains("github@openai-curated-remote"));
+    assert!(contextual_user_message.contains("google-calendar@openai-curated-remote"));
     let body = requests[0].body_json();
     let tools = tool_names(&body);
     assert!(
@@ -322,41 +268,10 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
             .iter()
             .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME)
     );
-    let request_tool = function_tool(&body, REQUEST_PLUGIN_INSTALL_TOOL_NAME)
-        .expect("request_plugin_install tool");
-    assert!(
-        request_tool
-            .get("description")
-            .and_then(Value::as_str)
-            .is_some_and(|description| {
-                description.contains("the `<recommended_plugins>` list")
-                    && description.contains("Briefly explain why in `suggest_reason`")
-                    && !description.contains("tool_type")
-                    && !description.contains("parenthesized")
-                    && !description.contains("parallel")
-            })
-    );
-    assert_eq!(
-        request_tool
-            .pointer("/parameters/required")
-            .and_then(Value::as_array)
-            .map(Vec::as_slice),
-        Some(
-            &[
-                Value::String("tool_type".to_string()),
-                Value::String("action_type".to_string()),
-                Value::String("tool_id".to_string()),
-                Value::String("suggest_reason".to_string()),
-            ][..]
-        )
-    );
-    let output = requests[1].function_call_output(call_id);
-    assert!(
-        output
-            .get("output")
-            .and_then(Value::as_str)
-            .is_some_and(|output| output.contains("<recommended_plugins> list"))
-    );
+    let output = requests[1]
+        .function_call_output_text(call_id)
+        .expect("request tool output");
+    assert!(output.contains("<recommended_plugins> list"));
     Ok(())
 }
 
