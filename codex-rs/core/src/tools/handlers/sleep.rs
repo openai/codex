@@ -6,6 +6,8 @@ use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use codex_protocol::items::SleepItem;
+use codex_protocol::items::TurnItem;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
@@ -63,6 +65,7 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
             let ToolInvocation {
                 session,
                 turn,
+                call_id,
                 payload,
                 ..
             } = invocation;
@@ -79,6 +82,11 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
             }
 
             let started = Instant::now();
+            let item = TurnItem::Sleep(SleepItem {
+                id: call_id,
+                duration_ms: args.duration_ms,
+            });
+            session.emit_turn_item_started(turn.as_ref(), &item).await;
             let turn_state = session
                 .input_queue
                 .turn_state_for_sub_id(&session.active_turn, &turn.sub_id)
@@ -104,6 +112,7 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
                     }
                 }
             };
+            session.emit_turn_item_completed(turn.as_ref(), item).await;
 
             let message = if interrupted {
                 "Sleep interrupted by new input."

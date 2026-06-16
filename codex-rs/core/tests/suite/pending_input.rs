@@ -4,9 +4,9 @@ use std::sync::Arc;
 use codex_core::CodexThread;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
+use codex_protocol::items::SleepItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -231,6 +231,54 @@ async fn wait_for_turn_complete(codex: &CodexThread) {
     wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 }
 
+async fn wait_for_sleep_item_started(codex: &CodexThread, call_id: &str, duration_ms: u64) {
+    let event = wait_for_event(codex, |event| {
+        matches!(
+            event,
+            EventMsg::ItemStarted(started)
+                if matches!(&started.item, TurnItem::Sleep(item) if item.id == call_id)
+        )
+    })
+    .await;
+    let EventMsg::ItemStarted(started) = event else {
+        unreachable!("wait predicate only accepts item/started events");
+    };
+    let TurnItem::Sleep(item) = started.item else {
+        unreachable!("wait predicate only accepts sleep items");
+    };
+    assert_eq!(
+        item,
+        SleepItem {
+            id: call_id.to_string(),
+            duration_ms,
+        }
+    );
+}
+
+async fn wait_for_sleep_item_completed(codex: &CodexThread, call_id: &str, duration_ms: u64) {
+    let event = wait_for_event(codex, |event| {
+        matches!(
+            event,
+            EventMsg::ItemCompleted(completed)
+                if matches!(&completed.item, TurnItem::Sleep(item) if item.id == call_id)
+        )
+    })
+    .await;
+    let EventMsg::ItemCompleted(completed) = event else {
+        unreachable!("wait predicate only accepts item/completed events");
+    };
+    let TurnItem::Sleep(item) = completed.item else {
+        unreachable!("wait predicate only accepts sleep items");
+    };
+    assert_eq!(
+        item,
+        SleepItem {
+            id: call_id.to_string(),
+            duration_ms,
+        }
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
     const WAIT_CALL_ID: &str = "wait-call";
@@ -338,34 +386,14 @@ async fn any_new_input_interrupts_sleep() {
         .codex;
 
     submit_user_input(&codex, INITIAL_PROMPT).await;
-    wait_for_event(&codex, |event| {
-        matches!(
-            event,
-            EventMsg::RawResponseItem(raw)
-                if matches!(
-                    &raw.item,
-                    ResponseItem::FunctionCall { name, call_id, .. }
-                        if name == "sleep" && call_id == FIRST_SLEEP_CALL_ID
-                )
-        )
-    })
-    .await;
+    wait_for_sleep_item_started(&codex, FIRST_SLEEP_CALL_ID, 60_000).await;
 
     steer_user_input(&codex, STEER_PROMPT).await;
-    wait_for_event(&codex, |event| {
-        matches!(
-            event,
-            EventMsg::RawResponseItem(raw)
-                if matches!(
-                    &raw.item,
-                    ResponseItem::FunctionCall { name, call_id, .. }
-                        if name == "sleep" && call_id == SECOND_SLEEP_CALL_ID
-                )
-        )
-    })
-    .await;
+    wait_for_sleep_item_completed(&codex, FIRST_SLEEP_CALL_ID, 60_000).await;
+    wait_for_sleep_item_started(&codex, SECOND_SLEEP_CALL_ID, 60_000).await;
 
     submit_queue_only_agent_mail(&codex, "new mailbox input").await;
+    wait_for_sleep_item_completed(&codex, SECOND_SLEEP_CALL_ID, 60_000).await;
     wait_for_turn_complete(&codex).await;
 
     let requests = server.requests().await;

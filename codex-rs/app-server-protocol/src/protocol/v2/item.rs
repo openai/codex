@@ -355,6 +355,13 @@ pub enum ThreadItem {
     ImageView { id: String, path: AbsolutePathBuf },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
+    Sleep {
+        id: String,
+        #[ts(type = "number")]
+        duration_ms: u64,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     ImageGeneration {
         id: String,
         status: String,
@@ -399,6 +406,7 @@ impl ThreadItem {
             | ThreadItem::SubAgentActivity { id, .. }
             | ThreadItem::WebSearch { id, .. }
             | ThreadItem::ImageView { id, .. }
+            | ThreadItem::Sleep { id, .. }
             | ThreadItem::ImageGeneration { id, .. }
             | ThreadItem::EnteredReviewMode { id, .. }
             | ThreadItem::ExitedReviewMode { id, .. }
@@ -833,6 +841,10 @@ impl From<CoreTurnItem> for ThreadItem {
             CoreTurnItem::ImageView(image) => ThreadItem::ImageView {
                 id: image.id,
                 path: image.path,
+            },
+            CoreTurnItem::Sleep(sleep) => ThreadItem::Sleep {
+                id: sleep.id,
+                duration_ms: sleep.duration_ms,
             },
             CoreTurnItem::ImageGeneration(image) => ThreadItem::ImageGeneration {
                 id: image.id,
