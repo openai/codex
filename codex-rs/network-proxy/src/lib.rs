@@ -1,9 +1,7 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
+#![allow(dead_code)]
 
-// These helpers are wired into command launches by the next layer of the MITM stack.
-#[allow(dead_code)]
 mod certs;
-#[allow(dead_code)]
 mod child_ca;
 mod config;
 mod connect_policy;
