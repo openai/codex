@@ -561,16 +561,16 @@ mod tests {
             FileSystemSpecialPath::project_roots(/*subpath*/ None),
             FileSystemAccessMode::Write,
         )]);
-        let sandbox_context = sandbox_context_with_cwd(&policy, cwd);
+        let sandbox_context = sandbox_context_with_cwd(&policy, cwd.clone());
 
         let err = sandbox_cwd(&sandbox_context).expect_err("non-native cwd should be rejected");
 
         assert_eq!(
             err,
-            crate::rpc::invalid_request(
-                "file system sandbox cwd is not native to this exec-server host: file URI contains an invalid absolute path"
-                    .to_string()
-            )
+            crate::rpc::invalid_request(format!(
+                "file system sandbox cwd is not native to this exec-server host: '{cwd}' is invalid on '{}'",
+                std::env::consts::OS
+            ))
         );
     }
 
