@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::JsonToolOutput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolExecutor;
+use codex_extension_api::ToolExecutorFuture;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolSpec;
@@ -112,7 +112,6 @@ enum AutomationTargetResponse {
     Heartbeat { thread_id: String },
 }
 
-#[async_trait]
 impl ToolExecutor<ToolCall> for AutomationUpdateTool {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(AUTOMATION_UPDATE_TOOL_NAME)
@@ -122,15 +121,17 @@ impl ToolExecutor<ToolCall> for AutomationUpdateTool {
         create_automation_update_tool()
     }
 
-    async fn handle(&self, invocation: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
-        let request: AutomationToolRequest = parse_arguments(invocation.function_arguments()?)?;
-        match request.mode {
-            AutomationToolMode::List => self.handle_list().await,
-            AutomationToolMode::Read => self.handle_read(request).await,
-            AutomationToolMode::Create => self.handle_create(request).await,
-            AutomationToolMode::Update => self.handle_update(request).await,
-            AutomationToolMode::Delete => self.handle_delete(request).await,
-        }
+    fn handle(&self, invocation: ToolCall) -> ToolExecutorFuture<'_> {
+        Box::pin(async move {
+            let request: AutomationToolRequest = parse_arguments(invocation.function_arguments()?)?;
+            match request.mode {
+                AutomationToolMode::List => self.handle_list().await,
+                AutomationToolMode::Read => self.handle_read(request).await,
+                AutomationToolMode::Create => self.handle_create(request).await,
+                AutomationToolMode::Update => self.handle_update(request).await,
+                AutomationToolMode::Delete => self.handle_delete(request).await,
+            }
+        })
     }
 }
 

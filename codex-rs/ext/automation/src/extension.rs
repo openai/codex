@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use codex_core::config::Config;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
@@ -95,13 +95,17 @@ impl std::fmt::Debug for AutomationExtension {
     }
 }
 
-#[async_trait]
 impl ThreadLifecycleContributor<Config> for AutomationExtension {
-    async fn on_thread_start(&self, input: ThreadStartInput<'_, Config>) {
-        let Some(context) = AutomationThreadContext::from_thread_start(&input) else {
-            return;
-        };
-        input.thread_store.insert(context);
+    fn on_thread_start<'a>(
+        &'a self,
+        input: ThreadStartInput<'a, Config>,
+    ) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let Some(context) = AutomationThreadContext::from_thread_start(&input) else {
+                return;
+            };
+            input.thread_store.insert(context);
+        })
     }
 }
 

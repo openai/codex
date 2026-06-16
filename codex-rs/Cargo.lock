@@ -2240,7 +2240,6 @@ name = "codex-automation-extension"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "chrono",
  "codex-core",
  "codex-extension-api",
