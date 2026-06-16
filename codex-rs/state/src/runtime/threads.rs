@@ -425,14 +425,17 @@ ON CONFLICT(child_thread_id) DO NOTHING
         let mut builder = QueryBuilder::<Sqlite>::new("");
         push_list_threads_query(&mut builder, filters, parent_thread_id, limit);
 
-        let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
-        let mut items = rows
+        let mut rows = builder.build().fetch_all(self.pool.as_ref()).await?;
+        let num_scanned_rows = rows.len();
+        let has_next_page = rows.len() > page_size;
+        if has_next_page {
+            rows.truncate(page_size);
+        }
+        let items = rows
             .into_iter()
             .map(|row| ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from))
             .collect::<Result<Vec<_>, _>>()?;
-        let num_scanned_rows = items.len();
-        let next_anchor = if items.len() > page_size {
-            items.pop();
+        let next_anchor = if has_next_page {
             items
                 .last()
                 .and_then(|item| anchor_from_item(item, filters.sort_key))

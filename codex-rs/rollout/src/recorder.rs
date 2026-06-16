@@ -396,9 +396,14 @@ impl RolloutRecorder {
             || model_providers.is_some()
             || cwd_filters.is_some()
             || search_term.is_some();
-        // Filesystem-first listing intentionally overfetches so we can repair stale/missing
-        // SQLite rows before returning the scan page for filtered listings or the DB page for
-        // unfiltered listings.
+        // Filesystem-first listing intentionally overfetches only when SQLite is present, so we
+        // can repair stale/missing rows before returning the scan page for filtered listings or
+        // the DB page for unfiltered listings.
+        let fs_page_size = if state_db_ctx.is_none() {
+            page_size
+        } else {
+            page_size.saturating_mul(2)
+        };
         let fs_page = match sort_direction {
             SortDirection::Asc => {
                 list_threads_from_files_asc(
@@ -418,7 +423,7 @@ impl RolloutRecorder {
             SortDirection::Desc => {
                 list_threads_from_files_desc(
                     codex_home,
-                    page_size.saturating_mul(2),
+                    fs_page_size,
                     cursor,
                     sort_key,
                     allowed_sources,
@@ -1876,11 +1881,7 @@ fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadI
         git_branch: item.git_branch,
         git_sha: item.git_sha,
         git_origin_url: item.git_origin_url,
-        source: Some(
-            serde_json::from_str(item.source.as_str())
-                .or_else(|_| serde_json::from_value(Value::String(item.source)))
-                .unwrap_or(SessionSource::Unknown),
-        ),
+        source: Some(session_source_from_state_string(item.source)),
         parent_thread_id: None,
         agent_nickname: item.agent_nickname,
         agent_role: item.agent_role,
@@ -1888,6 +1889,19 @@ fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadI
         cli_version: Some(item.cli_version),
         created_at: Some(item.created_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
         updated_at: Some(item.updated_at.to_rfc3339_opts(SecondsFormat::Millis, true)),
+    }
+}
+
+fn session_source_from_state_string(source: String) -> SessionSource {
+    match source.as_str() {
+        "cli" => SessionSource::Cli,
+        "vscode" => SessionSource::VSCode,
+        "exec" => SessionSource::Exec,
+        "mcp" => SessionSource::Mcp,
+        "unknown" => SessionSource::Unknown,
+        _ => serde_json::from_str(source.as_str())
+            .or_else(|_| serde_json::from_value(Value::String(source)))
+            .unwrap_or(SessionSource::Unknown),
     }
 }
 

@@ -297,6 +297,23 @@ pub fn normalize_cwd_for_state_db(cwd: &Path) -> PathBuf {
     normalize_for_path_comparison(cwd).unwrap_or_else(|_| cwd.to_path_buf())
 }
 
+fn session_source_filter_to_state_db_string(source: &SessionSource) -> String {
+    match source {
+        SessionSource::Cli => "cli".to_string(),
+        SessionSource::VSCode => "vscode".to_string(),
+        SessionSource::Exec => "exec".to_string(),
+        SessionSource::Mcp => "mcp".to_string(),
+        SessionSource::Unknown => "unknown".to_string(),
+        SessionSource::Custom(_) | SessionSource::Internal(_) | SessionSource::SubAgent(_) => {
+            match serde_json::to_value(source) {
+                Ok(Value::String(s)) => s,
+                Ok(other) => other.to_string(),
+                Err(_) => String::new(),
+            }
+        }
+    }
+}
+
 /// List thread ids from SQLite for parity checks without rollout scanning.
 #[allow(clippy::too_many_arguments)]
 pub async fn list_thread_ids_db(
@@ -322,11 +339,7 @@ pub async fn list_thread_ids_db(
     let anchor = cursor_to_anchor(cursor);
     let allowed_sources: Vec<String> = allowed_sources
         .iter()
-        .map(|value| match serde_json::to_value(value) {
-            Ok(Value::String(s)) => s,
-            Ok(other) => other.to_string(),
-            Err(_) => String::new(),
-        })
+        .map(session_source_filter_to_state_db_string)
         .collect();
     let model_providers = model_providers.map(<[String]>::to_vec);
     match ctx
@@ -379,11 +392,7 @@ pub async fn list_threads_db(
     let anchor = cursor_to_anchor(cursor);
     let allowed_sources: Vec<String> = allowed_sources
         .iter()
-        .map(|value| match serde_json::to_value(value) {
-            Ok(Value::String(s)) => s,
-            Ok(other) => other.to_string(),
-            Err(_) => String::new(),
-        })
+        .map(session_source_filter_to_state_db_string)
         .collect();
     let model_providers = model_providers.map(<[String]>::to_vec);
     let normalized_cwd_filters = cwd_filters.map(|filters| {
@@ -424,7 +433,7 @@ pub async fn list_threads_db(
             let mut valid_items = Vec::with_capacity(page.items.len());
             for item in page.items {
                 if let Some(existing_path) =
-                    crate::compression::existing_rollout_path(item.rollout_path.as_path()).await
+                    crate::compression::existing_rollout_path_blocking(item.rollout_path.as_path())
                 {
                     let mut item = item;
                     item.rollout_path = existing_path;
