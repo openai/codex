@@ -33,7 +33,6 @@ use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
-use codex_plugin::PluginLoadOutcome;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_plugin::app_connector_ids_from_declarations;
 use codex_protocol::protocol::Product;
@@ -81,12 +80,8 @@ enum NonCuratedCacheRefreshMode {
     ForceReinstall,
 }
 
-pub fn log_plugin_load_errors(outcome: &PluginLoadOutcome<McpServerConfig>) {
-    for plugin in outcome
-        .plugins()
-        .iter()
-        .filter(|plugin| plugin.error.is_some())
-    {
+pub(crate) fn log_plugin_load_errors(plugins: &[LoadedPlugin<McpServerConfig>]) {
+    for plugin in plugins.iter().filter(|plugin| plugin.error.is_some()) {
         if let Some(error) = plugin.error.as_deref() {
             warn!(
                 plugin = plugin.config_name,
@@ -110,14 +105,15 @@ struct PluginAppConfig {
     category: Option<String>,
 }
 
+/// Load configured plugins without applying auth-dependent runtime policies.
 #[instrument(level = "trace", skip_all)]
-pub async fn load_plugins_from_layer_stack(
+pub(crate) async fn load_plugins_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
     extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
     restriction_product: Option<Product>,
     prefer_remote_curated_conflicts: bool,
-) -> PluginLoadOutcome<McpServerConfig> {
+) -> Vec<LoadedPlugin<McpServerConfig>> {
     let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
     load_plugins_from_layer_stack_with_scope(
         config_layer_stack,
@@ -138,7 +134,7 @@ async fn load_plugins_from_layer_stack_with_scope(
     store: &PluginStore,
     prefer_remote_curated_conflicts: bool,
     scope: PluginLoadScope<'_>,
-) -> PluginLoadOutcome<McpServerConfig> {
+) -> Vec<LoadedPlugin<McpServerConfig>> {
     let configured_plugins = merge_configured_plugins_with_remote_installed(
         configured_plugins_from_stack(config_layer_stack),
         extra_plugins,
@@ -167,7 +163,7 @@ async fn load_plugins_from_layer_stack_with_scope(
         plugins.push(loaded_plugin);
     }
 
-    PluginLoadOutcome::from_plugins(plugins)
+    plugins
 }
 
 /// Load hooks from enabled plugins without loading their skills, MCP servers, or apps.
@@ -177,7 +173,7 @@ pub async fn load_plugin_hooks_from_layer_stack(
     store: &PluginStore,
     prefer_remote_curated_conflicts: bool,
 ) -> PluginHookLoadOutcome {
-    let outcome = load_plugins_from_layer_stack_with_scope(
+    let plugins = load_plugins_from_layer_stack_with_scope(
         config_layer_stack,
         extra_plugins,
         store,
@@ -186,8 +182,16 @@ pub async fn load_plugin_hooks_from_layer_stack(
     )
     .await;
     PluginHookLoadOutcome {
-        hook_sources: outcome.effective_plugin_hook_sources(),
-        hook_load_warnings: outcome.effective_plugin_hook_warnings(),
+        hook_sources: plugins
+            .iter()
+            .filter(|plugin| plugin.is_active())
+            .flat_map(|plugin| plugin.hook_sources.iter().cloned())
+            .collect(),
+        hook_load_warnings: plugins
+            .iter()
+            .filter(|plugin| plugin.is_active())
+            .flat_map(|plugin| plugin.hook_load_warnings.iter().cloned())
+            .collect(),
     }
 }
 
