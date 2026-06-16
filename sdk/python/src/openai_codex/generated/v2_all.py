@@ -2,11 +2,9 @@
 #   filename:  codex_app_server_protocol.v2.schemas.json
 
 from __future__ import annotations
-
-from enum import Enum
-from typing import Annotated, Any, Literal
-
 from pydantic import BaseModel, ConfigDict, Field, RootModel
+from typing import Annotated, Any, Literal
+from enum import Enum
 
 
 class CodexAppServerProtocolV2(BaseModel):
@@ -49,25 +47,6 @@ class AccountLoginCompletedNotification(BaseModel):
     error: str | None = None
     login_id: Annotated[str | None, Field(alias="loginId")] = None
     success: bool
-
-
-class AccountTokenUsageDailyBucket(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    start_date: Annotated[str, Field(alias="startDate")]
-    tokens: int
-
-
-class AccountTokenUsageSummary(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    current_streak_days: Annotated[int | None, Field(alias="currentStreakDays")] = None
-    lifetime_tokens: Annotated[int | None, Field(alias="lifetimeTokens")] = None
-    longest_running_turn_sec: Annotated[int | None, Field(alias="longestRunningTurnSec")] = None
-    longest_streak_days: Annotated[int | None, Field(alias="longestStreakDays")] = None
-    peak_daily_tokens: Annotated[int | None, Field(alias="peakDailyTokens")] = None
 
 
 class ActivePermissionProfile(BaseModel):
@@ -120,33 +99,6 @@ class AgentMessageDeltaNotification(BaseModel):
     turn_id: Annotated[str, Field(alias="turnId")]
 
 
-class InputTextAgentMessageInputContent(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    text: str
-    type: Annotated[Literal["input_text"], Field(title="InputTextAgentMessageInputContentType")]
-
-
-class EncryptedContentAgentMessageInputContent(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    encrypted_content: str
-    type: Annotated[
-        Literal["encrypted_content"], Field(title="EncryptedContentAgentMessageInputContentType")
-    ]
-
-
-class AgentMessageInputContent(
-    RootModel[InputTextAgentMessageInputContent | EncryptedContentAgentMessageInputContent]
-):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: InputTextAgentMessageInputContent | EncryptedContentAgentMessageInputContent
-
-
 class AgentPath(RootModel[str]):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -194,16 +146,11 @@ class AppSummary(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    category: str | None = None
     description: str | None = None
     id: str
     install_url: Annotated[str | None, Field(alias="installUrl")] = None
     name: str
-
-
-class AppTemplateUnavailableReason(Enum):
-    not_configured_for_workspace = "NOT_CONFIGURED_FOR_WORKSPACE"
-    no_active_workspace = "NO_ACTIVE_WORKSPACE"
+    needs_auth: Annotated[bool, Field(alias="needsAuth")]
 
 
 class AppToolApproval(Enum):
@@ -237,7 +184,6 @@ class AppsDefaultConfig(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    approvals_reviewer: ApprovalsReviewer | None = None
     destructive_enabled: bool | None = True
     enabled: bool | None = True
     open_world_enabled: bool | None = True
@@ -272,6 +218,7 @@ class AppsListParams(BaseModel):
 
 class AskForApprovalValue(Enum):
     untrusted = "untrusted"
+    on_failure = "on-failure"
     on_request = "on-request"
     never = "never"
 
@@ -307,8 +254,6 @@ class AuthMode(Enum):
     chatgpt = "chatgpt"
     chatgpt_auth_tokens = "chatgptAuthTokens"
     agent_identity = "agentIdentity"
-    personal_access_token = "personalAccessToken"
-    bedrock_api_key = "bedrockApiKey"
 
 
 class AutoCompactTokenLimitScope(Enum):
@@ -346,25 +291,6 @@ class CancelLoginAccountParams(BaseModel):
 class CancelLoginAccountStatus(Enum):
     canceled = "canceled"
     not_found = "notFound"
-
-
-class EnvironmentCapabilityRootLocation(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    environment_id: Annotated[str, Field(alias="environmentId")]
-    path: str
-    type: Annotated[Literal["environment"], Field(title="EnvironmentCapabilityRootLocationType")]
-
-
-class CapabilityRootLocation(RootModel[EnvironmentCapabilityRootLocation]):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: Annotated[
-        EnvironmentCapabilityRootLocation,
-        Field(description="Location used to resolve a selected capability root."),
-    ]
 
 
 class ClientInfo(BaseModel):
@@ -854,11 +780,6 @@ class ContextCompactedNotification(BaseModel):
     )
     thread_id: Annotated[str, Field(alias="threadId")]
     turn_id: Annotated[str, Field(alias="turnId")]
-
-
-class ConversationTextRole(Enum):
-    user = "user"
-    developer = "developer"
 
 
 class CreditsSnapshot(BaseModel):
@@ -1463,16 +1384,6 @@ class GetAccountParams(BaseModel):
     ] = None
 
 
-class GetAccountTokenUsageResponse(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    daily_usage_buckets: Annotated[
-        list[AccountTokenUsageDailyBucket] | None, Field(alias="dailyUsageBuckets")
-    ] = None
-    summary: AccountTokenUsageSummary
-
-
 class GitInfo(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -2047,7 +1958,6 @@ class McpServerStatusUpdatedNotification(BaseModel):
     error: str | None = None
     name: str
     status: McpServerStartupState
-    thread_id: Annotated[str | None, Field(alias="threadId")] = None
 
 
 class McpServerToolCallParams(BaseModel):
@@ -2764,11 +2674,6 @@ class RateLimitWindow(BaseModel):
     window_duration_mins: Annotated[int | None, Field(alias="windowDurationMins")] = None
 
 
-class RealtimeConversationArchitecture(Enum):
-    realtimeapi = "realtimeapi"
-    avas = "avas"
-
-
 class RealtimeConversationVersion(Enum):
     v1 = "v1"
     v2 = "v2"
@@ -2811,16 +2716,13 @@ class RealtimeVoicesList(BaseModel):
     v2: list[RealtimeVoice]
 
 
-class ReasoningEffort(RootModel[str]):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: Annotated[
-        str,
-        Field(
-            description="A non-empty reasoning effort value advertised by the model.", min_length=1
-        ),
-    ]
+class ReasoningEffort(Enum):
+    none = "none"
+    minimal = "minimal"
+    low = "low"
+    medium = "medium"
+    high = "high"
+    xhigh = "xhigh"
 
 
 class ReasoningEffortOption(BaseModel):
@@ -2928,20 +2830,6 @@ class RemoteControlConnectionStatus(Enum):
     errored = "errored"
 
 
-class RemoteControlDisableParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    ephemeral: bool | None = None
-
-
-class RemoteControlEnableParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    ephemeral: bool | None = None
-
-
 class RemoteControlStatusChangedNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -3021,16 +2909,6 @@ class ResourceTemplate(BaseModel):
     name: str
     title: str | None = None
     uri_template: Annotated[str, Field(alias="uriTemplate")]
-
-
-class AgentMessageResponseItem(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    author: str
-    content: list[AgentMessageInputContent]
-    recipient: str
-    type: Annotated[Literal["agent_message"], Field(title="AgentMessageResponseItemType")]
 
 
 class ReasoningResponseItem(BaseModel):
@@ -3329,18 +3207,6 @@ class SandboxWorkspaceWrite(BaseModel):
     exclude_tmpdir_env_var: bool | None = False
     network_access: bool | None = False
     writable_roots: list[str] | None = []
-
-
-class SelectedCapabilityRoot(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: Annotated[
-        str, Field(description="Stable identifier supplied by the capability selection platform.")
-    ]
-    location: Annotated[
-        CapabilityRootLocation, Field(description="Where the selected root can be resolved.")
-    ]
 
 
 class SendAddCreditsNudgeEmailParams(BaseModel):
@@ -3741,12 +3607,6 @@ class SpendControlLimitSnapshot(BaseModel):
     used: str
 
 
-class SubAgentActivityKind(Enum):
-    started = "started"
-    interacted = "interacted"
-    interrupted = "interrupted"
-
-
 class SubAgentSourceValue(Enum):
     review = "review"
     compact = "compact"
@@ -3878,27 +3738,6 @@ class ThreadCompactStartResponse(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-
-
-class ThreadDeleteParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    thread_id: Annotated[str, Field(alias="threadId")]
-
-
-class ThreadDeleteResponse(BaseModel):
-    pass
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-
-
-class ThreadDeletedNotification(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    thread_id: Annotated[str, Field(alias="threadId")]
 
 
 class ThreadGoalClearParams(BaseModel):
@@ -4075,17 +3914,6 @@ class DynamicToolCallThreadItem(BaseModel):
     success: bool | None = None
     tool: str
     type: Annotated[Literal["dynamicToolCall"], Field(title="DynamicToolCallThreadItemType")]
-
-
-class SubAgentActivityThreadItem(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    agent_path: Annotated[str, Field(alias="agentPath")]
-    agent_thread_id: Annotated[str, Field(alias="agentThreadId")]
-    id: str
-    kind: SubAgentActivityKind
-    type: Annotated[Literal["subAgentActivity"], Field(title="SubAgentActivityThreadItemType")]
 
 
 class ImageViewThreadItem(BaseModel):
@@ -4427,11 +4255,10 @@ class ThreadSortKey(Enum):
     updated_at = "updated_at"
 
 
-class ThreadSource(RootModel[str]):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: str
+class ThreadSource(Enum):
+    user = "user"
+    subagent = "subagent"
+    memory_consolidation = "memory_consolidation"
 
 
 class ThreadSourceKind(Enum):
@@ -4588,15 +4415,6 @@ class TurnItemsView(Enum):
     not_loaded = "notLoaded"
     summary = "summary"
     full = "full"
-
-
-class TurnModerationMetadataNotification(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    metadata: Any
-    thread_id: Annotated[str, Field(alias="threadId")]
-    turn_id: Annotated[str, Field(alias="turnId")]
 
 
 class TurnPlanStepStatus(Enum):
@@ -4899,21 +4717,6 @@ class AppMetadata(BaseModel):
     version_notes: Annotated[str | None, Field(alias="versionNotes")] = None
 
 
-class AppTemplateSummary(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    canonical_connector_id: Annotated[str | None, Field(alias="canonicalConnectorId")] = None
-    category: str | None = None
-    description: str | None = None
-    logo_url: Annotated[str | None, Field(alias="logoUrl")] = None
-    logo_url_dark: Annotated[str | None, Field(alias="logoUrlDark")] = None
-    materialized_app_ids: Annotated[list[str], Field(alias="materializedAppIds")]
-    name: str
-    reason: AppTemplateUnavailableReason | None = None
-    template_id: Annotated[str, Field(alias="templateId")]
-
-
 class AppsConfig(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -4953,15 +4756,6 @@ class ThreadArchiveRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["thread/archive"], Field(title="Thread/archiveRequestMethod")]
     params: ThreadArchiveParams
-
-
-class ThreadDeleteRequest(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: RequestId
-    method: Annotated[Literal["thread/delete"], Field(title="Thread/deleteRequestMethod")]
-    params: ThreadDeleteParams
 
 
 class ThreadUnsubscribeRequest(BaseModel):
@@ -5508,15 +5302,6 @@ class AccountRateLimitsReadRequest(BaseModel):
     params: None = None
 
 
-class AccountUsageReadRequest(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: RequestId
-    method: Annotated[Literal["account/usage/read"], Field(title="Account/usage/readRequestMethod")]
-    params: None = None
-
-
 class AccountSendAddCreditsNudgeEmailRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -5835,13 +5620,10 @@ class ConfigRequirements(BaseModel):
     )
     allow_appshots: Annotated[bool | None, Field(alias="allowAppshots")] = None
     allow_managed_hooks_only: Annotated[bool | None, Field(alias="allowManagedHooksOnly")] = None
-    allow_remote_control: Annotated[bool | None, Field(alias="allowRemoteControl")] = None
     allowed_approval_policies: Annotated[
         list[AskForApproval] | None, Field(alias="allowedApprovalPolicies")
     ] = None
-    allowed_permission_profiles: Annotated[
-        dict[str, Any] | None, Field(alias="allowedPermissionProfiles")
-    ] = None
+    allowed_permissions: Annotated[list[str] | None, Field(alias="allowedPermissions")] = None
     allowed_sandbox_modes: Annotated[
         list[SandboxMode] | None, Field(alias="allowedSandboxModes")
     ] = None
@@ -5852,7 +5634,6 @@ class ConfigRequirements(BaseModel):
         list[WindowsSandboxSetupMode] | None, Field(alias="allowedWindowsSandboxImplementations")
     ] = None
     computer_use: Annotated[ComputerUseRequirements | None, Field(alias="computerUse")] = None
-    default_permissions: Annotated[str | None, Field(alias="defaultPermissions")] = None
     enforce_residency: Annotated[ResidencyRequirement | None, Field(alias="enforceResidency")] = (
         None
     )
@@ -6433,14 +6214,6 @@ class ThreadArchivedServerNotification(BaseModel):
     params: ThreadArchivedNotification
 
 
-class ThreadDeletedServerNotification(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    method: Annotated[Literal["thread/deleted"], Field(title="Thread/deletedNotificationMethod")]
-    params: ThreadDeletedNotification
-
-
 class ThreadUnarchivedServerNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6553,16 +6326,6 @@ class AccountUpdatedServerNotification(BaseModel):
     )
     method: Annotated[Literal["account/updated"], Field(title="Account/updatedNotificationMethod")]
     params: AccountUpdatedNotification
-
-
-class TurnModerationMetadataServerNotification(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    method: Annotated[
-        Literal["turn/moderationMetadata"], Field(title="Turn/moderationMetadataNotificationMethod")
-    ]
-    params: TurnModerationMetadataNotification
 
 
 class WarningServerNotification(BaseModel):
@@ -6928,7 +6691,6 @@ class ThreadItem(
         | McpToolCallThreadItem
         | DynamicToolCallThreadItem
         | CollabAgentToolCallThreadItem
-        | SubAgentActivityThreadItem
         | WebSearchThreadItem
         | ImageViewThreadItem
         | ImageGenerationThreadItem
@@ -6951,7 +6713,6 @@ class ThreadItem(
         | McpToolCallThreadItem
         | DynamicToolCallThreadItem
         | CollabAgentToolCallThreadItem
-        | SubAgentActivityThreadItem
         | WebSearchThreadItem
         | ImageViewThreadItem
         | ImageGenerationThreadItem
@@ -7743,7 +7504,6 @@ class CustomToolCallOutputResponseItem(BaseModel):
 class ResponseItem(
     RootModel[
         MessageResponseItem
-        | AgentMessageResponseItem
         | ReasoningResponseItem
         | LocalShellCallResponseItem
         | FunctionCallResponseItem
@@ -7765,7 +7525,6 @@ class ResponseItem(
     )
     root: (
         MessageResponseItem
-        | AgentMessageResponseItem
         | ReasoningResponseItem
         | LocalShellCallResponseItem
         | FunctionCallResponseItem
@@ -8119,14 +7878,12 @@ class PluginDetail(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    app_templates: Annotated[list[AppTemplateSummary], Field(alias="appTemplates")]
     apps: list[AppSummary]
     description: str | None = None
     hooks: list[PluginHookSummary]
     marketplace_name: Annotated[str, Field(alias="marketplaceName")]
     marketplace_path: Annotated[AbsolutePathBuf | None, Field(alias="marketplacePath")] = None
     mcp_servers: Annotated[list[str], Field(alias="mcpServers")]
-    share_url: Annotated[str | None, Field(alias="shareUrl")] = None
     skills: list[SkillSummary]
     summary: PluginSummary
 
@@ -8521,7 +8278,6 @@ class ClientRequest(
         | ThreadResumeRequest
         | ThreadForkRequest
         | ThreadArchiveRequest
-        | ThreadDeleteRequest
         | ThreadUnsubscribeRequest
         | ThreadNameSetRequest
         | ThreadGoalSetRequest
@@ -8585,7 +8341,6 @@ class ClientRequest(
         | AccountLoginCancelRequest
         | AccountLogoutRequest
         | AccountRateLimitsReadRequest
-        | AccountUsageReadRequest
         | AccountSendAddCreditsNudgeEmailRequest
         | FeedbackUploadRequest
         | CommandExecRequest
@@ -8611,7 +8366,6 @@ class ClientRequest(
         | ThreadResumeRequest
         | ThreadForkRequest
         | ThreadArchiveRequest
-        | ThreadDeleteRequest
         | ThreadUnsubscribeRequest
         | ThreadNameSetRequest
         | ThreadGoalSetRequest
@@ -8675,7 +8429,6 @@ class ClientRequest(
         | AccountLoginCancelRequest
         | AccountLogoutRequest
         | AccountRateLimitsReadRequest
-        | AccountUsageReadRequest
         | AccountSendAddCreditsNudgeEmailRequest
         | FeedbackUploadRequest
         | CommandExecRequest
@@ -8729,7 +8482,6 @@ class ServerNotification(
         | ThreadStartedServerNotification
         | ThreadStatusChangedServerNotification
         | ThreadArchivedServerNotification
-        | ThreadDeletedServerNotification
         | ThreadUnarchivedServerNotification
         | ThreadClosedServerNotification
         | SkillsChangedServerNotification
@@ -8773,7 +8525,6 @@ class ServerNotification(
         | ThreadCompactedServerNotification
         | ModelReroutedServerNotification
         | ModelVerificationServerNotification
-        | TurnModerationMetadataServerNotification
         | WarningServerNotification
         | GuardianWarningServerNotification
         | DeprecationNoticeServerNotification
@@ -8801,7 +8552,6 @@ class ServerNotification(
         | ThreadStartedServerNotification
         | ThreadStatusChangedServerNotification
         | ThreadArchivedServerNotification
-        | ThreadDeletedServerNotification
         | ThreadUnarchivedServerNotification
         | ThreadClosedServerNotification
         | SkillsChangedServerNotification
@@ -8845,7 +8595,6 @@ class ServerNotification(
         | ThreadCompactedServerNotification
         | ModelReroutedServerNotification
         | ModelVerificationServerNotification
-        | TurnModerationMetadataServerNotification
         | WarningServerNotification
         | GuardianWarningServerNotification
         | DeprecationNoticeServerNotification
