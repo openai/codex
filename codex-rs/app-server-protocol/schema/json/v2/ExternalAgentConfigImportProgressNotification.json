@@ -122,6 +122,6 @@
     "importId",
     "itemTypeResults"
   ],
-  "title": "ExternalAgentConfigImportCompletedNotification",
+  "title": "ExternalAgentConfigImportProgressNotification",
   "type": "object"
 }
