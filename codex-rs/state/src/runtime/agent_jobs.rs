@@ -135,7 +135,6 @@ WHERE id = ?
         status: Option<AgentJobItemStatus>,
         limit: Option<usize>,
     ) -> anyhow::Result<Vec<AgentJobItem>> {
-        self.fail_stale_agent_job_items(job_id).await?;
         let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
 SELECT
@@ -179,7 +178,6 @@ WHERE job_id =
         job_id: &str,
         item_id: &str,
     ) -> anyhow::Result<Option<AgentJobItem>> {
-        self.fail_stale_agent_job_items(job_id).await?;
         let row: Option<AgentJobItemRow> = sqlx::query_as::<_, AgentJobItemRow>(
             r#"
 SELECT
@@ -315,6 +313,12 @@ WHERE id = ?
         Ok(AgentJobStatus::parse(status.as_str())? == AgentJobStatus::Cancelled)
     }
 
+    /// Fail any running items whose last state update is older than the job's runtime limit.
+    ///
+    /// This is an external watchdog for workers that never emit a terminal event. It deliberately
+    /// uses a strict second-based cutoff so workers are not failed before `max_runtime_seconds`
+    /// has fully elapsed, and it preserves `assigned_thread_id` for observability and later
+    /// cleanup by thread-deletion/recovery paths.
     pub async fn fail_stale_agent_job_items(&self, job_id: &str) -> anyhow::Result<u64> {
         let row = sqlx::query(
             r#"
@@ -346,12 +350,11 @@ SET
     status = ?,
     completed_at = ?,
     updated_at = ?,
-    last_error = ?,
-    assigned_thread_id = NULL
+    last_error = ?
 WHERE
     job_id = ?
     AND status = ?
-    AND updated_at <= ?
+    AND updated_at < ?
             "#,
         )
         .bind(AgentJobItemStatus::Failed.as_str())
@@ -588,7 +591,6 @@ WHERE
     }
 
     pub async fn get_agent_job_progress(&self, job_id: &str) -> anyhow::Result<AgentJobProgress> {
-        self.fail_stale_agent_job_items(job_id).await?;
         let row = sqlx::query(
             r#"
 SELECT
@@ -738,6 +740,89 @@ mod tests {
         assert_eq!(item.status, AgentJobItemStatus::Failed);
         assert_eq!(item.result_json, None);
         assert_eq!(item.last_error, Some("missing report".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fail_stale_agent_job_items_preserves_thread_id_and_rejects_late_report()
+    -> anyhow::Result<()> {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home, "test-provider".to_string()).await?;
+        let job_id = "job-stale".to_string();
+        let item_id = "item-1".to_string();
+        let thread_id = "00000000-0000-0000-0000-000000000001".to_string();
+        runtime
+            .create_agent_job(
+                &AgentJobCreateParams {
+                    id: job_id.clone(),
+                    name: "test-job".to_string(),
+                    instruction: "Return a result".to_string(),
+                    auto_export: true,
+                    max_runtime_seconds: Some(60),
+                    output_schema_json: None,
+                    input_headers: vec!["path".to_string()],
+                    input_csv_path: "/tmp/in.csv".to_string(),
+                    output_csv_path: "/tmp/out.csv".to_string(),
+                },
+                &[AgentJobItemCreateParams {
+                    item_id: item_id.clone(),
+                    row_index: 0,
+                    source_id: None,
+                    row_json: json!({"path":"file-1"}),
+                }],
+            )
+            .await?;
+        runtime.mark_agent_job_running(job_id.as_str()).await?;
+        assert!(
+            runtime
+                .mark_agent_job_item_running_with_thread(
+                    job_id.as_str(),
+                    item_id.as_str(),
+                    thread_id.as_str(),
+                )
+                .await?
+        );
+
+        let stale_updated_at = Utc::now().timestamp().saturating_sub(120);
+        sqlx::query(
+            r#"
+UPDATE agent_job_items
+SET updated_at = ?
+WHERE job_id = ? AND item_id = ?
+            "#,
+        )
+        .bind(stale_updated_at)
+        .bind(job_id.as_str())
+        .bind(item_id.as_str())
+        .execute(runtime.pool.as_ref())
+        .await?;
+
+        assert_eq!(
+            runtime.fail_stale_agent_job_items(job_id.as_str()).await?,
+            1
+        );
+
+        let accepted = runtime
+            .report_agent_job_item_result(
+                job_id.as_str(),
+                item_id.as_str(),
+                thread_id.as_str(),
+                &json!({"late": true}),
+            )
+            .await?;
+        assert!(!accepted);
+
+        let item = runtime
+            .get_agent_job_item(job_id.as_str(), item_id.as_str())
+            .await?
+            .expect("job item should exist");
+        assert_eq!(item.status, AgentJobItemStatus::Failed);
+        assert_eq!(item.assigned_thread_id, Some(thread_id));
+        assert_eq!(
+            item.last_error,
+            Some("worker exceeded max runtime of 60s".to_string())
+        );
+        assert_eq!(item.result_json, None);
         Ok(())
     }
 }
