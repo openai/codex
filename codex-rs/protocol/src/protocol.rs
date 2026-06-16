@@ -750,6 +750,7 @@ impl InterAgentCommunication {
             author: self.author.to_string(),
             recipient: self.recipient.to_string(),
             content: vec![content],
+            trigger_turn: Some(self.trigger_turn),
             metadata: self.metadata.clone(),
         }
     }

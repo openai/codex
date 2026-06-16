@@ -55,6 +55,28 @@ fn inter_agent_assistant_message(text: &str) -> ResponseItem {
     }
 }
 
+#[test]
+fn typed_inter_agent_message_preserves_trigger_turn() {
+    for trigger_turn in [false, true] {
+        let communication = InterAgentCommunication::new(
+            AgentPath::root(),
+            AgentPath::root().join("worker").expect("worker path"),
+            Vec::new(),
+            "hello".to_string(),
+            trigger_turn,
+        );
+
+        let ResponseItem::AgentMessage {
+            trigger_turn: serialized_trigger_turn,
+            ..
+        } = communication.to_model_input_item()
+        else {
+            panic!("expected typed agent message");
+        };
+        assert_eq!(serialized_trigger_turn, Some(trigger_turn));
+    }
+}
+
 #[tokio::test]
 async fn record_initial_history_reconstructs_typed_inter_agent_message() {
     let (session, _turn_context) = make_session_and_context().await;

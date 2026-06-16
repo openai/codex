@@ -922,6 +922,9 @@ pub enum ResponseItem {
         content: Vec<AgentMessageInputContent>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
+        trigger_turn: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         metadata: Option<ResponseItemMetadata>,
     },
     Reasoning {
