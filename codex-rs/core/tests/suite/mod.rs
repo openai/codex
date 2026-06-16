@@ -109,8 +109,6 @@ mod skill_approval;
 mod skills;
 mod spawn_agent_description;
 mod sqlite_state;
-#[cfg(not(target_os = "windows"))]
-mod stop_failure_hooks;
 mod stream_error_allows_next_turn;
 mod stream_no_completed;
 mod subagent_notifications;
