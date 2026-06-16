@@ -7,6 +7,8 @@ use codex_config::types::DEFAULT_OTEL_ENVIRONMENT;
 use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
+use http::HeaderName;
+use http::HeaderValue;
 
 pub(crate) fn resolve_config(
     config: OtelConfigToml,
@@ -119,6 +121,13 @@ pub(super) fn apply_requirement(
 }
 
 fn validate_requirement(requirement: &OtelConfigToml) -> std::io::Result<()> {
+    for (field, exporter) in [
+        ("exporter", requirement.exporter.as_ref()),
+        ("trace_exporter", requirement.trace_exporter.as_ref()),
+        ("metrics_exporter", requirement.metrics_exporter.as_ref()),
+    ] {
+        validate_exporter_headers(field, exporter)?;
+    }
     if let Some(span_attributes) = requirement.span_attributes.as_ref() {
         codex_otel::validate_span_attributes(span_attributes).map_err(|err| {
             std::io::Error::new(
@@ -134,6 +143,27 @@ fn validate_requirement(requirement: &OtelConfigToml) -> std::io::Result<()> {
                 format!("invalid required `otel.tracestate`: {err}"),
             )
         })?;
+    }
+    Ok(())
+}
+
+fn validate_exporter_headers(
+    field: &str,
+    exporter: Option<&OtelExporterKind>,
+) -> std::io::Result<()> {
+    let headers = match exporter {
+        Some(OtelExporterKind::OtlpHttp { headers, .. })
+        | Some(OtelExporterKind::OtlpGrpc { headers, .. }) => headers,
+        Some(OtelExporterKind::None | OtelExporterKind::Statsig) | None => return Ok(()),
+    };
+    for (name, value) in headers {
+        if HeaderName::from_bytes(name.as_bytes()).is_err() || HeaderValue::from_str(value).is_err()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("invalid required `otel.{field}` header `{name}`"),
+            ));
+        }
     }
     Ok(())
 }

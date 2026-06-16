@@ -1060,6 +1060,7 @@ pub async fn run_main(
     remove_legacy_tui_log_file(config.codex_home.as_path());
 
     let otel_originator = originator().value;
+    let required_otel_exporter = codex_app_server_client::has_required_otel_exporter(&config);
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         codex_app_server_client::build_otel_provider(
             &config,
@@ -1069,12 +1070,28 @@ pub async fn run_main(
         )
     })) {
         Ok(Ok(otel)) => otel,
+        Ok(Err(e)) if required_otel_exporter => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("Could not create required otel exporter: {e}");
+            }
+            std::process::exit(1);
+        }
         Ok(Err(e)) => {
             #[allow(clippy::print_stderr)]
             {
                 eprintln!("Could not create otel exporter: {e}");
             }
             None
+        }
+        Err(_) if required_otel_exporter => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!(
+                    "Could not create required otel exporter: panicked during initialization"
+                );
+            }
+            std::process::exit(1);
         }
         Err(_) => {
             #[allow(clippy::print_stderr)]

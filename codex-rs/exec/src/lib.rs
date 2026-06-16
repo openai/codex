@@ -484,6 +484,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         std::process::exit(1);
     }
 
+    let required_otel_exporter = codex_core::otel_init::has_required_exporter(&config);
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         codex_core::otel_init::build_provider(
             &config,
@@ -493,9 +494,17 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         )
     })) {
         Ok(Ok(otel)) => otel,
+        Ok(Err(e)) if required_otel_exporter => {
+            eprintln!("Could not create required otel exporter: {e}");
+            std::process::exit(1);
+        }
         Ok(Err(e)) => {
             eprintln!("Could not create otel exporter: {e}");
             None
+        }
+        Err(_) if required_otel_exporter => {
+            eprintln!("Could not create required otel exporter: panicked during initialization");
+            std::process::exit(1);
         }
         Err(_) => {
             eprintln!("Could not create otel exporter: panicked during initialization");
