@@ -1448,12 +1448,14 @@ pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) -> Res
     impl Respond for SeqResponder {
         fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
             let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
-            match self.responses.get(call_num) {
-                Some(body) => ResponseTemplate::new(200)
-                    .insert_header("content-type", "text/event-stream")
-                    .set_body_string(body.clone()),
-                None => panic!("no response for {call_num}"),
-            }
+            let missing_response_message = format!("no response for {call_num}");
+            let body = self
+                .responses
+                .get(call_num)
+                .expect(&missing_response_message);
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body.clone())
         }
     }
 

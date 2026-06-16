@@ -44,14 +44,10 @@ fn call_output(req: &ResponsesRequest, call_id: &str) -> String {
         Some(call_id),
         "mismatched call_id in function_call_output"
     );
-    let (content_opt, _success) = match req.function_call_output_content_and_success(call_id) {
-        Some(values) => values,
-        None => panic!("function_call_output present"),
-    };
-    match content_opt {
-        Some(content) => content,
-        None => panic!("function_call_output content present"),
-    }
+    let (content_opt, _success) = req
+        .function_call_output_content_and_success(call_id)
+        .expect("function_call_output present");
+    content_opt.expect("function_call_output content present")
 }
 
 fn call_output_content_and_success(
@@ -64,14 +60,10 @@ fn call_output_content_and_success(
         Some(call_id),
         "mismatched call_id in function_call_output"
     );
-    let (content_opt, success) = match req.function_call_output_content_and_success(call_id) {
-        Some(values) => values,
-        None => panic!("function_call_output present"),
-    };
-    let content = match content_opt {
-        Some(content) => content,
-        None => panic!("function_call_output content present"),
-    };
+    let (content_opt, success) = req
+        .function_call_output_content_and_success(call_id)
+        .expect("function_call_output present");
+    let content = content_opt.expect("function_call_output content present");
     (content, success)
 }
 
@@ -191,10 +183,10 @@ async fn request_user_input_round_trip_for_mode(
     assert!(
         timeout(Duration::from_millis(200), async {
             loop {
-                let event = match codex.next_event().await {
-                    Ok(event) => event,
-                    Err(err) => panic!("event stream should stay open: {err}"),
-                };
+                let event = codex
+                    .next_event()
+                    .await
+                    .expect("event stream should stay open");
                 if matches!(event.msg, EventMsg::TokenCount(_)) {
                     return;
                 }

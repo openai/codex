@@ -1093,18 +1093,16 @@ impl TestCodexHarness {
 }
 
 fn custom_tool_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
-    for body in bodies {
-        if let Some(items) = body.get("input").and_then(Value::as_array) {
-            for item in items {
-                if item.get("type").and_then(Value::as_str) == Some("custom_tool_call_output")
-                    && item.get("call_id").and_then(Value::as_str) == Some(call_id)
-                {
-                    return item;
-                }
-            }
-        }
-    }
-    panic!("custom_tool_call_output {call_id} not found");
+    let missing_output = format!("custom_tool_call_output {call_id} not found");
+    bodies
+        .iter()
+        .filter_map(|body| body.get("input").and_then(Value::as_array))
+        .flatten()
+        .find(|item| {
+            item.get("type").and_then(Value::as_str) == Some("custom_tool_call_output")
+                && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+        })
+        .expect(&missing_output)
 }
 
 fn custom_tool_call_output_text(bodies: &[Value], call_id: &str) -> String {
@@ -1116,18 +1114,16 @@ fn custom_tool_call_output_text(bodies: &[Value], call_id: &str) -> String {
 }
 
 fn function_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
-    for body in bodies {
-        if let Some(items) = body.get("input").and_then(Value::as_array) {
-            for item in items {
-                if item.get("type").and_then(Value::as_str) == Some("function_call_output")
-                    && item.get("call_id").and_then(Value::as_str) == Some(call_id)
-                {
-                    return item;
-                }
-            }
-        }
-    }
-    panic!("function_call_output {call_id} not found");
+    let missing_output = format!("function_call_output {call_id} not found");
+    bodies
+        .iter()
+        .filter_map(|body| body.get("input").and_then(Value::as_array))
+        .flatten()
+        .find(|item| {
+            item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+        })
+        .expect(&missing_output)
 }
 
 pub fn test_codex() -> TestCodexBuilder {

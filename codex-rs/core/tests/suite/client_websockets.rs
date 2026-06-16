@@ -2241,13 +2241,12 @@ async fn stream_until_complete_with_model_info(
         .expect("websocket stream failed");
 
     while let Some(event) = stream.next().await {
-        match event {
-            Ok(ResponseEvent::Completed { response_id, .. }) => {
+        match event.expect("websocket stream failed") {
+            ResponseEvent::Completed { response_id, .. } => {
                 assert_eq!(response_id, expected_response_id);
                 return;
             }
-            Ok(_) => {}
-            Err(err) => panic!("websocket stream failed: {err}"),
+            _ => {}
         }
     }
     panic!("websocket stream ended before completion");

@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::CopyOptions;
@@ -397,10 +399,7 @@ async fn file_system_copy_rejects_directory_without_recursive(
             /*sandbox*/ None,
         )
         .await;
-    let error = match error {
-        Ok(()) => panic!("copy should fail"),
-        Err(error) => error,
-    };
+    let error = error.expect_err("copying a directory without recursion should fail");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert_eq!(
         error.to_string(),
@@ -585,10 +584,7 @@ async fn file_system_copy_rejects_copying_directory_into_descendant(
             /*sandbox*/ None,
         )
         .await;
-    let error = match error {
-        Ok(()) => panic!("copy should fail"),
-        Err(error) => error,
-    };
+    let error = error.expect_err("copying a directory into itself should fail");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert_eq!(
         error.to_string(),

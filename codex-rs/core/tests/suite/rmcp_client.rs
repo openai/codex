@@ -521,9 +521,9 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
         .structured_content
         .as_ref()
         .expect("structured content");
-    let Value::Object(map) = structured else {
-        panic!("structured content should be an object: {structured:?}");
-    };
+    let map = structured
+        .as_object()
+        .expect("structured content should be an object");
     let echo_value = map
         .get("echo")
         .and_then(Value::as_str)
@@ -810,9 +810,9 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
     let wrapped_payload = split_wall_time_wrapped_output(output_text);
     let output_json: Value = serde_json::from_str(wrapped_payload)
         .expect("wrapped MCP output should preserve sandbox metadata JSON");
-    let Value::Object(meta) = output_json else {
-        panic!("sandbox_meta should return metadata object: {output_json:?}");
-    };
+    let meta = output_json
+        .as_object()
+        .expect("sandbox_meta should return metadata object");
 
     let sandbox_meta = meta
         .get(MCP_SANDBOX_STATE_META_CAPABILITY)
@@ -1747,9 +1747,9 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
         .structured_content
         .as_ref()
         .expect("structured content");
-    let Value::Object(map) = structured else {
-        panic!("structured content should be an object: {structured:?}");
-    };
+    let map = structured
+        .as_object()
+        .expect("structured content should be an object");
     let echo_value = map
         .get("echo")
         .and_then(Value::as_str)
@@ -2161,9 +2161,9 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
         .structured_content
         .as_ref()
         .expect("structured content");
-    let Value::Object(map) = structured else {
-        panic!("structured content should be an object: {structured:?}");
-    };
+    let map = structured
+        .as_object()
+        .expect("structured content should be an object");
     let echo_value = map
         .get("echo")
         .and_then(Value::as_str)
@@ -2351,9 +2351,9 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
         .structured_content
         .as_ref()
         .expect("structured content");
-    let Value::Object(map) = structured else {
-        panic!("structured content should be an object: {structured:?}");
-    };
+    let map = structured
+        .as_object()
+        .expect("structured content should be an object");
     let echo_value = map
         .get("echo")
         .and_then(Value::as_str)

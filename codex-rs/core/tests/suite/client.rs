@@ -352,19 +352,14 @@ move /y tokens.next tokens.txt >nul
             // Match the model-provider default to avoid brittle shell-startup timing in CI.
             timeout_ms: non_zero_u64(/*value*/ 5_000),
             refresh_interval_ms: 60_000,
-            cwd: match codex_utils_absolute_path::AbsolutePathBuf::try_from(self.tempdir.path()) {
-                Ok(cwd) => cwd,
-                Err(err) => panic!("tempdir should be absolute: {err}"),
-            },
+            cwd: codex_utils_absolute_path::AbsolutePathBuf::try_from(self.tempdir.path())
+                .expect("tempdir should be absolute"),
         }
     }
 }
 
 fn non_zero_u64(value: u64) -> NonZeroU64 {
-    match NonZeroU64::new(value) {
-        Some(value) => value,
-        None => panic!("expected non-zero value: {value}"),
-    }
+    NonZeroU64::new(value).expect("expected non-zero value")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1237,18 +1232,16 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
 
-    let auth_manager = match CodexAuth::from_auth_storage(
+    let auth = CodexAuth::from_auth_storage(
         codex_home.path(),
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::default(),
     )
     .await
-    {
-        Ok(Some(auth)) => codex_core::test_support::auth_manager_from_auth(auth),
-        Ok(None) => panic!("No CodexAuth found in codex_home"),
-        Err(e) => panic!("Failed to load CodexAuth: {e}"),
-    };
+    .expect("Failed to load CodexAuth")
+    .expect("No CodexAuth found in codex_home");
+    let auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
     let installation_id = resolve_installation_id(&config.codex_home)
         .await
         .expect("resolve installation id");

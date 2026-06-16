@@ -529,11 +529,8 @@ async fn subagent_start_replaces_session_start_and_injects_context() -> Result<(
 
     let test = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) =
-                write_subagent_lifecycle_hooks(home, /*stop_prompts*/ &[], "worker")
-            {
-                panic!("failed to write subagent hook fixture: {error}");
-            }
+            write_subagent_lifecycle_hooks(home, /*stop_prompts*/ &[], "worker")
+                .expect("failed to write subagent hook fixture");
         })
         .with_config(|config| {
             trust_discovered_hooks(config);

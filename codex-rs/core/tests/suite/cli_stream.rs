@@ -516,10 +516,9 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     .await?;
 
     // Basic sanity checks on location and metadata.
-    let rel = match path.strip_prefix(&sessions_dir) {
-        Ok(r) => r,
-        Err(_) => panic!("session file should live under sessions/"),
-    };
+    let rel = path
+        .strip_prefix(&sessions_dir)
+        .expect("session file should live under sessions/");
     let comps: Vec<String> = rel
         .components()
         .map(|c| c.as_os_str().to_string_lossy().into_owned())

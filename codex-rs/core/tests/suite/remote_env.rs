@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::types::ApprovalsReviewer;
@@ -229,10 +231,7 @@ async fn remote_test_env_exposes_target_shell_to_model() -> Result<()> {
 }
 
 fn absolute_path(path: PathBuf) -> AbsolutePathBuf {
-    match AbsolutePathBuf::try_from(path) {
-        Ok(path) => path,
-        Err(error) => panic!("path should be absolute: {error}"),
-    }
+    AbsolutePathBuf::try_from(path).expect("path should be absolute")
 }
 
 fn read_only_sandbox(readable_root: PathBuf) -> FileSystemSandboxContext {

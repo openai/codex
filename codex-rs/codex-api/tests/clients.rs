@@ -487,10 +487,9 @@ async fn streaming_client_does_not_retry_auth_build_error() -> Result<()> {
             /*turn_state*/ None,
         )
         .await;
-    let err = match result {
-        Ok(_) => panic!("auth build errors should fail without retry"),
-        Err(err) => err,
-    };
+    let err = result
+        .err()
+        .expect("auth build errors should fail without retry");
 
     assert!(matches!(
         err,

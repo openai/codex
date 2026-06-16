@@ -1001,14 +1001,15 @@ async fn wait_for_unified_exec_end(
                 response_mock.requests().len()
             );
         }
-        let event = match tokio::time::timeout(remaining, test.codex.next_event()).await {
-            Ok(Ok(event)) => event.msg,
-            Ok(Err(err)) => panic!("event stream ended unexpectedly: {err}"),
-            Err(_) => panic!(
-                "timed out waiting for network denial end event; observed {observed_events:?}; response requests: {}",
-                response_mock.requests().len()
-            ),
-        };
+        let timeout_message = format!(
+            "timed out waiting for network denial end event; observed {observed_events:?}; response requests: {}",
+            response_mock.requests().len()
+        );
+        let event = tokio::time::timeout(remaining, test.codex.next_event())
+            .await
+            .expect(&timeout_message)
+            .expect("event stream ended unexpectedly")
+            .msg;
         turn_completed |= matches!(event, EventMsg::TurnComplete(_));
         observed_events.push(format!("{event:?}"));
         if let EventMsg::ExecCommandEnd(ev) = event
