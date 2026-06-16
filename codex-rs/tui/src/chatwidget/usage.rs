@@ -13,7 +13,7 @@ impl ChatWidget {
         self.clear_pending_rate_limit_reset_hint();
         let reset_eligible =
             self.has_chatgpt_account && !self.plan_type.is_some_and(PlanType::is_workspace_account);
-        let (reset_available, reset_description) =
+        let (reset_action_enabled, reset_description) =
             match (reset_eligible, self.available_rate_limit_reset_credits) {
                 (true, Some(available_count)) if available_count > 0 => (
                     true,
@@ -22,10 +22,8 @@ impl ChatWidget {
                         reset_label(available_count)
                     ),
                 ),
-                (true, None) => (true, "Check reset availability.".to_string()),
-                (true, Some(_)) | (false, _) => {
-                    (false, "No rate-limit resets available.".to_string())
-                }
+                (true, _) => (true, "Check reset availability.".to_string()),
+                (false, _) => (false, "No rate-limit resets available.".to_string()),
             };
         self.bottom_pane.show_selection_view(SelectionViewParams {
             view_id: Some(USAGE_MENU_VIEW_ID),
@@ -45,7 +43,7 @@ impl ChatWidget {
                 SelectionItem {
                     name: "Redeem rate limit reset".to_string(),
                     description: Some(reset_description),
-                    is_disabled: !reset_available,
+                    is_disabled: !reset_action_enabled,
                     actions: vec![Box::new(|tx| {
                         tx.send(AppEvent::OpenRateLimitResetCredits);
                     })],

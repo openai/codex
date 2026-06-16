@@ -27,7 +27,7 @@ async fn usage_command_opens_menu_when_reset_is_available_snapshot() {
 }
 
 #[tokio::test]
-async fn usage_command_shows_disabled_reset_when_none_is_available_snapshot() {
+async fn usage_command_can_recheck_reset_availability_after_cached_zero_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
     let request_id = chat.start_rate_limit_reset_startup_check();
@@ -44,7 +44,7 @@ async fn usage_command_shows_disabled_reset_when_none_is_available_snapshot() {
     );
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenTokenActivity));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenRateLimitResetCredits));
 }
 
 #[tokio::test]
@@ -226,7 +226,7 @@ async fn rate_limit_reset_retry_reuses_idempotency_key() {
 }
 
 #[tokio::test]
-async fn no_credit_outcome_disables_reset_entry_in_usage_menu() {
+async fn no_credit_outcome_allows_reset_availability_recheck() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
     let startup_request_id = chat.start_rate_limit_reset_startup_check();
@@ -247,7 +247,7 @@ async fn no_credit_outcome_disables_reset_entry_in_usage_menu() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenTokenActivity));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenRateLimitResetCredits));
 }
 
 #[tokio::test]
