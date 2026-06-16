@@ -15,7 +15,11 @@ use codex_plugin::AppDeclaration;
 use codex_plugin::PluginId;
 use codex_plugin::app_connector_ids_from_declarations;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_plugins::plugin_service_routing::plugin_service_preview_enabled;
+use codex_utils_plugins::plugin_service_routing::plugin_service_routing_cookie;
 use reqwest::RequestBuilder;
+use reqwest::header::COOKIE;
+use reqwest::header::HeaderValue;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -1840,8 +1844,7 @@ async fn send_and_decode<T: for<'de> Deserialize<'de>>(
     request: RequestBuilder,
     url: &str,
 ) -> Result<T, RemotePluginCatalogError> {
-    let response = request
-        .send()
+    let response = send_plugin_service_request(request)
         .await
         .map_err(|source| RemotePluginCatalogError::Request {
             url: url.to_string(),
@@ -1861,4 +1864,38 @@ async fn send_and_decode<T: for<'de> Deserialize<'de>>(
         url: url.to_string(),
         source,
     })
+}
+
+pub(super) async fn send_plugin_service_request(
+    request: RequestBuilder,
+) -> Result<reqwest::Response, reqwest::Error> {
+    send_plugin_service_request_with_preview(request, plugin_service_preview_enabled()).await
+}
+
+async fn send_plugin_service_request_with_preview(
+    request: RequestBuilder,
+    preview_enabled: bool,
+) -> Result<reqwest::Response, reqwest::Error> {
+    let (client, request) = request.build_split();
+    let mut request = request?;
+    let headers = request.headers_mut();
+    let existing_cookie_headers = headers
+        .get_all(COOKIE)
+        .iter()
+        .map(|value| value.as_bytes().to_vec())
+        .collect::<Vec<_>>();
+    let existing_cookie_headers = existing_cookie_headers
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let routing_cookie = plugin_service_routing_cookie(&existing_cookie_headers, preview_enabled);
+
+    headers.remove(COOKIE);
+    if let Some(routing_cookie) = routing_cookie
+        && let Ok(routing_cookie) = HeaderValue::from_bytes(&routing_cookie)
+    {
+        headers.insert(COOKIE, routing_cookie);
+    }
+
+    client.execute(request).await
 }

@@ -33,6 +33,8 @@ use codex_protocol::mcp::Tool;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::McpAuthStatus;
+use codex_utils_plugins::plugin_service_routing::PLUGIN_SERVICE_PREVIEW_COOKIE;
+use codex_utils_plugins::plugin_service_routing::plugin_service_preview_enabled;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
@@ -455,6 +457,7 @@ pub fn codex_apps_mcp_server_config(
     mcp_server_config_for_url(
         codex_apps_mcp_url_for_base_url(chatgpt_base_url),
         apps_mcp_product_sku,
+        plugin_service_preview_enabled(),
     )
 }
 
@@ -469,13 +472,29 @@ pub fn hosted_plugin_runtime_mcp_server_config(
     } else {
         format!("{base_url}/api/codex")
     };
-    mcp_server_config_for_url(format!("{base_url}/ps/mcp"), apps_mcp_product_sku)
+    mcp_server_config_for_url(
+        format!("{base_url}/ps/mcp"),
+        apps_mcp_product_sku,
+        plugin_service_preview_enabled(),
+    )
 }
 
-fn mcp_server_config_for_url(url: String, apps_mcp_product_sku: Option<&str>) -> McpServerConfig {
-    let http_headers = apps_mcp_product_sku.map(|product_sku| {
-        HashMap::from([("X-OpenAI-Product-Sku".to_string(), product_sku.to_string())])
-    });
+fn mcp_server_config_for_url(
+    url: String,
+    apps_mcp_product_sku: Option<&str>,
+    preview_enabled: bool,
+) -> McpServerConfig {
+    let mut http_headers = HashMap::new();
+    if let Some(product_sku) = apps_mcp_product_sku {
+        http_headers.insert("X-OpenAI-Product-Sku".to_string(), product_sku.to_string());
+    }
+    if preview_enabled {
+        http_headers.insert(
+            "Cookie".to_string(),
+            PLUGIN_SERVICE_PREVIEW_COOKIE.to_string(),
+        );
+    }
+    let http_headers = (!http_headers.is_empty()).then_some(http_headers);
 
     McpServerConfig {
         transport: McpServerTransportConfig::StreamableHttp {

@@ -493,8 +493,7 @@ async fn send_and_expect_status(
     url_for_error: &str,
     expected_statuses: &[StatusCode],
 ) -> Result<(), RemotePluginCatalogError> {
-    let response = request
-        .send()
+    let response = send_plugin_service_request(request)
         .await
         .map_err(|source| RemotePluginCatalogError::Request {
             url: url_for_error.to_string(),

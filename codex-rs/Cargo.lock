@@ -4282,6 +4282,7 @@ dependencies = [
  "codex-exec-server",
  "codex-utils-absolute-path",
  "codex-utils-path-uri",
+ "pretty_assertions",
  "serde",
  "serde_json",
  "tempfile",

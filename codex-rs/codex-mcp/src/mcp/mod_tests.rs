@@ -261,7 +261,11 @@ fn codex_apps_server_config_uses_legacy_codex_apps_path() {
 
 #[test]
 fn codex_apps_server_config_forwards_configured_product_sku_header() {
-    let config = codex_apps_mcp_server_config("https://chatgpt.com", Some("tpp"));
+    let config = mcp_server_config_for_url(
+        codex_apps_mcp_url_for_base_url("https://chatgpt.com"),
+        Some("tpp"),
+        /*preview_enabled*/ false,
+    );
 
     match &config.transport {
         McpServerTransportConfig::StreamableHttp {
@@ -280,6 +284,59 @@ fn codex_apps_server_config_forwards_configured_product_sku_header() {
         }
         other => panic!("expected streamable http transport, got {other:?}"),
     }
+}
+
+#[test]
+fn built_in_plugin_service_mcp_config_only_adds_preview_cookie_when_enabled() {
+    let disabled = mcp_server_config_for_url(
+        "https://chatgpt.com/backend-api/ps/mcp".to_string(),
+        /*apps_mcp_product_sku*/ None,
+        /*preview_enabled*/ false,
+    );
+    let enabled = mcp_server_config_for_url(
+        "https://chatgpt.com/backend-api/ps/mcp".to_string(),
+        /*apps_mcp_product_sku*/ None,
+        /*preview_enabled*/ true,
+    );
+
+    fn headers(config: &McpServerConfig) -> Option<&HashMap<String, String>> {
+        match &config.transport {
+            McpServerTransportConfig::StreamableHttp { http_headers, .. } => http_headers.as_ref(),
+            other => panic!("expected streamable http transport, got {other:?}"),
+        }
+    }
+    assert_eq!(headers(&disabled), None);
+    assert_eq!(
+        headers(&enabled),
+        Some(&HashMap::from([(
+            "Cookie".to_string(),
+            "oai-chat-plugin-service-preview=true".to_string(),
+        )])),
+    );
+
+    let unrelated_server = McpServerConfig {
+        transport: McpServerTransportConfig::StreamableHttp {
+            url: "https://third-party.example/mcp".to_string(),
+            bearer_token_env_var: None,
+            http_headers: None,
+            env_http_headers: None,
+        },
+        environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+        enabled: true,
+        required: false,
+        supports_parallel_tool_calls: false,
+        disabled_reason: None,
+        startup_timeout_sec: None,
+        tool_timeout_sec: None,
+        default_tools_approval_mode: None,
+        enabled_tools: None,
+        disabled_tools: None,
+        scopes: None,
+        oauth: None,
+        oauth_resource: None,
+        tools: HashMap::new(),
+    };
+    assert_eq!(headers(&unrelated_server), None);
 }
 
 #[tokio::test]
