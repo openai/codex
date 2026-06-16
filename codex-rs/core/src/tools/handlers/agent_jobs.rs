@@ -612,10 +612,7 @@ fn job_runtime_timeout(job: &codex_state::AgentJob) -> Duration {
 }
 
 fn started_at_from_item(item: &codex_state::AgentJobItem) -> Instant {
-    let now = chrono::Utc::now();
-    let age = now.signed_duration_since(item.updated_at);
-    if let Ok(age) = age.to_std() {
-        let age = age.saturating_sub(Duration::from_secs(1));
+    if let Some(age) = age_since_item_update(item) {
         Instant::now().checked_sub(age).unwrap_or_else(Instant::now)
     } else {
         Instant::now()
@@ -623,12 +620,15 @@ fn started_at_from_item(item: &codex_state::AgentJobItem) -> Instant {
 }
 
 fn is_item_stale(item: &codex_state::AgentJobItem, runtime_timeout: Duration) -> bool {
+    age_since_item_update(item).is_some_and(|age| age > runtime_timeout)
+}
+
+fn age_since_item_update(item: &codex_state::AgentJobItem) -> Option<Duration> {
     let now = chrono::Utc::now();
-    if let Ok(age) = now.signed_duration_since(item.updated_at).to_std() {
-        age > runtime_timeout
-    } else {
-        false
-    }
+    now.signed_duration_since(item.updated_at)
+        .to_std()
+        .ok()
+        .map(|age| age.saturating_sub(Duration::from_secs(1)))
 }
 
 fn default_output_csv_path(input_csv_path: &AbsolutePathBuf, job_id: &str) -> AbsolutePathBuf {
