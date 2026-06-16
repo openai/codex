@@ -21,9 +21,9 @@ where
         startup_ca_env_keys_present_in_child,
         &can_read_path,
     );
-    // Fold SSL_CERT_DIR into SSL_CERT_FILE so children cannot consult an
-    // unmaterialized CA directory after preparation.
-    env.remove(crate::certs::SSL_CERT_DIR_ENV_KEY);
+    if ssl_cert_dir_contents.is_some() {
+        env.remove(crate::certs::SSL_CERT_DIR_ENV_KEY);
+    }
     let mut materialized_ca_trust_bundle_paths = Vec::new();
     for key in crate::certs::CUSTOM_CA_ENV_KEYS {
         let Some(value) = env.get(key).filter(|value| !value.is_empty()) else {
@@ -38,8 +38,7 @@ where
             &can_read_path,
         )
         .unwrap_or_default();
-        if key == "SSL_CERT_FILE"
-            && let Some(ssl_cert_dir_contents) = ssl_cert_dir_contents.as_deref()
+        if let Some(ssl_cert_dir_contents) = ssl_cert_dir_contents.as_deref()
             && let Err(err) = crate::certs::append_bounded_pem_contents(
                 &mut custom_ca_bundle,
                 ssl_cert_dir_contents,

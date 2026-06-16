@@ -1,7 +1,6 @@
 use super::*;
 use pretty_assertions::assert_eq;
 use std::fs;
-use std::path::Path;
 use tempfile::tempdir;
 
 const REQUESTS_CA_BUNDLE_ENV_KEY: &str = "REQUESTS_CA_BUNDLE";
@@ -24,11 +23,7 @@ fn requests_ca_bundle_env(value: impl Into<String>) -> HashMap<String, String> {
 }
 
 fn requests_ca_bundle_contents(env: &HashMap<String, String>) -> String {
-    fs::read_to_string(Path::new(
-        env.get(REQUESTS_CA_BUNDLE_ENV_KEY)
-            .expect("REQUESTS_CA_BUNDLE should be set"),
-    ))
-    .unwrap()
+    fs::read_to_string(&env[REQUESTS_CA_BUNDLE_ENV_KEY]).unwrap()
 }
 
 fn ssl_cert_dir_env(
@@ -48,6 +43,10 @@ fn ssl_cert_dir_env(
         HashMap::from([
             (
                 "SSL_CERT_FILE".to_string(),
+                mitm_ca_trust_bundle_path.display().to_string(),
+            ),
+            (
+                REQUESTS_CA_BUNDLE_ENV_KEY.to_string(),
                 mitm_ca_trust_bundle_path.display().to_string(),
             ),
             (
@@ -105,14 +104,12 @@ fn materializes_readable_ssl_cert_dir() {
         |_| true,
     );
 
-    let ssl_cert_file_path = Path::new(
-        env.get("SSL_CERT_FILE")
-            .expect("SSL_CERT_FILE should be set"),
-    );
-    assert_eq!(
-        fs::read_to_string(ssl_cert_file_path).unwrap(),
-        "dir ca a\ndir ca b\nmanaged ca\n"
-    );
+    for key in ["SSL_CERT_FILE", REQUESTS_CA_BUNDLE_ENV_KEY] {
+        assert_eq!(
+            fs::read_to_string(&env[key]).unwrap(),
+            "dir ca a\ndir ca b\nmanaged ca\n"
+        );
+    }
     assert_eq!(env.get(crate::certs::SSL_CERT_DIR_ENV_KEY), None);
 }
 
@@ -137,7 +134,7 @@ fn bounds_aggregate_ssl_cert_dir_contents() {
         env.get("SSL_CERT_FILE"),
         Some(&mitm_ca_trust_bundle.path.display().to_string())
     );
-    assert_eq!(env.get(crate::certs::SSL_CERT_DIR_ENV_KEY), None);
+    assert!(env.contains_key(crate::certs::SSL_CERT_DIR_ENV_KEY));
 }
 
 #[test]
