@@ -60,22 +60,6 @@ async fn expect_skills_changed_notification(
     Ok(())
 }
 
-fn write_plugins_enabled_config_with_base_url(
-    codex_home: &std::path::Path,
-    base_url: &str,
-) -> std::io::Result<()> {
-    std::fs::write(
-        codex_home.join("config.toml"),
-        format!(
-            r#"chatgpt_base_url = "{base_url}"
-
-[features]
-plugins = true
-"#,
-        ),
-    )
-}
-
 fn write_remote_plugins_enabled_config_with_base_url(
     codex_home: &std::path::Path,
     base_url: &str,
@@ -91,47 +75,6 @@ remote_plugin = true
 "#,
         ),
     )
-}
-
-fn write_plugin_with_skill(
-    repo_root: &std::path::Path,
-    plugin_name: &str,
-    skill_name: &str,
-) -> Result<()> {
-    std::fs::create_dir_all(repo_root.join(".git"))?;
-    std::fs::create_dir_all(repo_root.join(".agents/plugins"))?;
-    std::fs::write(
-        repo_root.join(".agents/plugins/marketplace.json"),
-        format!(
-            r#"{{
-  "name": "local-marketplace",
-  "plugins": [
-    {{
-      "name": "{plugin_name}",
-      "source": {{
-        "source": "local",
-        "path": "./{plugin_name}"
-      }}
-    }}
-  ]
-}}"#
-        ),
-    )?;
-
-    let plugin_root = repo_root.join(plugin_name);
-    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
-    std::fs::write(
-        plugin_root.join(".codex-plugin/plugin.json"),
-        format!(r#"{{"name":"{plugin_name}"}}"#),
-    )?;
-
-    let skill_dir = plugin_root.join("skills").join(skill_name);
-    std::fs::create_dir_all(&skill_dir)?;
-    std::fs::write(
-        skill_dir.join("SKILL.md"),
-        format!("---\nname: {skill_name}\ndescription: {skill_name} description\n---\n\n# Body\n"),
-    )?;
-    Ok(())
 }
 
 fn write_cached_remote_plugin_with_skill(
