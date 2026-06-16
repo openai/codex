@@ -125,9 +125,6 @@ struct FeaturedPluginIdsCacheKey {
 #[derive(Clone, Hash, PartialEq, Eq)]
 struct RecommendedPluginsCacheKey {
     chatgpt_base_url: String,
-    account_id: Option<String>,
-    chatgpt_user_id: Option<String>,
-    is_workspace_account: bool,
 }
 
 #[derive(Clone)]
@@ -219,19 +216,12 @@ fn featured_plugin_ids_cache_key(
     }
 }
 
-fn recommended_plugins_cache_key(
-    config: &PluginsConfigInput,
-    auth: Option<&CodexAuth>,
-) -> RecommendedPluginsCacheKey {
-    // Account changes start a warmup but do not clear process-local entries. Keep install
-    // identities scoped to the auth that fetched them, including while a new warmup is in flight.
+fn recommended_plugins_cache_key(config: &PluginsConfigInput) -> RecommendedPluginsCacheKey {
     RecommendedPluginsCacheKey {
         chatgpt_base_url: config.chatgpt_base_url.clone(),
-        account_id: auth.and_then(CodexAuth::get_account_id),
-        chatgpt_user_id: auth.and_then(CodexAuth::get_chatgpt_user_id),
-        is_workspace_account: auth.is_some_and(CodexAuth::is_workspace_account),
     }
 }
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInstallRequest {
     pub plugin_name: String,
@@ -525,6 +515,19 @@ impl PluginsManager {
             Err(err) => err.into_inner(),
         };
         *featured_plugin_ids_cache = None;
+    }
+
+    pub fn clear_recommended_plugins_cache(&self) {
+        let mut refreshes = match self.recommended_plugins_refreshes.write() {
+            Ok(refreshes) => refreshes,
+            Err(err) => err.into_inner(),
+        };
+        refreshes.clear();
+        let mut cache = match self.recommended_plugins_cache.write() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        cache.clear();
     }
 
     fn clear_loaded_plugins_cache(&self) {
@@ -936,7 +939,7 @@ impl PluginsManager {
             return RecommendedPluginsMode::Legacy;
         }
 
-        let cache_key = recommended_plugins_cache_key(config, auth);
+        let cache_key = recommended_plugins_cache_key(config);
         if let Some(cached) = self.cached_recommended_plugins_mode(&cache_key) {
             return cached;
         }

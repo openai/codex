@@ -181,6 +181,9 @@ impl AccountRequestProcessor {
         thread_manager
             .plugins_manager()
             .set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
+        thread_manager
+            .plugins_manager()
+            .clear_recommended_plugins_cache();
 
         match config_manager
             .load_latest_config(/*fallback_cwd*/ None)

@@ -3732,7 +3732,7 @@ remote_plugin = true
     config.chatgpt_base_url = server.uri();
     let manager = std::sync::Arc::new(PluginsManager::new(tmp.path().to_path_buf()));
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let cache_key = recommended_plugins_cache_key(&config, Some(&auth));
+    let cache_key = recommended_plugins_cache_key(&config);
 
     manager.maybe_start_remote_plugin_caches_refresh(
         &config,
@@ -3762,6 +3762,8 @@ remote_plugin = true
             .await,
         mode
     );
+    manager.clear_recommended_plugins_cache();
+    assert_eq!(manager.cached_recommended_plugins_mode(&cache_key), None);
 }
 
 #[tokio::test]
@@ -3839,49 +3841,6 @@ remote_plugin = true
             .recommended_plugins_mode_for_config(&config, Some(&auth))
             .await,
         expected
-    );
-}
-
-#[tokio::test]
-async fn recommended_plugins_memory_cache_is_isolated_by_account() {
-    let tmp = tempfile::tempdir().unwrap();
-    write_file(
-        &tmp.path().join(CONFIG_TOML_FILE),
-        r#"[features]
-plugins = true
-remote_plugin = true
-"#,
-    );
-    let config = load_config(tmp.path(), tmp.path()).await;
-    let manager = PluginsManager::new(tmp.path().to_path_buf());
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let mode = RecommendedPluginsMode::Endpoint {
-        plugins: vec![RecommendedPlugin {
-            config_id: "github@openai-curated-remote".to_string(),
-            remote_plugin_id: "plugin_github".to_string(),
-            display_name: "GitHub".to_string(),
-            app_connector_ids: Vec::new(),
-        }],
-    };
-    {
-        let mut cache = manager.recommended_plugins_cache.write().unwrap();
-        cache.insert(
-            recommended_plugins_cache_key(&config, Some(&auth)),
-            mode.clone(),
-        );
-    }
-
-    assert_eq!(
-        manager
-            .recommended_plugins_mode_for_config(&config, Some(&auth))
-            .await,
-        mode
-    );
-    assert_eq!(
-        manager
-            .recommended_plugins_mode_for_config(&config, /*auth*/ None)
-            .await,
-        RecommendedPluginsMode::Legacy
     );
 }
 
