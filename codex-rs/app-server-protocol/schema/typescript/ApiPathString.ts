@@ -11,9 +11,9 @@
  *
  * When converting from [`PathUri`], "native" refers to the supplied
  * [`PathConvention`], which may be foreign to the operating system running
- * this process. The inner string is private so path-producing code must use
- * [`Self::from_abs_path`] or [`Self::from_path_uri`] instead of bypassing the
- * intended conversion boundary. Non-UTF-8 paths are converted to UTF-8
+ * this process. The inner string is private so path-producing code must convert
+ * from [`AbsolutePathBuf`] or use [`Self::from_path_uri`] instead of bypassing
+ * the intended conversion boundary. Non-UTF-8 paths are converted to UTF-8
  * lossily because this API value is serialized as a JSON string.
  *
  * Deserialization accepts any UTF-8 string without interpreting or validating
