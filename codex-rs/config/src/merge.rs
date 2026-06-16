@@ -87,7 +87,7 @@ fn convert_legacy_to_filters(table: &mut toml::map::Map<String, TomlValue>) {
         None => toml::map::Map::new(),
     };
     table.remove("filters");
-    normalize_table_keys(&mut filters, |key| key.to_ascii_lowercase());
+    normalize_table_keys(&mut filters, str::to_ascii_lowercase);
     for (field, action) in [("exclude", "exclude"), ("include_only", "include")] {
         let Some(TomlValue::Array(patterns)) = table.get(field).cloned() else {
             continue;
@@ -111,7 +111,7 @@ fn convert_filters_to_legacy(table: &mut toml::map::Map<String, TomlValue>) {
         return;
     };
     table.remove("filters");
-    normalize_table_keys(&mut filters, |key| key.to_ascii_lowercase());
+    normalize_table_keys(&mut filters, str::to_ascii_lowercase);
     for (pattern, action) in filters {
         match action.as_str() {
             Some("exclude") => push_legacy_pattern(table, "exclude", "include_only", pattern),
@@ -173,7 +173,7 @@ fn normalize_merge_table_keys(path: &[String], table: &mut toml::map::Map<String
         }
         [policy, filters] if policy == "shell_environment_policy" && filters == "filters" => {
             // Environment-variable patterns compare case-insensitively.
-            normalize_table_keys(table, |key| key.to_ascii_lowercase());
+            normalize_table_keys(table, str::to_ascii_lowercase);
         }
         _ => {}
     }
