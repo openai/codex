@@ -176,7 +176,7 @@ async fn read_block_supports_non_sequential_offsets_and_lengths() -> Result<()> 
     std::fs::write(&path, b"0123456789")?;
     let open = client
         .fs_open(FsOpenParams {
-            handle_id: Uuid::new_v4().to_string(),
+            handle_id: Uuid::new_v4().simple().to_string(),
             path: PathUri::from_path(path)?,
             sandbox: None,
         })
@@ -241,7 +241,7 @@ async fn open_enforces_the_per_connection_limit_and_close_releases_capacity() ->
     for _ in 0..OPEN_FILE_LIMIT {
         let open = client
             .fs_open(FsOpenParams {
-                handle_id: Uuid::new_v4().to_string(),
+                handle_id: Uuid::new_v4().simple().to_string(),
                 path: path.clone(),
                 sandbox: None,
             })
@@ -251,7 +251,7 @@ async fn open_enforces_the_per_connection_limit_and_close_releases_capacity() ->
 
     let error = client
         .fs_open(FsOpenParams {
-            handle_id: Uuid::new_v4().to_string(),
+            handle_id: Uuid::new_v4().simple().to_string(),
             path: path.clone(),
             sandbox: None,
         })
@@ -275,13 +275,47 @@ async fn open_enforces_the_per_connection_limit_and_close_releases_capacity() ->
         .await?;
     client
         .fs_open(FsOpenParams {
-            handle_id: Uuid::new_v4().to_string(),
+            handle_id: Uuid::new_v4().simple().to_string(),
             path,
             sandbox: None,
         })
         .await?;
     drop(client);
     server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn open_rejects_handle_ids_longer_than_32_bytes() -> Result<()> {
+    let server = exec_server().await?;
+    let client = ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
+        server.websocket_url().to_string(),
+        "file-stream-protocol-test".to_string(),
+    ))
+    .await?;
+    let tmp = TempDir::new()?;
+    let path = tmp.path().join("handle-id-limit.bin");
+    std::fs::write(&path, b"limited")?;
+
+    let error = client
+        .fs_open(FsOpenParams {
+            handle_id: "x".repeat(33),
+            path: PathUri::from_path(path)?,
+            sandbox: None,
+        })
+        .await
+        .expect_err("oversized handle ID should fail");
+
+    let ExecServerError::Server { code, message } = error else {
+        anyhow::bail!("expected server error, got {error:?}");
+    };
+    assert_eq!(
+        (code, message),
+        (
+            -32600,
+            "file read handle ID must not exceed 32 bytes".to_string(),
+        )
+    );
     Ok(())
 }
 

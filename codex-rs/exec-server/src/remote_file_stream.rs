@@ -28,7 +28,7 @@ pub(super) async fn open(
 ) -> FileSystemResult<FileSystemReadStream> {
     let registration = FileReadRegistration {
         client,
-        handle_id: Uuid::new_v4().to_string(),
+        handle_id: Uuid::new_v4().simple().to_string(),
         runtime: tokio::runtime::Handle::try_current().ok(),
         active: true,
     };

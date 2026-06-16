@@ -39,6 +39,8 @@ use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 use crate::rpc::not_found;
 
+const MAX_FILE_READ_HANDLE_ID_BYTES: usize = 32;
+
 #[derive(Clone)]
 pub(crate) struct FileSystemHandler {
     file_system: LocalFileSystem,
@@ -61,6 +63,7 @@ impl FileSystemHandler {
         &self,
         params: FsOpenParams,
     ) -> Result<FsOpenResponse, JSONRPCErrorError> {
+        validate_file_read_handle_id(&params.handle_id)?;
         let file = self
             .file_system
             .open_file_for_read(&params.path, params.sandbox.as_ref())
@@ -78,6 +81,7 @@ impl FileSystemHandler {
         &self,
         params: FsReadBlockParams,
     ) -> Result<FsReadBlockResponse, JSONRPCErrorError> {
+        validate_file_read_handle_id(&params.handle_id)?;
         let block = self
             .file_reads
             .read_block(&params.handle_id, params.offset, params.len)
@@ -93,6 +97,7 @@ impl FileSystemHandler {
         &self,
         params: FsCloseParams,
     ) -> Result<FsCloseResponse, JSONRPCErrorError> {
+        validate_file_read_handle_id(&params.handle_id)?;
         self.file_reads.close(&params.handle_id).await;
         Ok(FsCloseResponse {})
     }
@@ -227,6 +232,15 @@ impl FileSystemHandler {
             .map_err(map_fs_error)?;
         Ok(FsCopyResponse {})
     }
+}
+
+fn validate_file_read_handle_id(handle_id: &str) -> Result<(), JSONRPCErrorError> {
+    if handle_id.len() > MAX_FILE_READ_HANDLE_ID_BYTES {
+        return Err(invalid_request(format!(
+            "file read handle ID must not exceed {MAX_FILE_READ_HANDLE_ID_BYTES} bytes"
+        )));
+    }
+    Ok(())
 }
 
 fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
