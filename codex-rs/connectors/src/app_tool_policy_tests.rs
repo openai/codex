@@ -525,7 +525,11 @@ fn evaluator_uses_apps_default_tools_approval_mode() {
     let apps_config = AppsConfigToml {
         default: Some(AppsDefaultConfig {
             default_tools_approval_mode: Some(AppToolApproval::Prompt),
-            ..defaults(true, true, true)
+            ..defaults(
+                /*enabled*/ true,
+                /*destructive_enabled*/ true,
+                /*open_world_enabled*/ true,
+            )
         }),
         apps: HashMap::new(),
     };
@@ -554,7 +558,11 @@ fn evaluator_prefers_app_default_tools_approval_mode_over_apps_default() {
     let apps_config = AppsConfigToml {
         default: Some(AppsDefaultConfig {
             default_tools_approval_mode: Some(AppToolApproval::Approve),
-            ..defaults(true, true, true)
+            ..defaults(
+                /*enabled*/ true,
+                /*destructive_enabled*/ true,
+                /*open_world_enabled*/ true,
+            )
         }),
         apps: HashMap::from([(
             "calendar".to_string(),
