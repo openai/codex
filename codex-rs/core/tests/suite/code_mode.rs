@@ -1049,6 +1049,13 @@ text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Vari
 
     let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
     let output = text_item(&items, /*index*/ 1);
+    // The nested 20,000-token budget leaves about 80,000 characters. This
+    // ceiling independently proves that history applied its smaller cap.
+    assert!(
+        output.len() < 60_000,
+        "expected history to truncate the emitted value, got {} bytes",
+        output.len()
+    );
     // The boolean describes the nested result; the marker below comes from
     // history truncating the value emitted with `text` afterward.
     assert_regex_match(
