@@ -257,7 +257,7 @@ async fn active_session_resume_is_rejected() {
         .await
         .expect_err("active session resume should fail");
 
-    assert_eq!(err.code, -32600);
+    assert_eq!(err.code, crate::rpc::SESSION_ALREADY_ATTACHED_ERROR_CODE);
     assert_eq!(
         err.message,
         format!(

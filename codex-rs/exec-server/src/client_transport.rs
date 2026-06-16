@@ -82,6 +82,14 @@ impl ExecServerClient {
     pub async fn connect_websocket(
         args: RemoteExecServerConnectArgs,
     ) -> Result<Self, ExecServerError> {
+        let connection = Self::open_websocket_connection(&args).await?;
+        let options = args.clone().into();
+        Self::connect_with_recovery(connection, options, Some(args)).await
+    }
+
+    pub(crate) async fn open_websocket_connection(
+        args: &RemoteExecServerConnectArgs,
+    ) -> Result<JsonRpcConnection, ExecServerError> {
         ensure_rustls_crypto_provider();
         let websocket_url = args.websocket_url.clone();
         let connect_timeout = args.connect_timeout;
@@ -102,7 +110,7 @@ impl ExecServerClient {
         } else {
             JsonRpcConnection::from_websocket(stream, connection_label)
         };
-        Self::connect(connection, args.into()).await
+        Ok(connection)
     }
 
     /// Connect to one exec-server through an authenticated rendezvous stream.
