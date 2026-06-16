@@ -14,6 +14,8 @@ use std::path::PathBuf;
 
 use super::ContextualUserFragment;
 
+const UNKNOWN_SHELL: &str = "unknown";
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct EnvironmentContext {
     pub(crate) environments: EnvironmentContextEnvironments,
@@ -28,11 +30,11 @@ pub(crate) struct EnvironmentContext {
 pub(crate) struct EnvironmentContextEnvironment {
     pub(crate) id: String,
     pub(crate) cwd: AbsolutePathBuf,
-    pub(crate) shell: Option<String>,
+    pub(crate) shell: String,
 }
 
 impl EnvironmentContextEnvironment {
-    fn legacy(cwd: AbsolutePathBuf, shell: Option<String>) -> Self {
+    fn legacy(cwd: AbsolutePathBuf, shell: String) -> Self {
         Self {
             id: String::new(),
             cwd,
@@ -46,10 +48,10 @@ impl EnvironmentContextEnvironment {
             .map(|environment| Self {
                 id: environment.environment_id.clone(),
                 cwd: environment.cwd().clone(),
-                shell: environment
-                    .shell()
-                    .ok()
-                    .map(|shell| shell.name().to_string()),
+                shell: environment.shell().map_or_else(
+                    |_| UNKNOWN_SHELL.to_string(),
+                    |shell| shell.name().to_string(),
+                ),
             })
             .collect()
     }
@@ -440,7 +442,8 @@ impl EnvironmentContext {
         };
         Self::new_with_environments(
             EnvironmentContextEnvironments::from_vec(vec![EnvironmentContextEnvironment::legacy(
-                cwd, None,
+                cwd,
+                UNKNOWN_SHELL.to_string(),
             )]),
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
@@ -541,9 +544,7 @@ impl ContextualUserFragment for EnvironmentContext {
                     "  <cwd>{}</cwd>",
                     environment.cwd.to_string_lossy()
                 ));
-                if let Some(shell) = &environment.shell {
-                    lines.push(format!("  <shell>{shell}</shell>"));
-                }
+                lines.push(format!("  <shell>{}</shell>", environment.shell));
             }
             EnvironmentContextEnvironments::Multiple(environments) => {
                 lines.push("  <environments>".to_string());
@@ -553,9 +554,7 @@ impl ContextualUserFragment for EnvironmentContext {
                         "      <cwd>{}</cwd>",
                         environment.cwd.to_string_lossy()
                     ));
-                    if let Some(shell) = &environment.shell {
-                        lines.push(format!("      <shell>{shell}</shell>"));
-                    }
+                    lines.push(format!("      <shell>{}</shell>", environment.shell));
                     lines.push("    </environment>".to_string());
                 }
                 lines.push("  </environments>".to_string());

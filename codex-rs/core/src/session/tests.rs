@@ -7301,50 +7301,6 @@ async fn build_settings_update_items_emits_environment_item_for_network_changes(
 }
 
 #[tokio::test]
-async fn environment_context_omits_shell_when_environment_shell_is_absent() {
-    let (_session, mut turn_context) = make_session_and_context().await;
-    for environment in &mut turn_context.environments.turn_environments {
-        *environment = TurnEnvironment::new(
-            environment.environment_id.clone(),
-            Arc::clone(&environment.environment),
-            environment.cwd().clone(),
-            Err("not configured for test".to_string()),
-        );
-    }
-
-    let environment_context =
-        crate::context::EnvironmentContext::from_turn_context(&turn_context).render();
-    assert!(
-        !environment_context.contains("<shell>"),
-        "{environment_context}"
-    );
-
-    let primary_environment = turn_context
-        .environments
-        .turn_environments
-        .first()
-        .cloned()
-        .expect("primary environment");
-    let primary_cwd = primary_environment.cwd().clone();
-    turn_context.environments.turn_environments[0] = TurnEnvironment::new(
-        primary_environment.environment_id,
-        primary_environment.environment,
-        primary_cwd,
-        Ok(crate::shell::Shell {
-            shell_type: crate::shell::ShellType::Cmd,
-            shell_path: PathBuf::from("cmd"),
-        }),
-    );
-
-    let environment_context =
-        crate::context::EnvironmentContext::from_turn_context(&turn_context).render();
-    assert!(
-        environment_context.contains("<shell>cmd</shell>"),
-        "{environment_context}"
-    );
-}
-
-#[tokio::test]
 async fn build_settings_update_items_emits_environment_item_for_time_changes() {
     let (session, previous_context) = make_session_and_context().await;
     let previous_context = Arc::new(previous_context);
