@@ -139,7 +139,6 @@ async fn spawn_v2_subagent(
             control.clone(),
             SessionSource::SubAgent(SubAgentSource::Other(label.to_string())),
             Some(parent_thread_id),
-            /*forked_from_thread_id*/ None,
             Some(ThreadSource::Subagent),
             /*metrics_service_name*/ None,
             /*inherited_environments*/ None,

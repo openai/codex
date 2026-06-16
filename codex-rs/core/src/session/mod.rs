@@ -415,7 +415,6 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
-    pub(crate) forked_from_thread_id: Option<ThreadId>,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) agent_control: AgentControl,
@@ -501,7 +500,6 @@ impl Codex {
             extensions,
             conversation_history,
             session_source,
-            forked_from_thread_id,
             parent_thread_id,
             thread_source,
             agent_control,
@@ -628,7 +626,7 @@ impl Codex {
             app_server_client_name: None,
             app_server_client_version: None,
             session_source,
-            forked_from_thread_id,
+            forked_from_thread_id: conversation_history.forked_from_id(),
             parent_thread_id,
             thread_source,
             dynamic_tools,
@@ -1279,21 +1277,21 @@ impl Session {
                     let _ = self.flush_rollout().await;
                 }
             }
-            InitialHistory::Forked(rollout_items) => {
+            InitialHistory::Forked(forked) => {
                 let turn_context = self.new_default_turn().await;
-                self.apply_rollout_reconstruction(&turn_context, &rollout_items)
+                self.apply_rollout_reconstruction(&turn_context, &forked.history)
                     .await;
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
-                if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
+                if let Some(info) = Self::last_token_info_from_rollout(&forked.history) {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
                 }
 
                 // If persisting, persist all rollout items as-is (the store filters).
-                if !rollout_items.is_empty() {
-                    self.persist_rollout_items(&rollout_items).await;
+                if !forked.history.is_empty() {
+                    self.persist_rollout_items(&forked.history).await;
                 }
 
                 // Forked threads should remain file-backed immediately after startup.

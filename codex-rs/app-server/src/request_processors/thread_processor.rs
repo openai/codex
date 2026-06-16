@@ -2597,7 +2597,7 @@ impl ThreadRequestProcessor {
         let include_turns = !exclude_turns;
 
         let resume_result = if let Some(history) = history {
-            self.resume_thread_from_history(history.as_slice())
+            self.resume_thread_from_history(&thread_id, history.as_slice())
                 .await
                 .map(|thread_history| (thread_history, None))
         } else if let Some(stored_thread) = stored_thread_from_running_probe {
@@ -3034,18 +3034,20 @@ impl ThreadRequestProcessor {
     #[tracing::instrument(level = "trace", skip_all)]
     async fn resume_thread_from_history(
         &self,
+        thread_id: &str,
         history: &[ResponseItem],
     ) -> Result<InitialHistory, JSONRPCErrorError> {
         if history.is_empty() {
             return Err(invalid_request("history must not be empty"));
         }
-        Ok(InitialHistory::Forked(
-            history
+        Ok(InitialHistory::Forked(ForkedHistory {
+            parent_id: ThreadId::from_string(thread_id).ok(),
+            history: history
                 .iter()
                 .cloned()
                 .map(RolloutItem::ResponseItem)
                 .collect(),
-        ))
+        }))
     }
 
     #[tracing::instrument(level = "trace", skip_all)]
@@ -3227,14 +3229,15 @@ impl ThreadRequestProcessor {
                     }
                 }
             }
-            InitialHistory::Forked(items) => {
+            InitialHistory::Forked(forked) => {
                 let mut thread = build_thread_from_snapshot(
                     thread_id,
                     session_id.clone(),
                     &config_snapshot,
                     Some(rollout_path.into()),
                 );
-                thread.preview = preview_from_rollout_items(items);
+                thread.preview = preview_from_rollout_items(&forked.history);
+                thread.forked_from_id = forked.parent_id.map(|id| id.to_string());
                 Ok(thread)
             }
             InitialHistory::New | InitialHistory::Cleared => Err(format!(

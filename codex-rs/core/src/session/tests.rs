@@ -111,6 +111,7 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::CreditsSnapshot;
+use codex_protocol::protocol::ForkedHistory;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -1813,17 +1814,30 @@ fn resolve_multi_agent_version_handles_unset_and_legacy_history() {
     );
     assert_eq!(
         resolve_multi_agent_version(
-            &InitialHistory::Forked(vec![session_meta_item(
-                thread_id,
-                Some(MultiAgentVersion::V2)
-            )]),
+            &InitialHistory::Forked(ForkedHistory {
+                parent_id: Some(thread_id),
+                history: vec![session_meta_item(thread_id, Some(MultiAgentVersion::V2))],
+            }),
             Some(MultiAgentVersion::Disabled),
         ),
         Some(MultiAgentVersion::Disabled)
     );
     assert_eq!(
         resolve_multi_agent_version(
-            &InitialHistory::Forked(Vec::new()),
+            &InitialHistory::Forked(ForkedHistory {
+                parent_id: None,
+                history: vec![session_meta_item(thread_id, Some(MultiAgentVersion::V2))],
+            }),
+            /*inherited_multi_agent_version*/ None,
+        ),
+        Some(MultiAgentVersion::V2)
+    );
+    assert_eq!(
+        resolve_multi_agent_version(
+            &InitialHistory::Forked(ForkedHistory {
+                parent_id: None,
+                history: Vec::new(),
+            }),
             /*inherited_multi_agent_version*/ None
         ),
         Some(MultiAgentVersion::V1)
@@ -2471,7 +2485,10 @@ async fn record_initial_history_reconstructs_forked_transcript() {
     let (rollout_items, expected) = sample_rollout(&session, &turn_context).await;
 
     session
-        .record_initial_history(InitialHistory::Forked(rollout_items))
+        .record_initial_history(InitialHistory::Forked(ForkedHistory {
+            parent_id: None,
+            history: rollout_items,
+        }))
         .await;
 
     let history = session.state.lock().await.clone_history();
@@ -2728,7 +2745,10 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
     ];
 
     session
-        .record_initial_history(InitialHistory::Forked(rollout_items))
+        .record_initial_history(InitialHistory::Forked(ForkedHistory {
+            parent_id: None,
+            history: rollout_items,
+        }))
         .await;
 
     let history = session.clone_history().await;

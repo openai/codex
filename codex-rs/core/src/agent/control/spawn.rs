@@ -204,7 +204,6 @@ impl AgentControl {
                 &InitialHistory::New,
                 session_source.as_ref(),
                 options.parent_thread_id,
-                /*forked_from_thread_id*/ None,
                 &config,
             )
             .await;
@@ -280,7 +279,6 @@ impl AgentControl {
                     self.clone(),
                     session_source,
                     options.parent_thread_id,
-                    /*forked_from_thread_id*/ None,
                     /*thread_source*/ Some(ThreadSource::Subagent),
                     /*metrics_service_name*/ None,
                     inheritance.environments,
@@ -507,12 +505,14 @@ impl AgentControl {
         state
             .fork_thread_with_source(
                 config.clone(),
-                InitialHistory::Forked(forked_rollout_items),
+                InitialHistory::Forked(ForkedHistory {
+                    parent_id: Some(parent_thread_id),
+                    history: forked_rollout_items,
+                }),
                 self.clone(),
                 session_source,
                 /*thread_source*/ Some(ThreadSource::Subagent),
                 /*parent_thread_id*/ Some(parent_thread_id),
-                /*forked_from_thread_id*/ Some(parent_thread_id),
                 inherited_environments,
                 inherited_exec_policy,
                 options.environments.clone(),
@@ -629,7 +629,6 @@ impl AgentControl {
                 &initial_history,
                 Some(&session_source),
                 parent_thread_id,
-                /*forked_from_thread_id*/ None,
                 &config,
             )
             .await;

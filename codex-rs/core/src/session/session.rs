@@ -496,14 +496,10 @@ impl Session {
             session_configuration.collaboration_mode.model(),
             session_configuration.provider
         );
-        let forked_from_id = session_configuration
-            .forked_from_thread_id
-            .or_else(|| initial_history.forked_from_id());
-        session_configuration.forked_from_thread_id = forked_from_id;
-        let parent_thread_id = session_configuration
+        session_configuration.forked_from_thread_id = initial_history.forked_from_id();
+        session_configuration.parent_thread_id = session_configuration
             .parent_thread_id
             .or_else(|| initial_history.get_resumed_parent_thread_id());
-        session_configuration.parent_thread_id = parent_thread_id;
         let multi_agent_version = multi_agent_version.map(OnceLock::from).unwrap_or_default();
         let initial_multi_agent_version = multi_agent_version.get().copied();
 
@@ -532,8 +528,8 @@ impl Session {
                         let params = CreateThreadParams {
                             thread_id,
                             extra_config: config.extra_config.clone(),
-                            forked_from_id,
-                            parent_thread_id,
+                            forked_from_id: session_configuration.forked_from_thread_id,
+                            parent_thread_id: session_configuration.parent_thread_id,
                             source: session_source,
                             thread_source: session_configuration.thread_source.clone(),
                             base_instructions: BaseInstructions {
@@ -1070,8 +1066,8 @@ impl Session {
                 msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                     session_id,
                     thread_id,
-                    forked_from_id,
-                    parent_thread_id,
+                    forked_from_id: session_configuration.forked_from_thread_id,
+                    parent_thread_id: session_configuration.parent_thread_id,
                     thread_source: session_configuration.thread_source.clone(),
                     thread_name: session_configuration.thread_name.clone(),
                     model: session_configuration.collaboration_mode.model().to_string(),

@@ -3448,6 +3448,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     let RestartedThreadFixture {
         mut mcp, thread_id, ..
     } = start_materialized_thread_and_restart(codex_home.path(), "seed history").await?;
+    let expected_forked_from_id = thread_id.clone();
 
     let history_text = "Hello from history";
     let history = vec![ResponseItem::Message {
@@ -3480,10 +3481,64 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
         model_provider,
         ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    assert!(!resumed.id.is_empty());
-    assert_eq!(model_provider, "mock_provider");
-    assert_eq!(resumed.preview, history_text);
-    assert_eq!(resumed.status, ThreadStatus::Idle);
+    assert_eq!(
+        (
+            resumed.id.is_empty(),
+            model_provider.as_str(),
+            resumed.preview.as_str(),
+            resumed.status,
+            resumed.forked_from_id,
+        ),
+        (
+            false,
+            "mock_provider",
+            history_text,
+            ThreadStatus::Idle,
+            Some(expected_forked_from_id),
+        )
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_history_accepts_placeholder_thread_id() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let RestartedThreadFixture { mut mcp, .. } =
+        start_materialized_thread_and_restart(codex_home.path(), "seed history").await?;
+
+    let history_text = "Hello from supplied history";
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: "placeholder".to_string(),
+            history: Some(vec![ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: history_text.to_string(),
+                }],
+                phase: None,
+                metadata: None,
+            }]),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed, ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(
+        (resumed.preview.as_str(), resumed.forked_from_id),
+        (history_text, None)
+    );
 
     Ok(())
 }

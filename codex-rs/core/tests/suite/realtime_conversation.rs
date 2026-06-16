@@ -15,6 +15,7 @@ use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ForkedHistory;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeAudioFrame;
@@ -2216,7 +2217,10 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
         .thread_manager
         .resume_thread_with_history(
             test.config.clone(),
-            InitialHistory::Forked(history),
+            InitialHistory::Forked(ForkedHistory {
+                parent_id: None,
+                history,
+            }),
             auth_manager_from_auth(CodexAuth::from_api_key("dummy")),
             /*parent_trace*/ None,
         )

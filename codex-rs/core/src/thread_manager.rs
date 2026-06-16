@@ -40,6 +40,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ForkedHistory;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
@@ -612,15 +613,6 @@ impl ThreadManager {
         &self,
         options: StartThreadOptions,
     ) -> CodexResult<NewThread> {
-        self.start_thread_with_options_and_fork_source(options, /*forked_from_thread_id*/ None)
-            .await
-    }
-
-    async fn start_thread_with_options_and_fork_source(
-        &self,
-        options: StartThreadOptions,
-        forked_from_thread_id: Option<ThreadId>,
-    ) -> CodexResult<NewThread> {
         let (resumed_session_source, resumed_thread_source) = options
             .initial_history
             .get_resumed_session_sources()
@@ -634,7 +626,6 @@ impl ThreadManager {
             self.agent_control(),
             session_source,
             /*parent_thread_id*/ None,
-            forked_from_thread_id,
             thread_source,
             options.dynamic_tools,
             options.metrics_service_name,
@@ -681,8 +672,7 @@ impl ThreadManager {
                 inherited_multi_agent_version,
             ),
         );
-        self.start_thread_with_options_and_fork_source(options, Some(forked_from_thread_id))
-            .await
+        self.start_thread_with_options(options).await
     }
 
     pub async fn resume_thread_from_rollout(
@@ -724,7 +714,6 @@ impl ThreadManager {
             self.agent_control(),
             session_source,
             /*parent_thread_id*/ None,
-            /*forked_from_thread_id*/ None,
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
@@ -753,7 +742,6 @@ impl ThreadManager {
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
             /*parent_thread_id*/ None,
-            /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
             Vec::new(),
             /*metrics_service_name*/ None,
@@ -787,7 +775,6 @@ impl ThreadManager {
             self.agent_control(),
             session_source,
             /*parent_thread_id*/ None,
-            /*forked_from_thread_id*/ None,
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
@@ -928,21 +915,10 @@ impl ThreadManager {
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
-        // `forked_from_id()` describes this history's existing lineage. When
-        // forking a resumed thread, the child copies the resumed thread itself.
-        let forked_from_thread_id = match &history {
-            InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
-            InitialHistory::Forked(_) => history.forked_from_id(),
-            InitialHistory::New | InitialHistory::Cleared => None,
-        };
         let multi_agent_version = self
             .state
             .effective_multi_agent_version_for_spawn(
-                &history,
-                /*session_source*/ None,
-                /*parent_thread_id*/ None,
-                forked_from_thread_id,
-                &config,
+                &history, /*session_source*/ None, /*parent_thread_id*/ None, &config,
             )
             .await;
         let interrupted_marker =
@@ -958,7 +934,6 @@ impl ThreadManager {
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
             /*parent_thread_id*/ None,
-            forked_from_thread_id,
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
@@ -1076,14 +1051,12 @@ impl ThreadManagerState {
         initial_history: &InitialHistory,
         session_source: Option<&SessionSource>,
         parent_thread_id: Option<ThreadId>,
-        forked_from_thread_id: Option<ThreadId>,
         config: &Config,
     ) -> MultiAgentVersion {
         self.initial_multi_agent_version_for_spawn(
             initial_history,
             session_source,
             parent_thread_id,
-            forked_from_thread_id,
         )
         .await
         .unwrap_or_else(|| config.multi_agent_version_from_features())
@@ -1094,7 +1067,6 @@ impl ThreadManagerState {
         initial_history: &InitialHistory,
         session_source: Option<&SessionSource>,
         parent_thread_id: Option<ThreadId>,
-        forked_from_thread_id: Option<ThreadId>,
     ) -> Option<MultiAgentVersion> {
         let inherited_thread_id = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -1102,7 +1074,7 @@ impl ThreadManagerState {
             })) => Some(*parent_thread_id),
             _ => match initial_history {
                 InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
-                InitialHistory::Forked(_) => forked_from_thread_id.or(parent_thread_id),
+                InitialHistory::Forked(forked) => forked.parent_id.or(parent_thread_id),
                 InitialHistory::New | InitialHistory::Cleared => parent_thread_id,
             },
         };
@@ -1134,9 +1106,9 @@ impl ThreadManagerState {
     /// than loading independently.
     async fn user_instructions_for_spawn(
         &self,
+        initial_history: &InitialHistory,
         session_source: &SessionSource,
         parent_thread_id: Option<ThreadId>,
-        forked_from_thread_id: Option<ThreadId>,
     ) -> LoadedUserInstructions {
         let is_root_agent = !session_source.is_non_root_agent();
         if is_root_agent {
@@ -1150,7 +1122,7 @@ impl ThreadManagerState {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id, ..
             }) => Some(*parent_thread_id),
-            _ => parent_thread_id.or(forked_from_thread_id),
+            _ => parent_thread_id.or_else(|| initial_history.forked_from_id()),
         };
         let instructions = match inherited_thread_id {
             // The spawn path retains only thread IDs, so look up the live
@@ -1178,7 +1150,6 @@ impl ThreadManagerState {
             agent_control,
             self.session_source.clone(),
             /*parent_thread_id*/ None,
-            /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
             /*metrics_service_name*/ None,
             /*inherited_environments*/ None,
@@ -1195,7 +1166,6 @@ impl ThreadManagerState {
         agent_control: AgentControl,
         session_source: SessionSource,
         parent_thread_id: Option<ThreadId>,
-        forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
         metrics_service_name: Option<String>,
         inherited_environments: Option<TurnEnvironmentSnapshot>,
@@ -1212,7 +1182,6 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             parent_thread_id,
-            forked_from_thread_id,
             thread_source,
             Vec::new(),
             metrics_service_name,
@@ -1249,7 +1218,6 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             parent_thread_id,
-            /*forked_from_thread_id*/ None,
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
@@ -1272,7 +1240,6 @@ impl ThreadManagerState {
         session_source: SessionSource,
         thread_source: Option<ThreadSource>,
         parent_thread_id: Option<ThreadId>,
-        forked_from_thread_id: Option<ThreadId>,
         inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
@@ -1287,7 +1254,6 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             parent_thread_id,
-            forked_from_thread_id,
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
@@ -1310,7 +1276,6 @@ impl ThreadManagerState {
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
         parent_thread_id: Option<ThreadId>,
-        forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         metrics_service_name: Option<String>,
@@ -1326,7 +1291,6 @@ impl ThreadManagerState {
             agent_control,
             self.session_source.clone(),
             parent_thread_id,
-            forked_from_thread_id,
             thread_source,
             dynamic_tools,
             metrics_service_name,
@@ -1349,7 +1313,6 @@ impl ThreadManagerState {
         agent_control: AgentControl,
         session_source: SessionSource,
         parent_thread_id: Option<ThreadId>,
-        forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         metrics_service_name: Option<String>,
@@ -1383,7 +1346,7 @@ impl ThreadManagerState {
             }
         }
         let user_instructions = self
-            .user_instructions_for_spawn(&session_source, parent_thread_id, forked_from_thread_id)
+            .user_instructions_for_spawn(&initial_history, &session_source, parent_thread_id)
             .await;
         let parent_rollout_thread_trace = self
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
@@ -1394,7 +1357,6 @@ impl ThreadManagerState {
                 &initial_history,
                 Some(&session_source),
                 parent_thread_id,
-                forked_from_thread_id,
             )
             .await;
         let CodexSpawnOk {
@@ -1412,7 +1374,6 @@ impl ThreadManagerState {
             extensions: Arc::clone(&self.extensions),
             conversation_history: initial_history,
             session_source,
-            forked_from_thread_id,
             parent_thread_id,
             thread_source,
             agent_control,
@@ -1567,6 +1528,11 @@ fn truncate_before_nth_user_message(
     n: usize,
     snapshot_state: &SnapshotTurnState,
 ) -> InitialHistory {
+    let parent_id = match &history {
+        InitialHistory::New | InitialHistory::Cleared => None,
+        InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
+        InitialHistory::Forked(forked) => forked.parent_id,
+    };
     let items: Vec<RolloutItem> = history.get_rollout_items();
     let user_positions = truncation::user_message_positions_in_rollout(&items);
     let rolled = if snapshot_state.ends_mid_turn && n >= user_positions.len() {
@@ -1582,11 +1548,10 @@ fn truncate_before_nth_user_message(
         truncation::truncate_rollout_before_nth_user_message_from_start(&items, n)
     };
 
-    if rolled.is_empty() {
-        InitialHistory::New
-    } else {
-        InitialHistory::Forked(rolled)
-    }
+    InitialHistory::Forked(ForkedHistory {
+        parent_id,
+        history: rolled,
+    })
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1663,8 +1628,11 @@ fn fork_history_from_snapshot(
             let history = match history {
                 InitialHistory::New => InitialHistory::New,
                 InitialHistory::Cleared => InitialHistory::Cleared,
-                InitialHistory::Forked(history) => InitialHistory::Forked(history),
-                InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
+                forked @ InitialHistory::Forked(_) => forked,
+                InitialHistory::Resumed(resumed) => InitialHistory::Forked(ForkedHistory {
+                    parent_id: Some(resumed.conversation_id),
+                    history: resumed.history,
+                }),
             };
             if snapshot_state.ends_mid_turn {
                 append_interrupted_boundary(
@@ -1701,21 +1669,27 @@ fn append_interrupted_boundary(
                 history.push(RolloutItem::ResponseItem(marker));
             }
             history.push(aborted_event);
-            InitialHistory::Forked(history)
+            InitialHistory::Forked(ForkedHistory {
+                parent_id: None,
+                history,
+            })
         }
-        InitialHistory::Forked(mut history) => {
+        InitialHistory::Forked(mut forked) => {
             if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
-                history.push(RolloutItem::ResponseItem(marker));
+                forked.history.push(RolloutItem::ResponseItem(marker));
             }
-            history.push(aborted_event);
-            InitialHistory::Forked(history)
+            forked.history.push(aborted_event);
+            InitialHistory::Forked(forked)
         }
         InitialHistory::Resumed(mut resumed) => {
             if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
                 resumed.history.push(RolloutItem::ResponseItem(marker));
             }
             resumed.history.push(aborted_event);
-            InitialHistory::Forked(resumed.history)
+            InitialHistory::Forked(ForkedHistory {
+                parent_id: Some(resumed.conversation_id),
+                history: resumed.history,
+            })
         }
     }
 }
