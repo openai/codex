@@ -947,7 +947,7 @@ pub struct ShellEnvironmentPolicyToml {
     /// Pattern actions used by the canonical table representation.
     ///
     /// Ordinary config keeps accepting the legacy arrays above during the
-    /// migration. Requirements accept only this keyed form, keeping array
+    /// migration. Requirements will accept only this keyed form, keeping array
     /// compatibility isolated so the legacy fields can be deprecated later.
     pub filters: Option<BTreeMap<String, ShellEnvironmentPolicyFilter>>,
 

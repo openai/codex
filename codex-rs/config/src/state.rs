@@ -1,5 +1,7 @@
+use crate::CONFIG_TOML_FILE;
 use crate::config_requirements::ConfigRequirements;
 use crate::config_requirements::ConfigRequirementsToml;
+use crate::format_config_layer_source;
 
 use super::fingerprint::record_origins;
 use super::fingerprint::version_for_toml;
@@ -275,6 +277,24 @@ impl ConfigLayerStack {
         requirements: ConfigRequirements,
         requirements_toml: ConfigRequirementsToml,
     ) -> std::io::Result<Self> {
+        if let Some(layer) = layers.iter().find(|layer| {
+            layer
+                .config
+                .get("shell_environment_policy")
+                .and_then(TomlValue::as_table)
+                .is_some_and(|policy| {
+                    policy.contains_key("filters")
+                        && (policy.contains_key("exclude") || policy.contains_key("include_only"))
+                })
+        }) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "cannot mix `filters` with legacy `exclude` or `include_only` in {}",
+                    format_config_layer_source(&layer.name, CONFIG_TOML_FILE)
+                ),
+            ));
+        }
         let user_layer_index = verify_layer_ordering(&layers)?;
         Ok(Self {
             layers,

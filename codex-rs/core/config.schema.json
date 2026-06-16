@@ -2646,7 +2646,7 @@
           "additionalProperties": {
             "$ref": "#/definitions/ShellEnvironmentPolicyFilter"
           },
-          "description": "Pattern actions used by the canonical table representation.\n\nOrdinary config keeps accepting the legacy arrays above during the migration. Requirements accept only this keyed form, keeping array compatibility isolated so the legacy fields can be deprecated later.",
+          "description": "Pattern actions used by the canonical table representation.\n\nOrdinary config keeps accepting the legacy arrays above during the migration. Requirements will accept only this keyed form, keeping array compatibility isolated so the legacy fields can be deprecated later.",
           "type": "object"
         },
         "ignore_default_excludes": {

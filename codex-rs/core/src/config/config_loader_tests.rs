@@ -380,6 +380,37 @@ unknown_key = true"#;
 }
 
 #[tokio::test]
+async fn non_strict_config_rejects_mixed_shell_environment_policy_forms_per_layer() {
+    let tmp = tempdir().expect("tempdir");
+    let contents = r#"
+[shell_environment_policy]
+exclude = ["LEGACY_*"]
+
+[shell_environment_policy.filters]
+"CANONICAL_*" = "include"
+"#;
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), contents).expect("write config");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .cli_overrides(vec![(
+            "shell_environment_policy.filters.HIGHER_*".to_string(),
+            TomlValue::String("exclude".to_string()),
+        )])
+        .strict_config(/*strict_config*/ false)
+        .build()
+        .await
+        .expect_err("one config layer must not mix legacy lists and filters");
+
+    assert!(
+        err.to_string()
+            .contains("cannot mix `filters` with legacy `exclude` or `include_only`")
+    );
+}
+
+#[tokio::test]
 async fn strict_config_rejects_unknown_cli_override_key() {
     let tmp = tempdir().expect("tempdir");
 
