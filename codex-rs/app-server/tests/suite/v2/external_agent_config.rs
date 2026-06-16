@@ -5,9 +5,12 @@ use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
-use codex_app_server::INVALID_PARAMS_ERROR_CODE;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
+use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
+use codex_app_server_protocol::ExternalAgentConfigImportHistoriesReadResponse;
+use codex_app_server_protocol::ExternalAgentConfigImportProgressNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
+use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginListParams;
@@ -32,14 +35,26 @@ use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
+fn assert_import_response(response: ExternalAgentConfigImportResponse) -> String {
+    assert!(!response.import_id.is_empty());
+    response.import_id
+}
+
 #[tokio::test]
 async fn external_agent_config_import_sends_completion_notification_for_sync_only_import()
 -> Result<()> {
     let codex_home = TempDir::new()?;
+    let sqlite_home = TempDir::new()?;
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let sqlite_home_dir = sqlite_home.path().display().to_string();
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.path(),
+        &[
+            ("HOME", Some(home_dir.as_str())),
+            ("CODEX_SQLITE_HOME", Some(sqlite_home_dir.as_str())),
+        ],
+    )
+    .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -61,13 +76,125 @@ async fn external_agent_config_import_sends_completion_notification_for_sync_onl
     )
     .await??;
     let response: ExternalAgentConfigImportResponse = to_response(response)?;
-    assert_eq!(response, ExternalAgentConfigImportResponse {});
+    let import_id = assert_import_response(response);
+    let progress = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("externalAgentConfig/import/progress"),
+    )
+    .await??;
+    assert_eq!(progress.method, "externalAgentConfig/import/progress");
+    let progress: ExternalAgentConfigImportProgressNotification =
+        serde_json::from_value(progress.params.expect("progress params"))?;
+    assert_eq!(progress.import_id, import_id);
+    assert_eq!(progress.item_type_results.len(), 1);
+    assert_eq!(
+        progress.item_type_results[0].item_type,
+        ExternalAgentConfigMigrationItemType::Config
+    );
+
     let notification = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
     )
     .await??;
     assert_eq!(notification.method, "externalAgentConfig/import/completed");
+    let completed: ExternalAgentConfigImportCompletedNotification =
+        serde_json::from_value(notification.params.expect("completed params"))?;
+    assert_eq!(completed.import_id, import_id);
+    let state_db =
+        codex_state::StateRuntime::init(sqlite_home.path().to_path_buf(), "mock_provider".into())
+            .await?;
+    let details_record = state_db
+        .external_agent_config_import_details_record(&import_id)
+        .await?
+        .expect("completed import details should be recorded by import id");
+    let expected_successes = completed
+        .item_type_results
+        .iter()
+        .flat_map(|type_result| type_result.successes.iter())
+        .collect::<Vec<_>>();
+    let expected_failures = completed
+        .item_type_results
+        .iter()
+        .flat_map(|type_result| type_result.failures.iter())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        serde_json::to_value(&details_record.successes)?,
+        serde_json::to_value(&expected_successes)?
+    );
+    assert_eq!(
+        serde_json::to_value(&details_record.failures)?,
+        serde_json::to_value(&expected_failures)?
+    );
+
+    let request_id = mcp
+        .send_raw_request(
+            "externalAgentConfig/import/readHistories",
+            /*params*/ None,
+        )
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ExternalAgentConfigImportHistoriesReadResponse = to_response(response)?;
+    let entry = response
+        .data
+        .iter()
+        .find(|entry| entry.import_id == import_id)
+        .expect("import history entry should be available");
+    assert!(entry.completed_at_ms > 0);
+    assert_eq!(
+        serde_json::to_value(&entry.successes)?,
+        serde_json::to_value(&expected_successes)?
+    );
+    assert_eq!(
+        serde_json::to_value(&entry.failures)?,
+        serde_json::to_value(&expected_failures)?
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn external_agent_config_import_returns_error_for_failed_sync_import() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::create_dir_all(codex_home.path().join(".claude"))?;
+    std::fs::write(
+        codex_home.path().join(".claude").join("settings.json"),
+        r#"{"env":{"FOO":"bar"}}"#,
+    )?;
+    std::fs::write(codex_home.path().join("config.toml"), "invalid = [")?;
+    let home_dir = codex_home.path().display().to_string();
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
+            .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_raw_request(
+            "externalAgentConfig/import",
+            Some(serde_json::json!({
+                "migrationItems": [{
+                    "itemType": "CONFIG",
+                    "description": "Import config",
+                    "cwd": null
+                }]
+            })),
+        )
+        .await?;
+
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(error.error.code, -32603);
+    assert!(
+        error.error.message.contains("invalid existing config.toml"),
+        "unexpected error: {error:?}"
+    );
 
     Ok(())
 }
@@ -148,13 +275,16 @@ async fn external_agent_config_import_sends_completion_notification_for_local_pl
     .await??;
     let response: ExternalAgentConfigImportResponse = to_response(response)?;
 
-    assert_eq!(response, ExternalAgentConfigImportResponse {});
+    let import_id = assert_import_response(response);
     let notification = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
     )
     .await??;
     assert_eq!(notification.method, "externalAgentConfig/import/completed");
+    let completed: ExternalAgentConfigImportCompletedNotification =
+        serde_json::from_value(notification.params.expect("completed params"))?;
+    assert_eq!(completed.import_id, import_id);
 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
@@ -236,13 +366,16 @@ async fn external_agent_config_import_sends_completion_notification_after_pendin
     )
     .await??;
     let response: ExternalAgentConfigImportResponse = to_response(response)?;
-    assert_eq!(response, ExternalAgentConfigImportResponse {});
+    let import_id = assert_import_response(response);
     let notification = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
     )
     .await??;
     assert_eq!(notification.method, "externalAgentConfig/import/completed");
+    let completed: ExternalAgentConfigImportCompletedNotification =
+        serde_json::from_value(notification.params.expect("completed params"))?;
+    assert_eq!(completed.import_id, import_id);
 
     Ok(())
 }
@@ -318,13 +451,40 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     )
     .await??;
     let response: ExternalAgentConfigImportResponse = to_response(response)?;
-    assert_eq!(response, ExternalAgentConfigImportResponse {});
+    let import_id = assert_import_response(response);
     let notification = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
     )
     .await??;
     assert_eq!(notification.method, "externalAgentConfig/import/completed");
+    let completed: ExternalAgentConfigImportCompletedNotification =
+        serde_json::from_value(notification.params.expect("completed params"))?;
+    assert_eq!(completed.import_id, import_id);
+    assert_eq!(completed.item_type_results.len(), 1);
+    let session_result = &completed.item_type_results[0];
+    assert_eq!(
+        session_result.item_type,
+        ExternalAgentConfigMigrationItemType::Sessions
+    );
+    assert_eq!(session_result.failures, Vec::new());
+    assert_eq!(session_result.successes.len(), 1);
+    let session_success = &session_result.successes[0];
+    assert_eq!(
+        session_success.item_type,
+        ExternalAgentConfigMigrationItemType::Sessions
+    );
+    assert_eq!(session_success.cwd, None);
+    let session_source = std::fs::canonicalize(&session_path)?.display().to_string();
+    assert_eq!(
+        session_success.source.as_deref(),
+        Some(session_source.as_str())
+    );
+    let imported_thread_id = session_success
+        .target
+        .as_deref()
+        .expect("session success should include imported thread id")
+        .to_string();
 
     let request_id = mcp
         .send_thread_list_request(ThreadListParams {
@@ -352,6 +512,7 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
         .first()
         .expect("expected imported thread")
         .clone();
+    assert_eq!(imported_thread_id, thread.id.to_string());
     assert_eq!(thread.preview, "first request");
     assert_eq!(thread.name.as_deref(), Some("source session title"));
 
@@ -583,13 +744,16 @@ async fn external_agent_config_import_accepts_detected_session_payload_after_res
     )
     .await??;
     let response: ExternalAgentConfigImportResponse = to_response(response)?;
-    assert_eq!(response, ExternalAgentConfigImportResponse {});
+    let import_id = assert_import_response(response);
     let notification = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
     )
     .await??;
     assert_eq!(notification.method, "externalAgentConfig/import/completed");
+    let completed: ExternalAgentConfigImportCompletedNotification =
+        serde_json::from_value(notification.params.expect("completed params"))?;
+    assert_eq!(completed.import_id, import_id);
 
     let request_id = mcp
         .send_thread_list_request(ThreadListParams {
@@ -670,13 +834,17 @@ async fn external_agent_config_import_skips_already_imported_session_versions() 
             mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
         )
         .await??;
-        let _: ExternalAgentConfigImportResponse = to_response(response)?;
+        let response: ExternalAgentConfigImportResponse = to_response(response)?;
+        let import_id = assert_import_response(response);
         let notification = timeout(
             DEFAULT_TIMEOUT,
             mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
         )
         .await??;
         assert_eq!(notification.method, "externalAgentConfig/import/completed");
+        let completed: ExternalAgentConfigImportCompletedNotification =
+            serde_json::from_value(notification.params.expect("completed params"))?;
+        assert_eq!(completed.import_id, import_id);
     }
 
     let request_id = mcp
@@ -718,24 +886,14 @@ async fn external_agent_config_import_returns_before_background_session_import_f
     let session_path = session_dir.join("session.jsonl");
     std::fs::create_dir_all(&project_root)?;
     std::fs::create_dir_all(&session_dir)?;
-    std::fs::write(
-        &session_path,
-        serde_json::json!({
-            "type": "user",
-            "cwd": &project_root,
-            "timestamp": &recent_timestamp,
-            "message": { "content": "first request" },
-        })
-        .to_string(),
-    )?;
-
-    let project_config_dir = project_root.join(".codex");
-    std::fs::create_dir_all(&project_config_dir)?;
-    let project_config = project_config_dir.join("config.toml");
-    let status = std::process::Command::new("mkfifo")
-        .arg(&project_config)
-        .status()?;
-    assert!(status.success());
+    let session_contents = serde_json::json!({
+        "type": "user",
+        "cwd": &project_root,
+        "timestamp": &recent_timestamp,
+        "message": { "content": "first request" },
+    })
+    .to_string();
+    std::fs::write(&session_path, &session_contents)?;
 
     let home_dir = codex_home.path().display().to_string();
     let mut mcp =
@@ -758,6 +916,12 @@ async fn external_agent_config_import_returns_before_background_session_import_f
     assert_eq!(detected.items.len(), 1);
     let detected_items = detected.items;
 
+    std::fs::remove_file(&session_path)?;
+    let status = std::process::Command::new("mkfifo")
+        .arg(&session_path)
+        .status()?;
+    assert!(status.success());
+
     let request_id = mcp
         .send_raw_request(
             "externalAgentConfig/import",
@@ -770,7 +934,7 @@ async fn external_agent_config_import_returns_before_background_session_import_f
     )
     .await??;
     let response: ExternalAgentConfigImportResponse = to_response(response)?;
-    assert_eq!(response, ExternalAgentConfigImportResponse {});
+    let import_id = assert_import_response(response);
 
     assert!(
         timeout(
@@ -794,30 +958,33 @@ async fn external_agent_config_import_returns_before_background_session_import_f
     )
     .await??;
     let response: ExternalAgentConfigImportResponse = to_response(response)?;
-    assert_eq!(response, ExternalAgentConfigImportResponse {});
+    let duplicate_import_id = assert_import_response(response);
 
-    let writer = tokio::spawn(async move {
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .open(&project_config)
-            .await?;
-        file.write_all(b"\n").await
-    });
-    timeout(DEFAULT_TIMEOUT, writer).await???;
+    let mut completed_import_ids = Vec::new();
+    for _ in 0..2 {
+        timeout(DEFAULT_TIMEOUT, async {
+            let mut file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .open(&session_path)
+                .await?;
+            file.write_all(session_contents.as_bytes()).await
+        })
+        .await??;
 
-    let notification = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
-    )
-    .await??;
-    assert_eq!(notification.method, "externalAgentConfig/import/completed");
-
-    let notification = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
-    )
-    .await??;
-    assert_eq!(notification.method, "externalAgentConfig/import/completed");
+        let notification = timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
+        )
+        .await??;
+        assert_eq!(notification.method, "externalAgentConfig/import/completed");
+        let completed: ExternalAgentConfigImportCompletedNotification =
+            serde_json::from_value(notification.params.expect("completed params"))?;
+        completed_import_ids.push(completed.import_id);
+    }
+    completed_import_ids.sort();
+    let mut expected_import_ids = vec![import_id, duplicate_import_id];
+    expected_import_ids.sort();
+    assert_eq!(completed_import_ids, expected_import_ids);
 
     let request_id = mcp
         .send_thread_list_request(ThreadListParams {
@@ -841,92 +1008,6 @@ async fn external_agent_config_import_returns_before_background_session_import_f
     .await??;
     let response: ThreadListResponse = to_response(response)?;
     assert_eq!(response.data.len(), 1);
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn external_agent_config_import_rejects_undetected_session_paths() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("unused").await;
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
-    let project_root = codex_home.path().join("repo");
-    let recent_timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let session_dir = codex_home.path().join(".claude/projects/repo");
-    let detected_session_path = session_dir.join("detected.jsonl");
-    let undetected_session_path = codex_home.path().join("outside.jsonl");
-    std::fs::create_dir_all(&project_root)?;
-    std::fs::create_dir_all(&session_dir)?;
-    for path in [&detected_session_path, &undetected_session_path] {
-        std::fs::write(
-            path,
-            format!(
-                r#"{{"type":"user","cwd":"{}","timestamp":"{}","message":{{"content":"first request"}}}}"#,
-                project_root.display(),
-                recent_timestamp
-            ),
-        )?;
-    }
-
-    let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_raw_request(
-            "externalAgentConfig/import",
-            Some(serde_json::json!({
-                "migrationItems": [{
-                    "itemType": "SESSIONS",
-                    "description": "Migrate recent sessions",
-                    "cwd": null,
-                    "details": {
-                        "sessions": [{
-                            "path": undetected_session_path,
-                            "cwd": project_root,
-                            "title": "first request"
-                        }]
-                    }
-                }]
-            })),
-        )
-        .await?;
-    let err: JSONRPCError = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    assert_eq!(err.error.code, INVALID_PARAMS_ERROR_CODE);
-    assert!(
-        err.error
-            .message
-            .contains("external agent session was not detected for import")
-    );
-
-    let request_id = mcp
-        .send_thread_list_request(ThreadListParams {
-            cursor: None,
-            limit: None,
-            sort_key: None,
-            sort_direction: None,
-            model_providers: None,
-            source_kinds: None,
-            archived: None,
-            cwd: None,
-            use_state_db_only: false,
-            search_term: None,
-            parent_thread_id: None,
-        })
-        .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: ThreadListResponse = to_response(response)?;
-    assert_eq!(response.data, Vec::new());
 
     Ok(())
 }
@@ -1022,13 +1103,17 @@ async fn external_agent_config_import_compacts_huge_session_before_first_follow_
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let _: ExternalAgentConfigImportResponse = to_response(response)?;
+    let response: ExternalAgentConfigImportResponse = to_response(response)?;
+    let import_id = assert_import_response(response);
     let notification = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
     )
     .await??;
     assert_eq!(notification.method, "externalAgentConfig/import/completed");
+    let completed: ExternalAgentConfigImportCompletedNotification =
+        serde_json::from_value(notification.params.expect("completed params"))?;
+    assert_eq!(completed.import_id, import_id);
 
     let request_id = mcp
         .send_thread_list_request(ThreadListParams {

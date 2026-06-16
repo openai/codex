@@ -10,6 +10,8 @@ use crate::app_event::ConnectorsSnapshot;
 use crate::config_update::format_config_error;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
+use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditParams;
+use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
 use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveParams;
@@ -17,6 +19,7 @@ use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::MarketplaceUpgradeParams;
 use codex_app_server_protocol::MarketplaceUpgradeResponse;
 
+use codex_app_server_protocol::RateLimitResetCreditsSummary;
 use codex_app_server_protocol::RequestId;
 
 use crate::hooks_rpc::fetch_hooks_list;
@@ -25,6 +28,8 @@ use crate::hooks_rpc::write_hook_trusts;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 const TOKEN_ACTIVITY_FETCH_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(/*secs*/ 15);
+const RATE_LIMIT_RESET_REQUEST_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(/*secs*/ 15);
 
 impl App {
@@ -63,9 +68,9 @@ impl App {
     /// result as a `RateLimitsLoaded` event.
     ///
     /// The `origin` is forwarded to the completion handler so it can distinguish
-    /// a startup prefetch (which only updates cached snapshots and schedules a
-    /// frame) from a `/status`-triggered refresh (which must finalize the
-    /// corresponding status card).
+    /// a startup prefetch (which updates cached snapshots and may surface a
+    /// reset-credit notice) from a `/status`-triggered refresh (which must
+    /// finalize the corresponding status card).
     pub(super) fn refresh_rate_limits(
         &mut self,
         app_server: &AppServerSession,
@@ -74,9 +79,19 @@ impl App {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
-            let result = fetch_account_rate_limits(request_handle)
-                .await
-                .map_err(|err| err.to_string());
+            let request = fetch_account_rate_limits(request_handle);
+            let result = match origin {
+                RateLimitRefreshOrigin::ResetConsume { .. } => {
+                    tokio::time::timeout(RATE_LIMIT_RESET_REQUEST_TIMEOUT, request)
+                        .await
+                        .map_err(|_| "account/rateLimits/read timed out in TUI".to_string())
+                        .and_then(|result| result.map_err(|err| err.to_string()))
+                }
+                RateLimitRefreshOrigin::StartupPrefetch { .. }
+                | RateLimitRefreshOrigin::StatusCommand { .. } => {
+                    request.await.map_err(|err| err.to_string())
+                }
+            };
             app_event_tx.send(AppEvent::RateLimitsLoaded { origin, result });
         });
     }
@@ -97,6 +112,49 @@ impl App {
             .map_err(|_| "account/usage/read timed out in TUI".to_string())
             .and_then(|result| result.map_err(|err| err.to_string()));
             app_event_tx.send(AppEvent::TokenActivityLoaded { request_id, result });
+        });
+    }
+
+    pub(super) fn refresh_rate_limit_reset_credits(
+        &mut self,
+        app_server: &AppServerSession,
+        request_id: u64,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = tokio::time::timeout(
+                RATE_LIMIT_RESET_REQUEST_TIMEOUT,
+                fetch_rate_limit_reset_credits(request_handle),
+            )
+            .await
+            .map_err(|_| "account/rateLimits/read timed out in TUI".to_string())
+            .and_then(|result| result.map_err(|err| err.to_string()));
+            app_event_tx.send(AppEvent::RateLimitResetCreditsLoaded { request_id, result });
+        });
+    }
+
+    pub(super) fn consume_rate_limit_reset_credit(
+        &mut self,
+        app_server: &AppServerSession,
+        request_id: u64,
+        idempotency_key: String,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = tokio::time::timeout(
+                RATE_LIMIT_RESET_REQUEST_TIMEOUT,
+                consume_rate_limit_reset_credit_request(request_handle, idempotency_key.clone()),
+            )
+            .await
+            .map_err(|_| "account/rateLimitResetCredit/consume timed out in TUI".to_string())
+            .and_then(|result| result.map_err(|err| err.to_string()));
+            app_event_tx.send(AppEvent::RateLimitResetCreditConsumed {
+                request_id,
+                idempotency_key,
+                result,
+            });
         });
     }
 
@@ -156,13 +214,34 @@ impl App {
     }
 
     pub(super) fn fetch_plugins_list(&mut self, app_server: &AppServerSession, cwd: PathBuf) {
+        self.chat_widget.on_plugins_list_fetch_started(cwd.clone());
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
+        let plugin_sharing_enabled = self.config.features.enabled(Feature::PluginSharing);
+        let remote_plugin_enabled = self.config.features.enabled(Feature::RemotePlugin);
         tokio::spawn(async move {
-            let result = fetch_plugins_list(request_handle, cwd.clone())
+            let result = fetch_plugins_list(request_handle.clone(), cwd.clone())
                 .await
                 .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::PluginsLoaded { cwd, result });
+            let should_fetch_additional_remote_sections = result.is_ok();
+            app_event_tx.send(AppEvent::PluginsLoaded {
+                cwd: cwd.clone(),
+                result,
+            });
+            if should_fetch_additional_remote_sections {
+                let (marketplaces, section_errors) = fetch_additional_plugin_remote_sections(
+                    request_handle,
+                    cwd.clone(),
+                    plugin_sharing_enabled,
+                    remote_plugin_enabled,
+                )
+                .await;
+                app_event_tx.send(AppEvent::PluginRemoteSectionsLoaded {
+                    cwd,
+                    marketplaces,
+                    section_errors,
+                });
+            }
         });
     }
 
@@ -661,17 +740,15 @@ pub(super) async fn fetch_all_mcp_server_statuses(
 
 pub(super) async fn fetch_account_rate_limits(
     request_handle: AppServerRequestHandle,
-) -> Result<Vec<RateLimitSnapshot>> {
+) -> Result<GetAccountRateLimitsResponse> {
     let request_id = RequestId::String(format!("account-rate-limits-{}", Uuid::new_v4()));
-    let response: GetAccountRateLimitsResponse = request_handle
+    request_handle
         .request_typed(ClientRequest::GetAccountRateLimits {
             request_id,
             params: None,
         })
         .await
-        .wrap_err("account/rateLimits/read failed in TUI")?;
-
-    Ok(app_server_rate_limit_snapshots(response))
+        .wrap_err("account/rateLimits/read failed in TUI")
 }
 
 pub(super) async fn fetch_account_token_activity(
@@ -685,6 +762,38 @@ pub(super) async fn fetch_account_token_activity(
         })
         .await
         .wrap_err("account/usage/read failed in TUI")
+}
+
+pub(super) async fn fetch_rate_limit_reset_credits(
+    request_handle: AppServerRequestHandle,
+) -> Result<RateLimitResetCreditsSummary> {
+    let request_id = RequestId::String(format!("account-rate-limit-resets-{}", Uuid::new_v4()));
+    let response: GetAccountRateLimitsResponse = request_handle
+        .request_typed(ClientRequest::GetAccountRateLimits {
+            request_id,
+            params: None,
+        })
+        .await
+        .wrap_err("account/rateLimits/read failed in TUI")?;
+    response.rate_limit_reset_credits.ok_or_else(|| {
+        color_eyre::eyre::eyre!(
+            "account/rateLimits/read response did not include rateLimitResetCredits"
+        )
+    })
+}
+
+pub(super) async fn consume_rate_limit_reset_credit_request(
+    request_handle: AppServerRequestHandle,
+    idempotency_key: String,
+) -> Result<ConsumeAccountRateLimitResetCreditResponse> {
+    let request_id = RequestId::String(format!("consume-rate-limit-reset-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::ConsumeAccountRateLimitResetCredit {
+            request_id,
+            params: ConsumeAccountRateLimitResetCreditParams { idempotency_key },
+        })
+        .await
+        .wrap_err("account/rateLimitResetCredit/consume failed in TUI")
 }
 
 pub(super) async fn send_add_credits_nudge_email(
@@ -756,6 +865,114 @@ pub(super) async fn fetch_plugins_list(
     Ok(response)
 }
 
+pub(super) async fn fetch_additional_plugin_remote_sections(
+    request_handle: AppServerRequestHandle,
+    cwd: PathBuf,
+    plugin_sharing_enabled: bool,
+    remote_plugin_enabled: bool,
+) -> (Vec<PluginMarketplaceEntry>, Vec<PluginRemoteSectionError>) {
+    let mut marketplaces = Vec::new();
+    let mut section_errors = Vec::new();
+    let mut sections = Vec::new();
+    if !remote_plugin_enabled {
+        sections.push((
+            "vertical",
+            "OpenAI Curated",
+            vec![PluginListMarketplaceKind::Vertical],
+        ));
+    }
+    sections.push((
+        "workspace",
+        "Workspace",
+        vec![PluginListMarketplaceKind::WorkspaceDirectory],
+    ));
+    if plugin_sharing_enabled {
+        sections.push((
+            "shared-with-me",
+            "Shared with me",
+            vec![PluginListMarketplaceKind::SharedWithMe],
+        ));
+    } else {
+        section_errors.push(plugin_sharing_disabled_remote_section_error());
+    }
+
+    for (section_id, label, marketplace_kinds) in sections {
+        match request_plugin_list_for_kinds(request_handle.clone(), cwd.clone(), marketplace_kinds)
+            .await
+        {
+            Ok(mut response) => {
+                hide_cli_only_plugin_marketplaces(&mut response);
+                marketplaces.extend(response.marketplaces);
+            }
+            Err(err) => {
+                let message = format!("{err:#}");
+                section_errors.push(PluginRemoteSectionError {
+                    section_id: section_id.to_string(),
+                    label: label.to_string(),
+                    message: plugin_remote_section_error_message(label, &message),
+                });
+            }
+        }
+    }
+
+    (marketplaces, section_errors)
+}
+
+fn plugin_remote_section_error_message(label: &str, err: &str) -> String {
+    let next_step = plugin_remote_section_error_next_step(label, err);
+    if next_step.is_empty() {
+        err.to_string()
+    } else {
+        format!("{err} {next_step}")
+    }
+}
+
+fn plugin_remote_section_error_next_step(label: &str, err: &str) -> &'static str {
+    let err = err.to_ascii_lowercase();
+    if err.contains("api key auth is not supported") {
+        "Sign in with ChatGPT auth; API key auth cannot load remote plugin catalogs."
+    } else if err.contains("authentication required")
+        || err.contains("not signed in")
+        || err.contains("not logged in")
+    {
+        "Sign in to ChatGPT, then try loading this section again."
+    } else if err.contains("codex plugins are disabled")
+        || err.contains("plugin sharing is disabled")
+        || err.contains("plugin sharing is not enabled")
+        || err.contains("feature disabled")
+    {
+        "Ask a workspace admin to enable Codex plugins or plugin sharing."
+    } else if err.contains("workspace") && (err.contains("access") || err.contains("mismatch")) {
+        "Switch to the matching workspace or ask the sharer for access."
+    } else if err.contains("not found") || err.contains("status 404") {
+        "Check that you are signed in to the correct workspace and still have access."
+    } else if err.contains("old build") || err.contains("update codex") || err.contains("stale") {
+        "Update Codex, then try opening the shared plugin again."
+    } else if err.contains("service unavailable")
+        || err.contains("temporarily unavailable")
+        || err.contains("status 503")
+        || err.contains("failed to send")
+        || err.contains("request")
+        || err.contains("status")
+    {
+        "Try again later; local plugin functionality is still available."
+    } else if err.contains("disabled by admin") || err.contains("admin disabled") {
+        "Ask a workspace admin to confirm plugin access."
+    } else if label == "Shared with me" && err.contains("plugin") && err.contains("disabled") {
+        "Ask the sharer or a workspace admin to confirm plugin access."
+    } else {
+        ""
+    }
+}
+
+fn plugin_sharing_disabled_remote_section_error() -> PluginRemoteSectionError {
+    PluginRemoteSectionError {
+        section_id: "shared-with-me".to_string(),
+        label: "Shared with me".to_string(),
+        message: "Plugin sharing is disabled for this Codex session. Enable plugin sharing to load shared plugins.".to_string(),
+    }
+}
+
 const CLI_HIDDEN_PLUGIN_MARKETPLACES: &[&str] = &["openai-bundled"];
 
 pub(super) fn hide_cli_only_plugin_marketplaces(response: &mut PluginListResponse) {
@@ -768,6 +985,23 @@ pub(super) async fn request_plugin_list(
     request_handle: AppServerRequestHandle,
     cwd: PathBuf,
 ) -> Result<PluginListResponse> {
+    request_plugin_list_with_marketplace_kinds(request_handle, cwd, /*marketplace_kinds*/ None)
+        .await
+}
+
+pub(super) async fn request_plugin_list_for_kinds(
+    request_handle: AppServerRequestHandle,
+    cwd: PathBuf,
+    marketplace_kinds: Vec<PluginListMarketplaceKind>,
+) -> Result<PluginListResponse> {
+    request_plugin_list_with_marketplace_kinds(request_handle, cwd, Some(marketplace_kinds)).await
+}
+
+async fn request_plugin_list_with_marketplace_kinds(
+    request_handle: AppServerRequestHandle,
+    cwd: PathBuf,
+    marketplace_kinds: Option<Vec<PluginListMarketplaceKind>>,
+) -> Result<PluginListResponse> {
     let cwd = AbsolutePathBuf::try_from(cwd).wrap_err("plugin list cwd must be absolute")?;
     let request_id = RequestId::String(format!("plugin-list-{}", Uuid::new_v4()));
     request_handle
@@ -775,7 +1009,7 @@ pub(super) async fn request_plugin_list(
             request_id,
             params: PluginListParams {
                 cwds: Some(vec![cwd]),
-                marketplace_kinds: None,
+                marketplace_kinds,
             },
         })
         .await
@@ -1115,6 +1349,71 @@ mod tests {
             }
             .into_request_params(),
             (None, Some("workspace-directory".to_string()))
+        );
+    }
+
+    #[test]
+    fn plugin_remote_section_error_message_adds_concrete_next_steps() {
+        let cases = [
+            (
+                "Workspace",
+                "chatgpt authentication required for remote plugin catalog",
+                "Sign in to ChatGPT, then try loading this section again.",
+            ),
+            (
+                "OpenAI Curated",
+                "chatgpt authentication required for remote plugin catalog; api key auth is not supported",
+                "Sign in with ChatGPT auth; API key auth cannot load remote plugin catalogs.",
+            ),
+            (
+                "Shared with me",
+                "remote plugin catalog request failed with status 404: missing",
+                "Check that you are signed in to the correct workspace and still have access.",
+            ),
+            (
+                "Shared with me",
+                "workspace access mismatch",
+                "Switch to the matching workspace or ask the sharer for access.",
+            ),
+            (
+                "Shared with me",
+                "old build fallback",
+                "Update Codex, then try opening the shared plugin again.",
+            ),
+            (
+                "Shared with me",
+                "remote service unavailable",
+                "Try again later; local plugin functionality is still available.",
+            ),
+            (
+                "Workspace",
+                "plugin disabled by admin",
+                "Ask a workspace admin to confirm plugin access.",
+            ),
+            (
+                "Shared with me",
+                "plugin sharing is not enabled",
+                "Ask a workspace admin to enable Codex plugins or plugin sharing.",
+            ),
+        ];
+
+        for (label, err, next_step) in cases {
+            assert_eq!(
+                plugin_remote_section_error_message(label, err),
+                format!("{err} {next_step}")
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_sharing_disabled_remote_section_error_targets_shared_with_me() {
+        assert_eq!(
+            plugin_sharing_disabled_remote_section_error(),
+            PluginRemoteSectionError {
+                section_id: "shared-with-me".to_string(),
+                label: "Shared with me".to_string(),
+                message: "Plugin sharing is disabled for this Codex session. Enable plugin sharing to load shared plugins.".to_string(),
+            }
         );
     }
 

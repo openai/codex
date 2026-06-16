@@ -54,7 +54,7 @@ impl ChatWidget {
             self.app_event_tx.send(AppEvent::StopCommitAnimation);
         }
         if had_stream_controller {
-            self.request_completed_token_activity_output_insertion();
+            self.request_pending_usage_output_insertion_after_stream_shutdown();
         }
     }
 
@@ -193,7 +193,7 @@ impl ChatWidget {
         if should_restore_after_stream {
             self.status_state.pending_status_indicator_restore = true;
             self.maybe_restore_status_indicator_after_stream_idle();
-            self.request_completed_token_activity_output_insertion();
+            self.request_pending_usage_output_insertion_after_stream_shutdown();
         }
     }
 

@@ -35,6 +35,7 @@ use codex_protocol::user_input::UserInput as CoreUserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
+use codex_utils_path_uri::ApiPathString;
 use pretty_assertions::assert_eq;
 use serde_json::Value as JsonValue;
 use serde_json::json;
@@ -379,8 +380,8 @@ fn external_agent_config_import_params_accept_legacy_plugin_details() {
 }
 
 #[test]
-fn command_execution_request_approval_rejects_relative_additional_permission_paths() {
-    let err = serde_json::from_value::<CommandExecutionRequestApprovalParams>(json!({
+fn command_execution_request_approval_localization_rejects_relative_additional_permission_paths() {
+    let params = serde_json::from_value::<CommandExecutionRequestApprovalParams>(json!({
         "threadId": "thr_123",
         "turnId": "turn_123",
         "itemId": "call_123",
@@ -401,12 +402,14 @@ fn command_execution_request_approval_rejects_relative_additional_permission_pat
         "proposedNetworkPolicyAmendments": null,
         "availableDecisions": null
     }))
-    .expect_err("relative additional permission paths should fail");
-    assert!(
-        err.to_string()
-            .contains("AbsolutePathBuf deserialized without a base path"),
-        "unexpected error: {err}"
-    );
+    .expect("API paths should deserialize before localization");
+    let additional_permissions = params
+        .additional_permissions
+        .expect("additional permissions should be present");
+
+    let err = CoreAdditionalPermissionProfile::try_from(additional_permissions)
+        .expect_err("relative additional permission paths should fail localization");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
 }
 
 #[test]
@@ -451,12 +454,12 @@ fn permissions_request_approval_uses_request_permission_profile() {
             }),
             file_system: Some(AdditionalFileSystemPermissions {
                 read: Some(vec![
-                    AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
-                        .expect("path must be absolute"),
+                    serde_json::from_value(json!(read_only_path))
+                        .expect("API path string should deserialize")
                 ]),
                 write: Some(vec![
-                    AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
-                        .expect("path must be absolute"),
+                    serde_json::from_value(json!(read_write_path))
+                        .expect("API path string should deserialize")
                 ]),
                 glob_scan_max_depth: None,
                 entries: None,
@@ -465,7 +468,8 @@ fn permissions_request_approval_uses_request_permission_profile() {
     );
 
     assert_eq!(
-        CoreRequestPermissionProfile::from(params.permissions),
+        CoreRequestPermissionProfile::try_from(params.permissions)
+            .expect("API paths should convert to native paths"),
         CoreRequestPermissionProfile {
             network: Some(CoreNetworkPermissions {
                 enabled: Some(true),
@@ -559,7 +563,8 @@ fn additional_file_system_permissions_preserves_canonical_entries() {
         }
     );
     assert_eq!(
-        CoreFileSystemPermissions::from(permissions),
+        CoreFileSystemPermissions::try_from(permissions)
+            .expect("API paths should convert to native paths"),
         core_permissions
     );
 }
@@ -574,23 +579,25 @@ fn additional_file_system_permissions_populates_entries_for_legacy_roots() {
     );
 
     let permissions = AdditionalFileSystemPermissions::from(core_permissions.clone());
+    let read_only_api_path = ApiPathString::from_abs_path(&read_only_path);
+    let read_write_api_path = ApiPathString::from_abs_path(&read_write_path);
 
     assert_eq!(
         permissions,
         AdditionalFileSystemPermissions {
-            read: Some(vec![read_only_path.clone()]),
-            write: Some(vec![read_write_path.clone()]),
+            read: Some(vec![read_only_api_path.clone()]),
+            write: Some(vec![read_write_api_path.clone()]),
             glob_scan_max_depth: None,
             entries: Some(vec![
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Path {
-                        path: read_only_path,
+                        path: read_only_api_path,
                     },
                     access: FileSystemAccessMode::Read,
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Path {
-                        path: read_write_path,
+                        path: read_write_api_path,
                     },
                     access: FileSystemAccessMode::Write,
                 },
@@ -598,7 +605,8 @@ fn additional_file_system_permissions_populates_entries_for_legacy_roots() {
         }
     );
     assert_eq!(
-        CoreFileSystemPermissions::from(permissions),
+        CoreFileSystemPermissions::try_from(permissions)
+            .expect("API paths should convert to native paths"),
         core_permissions
     );
 }
@@ -667,12 +675,12 @@ fn permissions_request_approval_response_uses_granted_permission_profile_without
             }),
             file_system: Some(AdditionalFileSystemPermissions {
                 read: Some(vec![
-                    AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
-                        .expect("path must be absolute"),
+                    serde_json::from_value(json!(read_only_path))
+                        .expect("API path string should deserialize")
                 ]),
                 write: Some(vec![
-                    AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
-                        .expect("path must be absolute"),
+                    serde_json::from_value(json!(read_write_path))
+                        .expect("API path string should deserialize")
                 ]),
                 glob_scan_max_depth: None,
                 entries: None,
@@ -681,7 +689,8 @@ fn permissions_request_approval_response_uses_granted_permission_profile_without
     );
 
     assert_eq!(
-        CoreAdditionalPermissionProfile::from(response.permissions),
+        CoreAdditionalPermissionProfile::try_from(response.permissions)
+            .expect("API paths should convert to native paths"),
         CoreAdditionalPermissionProfile {
             network: Some(CoreNetworkPermissions {
                 enabled: Some(true),
@@ -2907,6 +2916,7 @@ fn plugin_list_params_serializes_marketplace_kind_filter() {
                 PluginListMarketplaceKind::Vertical,
                 PluginListMarketplaceKind::WorkspaceDirectory,
                 PluginListMarketplaceKind::SharedWithMe,
+                PluginListMarketplaceKind::CreatedByMeRemote,
             ]),
         })
         .unwrap(),
@@ -2917,6 +2927,7 @@ fn plugin_list_params_serializes_marketplace_kind_filter() {
                 "vertical",
                 "workspace-directory",
                 "shared-with-me",
+                "created-by-me-remote",
             ],
         }),
     );
@@ -3529,56 +3540,6 @@ fn dynamic_tool_response_serializes_text_and_image_content_items() {
             "success": true,
         })
     );
-}
-
-#[test]
-fn dynamic_tool_spec_deserializes_defer_loading() {
-    let value = json!({
-        "name": "lookup_ticket",
-        "description": "Fetch a ticket",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "id": { "type": "string" }
-            }
-        },
-        "deferLoading": true,
-    });
-
-    let actual: DynamicToolSpec = serde_json::from_value(value).expect("deserialize");
-
-    assert_eq!(
-        actual,
-        DynamicToolSpec {
-            namespace: None,
-            name: "lookup_ticket".to_string(),
-            description: "Fetch a ticket".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "id": { "type": "string" }
-                }
-            }),
-            defer_loading: true,
-        }
-    );
-}
-
-#[test]
-fn dynamic_tool_spec_legacy_expose_to_context_inverts_to_defer_loading() {
-    let value = json!({
-        "name": "lookup_ticket",
-        "description": "Fetch a ticket",
-        "inputSchema": {
-            "type": "object",
-            "properties": {}
-        },
-        "exposeToContext": false,
-    });
-
-    let actual: DynamicToolSpec = serde_json::from_value(value).expect("deserialize");
-
-    assert!(actual.defer_loading);
 }
 
 #[test]

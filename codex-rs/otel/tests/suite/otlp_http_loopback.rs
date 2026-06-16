@@ -200,17 +200,7 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     let request = captured
         .iter()
         .find(|req| req.path == "/v1/metrics")
-        .unwrap_or_else(|| {
-            let paths = captured
-                .iter()
-                .map(|req| req.path.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            panic!(
-                "missing /v1/metrics request; got {}: {paths}",
-                captured.len()
-            );
-        });
+        .expect("/v1/metrics request should be captured");
     let content_type = request
         .content_type
         .as_deref()
@@ -241,6 +231,98 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
 }
 
 #[test]
+fn otlp_http_exporter_sends_logs_to_collector()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("local_addr");
+    listener.set_nonblocking(true).expect("set_nonblocking");
+
+    let (tx, rx) = mpsc::channel::<Vec<CapturedRequest>>();
+    let server = thread::spawn(move || {
+        let mut captured = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(3);
+
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let result = read_http_request(&mut stream);
+                    let _ = write_http_response(&mut stream, "202 Accepted");
+                    if let Ok((path, headers, body)) = result {
+                        captured.push(CapturedRequest {
+                            path,
+                            content_type: headers.get("content-type").cloned(),
+                            body,
+                        });
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+
+        let _ = tx.send(captured);
+    });
+
+    let otel = OtelProvider::from(&OtelSettings {
+        environment: "test".to_string(),
+        service_name: "codex-cli".to_string(),
+        service_version: env!("CARGO_PKG_VERSION").to_string(),
+        codex_home: PathBuf::from("."),
+        exporter: OtelExporter::OtlpHttp {
+            endpoint: format!("http://{addr}/v1/logs"),
+            headers: HashMap::new(),
+            protocol: OtelHttpProtocol::Json,
+            tls: None,
+        },
+        trace_exporter: OtelExporter::None,
+        metrics_exporter: OtelExporter::None,
+        runtime_metrics: false,
+        span_attributes: BTreeMap::new(),
+        tracestate: BTreeMap::new(),
+    })?
+    .expect("otel provider");
+    let logger_layer = otel.logger_layer().expect("logger layer");
+    let subscriber = tracing_subscriber::registry().with(logger_layer);
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        tracing::event!(
+            target: "codex_otel.log_only",
+            tracing::Level::INFO,
+            event.name = "codex.test.log_exported",
+            "test OTEL log export"
+        );
+    });
+    otel.shutdown();
+
+    server.join().expect("server join");
+    let captured = rx.recv_timeout(Duration::from_secs(1)).expect("captured");
+
+    let request = captured
+        .iter()
+        .find(|req| req.path == "/v1/logs")
+        .expect("/v1/logs request should be captured");
+    let content_type = request
+        .content_type
+        .as_deref()
+        .unwrap_or("<missing content-type>");
+    assert!(
+        content_type.starts_with("application/json"),
+        "unexpected content-type: {content_type}"
+    );
+
+    let body = String::from_utf8_lossy(&request.body);
+    assert!(
+        body.contains("codex.test.log_exported"),
+        "expected exported log event not found; body prefix: {}",
+        &body.chars().take(2000).collect::<String>()
+    );
+    Ok(())
+}
+
+#[test]
 fn otel_provider_rejects_header_unsafe_configured_tracestate() {
     let result = OtelProvider::from(&OtelSettings {
         environment: "test".to_string(),
@@ -263,9 +345,9 @@ fn otel_provider_rejects_header_unsafe_configured_tracestate() {
         )]),
     });
 
-    let Err(err) = result else {
-        panic!("expected header-unsafe configured tracestate to be rejected");
-    };
+    let err = result
+        .err()
+        .expect("header-unsafe configured tracestate should be rejected");
     assert!(err.to_string().contains("configured tracestate value"));
 }
 
@@ -357,6 +439,12 @@ fn otlp_http_exporter_sends_traces_to_collector()
         let _guard = span.enter();
         let propagated_trace =
             current_span_w3c_trace_context().expect("current span should have trace context");
+        tracing::event!(
+            target: "codex_otel.trace_safe",
+            tracing::Level::INFO,
+            event.name = "codex.test.trace_event",
+            "test OTEL trace event"
+        );
         tracing::info!("trace loopback event");
         propagated_trace
     });
@@ -373,17 +461,7 @@ fn otlp_http_exporter_sends_traces_to_collector()
     let request = captured
         .iter()
         .find(|req| req.path == "/v1/traces")
-        .unwrap_or_else(|| {
-            let paths = captured
-                .iter()
-                .map(|req| req.path.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            panic!(
-                "missing /v1/traces request; got {}: {paths}",
-                captured.len()
-            );
-        });
+        .expect("/v1/traces request should be captured");
     let content_type = request
         .content_type
         .as_deref()
@@ -407,6 +485,11 @@ fn otlp_http_exporter_sends_traces_to_collector()
     assert!(
         body.contains("test.configured_attribute") && body.contains("configured-value"),
         "expected configured span attribute not found; body prefix: {}",
+        &body.chars().take(2000).collect::<String>()
+    );
+    assert!(
+        body.contains("codex.test.trace_event"),
+        "expected trace event not found; body prefix: {}",
         &body.chars().take(2000).collect::<String>()
     );
 
@@ -491,17 +574,7 @@ async fn otlp_http_exporter_sends_traces_to_collector_in_tokio_runtime()
     let request = captured
         .iter()
         .find(|req| req.path == "/v1/traces")
-        .unwrap_or_else(|| {
-            let paths = captured
-                .iter()
-                .map(|req| req.path.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            panic!(
-                "missing /v1/traces request; got {}: {paths}",
-                captured.len()
-            );
-        });
+        .expect("/v1/traces request should be captured");
     let content_type = request
         .content_type
         .as_deref()
@@ -623,17 +696,7 @@ fn otlp_http_exporter_sends_traces_to_collector_in_current_thread_tokio_runtime(
     let request = captured
         .iter()
         .find(|req| req.path == "/v1/traces")
-        .unwrap_or_else(|| {
-            let paths = captured
-                .iter()
-                .map(|req| req.path.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            panic!(
-                "missing /v1/traces request; got {}: {paths}",
-                captured.len()
-            );
-        });
+        .expect("/v1/traces request should be captured");
     let content_type = request
         .content_type
         .as_deref()

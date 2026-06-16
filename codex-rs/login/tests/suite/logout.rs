@@ -7,6 +7,7 @@ use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::CLIENT_ID;
+use codex_login::CLIENT_ID_OVERRIDE_ENV_VAR;
 use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_login::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::logout_with_revoke;
@@ -28,11 +29,12 @@ use wiremock::matchers::path;
 const ACCESS_TOKEN: &str = "access-token";
 const REFRESH_TOKEN: &str = "refresh-token";
 
-#[serial_test::serial(logout_revoke)]
+#[serial_test::serial(auth_env)]
 #[tokio::test]
 async fn logout_with_revoke_revokes_refresh_token_then_removes_auth() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let _client_id_guard = EnvGuard::set(CLIENT_ID_OVERRIDE_ENV_VAR, "staging-client".to_string());
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/revoke"))
@@ -77,14 +79,14 @@ async fn logout_with_revoke_revokes_refresh_token_then_removes_auth() -> Result<
         json!({
             "token": REFRESH_TOKEN,
             "token_type_hint": "refresh_token",
-            "client_id": CLIENT_ID,
+            "client_id": "staging-client",
         })
     );
     server.verify().await;
     Ok(())
 }
 
-#[serial_test::serial(logout_revoke)]
+#[serial_test::serial(auth_env)]
 #[tokio::test]
 async fn logout_with_revoke_uses_stored_auth_when_access_token_env_is_set() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -126,7 +128,7 @@ async fn logout_with_revoke_uses_stored_auth_when_access_token_env_is_set() -> R
     Ok(())
 }
 
-#[serial_test::serial(logout_revoke)]
+#[serial_test::serial(auth_env)]
 #[tokio::test]
 async fn logout_with_revoke_removes_auth_when_revoke_fails() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -169,7 +171,7 @@ async fn logout_with_revoke_removes_auth_when_revoke_fails() -> Result<()> {
     Ok(())
 }
 
-#[serial_test::serial(logout_revoke)]
+#[serial_test::serial(auth_env)]
 #[tokio::test]
 async fn auth_manager_logout_with_revoke_uses_cached_auth() -> Result<()> {
     skip_if_no_network!(Ok(()));

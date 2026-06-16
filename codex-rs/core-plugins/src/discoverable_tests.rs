@@ -13,6 +13,7 @@ use crate::test_support::load_plugins_config;
 use crate::test_support::write_curated_plugin;
 use crate::test_support::write_curated_plugin_sha_with;
 use crate::test_support::write_file;
+use crate::test_support::write_openai_api_curated_marketplace;
 use crate::test_support::write_openai_curated_marketplace;
 use codex_config::CONFIG_TOML_FILE;
 use codex_login::CodexAuth;
@@ -60,6 +61,34 @@ async fn returns_fallback_plugins_without_installed_apps() {
 }
 
 #[tokio::test]
+async fn returns_api_curated_fallback_plugins_for_direct_provider_auth() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let curated_root = curated_plugins_repo_path(codex_home.path());
+    write_openai_api_curated_marketplace(&curated_root, &["sample", "slack", "openai-developers"]);
+
+    let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let auth = CodexAuth::from_api_key("test-api-key");
+    let discoverable_plugins = list_discoverable_plugins(
+        &plugins_manager,
+        discovery_input(plugins, &[], &[], &[]),
+        Some(&auth),
+    )
+    .await;
+
+    assert_eq!(
+        discoverable_plugins
+            .into_iter()
+            .map(|plugin| plugin.id)
+            .collect::<Vec<_>>(),
+        vec![
+            "openai-developers@openai-api-curated".to_string(),
+            "slack@openai-api-curated".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn returns_microsoft_fallback_plugins() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());
@@ -92,7 +121,7 @@ async fn returns_microsoft_fallback_plugins() {
 }
 
 #[tokio::test]
-async fn omits_openai_curated_when_remote_enabled() {
+async fn includes_openai_curated_when_remote_enabled() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());
     write_openai_curated_marketplace(&curated_root, &["slack"]);
@@ -142,7 +171,10 @@ source = "/tmp/{bundled_marketplace_name}"
             .into_iter()
             .map(|plugin| plugin.id)
             .collect::<Vec<_>>(),
-        vec!["chrome@openai-bundled".to_string()]
+        vec![
+            "chrome@openai-bundled".to_string(),
+            "slack@openai-curated".to_string(),
+        ]
     );
 }
 
@@ -628,7 +660,7 @@ remote_plugin = true
     .await
     .expect("remote plugin catalog cache should write");
 
-    for scope in ["GLOBAL", "WORKSPACE"] {
+    for scope in ["GLOBAL", "USER", "WORKSPACE"] {
         Mock::given(method("GET"))
             .and(path("/backend-api/ps/plugins/installed"))
             .and(query_param("scope", scope))

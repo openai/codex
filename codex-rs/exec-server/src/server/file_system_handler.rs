@@ -9,16 +9,23 @@ use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::RemoveOptions;
+use crate::file_read::FileReadHandleManager;
 use crate::local_file_system::LocalFileSystem;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCanonicalizeResponse;
+use crate::protocol::FsCloseParams;
+use crate::protocol::FsCloseResponse;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
+use crate::protocol::FsOpenParams;
+use crate::protocol::FsOpenResponse;
+use crate::protocol::FsReadBlockParams;
+use crate::protocol::FsReadBlockResponse;
 use crate::protocol::FsReadDirectoryEntry;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
@@ -32,16 +39,67 @@ use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 use crate::rpc::not_found;
 
+const MAX_FILE_READ_HANDLE_ID_BYTES: usize = 32;
+
 #[derive(Clone)]
 pub(crate) struct FileSystemHandler {
     file_system: LocalFileSystem,
+    file_reads: FileReadHandleManager,
 }
 
 impl FileSystemHandler {
     pub(crate) fn new(runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
             file_system: LocalFileSystem::with_runtime_paths(runtime_paths),
+            file_reads: FileReadHandleManager::default(),
         }
+    }
+
+    pub(crate) async fn shutdown(&self) {
+        self.file_reads.close_all().await;
+    }
+
+    pub(crate) async fn open(
+        &self,
+        params: FsOpenParams,
+    ) -> Result<FsOpenResponse, JSONRPCErrorError> {
+        validate_file_read_handle_id(&params.handle_id)?;
+        let file = self
+            .file_system
+            .open_file_for_read(&params.path, params.sandbox.as_ref())
+            .await
+            .map_err(map_fs_error)?;
+        let handle_id = self
+            .file_reads
+            .open(params.handle_id, file)
+            .await
+            .map_err(map_fs_error)?;
+        Ok(FsOpenResponse { handle_id })
+    }
+
+    pub(crate) async fn read_block(
+        &self,
+        params: FsReadBlockParams,
+    ) -> Result<FsReadBlockResponse, JSONRPCErrorError> {
+        validate_file_read_handle_id(&params.handle_id)?;
+        let block = self
+            .file_reads
+            .read_block(&params.handle_id, params.offset, params.len)
+            .await
+            .map_err(map_fs_error)?;
+        Ok(FsReadBlockResponse {
+            chunk: block.bytes.into(),
+            eof: block.eof,
+        })
+    }
+
+    pub(crate) async fn close(
+        &self,
+        params: FsCloseParams,
+    ) -> Result<FsCloseResponse, JSONRPCErrorError> {
+        validate_file_read_handle_id(&params.handle_id)?;
+        self.file_reads.close(&params.handle_id).await;
+        Ok(FsCloseResponse {})
     }
 
     pub(crate) async fn read_file(
@@ -174,6 +232,15 @@ impl FileSystemHandler {
             .map_err(map_fs_error)?;
         Ok(FsCopyResponse {})
     }
+}
+
+fn validate_file_read_handle_id(handle_id: &str) -> Result<(), JSONRPCErrorError> {
+    if handle_id.len() > MAX_FILE_READ_HANDLE_ID_BYTES {
+        return Err(invalid_request(format!(
+            "file read handle ID must not exceed {MAX_FILE_READ_HANDLE_ID_BYTES} bytes"
+        )));
+    }
+    Ok(())
 }
 
 fn map_fs_error(err: io::Error) -> JSONRPCErrorError {

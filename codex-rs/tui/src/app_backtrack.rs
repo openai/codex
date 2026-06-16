@@ -294,7 +294,7 @@ impl App {
         }
         self.overlay = None;
         self.backtrack.overlay_preview_active = false;
-        self.retry_pending_history_cell_refresh(tui);
+        tui.frame_requester().schedule_frame();
         if was_backtrack {
             // Ensure backtrack state is fully reset when overlay closes (e.g. via 'q').
             self.reset_backtrack_state();
@@ -541,6 +541,7 @@ impl App {
             return false;
         }
         self.chat_widget.clear_pending_token_activity_refreshes();
+        self.chat_widget.clear_pending_rate_limit_reset_hint();
         self.chat_widget
             .truncate_agent_copy_history_to_user_turn_count(user_count(&self.transcript_cells));
         self.sync_overlay_after_transcript_trim();
@@ -565,6 +566,7 @@ impl App {
             pending.selection.nth_user_message,
         ) {
             self.chat_widget.clear_pending_token_activity_refreshes();
+            self.chat_widget.clear_pending_rate_limit_reset_hint();
             self.chat_widget
                 .truncate_agent_copy_history_to_user_turn_count(user_count(&self.transcript_cells));
             self.sync_overlay_after_transcript_trim();

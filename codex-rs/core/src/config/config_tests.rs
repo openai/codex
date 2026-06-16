@@ -4357,8 +4357,13 @@ async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
         Some(&http_mcp("https://sample.example/mcp"))
     );
     assert_eq!(
-        mcp_config.mcp_server_catalog.plugin_ids_by_server_name(),
-        HashMap::from([("sample".to_string(), "sample@test".to_string())])
+        mcp_config
+            .mcp_server_catalog
+            .plugin_attributions_by_server_name(),
+        HashMap::from([(
+            "sample".to_string(),
+            McpPluginAttribution::new("sample@test".to_string(), "sample".to_string()),
+        )])
     );
 
     Ok(())
@@ -4416,7 +4421,7 @@ enabled = true
     assert!(
         mcp_config
             .mcp_server_catalog
-            .plugin_ids_by_server_name()
+            .plugin_attributions_by_server_name()
             .is_empty()
     );
 
@@ -4424,7 +4429,7 @@ enabled = true
 }
 
 #[tokio::test]
-async fn to_mcp_config_applies_plugin_mcp_cloud_config_bundle() -> anyhow::Result<()> {
+async fn selected_plugin_wins_after_discovered_plugin_requirements() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
     let plugin_root = codex_home
         .path()
@@ -4495,6 +4500,36 @@ url = "https://sample.example/mcp"
                     name: "Base requirements".to_string(),
                 },
             })
+        ))
+    );
+
+    let selected = http_mcp("https://selected.example/mcp");
+    let mcp_config = config
+        .to_mcp_config_with_plugin_registrations(
+            &plugins_manager,
+            [McpServerRegistration::from_selected_plugin(
+                "unlisted".to_string(),
+                McpPluginAttribution::new(
+                    "selected-root".to_string(),
+                    "Selected Plugin".to_string(),
+                ),
+                /*selection_order*/ 0,
+                selected.clone(),
+            )],
+        )
+        .await;
+
+    assert_eq!(
+        mcp_config
+            .mcp_server_catalog
+            .server("unlisted")
+            .map(|server| (server.source().clone(), server.config().clone())),
+        Some((
+            codex_mcp::McpServerSource::SelectedPlugin(McpPluginAttribution::new(
+                "selected-root".to_string(),
+                "Selected Plugin".to_string(),
+            )),
+            selected,
         ))
     );
     Ok(())
@@ -9808,13 +9843,16 @@ max_concurrent_threads_per_session = 17
 
     let config = resolve_multi_agent_v2_config(&config_toml);
     let concurrency_guidance = "There are 17 available concurrency slots, meaning that up to 17 agents can be active at once, including you.";
+    let expected_suffix = format!(
+        "{DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT}\n{concurrency_guidance}\n\n{DEFAULT_MULTI_AGENT_V2_NO_SPAWN_HINT_TEXT}"
+    );
     assert!(
         [
             config.root_agent_usage_hint_text,
             config.subagent_usage_hint_text,
         ]
         .into_iter()
-        .all(|hint| hint.is_some_and(|hint| hint.ends_with(concurrency_guidance)))
+        .all(|hint| hint.is_some_and(|hint| hint.ends_with(expected_suffix.as_str())))
     );
 }
 
