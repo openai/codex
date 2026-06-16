@@ -19,6 +19,13 @@ migration; if compliance is difficult, ask the user how to proceed.
 - Tool call arguments that the model is expected to generate should be deserialized as regular
   `String`s with feature-specific path handling code.
 
+## Rollout stability
+
+Assume that rollouts will be parsed by monotonically increasing versions of Codex.
+
+You can use `PathUri` in place of `AbsolutePathBuf` for rollout fields without jeopardizing
+backwards compatibility since `PathUri` allows deserialization from bare absolute paths.
+
 ## Migration requirements
 
 Keep these requirements in mind while migrating code to conform with the above guidelines:
