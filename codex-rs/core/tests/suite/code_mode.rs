@@ -944,15 +944,6 @@ text(JSON.stringify(results));
 // history assertions a stable `…N tokens truncated…` marker.
 const TOKEN_POLICY_TEST_MODEL: &str = "gpt-5.4";
 
-/// Confirms JavaScript observed an intact result before its printed value was
-/// truncated while being recorded into conversation history.
-fn assert_result_variable_preserved_before_history_truncation(output: &str) {
-    assert_regex_match(
-        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
-        output,
-    );
-}
-
 // A nested `exec_command` limit applies to `result.output` inside JavaScript.
 // The outer code-mode and history budgets apply after the script calls `text`.
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
@@ -1015,7 +1006,10 @@ text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Vari
 
     let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
     let output = text_item(&items, /*index*/ 1);
-    assert_result_variable_preserved_before_history_truncation(output);
+    assert_regex_match(
+        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
+        output,
+    );
 
     Ok(())
 }
@@ -1082,13 +1076,11 @@ async fn code_mode_exec_nested_limit_preserves_result_variable_before_configured
         &server,
         "use exec_command from code mode",
         r#"// @exec: {"max_output_tokens": 20000}
-// This value stays below the default history cap but exceeds the configured
-// 50-token cap.
 const result = await tools.exec_command({
-  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 2000)\"",
+  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\"",
   max_output_tokens: 20000
 });
-const resultVariableWasTruncated = result.output.length !== 2000;
+const resultVariableWasTruncated = result.output.length !== 50000;
 text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Variable: ${result.output}`);
 "#,
         TOKEN_POLICY_TEST_MODEL,
@@ -1100,7 +1092,17 @@ text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Vari
 
     let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
     let output = text_item(&items, /*index*/ 1);
-    assert_result_variable_preserved_before_history_truncation(output);
+    // The 50-token override must shrink this 50,000-character value far below
+    // what the default 10,000-token history cap would retain.
+    assert!(
+        output.len() < 1_000,
+        "expected configured history cap to truncate the emitted value, got {} bytes",
+        output.len()
+    );
+    assert_regex_match(
+        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
+        output,
+    );
 
     Ok(())
 }
@@ -1134,7 +1136,10 @@ text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Vari
 
     let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
     let output = text_item(&items, /*index*/ 1);
-    assert_result_variable_preserved_before_history_truncation(output);
+    assert_regex_match(
+        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
+        output,
+    );
 
     Ok(())
 }
@@ -1155,12 +1160,10 @@ async fn code_mode_exec_without_nested_limit_preserves_result_variable_before_co
         &server,
         "use exec_command from code mode",
         r#"// @exec: {"max_output_tokens": 20000}
-// This value stays below the default history cap but exceeds the configured
-// 50-token cap.
 const result = await tools.exec_command({
-  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 2000)\""
+  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\""
 });
-const resultVariableWasTruncated = result.output.length !== 2000;
+const resultVariableWasTruncated = result.output.length !== 50000;
 text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Variable: ${result.output}`);
 "#,
         TOKEN_POLICY_TEST_MODEL,
@@ -1172,7 +1175,17 @@ text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Vari
 
     let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
     let output = text_item(&items, /*index*/ 1);
-    assert_result_variable_preserved_before_history_truncation(output);
+    // The 50-token override must shrink this 50,000-character value far below
+    // what the default 10,000-token history cap would retain.
+    assert!(
+        output.len() < 1_000,
+        "expected configured history cap to truncate the emitted value, got {} bytes",
+        output.len()
+    );
+    assert_regex_match(
+        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
+        output,
+    );
 
     Ok(())
 }
