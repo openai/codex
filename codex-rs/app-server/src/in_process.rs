@@ -750,7 +750,7 @@ async fn start_uninitialized(
                     &mut writer_rx,
                     &mut pending_request_responses,
                     &event_tx,
-                    None,
+                    /*outgoing*/ None,
                     event_delivery,
                 ),
             )
@@ -777,7 +777,7 @@ async fn start_uninitialized(
                 &mut writer_rx,
                 &mut pending_request_responses,
                 &event_tx,
-                None,
+                /*outgoing*/ None,
                 event_delivery,
             )
             .await;
