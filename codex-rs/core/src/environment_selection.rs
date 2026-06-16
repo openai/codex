@@ -66,7 +66,7 @@ impl ThreadEnvironments {
         let local_shell = self.local_shell.clone();
         let shell_snapshot = self.shell_snapshot.clone();
         let environments = environments.to_vec();
-        let (snapshot_task, snapshot) = async move {
+        let snapshot = async move {
             Self::resolve_snapshot(
                 environment_manager,
                 local_shell,
@@ -76,10 +76,10 @@ impl ThreadEnvironments {
             )
             .await
         }
-        .remote_handle();
-        self.snapshot_task
-            .store(Arc::new(snapshot.boxed().shared()));
-        drop(tokio::spawn(snapshot_task));
+        .boxed()
+        .shared();
+        self.snapshot_task.store(Arc::new(snapshot.clone()));
+        drop(tokio::spawn(snapshot));
     }
 
     async fn resolve_snapshot(
@@ -361,6 +361,35 @@ url = "ws://127.0.0.1:8765"
                 .and_then(|environment| environment.shell.as_ref()),
             Some(&local_shell)
         );
+    }
+
+    #[tokio::test]
+    async fn completed_resolution_is_visible_without_awaiting_snapshot() {
+        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let selection = TurnEnvironmentSelection {
+            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+            cwd: PathUri::from_abs_path(&cwd),
+        };
+        let turn_environments = ThreadEnvironments::new(
+            Arc::new(EnvironmentManager::default_for_tests()),
+            crate::shell::default_user_shell(),
+            ShellSnapshot::disabled(),
+            TurnEnvironmentSnapshot::default(),
+        );
+        turn_environments.update_selections(std::slice::from_ref(&selection));
+
+        let snapshot = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Some(snapshot) = turn_environments.snapshot_if_ready() {
+                    break snapshot;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("background environment resolution should complete");
+
+        assert_eq!(snapshot.to_selections(), vec![selection]);
     }
 
     #[tokio::test]
