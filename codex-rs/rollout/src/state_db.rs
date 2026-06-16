@@ -482,6 +482,12 @@ async fn repair_stale_rollout_path_from_metadata(
     .ok()
     .flatten()?;
     let existing_path = crate::compression::existing_rollout_path_blocking(candidate.as_path())?;
+    let session_meta = crate::list::read_session_meta_line(existing_path.as_path())
+        .await
+        .ok()?;
+    if session_meta.meta.id != item.id {
+        return None;
+    }
 
     warn!(
         "state db list_threads repaired stale rollout path for thread {}: {} -> {}",

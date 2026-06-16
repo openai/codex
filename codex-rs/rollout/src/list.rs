@@ -1792,9 +1792,6 @@ async fn find_thread_path_by_id_str_in_subdir(
                 if let Some(existing_db_path) =
                     compression::existing_rollout_path_blocking(db_path.as_path())
                 {
-                    if rollout_file_name_matches_uuid(existing_db_path.as_path(), target_uuid) {
-                        return Ok(Some(existing_db_path));
-                    }
                     match read_session_meta_line(&existing_db_path).await {
                         Ok(meta_line) if meta_line.meta.id == thread_id => {
                             return Ok(Some(existing_db_path));
@@ -1928,9 +1925,6 @@ async fn find_thread_path_by_id_str_in_any_subdir(
                 if let Some(existing_db_path) =
                     compression::existing_rollout_path_blocking(db_path.as_path())
                 {
-                    if rollout_file_name_matches_uuid(existing_db_path.as_path(), target_uuid) {
-                        return Ok(Some(existing_db_path));
-                    }
                     match read_session_meta_line(&existing_db_path).await {
                         Ok(meta_line) if meta_line.meta.id == thread_id => {
                             return Ok(Some(existing_db_path));
