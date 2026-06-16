@@ -196,6 +196,7 @@ impl ChatWidget {
                         | ConsumeAccountRateLimitResetCreditOutcome::AlreadyRedeemed
                 ) =>
             {
+                self.available_rate_limit_reset_credits = None;
                 self.replace_rate_limit_reset_popup(Self::rate_limit_reset_success_loading_params());
                 true
             }
@@ -312,6 +313,9 @@ impl ChatWidget {
         self.pending_rate_limit_reset_hint_request_id = None;
         if !self.has_codex_backend_auth {
             return false;
+        }
+        if self.plan_type.is_some_and(PlanType::is_workspace_account) {
+            return true;
         }
         if let Ok(response) = result {
             self.available_rate_limit_reset_credits = Some(response.available_count);

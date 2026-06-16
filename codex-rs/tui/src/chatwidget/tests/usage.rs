@@ -2,6 +2,7 @@ use super::*;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditOutcome;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
 use codex_app_server_protocol::RateLimitResetCreditsSummary;
+use uuid::Uuid;
 
 const TEST_OVERLAY_VIEW_ID: &str = "usage-test-overlay";
 
@@ -187,6 +188,25 @@ async fn rate_limit_reset_confirmation_selects_cancel_by_default() {
 }
 
 #[tokio::test]
+async fn rate_limit_reset_confirmation_can_use_reset() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let request_id = chat.show_rate_limit_reset_loading_popup();
+    assert!(chat.finish_rate_limit_reset_credits_refresh(
+        request_id,
+        Ok(RateLimitResetCreditsSummary { available_count: 1 }),
+    ));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::ConsumeRateLimitResetCredit { idempotency_key })
+            if Uuid::parse_str(&idempotency_key).is_ok()
+    );
+}
+
+#[tokio::test]
 async fn rate_limit_reset_retry_reuses_idempotency_key() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let request_id = chat.show_rate_limit_reset_consuming_popup();
@@ -286,6 +306,35 @@ async fn already_redeemed_is_an_idempotent_success() {
         render_bottom_popup(&chat, /*width*/ 80)
             .contains("Usage reset. You have 0 rate-limit resets left.")
     );
+}
+
+#[tokio::test]
+async fn failed_post_consume_refresh_does_not_keep_stale_reset_count() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+    let startup_request_id = chat.start_rate_limit_reset_startup_check();
+    assert!(chat.finish_rate_limit_reset_hint_refresh(
+        startup_request_id,
+        Ok(RateLimitResetCreditsSummary { available_count: 2 }),
+    ));
+    let consume_request_id = chat.show_rate_limit_reset_consuming_popup();
+    assert!(finish_reset_consume_outcome(
+        &mut chat,
+        consume_request_id,
+        "redeem-with-refresh-error",
+        ConsumeAccountRateLimitResetCreditOutcome::Reset,
+    ));
+
+    assert!(chat.finish_post_consume_reset_credits_refresh(
+        consume_request_id,
+        Err("backend unavailable".to_string()),
+    ));
+    dismiss_popup(&mut chat);
+    chat.dispatch_command(SlashCommand::Usage);
+
+    let rendered = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(rendered.contains("Check reset availability."));
+    assert!(!rendered.contains("You have 2 rate-limit resets available."));
 }
 
 #[tokio::test]
@@ -490,6 +539,21 @@ async fn startup_check_omits_reset_hint_when_none_are_available() {
         Ok(RateLimitResetCreditsSummary { available_count: 0 }),
     ));
     assert!(chat.pending_rate_limit_reset_hint().is_none());
+}
+
+#[tokio::test]
+async fn startup_check_omits_reset_hint_for_workspace_accounts() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+    chat.plan_type = Some(PlanType::Business);
+    let hint_request_id = chat.start_rate_limit_reset_startup_check();
+
+    assert!(chat.finish_rate_limit_reset_hint_refresh(
+        hint_request_id,
+        Ok(RateLimitResetCreditsSummary { available_count: 2 }),
+    ));
+    assert!(chat.pending_rate_limit_reset_hint().is_none());
+    assert_eq!(chat.available_rate_limit_reset_credits, None);
 }
 
 fn consume_response(
