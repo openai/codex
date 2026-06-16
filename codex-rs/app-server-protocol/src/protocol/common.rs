@@ -1104,7 +1104,7 @@ client_request_definitions! {
         response: v2::ExternalAgentConfigImportResponse,
     },
     ExternalAgentConfigImportHistoriesRead => "externalAgentConfig/import/readHistories" {
-        params: v2::ExternalAgentConfigImportHistoriesReadParams,
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         serialization: global_shared_read("config"),
         response: v2::ExternalAgentConfigImportHistoriesReadResponse,
     },

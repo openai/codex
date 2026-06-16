@@ -130,7 +130,7 @@ async fn external_agent_config_import_sends_completion_notification_for_sync_onl
     let request_id = mcp
         .send_raw_request(
             "externalAgentConfig/import/readHistories",
-            Some(serde_json::json!({ "limit": 50 })),
+            /*params*/ None,
         )
         .await?;
     let response: JSONRPCResponse = timeout(
@@ -139,7 +139,6 @@ async fn external_agent_config_import_sends_completion_notification_for_sync_onl
     )
     .await??;
     let response: ExternalAgentConfigImportHistoriesReadResponse = to_response(response)?;
-    assert_eq!(response.next_cursor, None);
     let entry = response
         .data
         .iter()

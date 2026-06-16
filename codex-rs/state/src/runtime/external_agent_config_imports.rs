@@ -38,12 +38,6 @@ pub struct ExternalAgentConfigImportHistoryRecord {
     pub failures: Vec<ExternalAgentConfigImportFailureRecord>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExternalAgentConfigImportHistoryCursor {
-    pub completed_at_ms: i64,
-    pub import_id: String,
-}
-
 impl StateRuntime {
     pub async fn record_external_agent_config_import_completed(
         &self,
@@ -105,37 +99,9 @@ WHERE import_id = ?
 
     pub async fn external_agent_config_import_history_records(
         &self,
-        cursor: Option<&ExternalAgentConfigImportHistoryCursor>,
-        limit: usize,
     ) -> anyhow::Result<Vec<ExternalAgentConfigImportHistoryRecord>> {
-        if limit == 0 {
-            return Ok(Vec::new());
-        }
-        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        let rows = if let Some(cursor) = cursor {
-            sqlx::query(
-                r#"
-SELECT
-    import_id,
-    completed_at_ms,
-    successes,
-    failures
-FROM external_agent_config_imports
-WHERE completed_at_ms < ?
-   OR (completed_at_ms = ? AND import_id > ?)
-ORDER BY completed_at_ms DESC, import_id ASC
-LIMIT ?
-"#,
-            )
-            .bind(cursor.completed_at_ms)
-            .bind(cursor.completed_at_ms)
-            .bind(&cursor.import_id)
-            .bind(limit)
-            .fetch_all(self.pool.as_ref())
-            .await?
-        } else {
-            sqlx::query(
-                r#"
+        let rows = sqlx::query(
+            r#"
 SELECT
     import_id,
     completed_at_ms,
@@ -143,13 +109,10 @@ SELECT
     failures
 FROM external_agent_config_imports
 ORDER BY completed_at_ms DESC, import_id ASC
-LIMIT ?
 "#,
-            )
-            .bind(limit)
-            .fetch_all(self.pool.as_ref())
-            .await?
-        };
+        )
+        .fetch_all(self.pool.as_ref())
+        .await?;
 
         rows.into_iter()
             .map(|row| {

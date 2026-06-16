@@ -118,12 +118,6 @@
         "$ref": "#/definitions/ExternalAgentConfigImportHistory"
       },
       "type": "array"
-    },
-    "nextCursor": {
-      "type": [
-        "string",
-        "null"
-      ]
     }
   },
   "required": [

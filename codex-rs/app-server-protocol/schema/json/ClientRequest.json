@@ -806,25 +806,6 @@
       },
       "type": "object"
     },
-    "ExternalAgentConfigImportHistoriesReadParams": {
-      "properties": {
-        "cursor": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "limit": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "ExternalAgentConfigImportParams": {
       "properties": {
         "migrationItems": {
@@ -6652,13 +6633,12 @@
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/ExternalAgentConfigImportHistoriesReadParams"
+          "type": "null"
         }
       },
       "required": [
         "id",
-        "method",
-        "params"
+        "method"
       ],
       "title": "ExternalAgentConfig/import/readHistoriesRequest",
       "type": "object"

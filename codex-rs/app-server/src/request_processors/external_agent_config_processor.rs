@@ -13,14 +13,12 @@ use crate::config::external_agent_config::PluginImportOutcome;
 use crate::config::external_agent_config::record_import_error;
 use crate::config_manager::ConfigManager;
 use crate::error_code::internal_error;
-use crate::error_code::invalid_params;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::CommandMigration;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
-use codex_app_server_protocol::ExternalAgentConfigImportHistoriesReadParams;
 use codex_app_server_protocol::ExternalAgentConfigImportHistoriesReadResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportHistory;
 use codex_app_server_protocol::ExternalAgentConfigImportItemTypeFailure as ProtocolImportFailure;
@@ -42,8 +40,6 @@ use codex_core::ThreadManager;
 use codex_external_agent_sessions::ExternalAgentSessionMigration as CoreSessionMigration;
 use codex_rollout::StateDbHandle;
 use codex_state::ExternalAgentConfigImportFailureRecord;
-use codex_state::ExternalAgentConfigImportHistoryCursor;
-use codex_state::ExternalAgentConfigImportHistoryRecord;
 use codex_state::ExternalAgentConfigImportSuccessRecord;
 use codex_thread_store::ThreadStore;
 use std::collections::HashSet;
@@ -52,9 +48,6 @@ use std::path::PathBuf;
 use super::ConfigRequestProcessor;
 use super::external_agent_session_import::ExternalAgentSessionImporter;
 use uuid::Uuid;
-
-const DEFAULT_IMPORT_HISTORY_LIMIT: usize = 50;
-const MAX_IMPORT_HISTORY_LIMIT: usize = 200;
 
 #[derive(Clone)]
 pub(crate) struct ExternalAgentConfigRequestProcessor {
@@ -342,41 +335,21 @@ impl ExternalAgentConfigRequestProcessor {
 
     pub(crate) async fn read_import_histories(
         &self,
-        params: ExternalAgentConfigImportHistoriesReadParams,
     ) -> Result<ExternalAgentConfigImportHistoriesReadResponse, JSONRPCErrorError> {
         let state_db = self
             .state_db
             .as_ref()
             .ok_or_else(|| internal_error("state database is unavailable"))?;
-        let limit = params
-            .limit
-            .unwrap_or(DEFAULT_IMPORT_HISTORY_LIMIT as u32)
-            .max(1)
-            .min(MAX_IMPORT_HISTORY_LIMIT as u32) as usize;
-        let cursor = params
-            .cursor
-            .as_deref()
-            .map(decode_import_history_cursor)
-            .transpose()?;
-        let mut histories = state_db
-            .external_agent_config_import_history_records(cursor.as_ref(), limit.saturating_add(1))
+        let histories = state_db
+            .external_agent_config_import_history_records()
             .await
             .map_err(|err| internal_error(format!("failed to read import histories: {err}")))?;
-        let next_cursor = if histories.len() > limit {
-            histories.pop();
-            histories
-                .last()
-                .map(encode_import_history_cursor)
-                .transpose()?
-        } else {
-            None
-        };
         let data = histories
             .into_iter()
             .map(protocol_import_history)
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(ExternalAgentConfigImportHistoriesReadResponse { data, next_cursor })
+        Ok(ExternalAgentConfigImportHistoriesReadResponse { data })
     }
 
     fn validate_pending_session_imports(
@@ -637,34 +610,6 @@ async fn record_completed_import_notification(
             &failures,
         )
         .await
-}
-
-#[derive(serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ImportHistoryCursor {
-    completed_at_ms: i64,
-    import_id: String,
-}
-
-fn decode_import_history_cursor(
-    cursor: &str,
-) -> Result<ExternalAgentConfigImportHistoryCursor, JSONRPCErrorError> {
-    let cursor: ImportHistoryCursor = serde_json::from_str(cursor)
-        .map_err(|err| invalid_params(format!("failed to decode import history cursor: {err}")))?;
-    Ok(ExternalAgentConfigImportHistoryCursor {
-        completed_at_ms: cursor.completed_at_ms,
-        import_id: cursor.import_id,
-    })
-}
-
-fn encode_import_history_cursor(
-    record: &ExternalAgentConfigImportHistoryRecord,
-) -> Result<String, JSONRPCErrorError> {
-    serde_json::to_string(&ImportHistoryCursor {
-        completed_at_ms: record.completed_at_ms,
-        import_id: record.import_id.clone(),
-    })
-    .map_err(|err| internal_error(format!("failed to encode import history cursor: {err}")))
 }
 
 fn protocol_import_history(

@@ -110,7 +110,6 @@ export type { ExperimentalFeatureStage } from "./ExperimentalFeatureStage";
 export type { ExternalAgentConfigDetectParams } from "./ExternalAgentConfigDetectParams";
 export type { ExternalAgentConfigDetectResponse } from "./ExternalAgentConfigDetectResponse";
 export type { ExternalAgentConfigImportCompletedNotification } from "./ExternalAgentConfigImportCompletedNotification";
-export type { ExternalAgentConfigImportHistoriesReadParams } from "./ExternalAgentConfigImportHistoriesReadParams";
 export type { ExternalAgentConfigImportHistoriesReadResponse } from "./ExternalAgentConfigImportHistoriesReadResponse";
 export type { ExternalAgentConfigImportHistory } from "./ExternalAgentConfigImportHistory";
 export type { ExternalAgentConfigImportItemTypeFailure } from "./ExternalAgentConfigImportItemTypeFailure";
