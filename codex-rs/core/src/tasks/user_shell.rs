@@ -129,12 +129,13 @@ pub(crate) async fn execute_user_shell_command(
     // We do not source rc files or otherwise reformat the script.
     let use_login_shell = true;
     let session_shell = session.user_shell();
-    let shell_snapshot = session.services.shell_snapshot.load_full();
-    #[allow(deprecated)]
-    let shell_snapshot_location = shell_snapshot
-        .as_ref()
-        .and_then(|snapshot| snapshot.location(&turn_context.cwd));
-    let display_command = session_shell.derive_exec_args(&command, use_login_shell);
+    let environment = turn_context.environments.single_local_environment();
+    let shell = environment
+        .and_then(|environment| environment.shell.as_ref())
+        .unwrap_or(session_shell.as_ref());
+    let shell_snapshot_location =
+        environment.and_then(|environment| environment.shell_snapshot(environment.cwd()));
+    let display_command = shell.derive_exec_args(&command, use_login_shell);
     let mut exec_env_map = create_env(
         &turn_context.shell_environment_policy,
         Some(session.thread_id),
@@ -144,7 +145,7 @@ pub(crate) async fn execute_user_shell_command(
     }
     let exec_command = prepare_user_shell_exec_command(
         &display_command,
-        session_shell.as_ref(),
+        shell,
         shell_snapshot_location.as_ref(),
         &turn_context.shell_environment_policy.r#set,
         &mut exec_env_map,
@@ -153,7 +154,9 @@ pub(crate) async fn execute_user_shell_command(
     let call_id = Uuid::new_v4().to_string();
     let raw_command = command;
     #[allow(deprecated)]
-    let cwd = turn_context.cwd.clone();
+    let cwd = environment
+        .map(|environment| environment.cwd().clone())
+        .unwrap_or_else(|| turn_context.cwd.clone());
 
     let parsed_cmd = parse_command(&display_command);
     session

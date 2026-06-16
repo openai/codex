@@ -30,7 +30,6 @@ use core_test_support::test_codex::RecordingUserInstructionsProvider;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::sync::Arc;
@@ -718,8 +717,7 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> {
-    // Set up a malformed global instruction file and one model response.
+async fn invalid_utf8_global_instructions_are_lossy() -> Result<()> {
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_once(
         &server,
@@ -736,29 +734,12 @@ async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> 
         b"global\xFFinstructions",
     )?;
 
-    // Create the thread, capture its load warning, and submit one turn for rendered output.
     let mut builder = test_codex().with_home(home);
     let test = builder.build(&server).await?;
-    let warning = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::Warning(warning)
-            if warning
-                .message
-                .contains(source.as_path().display().to_string().as_str()) =>
-        {
-            Some(warning.message.clone())
-        }
-        _ => None,
-    })
-    .await;
     test.submit_turn("inspect lossy global instructions")
         .await?;
 
-    // Assert the source is reported, the warning is specific, and rendering is lossily decoded.
     assert_eq!(test.codex.instruction_sources().await, vec![source.clone()]);
-    assert!(
-        warning.contains("invalid UTF-8"),
-        "expected warning to contain \"invalid UTF-8\"; observed: {warning}"
-    );
     let expected_fragment =
         expected_provider_only_instruction_fragment("global\u{FFFD}instructions");
     assert_single_instruction_fragment(&response_mock.single_request(), &expected_fragment);

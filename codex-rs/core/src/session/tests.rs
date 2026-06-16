@@ -6,8 +6,10 @@ use crate::config::ConfigOverrides;
 use crate::config::test_config;
 use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
+use crate::environment_selection::ThreadEnvironments;
 use crate::function_tool::FunctionCallError;
 use crate::shell::default_user_shell;
+use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills::render::SkillMetadataBudget;
 use crate::test_support::models_manager_with_provider;
@@ -3323,7 +3325,6 @@ async fn set_rate_limits_retains_previous_credits() {
         parent_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
-        inherited_shell_snapshot: None,
         user_shell_override: None,
     };
 
@@ -3430,7 +3431,6 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         parent_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
-        inherited_shell_snapshot: None,
         user_shell_override: None,
     };
 
@@ -3962,7 +3962,6 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         parent_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
-        inherited_shell_snapshot: None,
         user_shell_override: None,
     }
 }
@@ -4046,14 +4045,17 @@ async fn emit_subagent_session_started_includes_fork_lineage_from_session_config
     );
 }
 
-async fn turn_environments_for_configuration(
+async fn resolved_environments_for_configuration(
     session_configuration: &SessionConfiguration,
-) -> Arc<ThreadEnvironments> {
-    let turn_environments = Arc::new(ThreadEnvironments::new(Arc::new(
-        codex_exec_server::EnvironmentManager::default_for_tests(),
-    )));
+) -> (Arc<EnvironmentManager>, TurnEnvironmentSnapshot) {
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
+    let turn_environments = ThreadEnvironments::new(
+        Arc::clone(&environment_manager),
+        ShellSnapshot::disabled(),
+        TurnEnvironmentSnapshot::default(),
+    );
     turn_environments.update_selections(session_configuration.environment_selections());
-    turn_environments
+    (environment_manager, turn_environments.snapshot().await)
 }
 
 #[tokio::test]
@@ -4818,7 +4820,6 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         parent_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
-        inherited_shell_snapshot: None,
         user_shell_override: None,
     };
 
@@ -4830,10 +4831,11 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
-    let turn_environments = turn_environments_for_configuration(&session_configuration).await;
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
     let result = Session::new(
         session_configuration,
         Arc::clone(&config),
+        /*user_instructions*/ None,
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
         models_manager,
@@ -4848,7 +4850,8 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
         AgentControl::default(),
-        turn_environments,
+        environment_manager,
+        /*inherited_environments*/ None,
         /*analytics_events_client*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
@@ -4927,7 +4930,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         parent_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
-        inherited_shell_snapshot: None,
         user_shell_override: None,
     };
     let per_turn_config =
@@ -4944,8 +4946,14 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
 
     let state = SessionState::new(session_configuration.clone());
-    let turn_environments = turn_environments_for_configuration(&session_configuration).await;
-    let resolved_turn_environments = turn_environments.snapshot().await;
+    let (environment_manager, resolved_environments) =
+        resolved_environments_for_configuration(&session_configuration).await;
+    let resolved_turn_environments = resolved_environments.clone();
+    let turn_environments = Arc::new(ThreadEnvironments::new(
+        environment_manager,
+        ShellSnapshot::disabled(),
+        resolved_environments,
+    ));
     let environment = Arc::clone(
         &resolved_turn_environments
             .primary()
@@ -4984,7 +4992,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         })),
         rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell: Arc::new(default_user_shell()),
-        shell_snapshot: arc_swap::ArcSwapOption::empty(),
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
         auth_manager: auth_manager.clone(),
@@ -5160,7 +5167,6 @@ async fn make_session_with_config_and_rx(
         parent_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
-        inherited_shell_snapshot: None,
         user_shell_override: None,
     };
 
@@ -5172,11 +5178,12 @@ async fn make_session_with_config_and_rx(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
-    let turn_environments = turn_environments_for_configuration(&session_configuration).await;
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
 
     let session = Session::new(
         session_configuration,
         Arc::clone(&config),
+        /*user_instructions*/ None,
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
         models_manager,
@@ -5191,7 +5198,8 @@ async fn make_session_with_config_and_rx(
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
         AgentControl::default(),
-        turn_environments,
+        environment_manager,
+        /*inherited_environments*/ None,
         /*analytics_events_client*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
@@ -5263,7 +5271,6 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         parent_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
-        inherited_shell_snapshot: None,
         user_shell_override: None,
     };
 
@@ -5275,11 +5282,12 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
-    let turn_environments = turn_environments_for_configuration(&session_configuration).await;
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
 
     let session = Session::new(
         session_configuration,
         Arc::clone(&config),
+        /*user_instructions*/ None,
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
         models_manager,
@@ -5294,7 +5302,8 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
         agent_control,
-        turn_environments,
+        environment_manager,
+        /*inherited_environments*/ None,
         /*analytics_events_client*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
@@ -6965,7 +6974,6 @@ where
         parent_thread_id: None,
         thread_source: None,
         dynamic_tools,
-        inherited_shell_snapshot: None,
         user_shell_override: None,
     };
     let per_turn_config =
@@ -6982,8 +6990,13 @@ where
     );
 
     let state = SessionState::new(session_configuration.clone());
-    let turn_environments = turn_environments_for_configuration(&session_configuration).await;
-    let resolved_turn_environments = turn_environments.snapshot().await;
+    let (environment_manager, resolved_turn_environments) =
+        resolved_environments_for_configuration(&session_configuration).await;
+    let turn_environments = Arc::new(ThreadEnvironments::new(
+        environment_manager,
+        ShellSnapshot::disabled(),
+        resolved_turn_environments.clone(),
+    ));
     let environment = Arc::clone(
         &resolved_turn_environments
             .primary()
@@ -7022,7 +7035,6 @@ where
         })),
         rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell: Arc::new(default_user_shell()),
-        shell_snapshot: arc_swap::ArcSwapOption::empty(),
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
         auth_manager: Arc::clone(&auth_manager),
