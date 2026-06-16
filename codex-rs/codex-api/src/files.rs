@@ -325,7 +325,7 @@ mod tests {
             &base_url,
             &chatgpt_auth(),
             "hello.txt".to_string(),
-            5,
+            /*file_size_bytes*/ 5,
             contents,
         )
         .await

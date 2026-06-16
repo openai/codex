@@ -230,7 +230,7 @@ async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() 
 async fn codex_apps_file_params_pass_uploaded_file_to_post_tool_use_hook() -> Result<()> {
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
-    mount_file_upload_mocks(&server, 11).await;
+    mount_file_upload_mocks(&server, /*file_size_bytes*/ 11).await;
 
     let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone())
         .with_pre_build_hook(move |home| {
@@ -249,7 +249,7 @@ async fn codex_apps_file_params_pass_uploaded_file_to_post_tool_use_hook() -> Re
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(
         hook_inputs[0]["tool_input"]["file"],
-        uploaded_file(&server, 11)
+        uploaded_file(&server, /*file_size_bytes*/ 11)
     );
 
     server.verify().await;
