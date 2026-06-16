@@ -6,7 +6,6 @@ use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::ApiPathString;
-use codex_utils_path_uri::PathConvention;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio::time::Duration;
@@ -17,7 +16,7 @@ fn absolute_path(path: &str) -> AbsolutePathBuf {
 }
 
 fn api_path(path: &str) -> ApiPathString {
-    ApiPathString::from_abs_path(&absolute_path(path), PathConvention::native()).expect("API path")
+    ApiPathString::from_abs_path(&absolute_path(path))
 }
 
 fn thread_realtime_started_notification() -> ServerNotification {

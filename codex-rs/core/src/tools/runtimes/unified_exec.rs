@@ -340,12 +340,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 &env,
                 req.additional_permissions.clone(),
             )
-                    .map_err(|error| match error {
-                        ToolError::Rejected(_) => {
-                            ToolError::Rejected("missing command line for PTY".to_string())
-                        }
-                        error @ ToolError::Codex(_) => error,
-                    })?;
+            .map_err(|error| match error {
+                ToolError::Rejected(_) => {
+                    ToolError::Rejected("missing command line for PTY".to_string())
+                }
+                error @ ToolError::Codex(_) => error,
+            })?;
             let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
             let mut exec_env = attempt
                 .env_for(command, options, managed_network)
@@ -401,12 +401,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             &env,
             req.additional_permissions.clone(),
         )
-                .map_err(|error| match error {
-                    ToolError::Rejected(_) => {
-                        ToolError::Rejected("missing command line for PTY".to_string())
-                    }
-                    error @ ToolError::Codex(_) => error,
-                })?;
+        .map_err(|error| match error {
+            ToolError::Rejected(_) => {
+                ToolError::Rejected("missing command line for PTY".to_string())
+            }
+            error @ ToolError::Codex(_) => error,
+        })?;
         let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
         let mut exec_env = attempt
             .env_for(command, options, managed_network)

@@ -58,13 +58,8 @@ fn command_cwd_for_api_and_actions(cwd: &PathUri) -> (ApiPathString, AbsolutePat
     (api_cwd, host_cwd)
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "guardian command paths are native to the app-server host"
-)]
 fn api_path_from_host(cwd: &AbsolutePathBuf) -> ApiPathString {
-    ApiPathString::from_abs_path(cwd, PathConvention::native())
-        .expect("guardian command cwd should render using the host path convention")
+    ApiPathString::from_abs_path(cwd)
 }
 
 pub fn build_file_change_approval_request_item(

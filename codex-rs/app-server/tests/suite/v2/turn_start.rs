@@ -77,6 +77,7 @@ use codex_protocol::models::ImageDetail;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::ApiPathString;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -2440,10 +2441,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         unreachable!("loop ensures we break on command execution items");
     };
     let second_cwd = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(second_cwd)?;
-    assert_eq!(
-        cwd,
-        ApiPathString::from_abs_path(&second_cwd, PathConvention::native())?
-    );
+    assert_eq!(cwd, ApiPathString::from_abs_path(&second_cwd));
     let expected_command = format_with_current_shell_display("echo second turn");
     assert_eq!(command, expected_command);
     assert_eq!(status, CommandExecutionStatus::InProgress);

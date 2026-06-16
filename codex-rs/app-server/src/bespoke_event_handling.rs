@@ -2338,11 +2338,7 @@ mod tests {
     fn command_execution_completion_item(command: &str) -> CommandExecutionCompletionItem {
         CommandExecutionCompletionItem {
             command: command.to_string(),
-            cwd: ApiPathString::from_abs_path(
-                &test_path_buf("/tmp").abs(),
-                PathConvention::native(),
-            )
-            .expect("API cwd"),
+            cwd: ApiPathString::from_abs_path(&test_path_buf("/tmp").abs()),
             command_actions: vec![V2ParsedCommand::Unknown {
                 command: command.to_string(),
             }],

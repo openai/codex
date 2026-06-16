@@ -1279,7 +1279,6 @@ mod tests {
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use codex_utils_path_uri::ApiPathString;
-    use codex_utils_path_uri::PathConvention;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
@@ -1287,8 +1286,7 @@ mod tests {
     use uuid::Uuid;
 
     fn test_api_path(path: &str) -> ApiPathString {
-        ApiPathString::from_abs_path(&test_path_buf(path).abs(), PathConvention::native())
-            .expect("API path")
+        ApiPathString::from_abs_path(&test_path_buf(path).abs())
     }
 
     #[test]

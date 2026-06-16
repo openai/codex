@@ -80,7 +80,7 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
     let permission_profile = codex_protocol::models::PermissionProfile::Disabled;
     let request = ExecRequest {
         command: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
-        cwd: command_cwd.clone(),
+        cwd: command_cwd,
         env: HashMap::from([
             ("HOME".to_string(), "/client-home".to_string()),
             ("PATH".to_string(), "/sandbox-path".to_string()),
