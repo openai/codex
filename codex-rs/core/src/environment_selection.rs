@@ -33,31 +33,11 @@ pub(crate) fn default_thread_environment_selections(
 
 type SnapshotTask = Shared<BoxFuture<'static, TurnEnvironmentSnapshot>>;
 
-/// One environment selection being resolved in the background.
-#[derive(Clone)]
-pub(crate) struct EnvironmentResolution {
-    snapshot_task: SnapshotTask,
-}
-
-impl EnvironmentResolution {
-    fn new(snapshot_task: SnapshotTask) -> Self {
-        Self { snapshot_task }
-    }
-
-    pub(crate) fn snapshot_if_ready(&self) -> Option<TurnEnvironmentSnapshot> {
-        self.snapshot_task.peek().cloned()
-    }
-
-    pub(crate) async fn snapshot(&self) -> TurnEnvironmentSnapshot {
-        self.snapshot_task.clone().await
-    }
-}
-
 pub(crate) struct ThreadEnvironments {
     environment_manager: Arc<EnvironmentManager>,
     local_shell: Shell,
     shell_snapshot: ShellSnapshot,
-    current: ArcSwap<EnvironmentResolution>,
+    snapshot_task: ArcSwap<SnapshotTask>,
 }
 
 impl ThreadEnvironments {
@@ -71,18 +51,12 @@ impl ThreadEnvironments {
             environment_manager,
             local_shell,
             shell_snapshot,
-            current: ArcSwap::from_pointee(EnvironmentResolution::new(
-                futures::future::ready(current).boxed().shared(),
-            )),
+            snapshot_task: ArcSwap::from_pointee(futures::future::ready(current).boxed().shared()),
         }
     }
 
-    /// Returns the work started here so a turn can check it later without blocking startup.
-    pub(crate) fn update_selections(
-        &self,
-        environments: &[TurnEnvironmentSelection],
-    ) -> EnvironmentResolution {
-        let previous = self.current.load().snapshot_if_ready().unwrap_or_default();
+    pub(crate) fn update_selections(&self, environments: &[TurnEnvironmentSelection]) {
+        let previous = self.snapshot_if_ready().unwrap_or_default();
         let environment_manager = Arc::clone(&self.environment_manager);
         let local_shell = self.local_shell.clone();
         let shell_snapshot = self.shell_snapshot.clone();
@@ -99,11 +73,9 @@ impl ThreadEnvironments {
         }
         .boxed()
         .shared();
-        let resolution = EnvironmentResolution::new(snapshot_task.clone());
-        self.current.store(Arc::new(resolution.clone()));
+        self.snapshot_task.store(Arc::new(snapshot_task.clone()));
         // Keep resolving even when no caller is currently waiting for the result.
         drop(tokio::spawn(snapshot_task));
-        resolution
     }
 
     async fn resolve_snapshot(
@@ -199,9 +171,12 @@ impl ThreadEnvironments {
         Ok(turn_environment)
     }
 
+    pub(crate) fn snapshot_if_ready(&self) -> Option<TurnEnvironmentSnapshot> {
+        self.snapshot_task.load().peek().cloned()
+    }
+
     pub(crate) async fn snapshot(&self) -> TurnEnvironmentSnapshot {
-        let resolution = self.current.load_full();
-        resolution.snapshot().await
+        self.snapshot_task.load_full().as_ref().clone().await
     }
 
     pub(crate) fn environment_manager(&self) -> Arc<EnvironmentManager> {
@@ -398,10 +373,10 @@ url = "ws://127.0.0.1:8765"
             TurnEnvironmentSnapshot::default(),
         );
 
-        let resolution = turn_environments.update_selections(std::slice::from_ref(&selection));
+        turn_environments.update_selections(std::slice::from_ref(&selection));
         let snapshot = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
-                if let Some(snapshot) = resolution.snapshot_if_ready() {
+                if let Some(snapshot) = turn_environments.snapshot_if_ready() {
                     break snapshot;
                 }
                 tokio::task::yield_now().await;
