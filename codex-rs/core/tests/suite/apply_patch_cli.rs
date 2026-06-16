@@ -51,6 +51,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_remote;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::local;
@@ -911,6 +912,8 @@ async fn apply_patch_cli_preserves_existing_hard_link_outside_workspace() -> Res
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace() -> Result<()> {
+    // TODO(anp): Remove after apply-patch fixtures use target-native paths.
+    skip_if_wine_exec!(Ok(()), "asserts POSIX workspace traversal behavior");
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -1566,6 +1569,11 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Result<()> {
+    // TODO(anp): Remove after shared-cwd helpers use target-native paths.
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a cwd valid in local POSIX and remote Windows environments"
+    );
     skip_if_no_network!(Ok(()));
     let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());

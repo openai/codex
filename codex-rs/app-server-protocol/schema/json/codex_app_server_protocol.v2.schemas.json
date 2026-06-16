@@ -265,7 +265,7 @@
         "read": {
           "description": "This will be removed in favor of `entries`.",
           "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
+            "$ref": "#/definitions/ApiPathString"
           },
           "type": [
             "array",
@@ -275,7 +275,7 @@
         "write": {
           "description": "This will be removed in favor of `entries`.",
           "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
+            "$ref": "#/definitions/ApiPathString"
           },
           "type": [
             "array",
@@ -379,6 +379,9 @@
         }
       },
       "type": "object"
+    },
+    "ApiPathString": {
+      "type": "string"
     },
     "AppBranding": {
       "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
@@ -5695,7 +5698,7 @@
         {
           "properties": {
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "$ref": "#/definitions/ApiPathString"
             },
             "type": {
               "enum": [

@@ -698,6 +698,7 @@ async fn prepare_realtime_start(
     let config = sess.get_config().await;
     let transport = params
         .transport
+        .clone()
         .unwrap_or(ConversationStartTransport::Websocket);
     let mut api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
@@ -720,16 +721,7 @@ async fn prepare_realtime_start(
         &transport,
         config.realtime.session_type,
     )?;
-    let session_config = build_realtime_session_config(
-        sess,
-        params.model,
-        params.prompt,
-        params.realtime_session_id,
-        params.output_modality,
-        version,
-        params.voice,
-    )
-    .await?;
+    let session_config = build_realtime_session_config(sess, &params, version).await?;
     let requested_realtime_session_id = session_config.session_id.clone();
     let extra_headers = match transport {
         ConversationStartTransport::Websocket => {
@@ -791,25 +783,25 @@ fn validate_realtime_architecture(
 
 pub(crate) async fn build_realtime_session_config(
     sess: &Arc<Session>,
-    model: Option<String>,
-    prompt: Option<Option<String>>,
-    realtime_session_id: Option<String>,
-    output_modality: RealtimeOutputModality,
+    params: &ConversationStartParams,
     version: RealtimeWsVersion,
-    voice: Option<RealtimeVoice>,
 ) -> CodexResult<RealtimeSessionConfig> {
     let config = sess.get_config().await;
     let prompt = prepare_realtime_backend_prompt(
-        prompt,
+        params.prompt.clone(),
         config.experimental_realtime_ws_backend_prompt.clone(),
     );
-    let startup_context = match config.experimental_realtime_ws_startup_context.clone() {
-        Some(startup_context) => startup_context,
-        None => {
-            build_realtime_startup_context(sess.as_ref(), REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET)
-                .await
-                .unwrap_or_default()
+    let startup_context = if params.include_startup_context {
+        match config.experimental_realtime_ws_startup_context.clone() {
+            Some(startup_context) => startup_context,
+            None => {
+                build_realtime_startup_context(sess.as_ref(), REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET)
+                    .await
+                    .unwrap_or_default()
+            }
         }
+    } else {
+        String::new()
     };
     let prompt = match (prompt.is_empty(), startup_context.is_empty()) {
         (true, true) => String::new(),
@@ -818,7 +810,9 @@ pub(crate) async fn build_realtime_session_config(
         (false, false) => format!("{prompt}\n\n{startup_context}"),
     };
     let model = Some(
-        model
+        params
+            .model
+            .clone()
             .or_else(|| config.experimental_realtime_ws_model.clone())
             .unwrap_or_else(|| DEFAULT_REALTIME_MODEL.to_string()),
     );
@@ -826,7 +820,9 @@ pub(crate) async fn build_realtime_session_config(
         RealtimeWsVersion::V1 => RealtimeEventParser::V1,
         RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,
     };
-    if version == RealtimeWsVersion::V1 && matches!(output_modality, RealtimeOutputModality::Text) {
+    if version == RealtimeWsVersion::V1
+        && matches!(params.output_modality, RealtimeOutputModality::Text)
+    {
         return Err(CodexErr::InvalidRequest(
             "text realtime output modality requires realtime v2".to_string(),
         ));
@@ -835,17 +831,23 @@ pub(crate) async fn build_realtime_session_config(
         RealtimeWsMode::Conversational => RealtimeSessionMode::Conversational,
         RealtimeWsMode::Transcription => RealtimeSessionMode::Transcription,
     };
-    let voice = voice
+    let voice = params
+        .voice
         .or(config.realtime.voice)
         .unwrap_or_else(|| default_realtime_voice(version));
     validate_realtime_voice(version, voice)?;
     Ok(RealtimeSessionConfig {
         instructions: prompt,
         model,
-        session_id: Some(realtime_session_id.unwrap_or_else(|| sess.thread_id.to_string())),
+        session_id: Some(
+            params
+                .realtime_session_id
+                .clone()
+                .unwrap_or_else(|| sess.thread_id.to_string()),
+        ),
         event_parser,
         session_mode,
-        output_modality,
+        output_modality: params.output_modality,
         voice,
     })
 }

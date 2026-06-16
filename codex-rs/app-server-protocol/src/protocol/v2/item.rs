@@ -37,6 +37,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_with::serde_as;
 use std::collections::HashMap;
+use std::io;
 use std::path::PathBuf;
 use ts_rs::TS;
 
@@ -687,9 +688,11 @@ impl From<CoreGuardianAssessmentAction> for GuardianApprovalReviewAction {
     }
 }
 
-impl From<GuardianApprovalReviewAction> for CoreGuardianAssessmentAction {
-    fn from(value: GuardianApprovalReviewAction) -> Self {
-        match value {
+impl TryFrom<GuardianApprovalReviewAction> for CoreGuardianAssessmentAction {
+    type Error = io::Error;
+
+    fn try_from(value: GuardianApprovalReviewAction) -> Result<Self, Self::Error> {
+        Ok(match value {
             GuardianApprovalReviewAction::Command {
                 source,
                 command,
@@ -742,9 +745,9 @@ impl From<GuardianApprovalReviewAction> for CoreGuardianAssessmentAction {
                 permissions,
             } => Self::RequestPermissions {
                 reason,
-                permissions: permissions.into(),
+                permissions: permissions.try_into()?,
             },
-        }
+        })
     }
 }
 

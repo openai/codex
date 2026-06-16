@@ -32,8 +32,13 @@ pub mod responses;
 pub mod streaming_sse;
 pub mod test_codex;
 pub mod test_codex_exec;
+mod test_environment;
 pub mod tracing;
 pub mod zsh_fork;
+
+pub use test_environment::TestEnvironment;
+pub use test_environment::get_remote_test_env;
+pub use test_environment::test_environment;
 
 static TEST_ARG0_PATH_ENTRY: OnceLock<Option<Arg0PathEntryGuard>> = OnceLock::new();
 
@@ -357,33 +362,6 @@ pub fn sandbox_network_env_var() -> &'static str {
     codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
 }
 
-const REMOTE_ENV_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV";
-
-pub fn remote_env_env_var() -> &'static str {
-    REMOTE_ENV_ENV_VAR
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RemoteEnvConfig {
-    pub container_name: String,
-}
-
-pub fn get_remote_test_env() -> Option<RemoteEnvConfig> {
-    if std::env::var_os(REMOTE_ENV_ENV_VAR).is_none() {
-        eprintln!("Skipping test because {REMOTE_ENV_ENV_VAR} is not set.");
-        return None;
-    }
-
-    let container_name = std::env::var(REMOTE_ENV_ENV_VAR)
-        .unwrap_or_else(|_| panic!("{REMOTE_ENV_ENV_VAR} must be set"));
-    assert!(
-        !container_name.trim().is_empty(),
-        "{REMOTE_ENV_ENV_VAR} must not be empty"
-    );
-
-    Some(RemoteEnvConfig { container_name })
-}
-
 pub fn format_with_current_shell(command: &str) -> Vec<String> {
     codex_core::shell::default_user_shell().derive_exec_args(command, /*use_login_shell*/ true)
 }
@@ -597,27 +575,55 @@ macro_rules! skip_if_no_network {
     }};
 }
 
+// Exported so the public skip macros can expand in downstream test crates.
+// Call `skip_if_remote!` or `skip_if_wine_exec!` instead.
 #[macro_export]
-macro_rules! skip_if_remote {
-    ($reason:expr $(,)?) => {{
-        if ::std::env::var_os($crate::remote_env_env_var()).is_some() {
-            eprintln!(
-                "Skipping test under {}: {}",
-                $crate::remote_env_env_var(),
-                $reason
-            );
+#[doc(hidden)]
+macro_rules! skip_if_test_environment {
+    ($pattern:pat, $reason:expr $(,)?) => {{
+        let environment = $crate::test_environment();
+        if ::std::matches!(&environment, $pattern) {
+            eprintln!("Skipping test in {environment:?}: {}", $reason);
             return;
         }
     }};
-    ($return_value:expr, $reason:expr $(,)?) => {{
-        if ::std::env::var_os($crate::remote_env_env_var()).is_some() {
-            eprintln!(
-                "Skipping test under {}: {}",
-                $crate::remote_env_env_var(),
-                $reason
-            );
+    ($return_value:expr, $pattern:pat, $reason:expr $(,)?) => {{
+        let environment = $crate::test_environment();
+        if ::std::matches!(&environment, $pattern) {
+            eprintln!("Skipping test in {environment:?}: {}", $reason);
             return $return_value;
         }
+    }};
+}
+
+#[macro_export]
+macro_rules! skip_if_remote {
+    ($reason:expr $(,)?) => {{
+        $crate::skip_if_test_environment!(
+            $crate::TestEnvironment::Docker { .. } | $crate::TestEnvironment::WineExec,
+            $reason,
+        );
+    }};
+    ($return_value:expr, $reason:expr $(,)?) => {{
+        $crate::skip_if_test_environment!(
+            $return_value,
+            $crate::TestEnvironment::Docker { .. } | $crate::TestEnvironment::WineExec,
+            $reason,
+        );
+    }};
+}
+
+#[macro_export]
+macro_rules! skip_if_wine_exec {
+    ($reason:expr $(,)?) => {{
+        $crate::skip_if_test_environment!($crate::TestEnvironment::WineExec, $reason);
+    }};
+    ($return_value:expr, $reason:expr $(,)?) => {{
+        $crate::skip_if_test_environment!(
+            $return_value,
+            $crate::TestEnvironment::WineExec,
+            $reason,
+        );
     }};
 }
 

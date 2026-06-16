@@ -23,6 +23,7 @@ use crate::protocol::SandboxPolicy;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::ImageProcessingError;
+use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 
 use crate::mcp::CallToolResult;
@@ -62,22 +63,59 @@ impl SandboxPermissions {
     }
 }
 
-#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, JsonSchema, TS)]
-pub struct FileSystemPermissions {
-    pub entries: Vec<FileSystemSandboxEntry>,
+#[derive(Debug, Clone, Eq, Hash, PartialEq, JsonSchema, TS)]
+pub struct FileSystemPermissions<PathType = AbsolutePathBuf> {
+    pub entries: Vec<FileSystemSandboxEntry<PathType>>,
     pub glob_scan_max_depth: Option<NonZeroUsize>,
 }
 
-pub type LegacyReadWriteRoots = (Option<Vec<AbsolutePathBuf>>, Option<Vec<AbsolutePathBuf>>);
+impl From<FileSystemPermissions<AbsolutePathBuf>> for FileSystemPermissions<PathUri> {
+    fn from(value: FileSystemPermissions<AbsolutePathBuf>) -> Self {
+        FileSystemPermissions {
+            entries: value
+                .entries
+                .into_iter()
+                .map(FileSystemSandboxEntry::<PathUri>::from)
+                .collect(),
+            glob_scan_max_depth: value.glob_scan_max_depth,
+        }
+    }
+}
 
-impl FileSystemPermissions {
+impl TryFrom<FileSystemPermissions<PathUri>> for FileSystemPermissions<AbsolutePathBuf> {
+    type Error = io::Error;
+
+    fn try_from(value: FileSystemPermissions<PathUri>) -> Result<Self, Self::Error> {
+        Ok(FileSystemPermissions {
+            entries: value
+                .entries
+                .into_iter()
+                .map(FileSystemSandboxEntry::<AbsolutePathBuf>::try_from)
+                .collect::<io::Result<_>>()?,
+            glob_scan_max_depth: value.glob_scan_max_depth,
+        })
+    }
+}
+
+impl<PathType> Default for FileSystemPermissions<PathType> {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            glob_scan_max_depth: None,
+        }
+    }
+}
+
+pub type LegacyReadWriteRoots<PathType = AbsolutePathBuf> =
+    (Option<Vec<PathType>>, Option<Vec<PathType>>);
+impl<PathType> FileSystemPermissions<PathType> {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
     pub fn from_read_write_roots(
-        read: Option<Vec<AbsolutePathBuf>>,
-        write: Option<Vec<AbsolutePathBuf>>,
+        read: Option<Vec<PathType>>,
+        write: Option<Vec<PathType>>,
     ) -> Self {
         let mut entries = Vec::new();
         if let Some(read) = read {
@@ -98,21 +136,25 @@ impl FileSystemPermissions {
         }
     }
 
-    pub fn explicit_path_entries(
-        &self,
-    ) -> impl Iterator<Item = (&AbsolutePathBuf, FileSystemAccessMode)> {
+    pub fn explicit_path_entries(&self) -> impl Iterator<Item = (&PathType, FileSystemAccessMode)> {
         self.entries.iter().filter_map(|entry| match &entry.path {
             FileSystemPath::Path { path } => Some((path, entry.access)),
             FileSystemPath::GlobPattern { .. } | FileSystemPath::Special { .. } => None,
         })
     }
 
-    pub fn legacy_read_write_roots(&self) -> Option<LegacyReadWriteRoots> {
+    pub fn legacy_read_write_roots(&self) -> Option<LegacyReadWriteRoots<PathType>>
+    where
+        PathType: Clone,
+    {
         self.as_legacy_permissions()
             .map(|legacy| (legacy.read, legacy.write))
     }
 
-    fn as_legacy_permissions(&self) -> Option<LegacyFileSystemPermissions> {
+    fn as_legacy_permissions(&self) -> Option<LegacyFileSystemPermissions<PathType>>
+    where
+        PathType: Clone,
+    {
         if self.glob_scan_max_depth.is_some() {
             return None;
         }
@@ -140,30 +182,35 @@ impl FileSystemPermissions {
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LegacyFileSystemPermissions {
+#[serde(bound(deserialize = "PathType: Deserialize<'de>"))]
+struct LegacyFileSystemPermissions<PathType = AbsolutePathBuf> {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    read: Option<Vec<AbsolutePathBuf>>,
+    read: Option<Vec<PathType>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    write: Option<Vec<AbsolutePathBuf>>,
+    write: Option<Vec<PathType>>,
 }
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CanonicalFileSystemPermissions {
+#[serde(bound(deserialize = "PathType: Deserialize<'de>"))]
+struct CanonicalFileSystemPermissions<PathType = AbsolutePathBuf> {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    entries: Vec<FileSystemSandboxEntry>,
+    entries: Vec<FileSystemSandboxEntry<PathType>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     glob_scan_max_depth: Option<NonZeroUsize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
-enum FileSystemPermissionsDe {
-    Canonical(CanonicalFileSystemPermissions),
-    Legacy(LegacyFileSystemPermissions),
+enum FileSystemPermissionsDe<PathType = AbsolutePathBuf> {
+    Canonical(CanonicalFileSystemPermissions<PathType>),
+    Legacy(LegacyFileSystemPermissions<PathType>),
 }
 
-impl Serialize for FileSystemPermissions {
+impl<PathType> Serialize for FileSystemPermissions<PathType>
+where
+    PathType: Clone + Serialize,
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -180,7 +227,10 @@ impl Serialize for FileSystemPermissions {
     }
 }
 
-impl<'de> Deserialize<'de> for FileSystemPermissions {
+impl<'de, PathType> Deserialize<'de> for FileSystemPermissions<PathType>
+where
+    PathType: Deserialize<'de>,
+{
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -253,18 +303,62 @@ impl SandboxEnforcement {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(tag = "type")]
-pub enum ManagedFileSystemPermissions {
+pub enum ManagedFileSystemPermissions<PathType = AbsolutePathBuf> {
     /// Apply a managed filesystem sandbox from the listed entries.
     #[serde(rename_all = "snake_case")]
     #[ts(rename_all = "snake_case")]
     Restricted {
-        entries: Vec<FileSystemSandboxEntry>,
+        entries: Vec<FileSystemSandboxEntry<PathType>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         glob_scan_max_depth: Option<NonZeroUsize>,
     },
     /// Apply a managed sandbox that allows all filesystem access.
     Unrestricted,
+}
+
+impl From<ManagedFileSystemPermissions<AbsolutePathBuf>> for ManagedFileSystemPermissions<PathUri> {
+    fn from(value: ManagedFileSystemPermissions<AbsolutePathBuf>) -> Self {
+        match value {
+            ManagedFileSystemPermissions::Restricted {
+                entries,
+                glob_scan_max_depth,
+            } => ManagedFileSystemPermissions::Restricted {
+                entries: entries
+                    .into_iter()
+                    .map(FileSystemSandboxEntry::<PathUri>::from)
+                    .collect(),
+                glob_scan_max_depth,
+            },
+            ManagedFileSystemPermissions::Unrestricted => {
+                ManagedFileSystemPermissions::Unrestricted
+            }
+        }
+    }
+}
+
+impl TryFrom<ManagedFileSystemPermissions<PathUri>>
+    for ManagedFileSystemPermissions<AbsolutePathBuf>
+{
+    type Error = io::Error;
+
+    fn try_from(value: ManagedFileSystemPermissions<PathUri>) -> Result<Self, Self::Error> {
+        Ok(match value {
+            ManagedFileSystemPermissions::Restricted {
+                entries,
+                glob_scan_max_depth,
+            } => ManagedFileSystemPermissions::Restricted {
+                entries: entries
+                    .into_iter()
+                    .map(FileSystemSandboxEntry::<AbsolutePathBuf>::try_from)
+                    .collect::<io::Result<_>>()?,
+                glob_scan_max_depth,
+            },
+            ManagedFileSystemPermissions::Unrestricted => {
+                ManagedFileSystemPermissions::Unrestricted
+            }
+        })
+    }
 }
 
 impl ManagedFileSystemPermissions {
@@ -311,12 +405,12 @@ pub const BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS: &str = ":danger-full-a
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(tag = "type")]
-pub enum PermissionProfile {
+pub enum PermissionProfile<PathType = AbsolutePathBuf> {
     /// Codex owns sandbox construction for this profile.
     #[serde(rename_all = "snake_case")]
     #[ts(rename_all = "snake_case")]
     Managed {
-        file_system: ManagedFileSystemPermissions,
+        file_system: ManagedFileSystemPermissions<PathType>,
         network: NetworkSandboxPolicy,
     },
     /// Do not apply an outer sandbox.
@@ -325,6 +419,40 @@ pub enum PermissionProfile {
     #[serde(rename_all = "snake_case")]
     #[ts(rename_all = "snake_case")]
     External { network: NetworkSandboxPolicy },
+}
+
+impl From<PermissionProfile<AbsolutePathBuf>> for PermissionProfile<PathUri> {
+    fn from(value: PermissionProfile<AbsolutePathBuf>) -> Self {
+        match value {
+            PermissionProfile::Managed {
+                file_system,
+                network,
+            } => PermissionProfile::Managed {
+                file_system: file_system.into(),
+                network,
+            },
+            PermissionProfile::Disabled => PermissionProfile::Disabled,
+            PermissionProfile::External { network } => PermissionProfile::External { network },
+        }
+    }
+}
+
+impl TryFrom<PermissionProfile<PathUri>> for PermissionProfile<AbsolutePathBuf> {
+    type Error = io::Error;
+
+    fn try_from(value: PermissionProfile<PathUri>) -> Result<Self, Self::Error> {
+        Ok(match value {
+            PermissionProfile::Managed {
+                file_system,
+                network,
+            } => PermissionProfile::Managed {
+                file_system: file_system.try_into()?,
+                network,
+            },
+            PermissionProfile::Disabled => PermissionProfile::Disabled,
+            PermissionProfile::External { network } => PermissionProfile::External { network },
+        })
+    }
 }
 
 /// Metadata for the named or implicit built-in permissions profile that
@@ -360,7 +488,7 @@ impl ActivePermissionProfile {
     }
 }
 
-impl Default for PermissionProfile {
+impl<PathType> Default for PermissionProfile<PathType> {
     fn default() -> Self {
         Self::Managed {
             file_system: ManagedFileSystemPermissions::Restricted {
@@ -548,10 +676,10 @@ impl PermissionProfile {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum TaggedPermissionProfile {
+enum TaggedPermissionProfile<PathType = AbsolutePathBuf> {
     #[serde(rename_all = "snake_case")]
     Managed {
-        file_system: ManagedFileSystemPermissions,
+        file_system: ManagedFileSystemPermissions<PathType>,
         network: NetworkSandboxPolicy,
     },
     Disabled,
@@ -561,8 +689,8 @@ enum TaggedPermissionProfile {
     },
 }
 
-impl From<TaggedPermissionProfile> for PermissionProfile {
-    fn from(value: TaggedPermissionProfile) -> Self {
+impl<PathType> From<TaggedPermissionProfile<PathType>> for PermissionProfile<PathType> {
+    fn from(value: TaggedPermissionProfile<PathType>) -> Self {
         match value {
             TaggedPermissionProfile::Managed {
                 file_system,
@@ -581,16 +709,22 @@ impl From<TaggedPermissionProfile> for PermissionProfile {
 /// represented enforcement explicitly.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LegacyPermissionProfile {
+struct LegacyPermissionProfile<PathType = AbsolutePathBuf> {
     network: Option<NetworkPermissions>,
-    file_system: Option<FileSystemPermissions>,
+    file_system: Option<FileSystemPermissions<PathType>>,
 }
 
-impl From<LegacyPermissionProfile> for PermissionProfile {
-    fn from(value: LegacyPermissionProfile) -> Self {
-        let file_system_sandbox_policy = value.file_system.as_ref().map_or_else(
-            || FileSystemSandboxPolicy::restricted(Vec::new()),
-            FileSystemSandboxPolicy::from,
+impl<PathType> From<LegacyPermissionProfile<PathType>> for PermissionProfile<PathType> {
+    fn from(value: LegacyPermissionProfile<PathType>) -> Self {
+        let file_system = value.file_system.map_or_else(
+            || ManagedFileSystemPermissions::Restricted {
+                entries: Vec::new(),
+                glob_scan_max_depth: None,
+            },
+            |permissions| ManagedFileSystemPermissions::Restricted {
+                entries: permissions.entries,
+                glob_scan_max_depth: permissions.glob_scan_max_depth,
+            },
         );
         let network_sandbox_policy = if value
             .network
@@ -602,18 +736,24 @@ impl From<LegacyPermissionProfile> for PermissionProfile {
         } else {
             NetworkSandboxPolicy::Restricted
         };
-        Self::from_runtime_permissions(&file_system_sandbox_policy, network_sandbox_policy)
+        Self::Managed {
+            file_system,
+            network: network_sandbox_policy,
+        }
     }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
-enum PermissionProfileDe {
-    Tagged(TaggedPermissionProfile),
-    Legacy(LegacyPermissionProfile),
+enum PermissionProfileDe<PathType = AbsolutePathBuf> {
+    Tagged(TaggedPermissionProfile<PathType>),
+    Legacy(LegacyPermissionProfile<PathType>),
 }
 
-impl<'de> Deserialize<'de> for PermissionProfile {
+impl<'de, PathType> Deserialize<'de> for PermissionProfile<PathType>
+where
+    PathType: Deserialize<'de>,
+{
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,

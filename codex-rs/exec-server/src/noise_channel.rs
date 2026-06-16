@@ -167,6 +167,62 @@ impl InitiatorHandshake {
     }
 }
 
+/// Executor-side handshake state while harness authorization is pending.
+/// This is not a usable transport until the registry accepts the authenticated
+/// harness key.
+pub(crate) struct PendingResponderHandshake {
+    handshake: Handshake,
+    pub(crate) initiator_public_key: NoiseChannelPublicKey,
+    pub(crate) payload: Vec<u8>,
+}
+
+impl PendingResponderHandshake {
+    /// Parse the first IK message and recover the authenticated harness key.
+    /// Callers must authorize that key before calling [`Self::complete`].
+    pub(crate) fn read_request(
+        identity: &NoiseChannelIdentity,
+        prologue: &[u8],
+        request: &[u8],
+    ) -> Result<Self, NoiseChannelError> {
+        ensure_noise_frame_len(request.len(), "handshake request is too large")?;
+        let params = HybridHandshakeParams::new(noise_hybrid_ik(), false)
+            .with_prologue(prologue)
+            .with_s(identity.dh.clone())
+            .with_s_kem(identity.kem.clone());
+        let mut handshake = Handshake::new(params)?;
+        let mut payload = [0u8; MAX_MESSAGE_LEN];
+        let payload_len = handshake.read_message(request, &mut payload)?;
+        // Clatter exposes this key only after the first IK message authenticates.
+        let remote = handshake
+            .get_remote_static()
+            .ok_or(NoiseChannelError::InvalidMessage(
+                "handshake request is missing initiator static key",
+            ))?;
+        let initiator_public_key = NoiseChannelPublicKey {
+            suite: NOISE_CHANNEL_SUITE.to_string(),
+            x25519_public_key: STANDARD.encode(remote.dh()),
+            mlkem768_public_key: STANDARD.encode(remote.kem().as_slice()),
+        };
+        Ok(Self {
+            handshake,
+            initiator_public_key,
+            payload: payload[..payload_len].to_vec(),
+        })
+    }
+
+    /// Finish the handshake after the registry authorizes the harness key.
+    pub(crate) fn complete(mut self) -> Result<(NoiseTransport, Vec<u8>), NoiseChannelError> {
+        let mut response = [0u8; MAX_MESSAGE_LEN];
+        let response_len = self.handshake.write_message(&[], &mut response)?;
+        Ok((
+            NoiseTransport {
+                transport: self.handshake.finalize()?,
+            },
+            response[..response_len].to_vec(),
+        ))
+    }
+}
+
 /// Established channel with independent implicit send and receive nonces.
 /// Relay records must be ordered before decryption, and a logical record must
 /// not be encrypted again for retry.

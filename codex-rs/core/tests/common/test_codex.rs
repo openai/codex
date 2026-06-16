@@ -53,7 +53,6 @@ use serde_json::Value;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
-use crate::PathBufExt;
 use crate::TempDirExt;
 use crate::get_remote_test_env;
 use crate::load_default_config_for_test;
@@ -164,8 +163,10 @@ pub async fn test_env() -> Result<TestEnv> {
             let websocket_url = remote_exec_server_url()?;
             let environment =
                 codex_exec_server::Environment::create_for_tests(Some(websocket_url.clone()))?;
-            let cwd = remote_aware_cwd_path();
-            let cwd_uri = PathUri::from_path(&cwd)?;
+            let cwd = remote_env
+                .remote_cwd(&remote_test_instance_id())?
+                .context("remote test environment should define a cwd")?;
+            let cwd_uri = cwd.to_path_uri(remote_env.path_convention())?;
             environment
                 .get_filesystem()
                 .create_directory(
@@ -174,24 +175,17 @@ pub async fn test_env() -> Result<TestEnv> {
                     /*sandbox*/ None,
                 )
                 .await?;
+            let cwd = cwd_uri.to_abs_path()?;
             Ok(TestEnv {
                 environment,
                 exec_server_url: Some(websocket_url),
                 cwd,
                 local_cwd_temp_dir: None,
-                remote_container_name: Some(remote_env.container_name),
+                remote_container_name: remote_env.docker_container_name().map(str::to_owned),
             })
         }
         None => TestEnv::local().await,
     }
-}
-
-fn remote_aware_cwd_path() -> AbsolutePathBuf {
-    PathBuf::from(format!(
-        "/tmp/codex-core-test-cwd-{}",
-        remote_test_instance_id()
-    ))
-    .abs()
 }
 
 fn remote_exec_server_url() -> Result<String> {

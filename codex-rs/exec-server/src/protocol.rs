@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use crate::FileSystemSandboxContext;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_file_system::FileSystemSandboxContext;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
@@ -454,7 +454,7 @@ mod base64_bytes {
 mod tests {
     use super::FsReadFileParams;
     use super::HttpRequestParams;
-    use crate::FileSystemSandboxContext;
+    use codex_file_system::FileSystemSandboxContext;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
@@ -465,18 +465,19 @@ mod tests {
             .expect("current directory")
             .join("legacy-file.txt");
         let legacy_cwd = std::env::current_dir().expect("current directory");
-        let expected_sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+        let native_sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
             PermissionProfile::default(),
             PathUri::from_path(&legacy_cwd).expect("cwd URI"),
         );
         let mut legacy_sandbox =
-            serde_json::to_value(&expected_sandbox).expect("sandbox should serialize");
+            serde_json::to_value(&native_sandbox).expect("sandbox should serialize");
         legacy_sandbox["cwd"] = serde_json::json!(legacy_cwd.to_string_lossy());
         let params: FsReadFileParams = serde_json::from_value(serde_json::json!({
             "path": legacy_path.to_string_lossy(),
             "sandbox": legacy_sandbox,
         }))
         .expect("legacy absolute path should deserialize");
+        let expected_sandbox = native_sandbox;
         let expected = FsReadFileParams {
             path: PathUri::from_path(legacy_path).expect("path URI"),
             sandbox: Some(expected_sandbox.clone()),
