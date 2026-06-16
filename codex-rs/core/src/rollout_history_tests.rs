@@ -10,6 +10,7 @@ fn message(role: &str, content: ContentItem) -> ResponseItem {
         role: role.to_string(),
         content: vec![content],
         phase: None,
+        metadata: None,
     }
 }
 
@@ -22,9 +23,11 @@ fn classifies_user_directed_turn_boundaries() {
         },
     );
     let agent_message = ResponseItem::AgentMessage {
+        id: None,
         author: "/root".to_string(),
         recipient: "/root/worker".to_string(),
         content: Vec::new(),
+        metadata: None,
     };
     let instruction = InterAgentCommunication::new(
         AgentPath::root(),
