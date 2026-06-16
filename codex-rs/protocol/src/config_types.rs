@@ -204,7 +204,7 @@ pub enum ShellEnvironmentPolicyInherit {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export_to = "v2/")]
-pub enum ShellEnvironmentPolicyRule {
+pub enum ShellEnvironmentPolicyFilter {
     Include,
     Exclude,
 }

@@ -2595,6 +2595,14 @@
       ],
       "type": "string"
     },
+    "ShellEnvironmentPolicyFilter": {
+      "description": "Assigns a shell environment variable pattern to the include-only or exclude set. Includes do not re-add variables removed by another exclude pattern.",
+      "enum": [
+        "include",
+        "exclude"
+      ],
+      "type": "string"
+    },
     "ShellEnvironmentPolicyInherit": {
       "oneOf": [
         {
@@ -2620,14 +2628,6 @@
         }
       ]
     },
-    "ShellEnvironmentPolicyRule": {
-      "description": "Assigns a shell environment variable pattern to the include-only or exclude set. Includes do not re-add variables removed by another exclude pattern.",
-      "enum": [
-        "include",
-        "exclude"
-      ],
-      "type": "string"
-    },
     "ShellEnvironmentPolicyToml": {
       "additionalProperties": false,
       "description": "Policy for building the `env` when spawning a process via shell-like tools.",
@@ -2642,6 +2642,13 @@
         "experimental_use_profile": {
           "type": "boolean"
         },
+        "filters": {
+          "additionalProperties": {
+            "$ref": "#/definitions/ShellEnvironmentPolicyFilter"
+          },
+          "description": "Pattern actions used by the canonical table representation.\n\nOrdinary config keeps accepting the legacy arrays above during the migration. Requirements accept only this keyed form, keeping array compatibility isolated so the legacy fields can be deprecated later.",
+          "type": "object"
+        },
         "ignore_default_excludes": {
           "type": "boolean"
         },
@@ -2654,13 +2661,6 @@
         },
         "inherit": {
           "$ref": "#/definitions/ShellEnvironmentPolicyInherit"
-        },
-        "rules": {
-          "additionalProperties": {
-            "$ref": "#/definitions/ShellEnvironmentPolicyRule"
-          },
-          "description": "Pattern actions used by the canonical table representation.\n\nOrdinary config keeps accepting the legacy arrays above during the migration. Requirements accept only this keyed form, keeping array compatibility isolated so the legacy fields can be deprecated later.",
-          "type": "object"
         },
         "set": {
           "additionalProperties": {
@@ -5215,10 +5215,10 @@
       "default": {
         "exclude": null,
         "experimental_use_profile": null,
+        "filters": null,
         "ignore_default_excludes": null,
         "include_only": null,
         "inherit": null,
-        "rules": null,
         "set": null
       }
     },

@@ -18,8 +18,8 @@ pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
 pub use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::config_types::ShellEnvironmentPolicyFilter;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
-use codex_protocol::config_types::ShellEnvironmentPolicyRule;
 pub use codex_protocol::config_types::WebSearchMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
@@ -929,7 +929,7 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings 
 }
 
 /// Policy for building the `env` when spawning a process via shell-like tools.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[derive(Serialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ShellEnvironmentPolicyToml {
     pub inherit: Option<ShellEnvironmentPolicyInherit>,
@@ -949,9 +949,44 @@ pub struct ShellEnvironmentPolicyToml {
     /// Ordinary config keeps accepting the legacy arrays above during the
     /// migration. Requirements accept only this keyed form, keeping array
     /// compatibility isolated so the legacy fields can be deprecated later.
-    pub rules: Option<BTreeMap<String, ShellEnvironmentPolicyRule>>,
+    pub filters: Option<BTreeMap<String, ShellEnvironmentPolicyFilter>>,
 
     pub experimental_use_profile: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShellEnvironmentPolicyTomlRaw {
+    inherit: Option<ShellEnvironmentPolicyInherit>,
+    ignore_default_excludes: Option<bool>,
+    exclude: Option<Vec<String>>,
+    r#set: Option<HashMap<String, String>>,
+    include_only: Option<Vec<String>>,
+    filters: Option<BTreeMap<String, ShellEnvironmentPolicyFilter>>,
+    experimental_use_profile: Option<bool>,
+}
+
+impl<'de> Deserialize<'de> for ShellEnvironmentPolicyToml {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = ShellEnvironmentPolicyTomlRaw::deserialize(deserializer)?;
+        if raw.filters.is_some() && (raw.exclude.is_some() || raw.include_only.is_some()) {
+            return Err(serde::de::Error::custom(
+                "cannot mix `filters` with legacy `exclude` or `include_only`",
+            ));
+        }
+        Ok(Self {
+            inherit: raw.inherit,
+            ignore_default_excludes: raw.ignore_default_excludes,
+            exclude: raw.exclude,
+            r#set: raw.r#set,
+            include_only: raw.include_only,
+            filters: raw.filters,
+            experimental_use_profile: raw.experimental_use_profile,
+        })
+    }
 }
 
 impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
@@ -961,12 +996,12 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
         let ignore_default_excludes = toml.ignore_default_excludes.unwrap_or(true);
         let mut exclude = toml.exclude.unwrap_or_default();
         let mut include_only = toml.include_only.unwrap_or_default();
-        for (pattern, rule) in toml.rules.unwrap_or_default() {
+        for (pattern, filter) in toml.filters.unwrap_or_default() {
             exclude.retain(|candidate| candidate != &pattern);
             include_only.retain(|candidate| candidate != &pattern);
-            match rule {
-                ShellEnvironmentPolicyRule::Include => include_only.push(pattern),
-                ShellEnvironmentPolicyRule::Exclude => exclude.push(pattern),
+            match filter {
+                ShellEnvironmentPolicyFilter::Include => include_only.push(pattern),
+                ShellEnvironmentPolicyFilter::Exclude => exclude.push(pattern),
             }
         }
         let exclude = exclude

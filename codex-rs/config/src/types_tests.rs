@@ -2,7 +2,7 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn shell_environment_policy_accepts_legacy_lists_and_rules() {
+fn shell_environment_policy_accepts_legacy_lists_or_filters() {
     let legacy: ShellEnvironmentPolicyToml = toml::from_str(
         r#"
 exclude = ["LEGACY_*", "SHARED_*"]
@@ -19,54 +19,56 @@ include_only = ["PATH", "HOME"]
         }
     );
 
-    let ruled: ShellEnvironmentPolicyToml = toml::from_str(
+    let filtered: ShellEnvironmentPolicyToml = toml::from_str(
         r#"
-exclude = ["KEEP_EXCLUDED", "FLIP_TO_INCLUDE"]
-include_only = ["KEEP_INCLUDED", "FLIP_TO_EXCLUDE"]
-
-[rules]
+[filters]
 "FLIP_TO_EXCLUDE" = "exclude"
 "FLIP_TO_INCLUDE" = "include"
 "#,
     )
-    .expect("rules should be valid in config.toml");
+    .expect("filters should be valid in config.toml");
     assert_eq!(
-        ruled,
+        filtered,
         ShellEnvironmentPolicyToml {
-            exclude: Some(vec![
-                "KEEP_EXCLUDED".to_string(),
-                "FLIP_TO_INCLUDE".to_string(),
-            ]),
-            include_only: Some(vec![
-                "KEEP_INCLUDED".to_string(),
-                "FLIP_TO_EXCLUDE".to_string(),
-            ]),
-            rules: Some(BTreeMap::from([
+            filters: Some(BTreeMap::from([
                 (
                     "FLIP_TO_EXCLUDE".to_string(),
-                    ShellEnvironmentPolicyRule::Exclude,
+                    ShellEnvironmentPolicyFilter::Exclude,
                 ),
                 (
                     "FLIP_TO_INCLUDE".to_string(),
-                    ShellEnvironmentPolicyRule::Include,
+                    ShellEnvironmentPolicyFilter::Include,
                 ),
             ])),
             ..Default::default()
         }
     );
     assert_eq!(
-        ShellEnvironmentPolicy::from(ruled),
+        ShellEnvironmentPolicy::from(filtered),
         ShellEnvironmentPolicy::from(ShellEnvironmentPolicyToml {
-            exclude: Some(vec![
-                "KEEP_EXCLUDED".to_string(),
-                "FLIP_TO_EXCLUDE".to_string(),
-            ]),
-            include_only: Some(vec![
-                "KEEP_INCLUDED".to_string(),
-                "FLIP_TO_INCLUDE".to_string(),
-            ]),
+            exclude: Some(vec!["FLIP_TO_EXCLUDE".to_string()]),
+            include_only: Some(vec!["FLIP_TO_INCLUDE".to_string()]),
             ..Default::default()
         })
+    );
+}
+
+#[test]
+fn shell_environment_policy_rejects_mixed_legacy_lists_and_filters() {
+    let error = toml::from_str::<ShellEnvironmentPolicyToml>(
+        r#"
+exclude = ["LEGACY_*"]
+
+[filters]
+"CANONICAL_*" = "include"
+"#,
+    )
+    .expect_err("one config layer must not mix legacy lists and filters");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot mix `filters` with legacy `exclude` or `include_only`")
     );
 }
 

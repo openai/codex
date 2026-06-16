@@ -147,19 +147,19 @@ exclude = ["HIGH_*"]
 }
 
 #[test]
-fn shell_environment_policy_rules_overlay_merges_by_key() {
+fn shell_environment_policy_filters_overlay_merges_by_key_case_insensitively() {
     let mut base = parse_toml(
         r#"
-[shell_environment_policy.rules]
+[shell_environment_policy.filters]
 "FLIP_*" = "exclude"
 "KEEP_*" = "include"
 "#,
     );
     let overlay = parse_toml(
         r#"
-[shell_environment_policy.rules]
+[shell_environment_policy.filters]
 "ADD_*" = "exclude"
-"FLIP_*" = "include"
+"flip_*" = "include"
 "#,
     );
 
@@ -169,17 +169,17 @@ fn shell_environment_policy_rules_overlay_merges_by_key() {
         base,
         parse_toml(
             r#"
-[shell_environment_policy.rules]
-"ADD_*" = "exclude"
-"FLIP_*" = "include"
-"KEEP_*" = "include"
+[shell_environment_policy.filters]
+"add_*" = "exclude"
+"flip_*" = "include"
+"keep_*" = "include"
 "#,
         )
     );
 }
 
 #[test]
-fn shell_environment_policy_rules_override_lower_legacy_arrays_by_pattern() {
+fn shell_environment_policy_filters_override_lower_legacy_arrays_by_pattern() {
     let mut base = parse_toml(
         r#"
 [shell_environment_policy]
@@ -189,7 +189,7 @@ include_only = ["FLIP_TO_EXCLUDE", "KEEP_INCLUDED"]
     );
     let overlay = parse_toml(
         r#"
-[shell_environment_policy.rules]
+[shell_environment_policy.filters]
 "ADD_INCLUDED" = "include"
 "FLIP_TO_EXCLUDE" = "exclude"
 "FLIP_TO_INCLUDE" = "include"
@@ -202,14 +202,12 @@ include_only = ["FLIP_TO_EXCLUDE", "KEEP_INCLUDED"]
         base,
         parse_toml(
             r#"
-[shell_environment_policy]
-exclude = ["KEEP_EXCLUDED"]
-include_only = ["KEEP_INCLUDED"]
-
-[shell_environment_policy.rules]
-"ADD_INCLUDED" = "include"
-"FLIP_TO_EXCLUDE" = "exclude"
-"FLIP_TO_INCLUDE" = "include"
+[shell_environment_policy.filters]
+"add_included" = "include"
+"flip_to_exclude" = "exclude"
+"flip_to_include" = "include"
+"keep_excluded" = "exclude"
+"keep_included" = "include"
 "#,
         )
     );
@@ -219,13 +217,13 @@ include_only = ["KEEP_INCLUDED"]
         codex_protocol::config_types::ShellEnvironmentPolicy::from(config.shell_environment_policy),
         codex_protocol::config_types::ShellEnvironmentPolicy::from(ShellEnvironmentPolicyToml {
             exclude: Some(vec![
-                "KEEP_EXCLUDED".to_string(),
-                "FLIP_TO_EXCLUDE".to_string(),
+                "flip_to_exclude".to_string(),
+                "keep_excluded".to_string(),
             ]),
             include_only: Some(vec![
-                "KEEP_INCLUDED".to_string(),
-                "ADD_INCLUDED".to_string(),
-                "FLIP_TO_INCLUDE".to_string(),
+                "add_included".to_string(),
+                "flip_to_include".to_string(),
+                "keep_included".to_string(),
             ]),
             ..Default::default()
         })
@@ -233,10 +231,10 @@ include_only = ["KEEP_INCLUDED"]
 }
 
 #[test]
-fn shell_environment_policy_legacy_array_replaces_lower_rules_for_its_action() {
+fn shell_environment_policy_legacy_array_replaces_lower_filters_for_its_action() {
     let mut base = parse_toml(
         r#"
-[shell_environment_policy.rules]
+[shell_environment_policy.filters]
 "FLIP_TO_EXCLUDE" = "include"
 "LOW_EXCLUDED" = "exclude"
 "KEEP_INCLUDED" = "include"
@@ -257,9 +255,7 @@ exclude = ["FLIP_TO_EXCLUDE", "HIGH_EXCLUDED"]
             r#"
 [shell_environment_policy]
 exclude = ["FLIP_TO_EXCLUDE", "HIGH_EXCLUDED"]
-
-[shell_environment_policy.rules]
-"KEEP_INCLUDED" = "include"
+include_only = ["keep_included"]
 "#,
         )
     );
