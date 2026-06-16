@@ -8,7 +8,6 @@ use codex_app_server_protocol::PluginShareTargetRole;
 use codex_config::types::McpServerConfig;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginListBackgroundTaskOptions;
-use codex_core_plugins::apps_route_available;
 use codex_core_plugins::remote::REMOTE_CREATED_BY_ME_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_WORKSPACE_MARKETPLACE_NAME;
@@ -991,8 +990,6 @@ impl PluginRequestProcessor {
         let plugins_input = config.plugins_config_input();
         let auth = self.auth_manager.auth().await;
         plugins_manager.set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
-        let app_summaries_available =
-            apps_route_available(auth.as_ref().map(CodexAuth::api_auth_mode));
 
         let plugin = match read_source {
             Ok(marketplace_path) => {
@@ -1057,16 +1054,12 @@ impl PluginRequestProcessor {
                     }
                     None => None,
                 };
-                let app_summaries = if app_summaries_available {
-                    load_plugin_app_summaries(
-                        &config,
-                        &outcome.plugin.apps,
-                        &outcome.plugin.app_category_by_id,
-                    )
-                    .await
-                } else {
-                    Vec::new()
-                };
+                let app_summaries = load_plugin_app_summaries(
+                    &config,
+                    &outcome.plugin.apps,
+                    &outcome.plugin.app_category_by_id,
+                )
+                .await;
                 let visible_skills = outcome
                     .plugin
                     .skills
@@ -1136,22 +1129,19 @@ impl PluginRequestProcessor {
                 .map_err(|err| {
                     remote_plugin_catalog_error_to_jsonrpc(err, "read remote plugin details")
                 })?;
-                let app_summaries = if app_summaries_available {
-                    let plugin_apps = remote_detail
-                        .app_ids
-                        .iter()
-                        .cloned()
-                        .map(codex_plugin::AppConnectorId)
-                        .collect::<Vec<_>>();
-                    let app_category_by_id = remote_detail
-                        .app_manifest
-                        .as_ref()
-                        .map(plugin_app_category_by_id_from_value)
-                        .unwrap_or_default();
-                    load_plugin_app_summaries(&config, &plugin_apps, &app_category_by_id).await
-                } else {
-                    Vec::new()
-                };
+                let plugin_apps = remote_detail
+                    .app_ids
+                    .iter()
+                    .cloned()
+                    .map(codex_plugin::AppConnectorId)
+                    .collect::<Vec<_>>();
+                let app_category_by_id = remote_detail
+                    .app_manifest
+                    .as_ref()
+                    .map(plugin_app_category_by_id_from_value)
+                    .unwrap_or_default();
+                let app_summaries =
+                    load_plugin_app_summaries(&config, &plugin_apps, &app_category_by_id).await;
                 remote_plugin_detail_to_info(remote_detail, app_summaries)
             }
         };
