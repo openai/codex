@@ -1314,7 +1314,17 @@ impl PluginsManager {
                 event_name: hook.event_name,
             })
             .collect();
-        let app_declarations = load_plugin_apps(source_path.as_path()).await;
+        let auth_mode = self.auth_mode();
+        let mut app_declarations = load_plugin_apps(source_path.as_path()).await;
+        let mut mcp_servers = load_plugin_mcp_servers(source_path.as_path(), auth_mode).await;
+        if auth_mode.is_some() {
+            apply_app_mcp_routing_policy(
+                &mut app_declarations,
+                &mut mcp_servers,
+                auth_mode,
+                /*plugin_active*/ true,
+            );
+        }
         let apps = app_connector_ids_from_declarations(&app_declarations);
         let mut seen_app_connector_ids = HashSet::new();
         let mut app_category_by_id = HashMap::new();
@@ -1325,10 +1335,7 @@ impl PluginsManager {
                 app_category_by_id.insert(app.connector_id.0.clone(), category.clone());
             }
         }
-        let mut mcp_server_names = load_plugin_mcp_servers(source_path.as_path(), self.auth_mode())
-            .await
-            .into_keys()
-            .collect::<Vec<_>>();
+        let mut mcp_server_names = mcp_servers.into_keys().collect::<Vec<_>>();
         mcp_server_names.sort_unstable();
         mcp_server_names.dedup();
 
