@@ -6,6 +6,7 @@ use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -63,6 +64,29 @@ fn message_input_texts(body: &Value, role: &str) -> Vec<String> {
         .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
         .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
         .collect()
+}
+
+fn function_call_output_text<'a>(body: &'a Value, call_id: &str) -> Option<&'a str> {
+    body.get("input")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|item| {
+            item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+        })?
+        .get("output")?
+        .as_str()
+}
+
+fn assert_interrupted_sleep_output(output: Option<&str>) {
+    let output = output.expect("sleep output");
+    let wall_time = output
+        .strip_prefix("Wall time: ")
+        .and_then(|output| output.strip_suffix(" seconds\nSleep interrupted by new input."))
+        .expect("sleep output should include wall time");
+    wall_time
+        .parse::<f64>()
+        .expect("sleep wall time should be a number");
 }
 
 fn chunk(event: Value) -> StreamingSseChunk {
@@ -257,17 +281,7 @@ async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
         relevant_user_input,
         vec![INITIAL_PROMPT.to_string(), STEER_PROMPT.to_string()]
     );
-    let wait_output = second["input"]
-        .as_array()
-        .expect("second request input")
-        .iter()
-        .find(|item| {
-            item.get("type").and_then(Value::as_str) == Some("function_call_output")
-                && item.get("call_id").and_then(Value::as_str) == Some(WAIT_CALL_ID)
-        })
-        .and_then(|item| item.get("output"))
-        .and_then(Value::as_str)
-        .expect("wait_agent output");
+    let wait_output = function_call_output_text(&second, WAIT_CALL_ID).expect("wait_agent output");
     assert_eq!(
         serde_json::from_str::<Value>(wait_output).expect("parse wait_agent output"),
         json!({
@@ -275,6 +289,100 @@ async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
             "timed_out": false,
         })
     );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn any_new_input_interrupts_sleep() {
+    const FIRST_SLEEP_CALL_ID: &str = "sleep-call-1";
+    const SECOND_SLEEP_CALL_ID: &str = "sleep-call-2";
+    const INITIAL_PROMPT: &str = "sleep for a while";
+    const STEER_PROMPT: &str = "stop sleeping and continue";
+
+    let first_chunks = vec![
+        chunk(ev_response_created("resp-1")),
+        chunk(ev_function_call(
+            FIRST_SLEEP_CALL_ID,
+            "sleep",
+            r#"{"duration_ms":60000}"#,
+        )),
+        chunk(ev_completed("resp-1")),
+    ];
+    let second_chunks = vec![
+        chunk(ev_response_created("resp-2")),
+        chunk(ev_function_call(
+            SECOND_SLEEP_CALL_ID,
+            "sleep",
+            r#"{"duration_ms":60000}"#,
+        )),
+        chunk(ev_completed("resp-2")),
+    ];
+    let (server, _completions) = start_streaming_sse_server(vec![
+        first_chunks,
+        second_chunks,
+        response_completed_chunks("resp-3"),
+    ])
+    .await;
+    let codex = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::SleepTool)
+                .expect("test config should allow feature update");
+        })
+        .build_with_streaming_server(&server)
+        .await
+        .expect("build Codex test session")
+        .codex;
+
+    submit_user_input(&codex, INITIAL_PROMPT).await;
+    wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::RawResponseItem(raw)
+                if matches!(
+                    &raw.item,
+                    ResponseItem::FunctionCall { name, call_id, .. }
+                        if name == "sleep" && call_id == FIRST_SLEEP_CALL_ID
+                )
+        )
+    })
+    .await;
+
+    steer_user_input(&codex, STEER_PROMPT).await;
+    wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::RawResponseItem(raw)
+                if matches!(
+                    &raw.item,
+                    ResponseItem::FunctionCall { name, call_id, .. }
+                        if name == "sleep" && call_id == SECOND_SLEEP_CALL_ID
+                )
+        )
+    })
+    .await;
+
+    submit_queue_only_agent_mail(&codex, "new mailbox input").await;
+    wait_for_turn_complete(&codex).await;
+
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 3);
+    let second: Value = from_slice(&requests[1]).expect("parse second request");
+    let relevant_user_input = message_input_texts(&second, "user")
+        .into_iter()
+        .filter(|text| text == INITIAL_PROMPT || text == STEER_PROMPT)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        relevant_user_input,
+        vec![INITIAL_PROMPT.to_string(), STEER_PROMPT.to_string()]
+    );
+    assert_interrupted_sleep_output(function_call_output_text(&second, FIRST_SLEEP_CALL_ID));
+
+    let third: Value = from_slice(&requests[2]).expect("parse third request");
+    assert_interrupted_sleep_output(function_call_output_text(&third, SECOND_SLEEP_CALL_ID));
 
     server.shutdown().await;
 }

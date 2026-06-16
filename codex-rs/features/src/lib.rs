@@ -201,6 +201,8 @@ pub enum Feature {
     Goals,
     /// Add current context-window metadata to model-visible context.
     TokenBudget,
+    /// Expose an input-interruptible sleep tool.
+    SleepTool,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
     ToolCallMcpElicitation,
     /// Prompt Codex Apps connector auth failures through MCP URL elicitations.
@@ -1154,6 +1156,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::TokenBudget,
         key: "token_budget",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SleepTool,
+        key: "sleep_tool",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

@@ -22,6 +22,7 @@ use crate::tools::handlers::RequestPluginInstallHandler;
 use crate::tools::handlers::RequestUserInputHandler;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
+use crate::tools::handlers::SleepHandler;
 use crate::tools::handlers::TestSyncHandler;
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::ViewImageHandler;
@@ -664,6 +665,10 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     if features.enabled(Feature::TokenBudget) {
         planned_tools.add_with_exposure(NewContextWindowHandler, ToolExposure::DirectModelOnly);
         planned_tools.add(GetContextRemainingHandler);
+    }
+
+    if features.enabled(Feature::SleepTool) {
+        planned_tools.add(SleepHandler);
     }
 
     if tool_suggest_enabled(turn_context)
