@@ -30,7 +30,7 @@ const SUMMARY_INDENT_WIDTH: u16 = 1;
 
 /// Selects the aggregation represented by the token activity chart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::chatwidget) enum TokenActivityView {
+pub(crate) enum TokenActivityView {
     Daily,
     Weekly,
     Cumulative,
