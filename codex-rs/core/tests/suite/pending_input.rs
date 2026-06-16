@@ -352,16 +352,17 @@ async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
 async fn any_new_input_interrupts_sleep() {
     const FIRST_SLEEP_CALL_ID: &str = "sleep-call-1";
     const SECOND_SLEEP_CALL_ID: &str = "sleep-call-2";
-    const SLEEP_DURATION_MS: u64 = 60_000;
+    const SLEEP_DURATION_MS: u64 = 3_600_000;
     const INITIAL_PROMPT: &str = "sleep for a while";
     const STEER_PROMPT: &str = "stop sleeping and continue";
+    let sleep_arguments = json!({ "duration_ms": SLEEP_DURATION_MS }).to_string();
 
     let first_chunks = vec![
         chunk(ev_response_created("resp-1")),
         chunk(ev_function_call(
             FIRST_SLEEP_CALL_ID,
             "sleep",
-            r#"{"duration_ms":60000}"#,
+            &sleep_arguments,
         )),
         chunk(ev_completed("resp-1")),
     ];
@@ -370,7 +371,7 @@ async fn any_new_input_interrupts_sleep() {
         chunk(ev_function_call(
             SECOND_SLEEP_CALL_ID,
             "sleep",
-            r#"{"duration_ms":60000}"#,
+            &sleep_arguments,
         )),
         chunk(ev_completed("resp-2")),
     ];
