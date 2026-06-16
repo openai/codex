@@ -371,7 +371,7 @@ impl AccountRequestProcessor {
             opts
         };
 
-        Ok((opts, config.chatgpt_base_url.clone()))
+        Ok((opts, config.chatgpt_base_url))
     }
 
     fn login_chatgpt_device_code_start_error(err: IoError) -> JSONRPCErrorError {
