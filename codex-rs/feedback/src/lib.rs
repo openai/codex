@@ -421,19 +421,27 @@ impl FeedbackSnapshot {
 
         use sentry::Client;
         use sentry::ClientOptions;
-        use sentry::protocol::Envelope;
-        use sentry::protocol::EnvelopeItem;
-        use sentry::protocol::Event;
-        use sentry::protocol::Level;
         use sentry::transports::DefaultTransportFactory;
         use sentry::types::Dsn;
 
-        // Build Sentry client
         let client = Client::from_config(ClientOptions {
             dsn: Some(Dsn::from_str(SENTRY_DSN).map_err(|e| anyhow!("invalid DSN: {e}"))?),
             transport: Some(Arc::new(DefaultTransportFactory {})),
             ..Default::default()
         });
+
+        self.upload_feedback_with_client(options, &client)
+    }
+
+    fn upload_feedback_with_client(
+        &self,
+        options: FeedbackUploadOptions<'_>,
+        client: &sentry::Client,
+    ) -> Result<()> {
+        use sentry::protocol::Envelope;
+        use sentry::protocol::EnvelopeItem;
+        use sentry::protocol::Event;
+        use sentry::protocol::Level;
 
         let tags = self.upload_tags(
             options.classification,
@@ -482,7 +490,9 @@ impl FeedbackSnapshot {
         }
 
         client.send_envelope(envelope);
-        client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
+        if !client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS))) {
+            return Err(anyhow!("timed out waiting for feedback upload to finish"));
+        }
         Ok(())
     }
 
@@ -689,12 +699,55 @@ impl Visit for FeedbackTagsVisitor {
 mod tests {
     use std::ffi::OsStr;
     use std::fs;
+    use std::sync::Arc;
+    use std::time::Duration;
 
     use super::*;
     use crate::FeedbackDiagnostic;
     use pretty_assertions::assert_eq;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
+
+    struct TimedOutTransport;
+
+    impl sentry::Transport for TimedOutTransport {
+        fn send_envelope(&self, _envelope: sentry::Envelope) {}
+
+        fn flush(&self, _timeout: Duration) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn upload_feedback_reports_transport_timeout() {
+        let client = sentry::Client::from_config(sentry::ClientOptions {
+            dsn: SENTRY_DSN.parse().ok(),
+            transport: Some(Arc::new(Arc::new(TimedOutTransport))),
+            ..Default::default()
+        });
+        let snapshot = CodexFeedback::new().snapshot(/*session_id*/ None);
+
+        let error = snapshot
+            .upload_feedback_with_client(
+                FeedbackUploadOptions {
+                    classification: "bug",
+                    reason: None,
+                    tags: None,
+                    include_logs: false,
+                    extra_attachments: &[],
+                    extra_attachment_paths: &[],
+                    session_source: None,
+                    logs_override: None,
+                },
+                &client,
+            )
+            .expect_err("timed out feedback upload should fail");
+
+        assert_eq!(
+            error.to_string(),
+            "timed out waiting for feedback upload to finish"
+        );
+    }
 
     #[test]
     fn ring_buffer_drops_front_when_full() {
