@@ -1,5 +1,6 @@
 use crate::history_cell::PlainHistoryCell;
 use crate::legacy_core::config::Config;
+use crate::legacy_core::config::Permissions;
 use crate::session_state::SessionNetworkProxyRuntime;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
@@ -15,6 +16,8 @@ use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::WebSearchModeRequirement;
 use codex_config::format_config_layer_source;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use toml::Value as TomlValue;
@@ -23,7 +26,9 @@ pub(crate) fn new_debug_config_output(
     config: &Config,
     session_network_proxy: Option<&SessionNetworkProxyRuntime>,
 ) -> PlainHistoryCell {
-    let mut lines = render_debug_config_lines(&config.config_layer_stack);
+    let mut lines = render_debug_config_lines(&config.config_layer_stack, |mode| {
+        sandbox_mode_is_allowed_by_permissions(&config.permissions, mode)
+    });
 
     if let Some(proxy) = session_network_proxy {
         lines.push("".into());
@@ -49,6 +54,24 @@ pub(crate) fn new_debug_config_output(
     PlainHistoryCell::new(lines)
 }
 
+fn sandbox_mode_is_allowed_by_permissions(
+    permissions: &Permissions,
+    mode: SandboxModeRequirement,
+) -> bool {
+    let permission_profile = match mode {
+        SandboxModeRequirement::ReadOnly => PermissionProfile::read_only(),
+        SandboxModeRequirement::WorkspaceWrite => PermissionProfile::workspace_write(),
+        SandboxModeRequirement::DangerFullAccess => PermissionProfile::Disabled,
+        SandboxModeRequirement::ExternalSandbox => PermissionProfile::External {
+            network: NetworkSandboxPolicy::Restricted,
+        },
+    };
+
+    permissions
+        .can_set_permission_profile(&permission_profile)
+        .is_ok()
+}
+
 fn session_all_proxy_url(http_addr: &str, socks_addr: &str, socks_enabled: bool) -> String {
     if socks_enabled {
         format!("socks5h://{socks_addr}")
@@ -57,7 +80,10 @@ fn session_all_proxy_url(http_addr: &str, socks_addr: &str, socks_enabled: bool)
     }
 }
 
-fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
+fn render_debug_config_lines(
+    stack: &ConfigLayerStack,
+    sandbox_mode_is_effectively_allowed: impl Fn(SandboxModeRequirement) -> bool,
+) -> Vec<Line<'static>> {
     let mut lines = vec!["/debug-config".magenta().into(), "".into()];
 
     lines.push(
@@ -122,6 +148,7 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
             modes
                 .iter()
                 .copied()
+                .filter(|mode| sandbox_mode_is_effectively_allowed(*mode))
                 .map(format_sandbox_mode_requirement)
                 .collect::<Vec<_>>(),
         );
@@ -164,6 +191,17 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
             allow_appshots.to_string(),
             requirements
                 .allow_appshots
+                .as_ref()
+                .map(|sourced| &sourced.source),
+        ));
+    }
+
+    if let Some(allow_remote_control) = requirements_toml.allow_remote_control {
+        requirement_lines.push(requirement_line(
+            "allow_remote_control",
+            allow_remote_control.to_string(),
+            requirements
+                .allow_remote_control
                 .as_ref()
                 .map(|sourced| &sourced.source),
         ));
@@ -515,15 +553,18 @@ fn format_network_unix_socket_permission(
 #[cfg(test)]
 mod tests {
     use super::render_debug_config_lines;
+    use super::sandbox_mode_is_allowed_by_permissions;
     use super::session_all_proxy_url;
-    use crate::legacy_core::config::Constrained;
+    use crate::legacy_core::config::Permissions;
     use codex_app_server_protocol::AskForApproval;
     use codex_app_server_protocol::ConfigLayerSource;
     use codex_config::ConfigLayerEntry;
     use codex_config::ConfigLayerStack;
     use codex_config::ConfigRequirements;
     use codex_config::ConfigRequirementsToml;
+    use codex_config::Constrained;
     use codex_config::ConstrainedWithSource;
+    use codex_config::ConstraintError;
     use codex_config::FeatureRequirementsToml;
     use codex_config::FilesystemConstraints;
     use codex_config::HookEventsToml;
@@ -542,6 +583,7 @@ mod tests {
     use codex_config::SandboxModeRequirement;
     use codex_config::Sourced;
     use codex_config::WebSearchModeRequirement;
+    use codex_config::sandbox_mode_requirement_for_permission_profile;
     use codex_protocol::config_types::ApprovalsReviewer;
     use codex_protocol::config_types::WebSearchMode;
     use codex_protocol::models::PermissionProfile;
@@ -569,6 +611,20 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn render_stack_to_text(stack: &ConfigLayerStack) -> String {
+        render_stack_to_text_with_sandbox_mode_filter(stack, |_| true)
+    }
+
+    fn render_stack_to_text_with_sandbox_mode_filter(
+        stack: &ConfigLayerStack,
+        sandbox_mode_is_effectively_allowed: impl Fn(SandboxModeRequirement) -> bool,
+    ) -> String {
+        render_to_text(&render_debug_config_lines(
+            stack,
+            sandbox_mode_is_effectively_allowed,
+        ))
     }
 
     #[test]
@@ -604,7 +660,7 @@ mod tests {
         )
         .expect("config layer stack");
 
-        let rendered = render_to_text(&render_debug_config_lines(&stack));
+        let rendered = render_stack_to_text(&stack);
         assert!(rendered.contains("(enabled)"));
         assert!(rendered.contains("(disabled)"));
         assert!(rendered.contains("reason: project is untrusted"));
@@ -667,6 +723,10 @@ mod tests {
                 /*value*/ false,
                 RequirementSource::LegacyManagedConfigTomlFromMdm,
             )),
+            allow_remote_control: Some(Sourced::new(
+                /*value*/ false,
+                RequirementSource::LegacyManagedConfigTomlFromMdm,
+            )),
             feature_requirements: Some(Sourced::new(
                 FeatureRequirementsToml {
                     entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
@@ -702,11 +762,13 @@ mod tests {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest.to_core()]),
             allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
-            allowed_permissions: None,
+            allowed_permission_profiles: None,
+            default_permissions: None,
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
             allow_managed_hooks_only: Some(true),
             allow_appshots: Some(false),
+            allow_remote_control: Some(false),
             computer_use: None,
             windows: None,
             guardian_policy_config: Some("Use the managed guardian policy.".to_string()),
@@ -748,13 +810,16 @@ mod tests {
         )
         .expect("config layer stack");
 
-        let rendered = render_to_text(&render_debug_config_lines(&stack));
+        let rendered = render_stack_to_text(&stack);
+        #[cfg(not(windows))]
+        insta::assert_snapshot!("debug_config_requirement_sources", rendered.as_str());
+
         let requirements_source = (RequirementSource::LegacyManagedConfigTomlFromMdm).to_string();
         assert!(rendered.contains(&format!(
             "allowed_approval_policies: on-request (source: {requirements_source})"
         )));
         assert!(rendered.contains(
-            "allowed_approvals_reviewers: guardian_subagent (source: MDM managed_config.toml (legacy))"
+            "allowed_approvals_reviewers: auto_review (source: MDM managed_config.toml (legacy))"
         ));
         assert!(
             rendered.contains(
@@ -773,6 +838,9 @@ mod tests {
         )));
         assert!(rendered.contains(&format!(
             "allow_appshots: false (source: {requirements_source})"
+        )));
+        assert!(rendered.contains(&format!(
+            "allow_remote_control: false (source: {requirements_source})"
         )));
         assert!(rendered.contains(&format!(
             "guardian_policy_config: configured (source: {requirements_source})"
@@ -800,6 +868,93 @@ mod tests {
     }
 
     #[test]
+    fn debug_config_output_filters_sandbox_modes_blocked_by_deny_read_requirements() {
+        let requirements_file = if cfg!(windows) {
+            absolute_path("C:\\ProgramData\\OpenAI\\Codex\\requirements.toml")
+        } else {
+            absolute_path("/etc/codex/requirements.toml")
+        };
+        let denied_path = if cfg!(windows) {
+            absolute_path("C:\\Users\\alice\\.gitconfig")
+        } else {
+            absolute_path("/home/alice/.gitconfig")
+        };
+
+        let requirements = ConfigRequirements {
+            permission_profile: ConstrainedWithSource::new(
+                Constrained::allow_any(PermissionProfile::read_only()),
+                Some(RequirementSource::SystemRequirementsToml {
+                    file: requirements_file.clone(),
+                }),
+            ),
+            filesystem: Some(Sourced::new(
+                FilesystemConstraints {
+                    deny_read: vec![denied_path.into()],
+                },
+                RequirementSource::SystemRequirementsToml {
+                    file: requirements_file.clone(),
+                },
+            )),
+            ..ConfigRequirements::default()
+        };
+        let requirements_toml = ConfigRequirementsToml {
+            allowed_sandbox_modes: Some(vec![
+                SandboxModeRequirement::ReadOnly,
+                SandboxModeRequirement::WorkspaceWrite,
+                SandboxModeRequirement::DangerFullAccess,
+                SandboxModeRequirement::ExternalSandbox,
+            ]),
+            ..ConfigRequirementsToml::default()
+        };
+        let stack = ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
+            .expect("config layer stack");
+        let constrained_permission_profile =
+            Constrained::new(PermissionProfile::read_only(), |candidate| {
+                let mode = sandbox_mode_requirement_for_permission_profile(candidate);
+                match mode {
+                    SandboxModeRequirement::ReadOnly | SandboxModeRequirement::WorkspaceWrite => {
+                        Ok(())
+                    }
+                    SandboxModeRequirement::DangerFullAccess
+                    | SandboxModeRequirement::ExternalSandbox => {
+                        Err(ConstraintError::InvalidValue {
+                            field_name: "sandbox_mode",
+                            candidate: format!("{mode:?}"),
+                            allowed: "[read-only, workspace-write]".to_string(),
+                            requirement_source: RequirementSource::Unknown,
+                        })
+                    }
+                }
+            })
+            .expect("constrained permission profile");
+        let permissions = Permissions::from_approval_and_profile(
+            Constrained::allow_any(AskForApproval::OnRequest.to_core()),
+            constrained_permission_profile,
+        )
+        .expect("permissions");
+
+        let rendered = render_stack_to_text_with_sandbox_mode_filter(&stack, |mode| {
+            sandbox_mode_is_allowed_by_permissions(&permissions, mode)
+        });
+        #[cfg(not(windows))]
+        insta::assert_snapshot!(
+            "debug_config_effective_sandbox_modes_with_deny_read",
+            rendered.as_str()
+        );
+        assert!(
+            rendered.contains(
+                format!(
+                    "allowed_sandbox_modes: read-only, workspace-write (source: {})",
+                    requirements_file.as_path().display()
+                )
+                .as_str()
+            )
+        );
+        assert!(!rendered.contains("danger-full-access"));
+        assert!(!rendered.contains("external-sandbox"));
+    }
+
+    #[test]
     fn debug_config_output_lists_approvals_reviewer_as_requirement() {
         let requirements = ConfigRequirements {
             approvals_reviewer: ConstrainedWithSource::new(
@@ -815,9 +970,9 @@ mod tests {
         let stack = ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
             .expect("config layer stack");
 
-        let rendered = render_to_text(&render_debug_config_lines(&stack));
+        let rendered = render_stack_to_text(&stack);
         assert!(rendered.contains(
-            "allowed_approvals_reviewers: guardian_subagent (source: MDM managed_config.toml (legacy))"
+            "allowed_approvals_reviewers: auto_review (source: MDM managed_config.toml (legacy))"
         ));
         assert!(!rendered.contains("Requirements:\n  <none>"));
     }
@@ -850,7 +1005,7 @@ mod tests {
             ConfigLayerStack::new(Vec::new(), requirements, ConfigRequirementsToml::default())
                 .expect("config layer stack");
 
-        let rendered = render_to_text(&render_debug_config_lines(&stack));
+        let rendered = render_stack_to_text(&stack);
         let requirements_source = (RequirementSource::LegacyManagedConfigTomlFromMdm).to_string();
         assert!(rendered.contains(&format!(
             "experimental_network: unix_sockets={{/tmp/blocked.sock=deny, /tmp/codex.sock=allow}} (source: {requirements_source})"
@@ -879,7 +1034,7 @@ writable_roots = ["/tmp"]
         )
         .expect("config layer stack");
 
-        let rendered = render_to_text(&render_debug_config_lines(&stack));
+        let rendered = render_stack_to_text(&stack);
         assert!(rendered.contains("session-flags (enabled)"));
         assert!(rendered.contains("     - model = \"gpt-5\""));
         assert!(rendered.contains("     - sandbox_workspace_write.network_access = true"));
@@ -913,7 +1068,7 @@ approval_policy = "never"
         )
         .expect("config layer stack");
 
-        let rendered = render_to_text(&render_debug_config_lines(&stack));
+        let rendered = render_stack_to_text(&stack);
         assert!(rendered.contains("legacy managed_config.toml (MDM) (enabled)"));
         assert!(rendered.contains("MDM value:"));
         assert!(rendered.contains("# managed by MDM"));
@@ -950,7 +1105,7 @@ approval_policy = "never"
         )
         .expect("config layer stack");
 
-        let rendered = render_to_text(&render_debug_config_lines(&stack));
+        let rendered = render_stack_to_text(&stack);
         assert!(rendered.contains("enterprise-managed (Base policy, cfg_123) (enabled)"));
         assert!(rendered.contains("Enterprise-managed config value:"));
         assert!(!rendered.contains("MDM value:"));
@@ -973,11 +1128,13 @@ approval_policy = "never"
             allowed_approval_policies: None,
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
-            allowed_permissions: None,
+            allowed_permission_profiles: None,
+            default_permissions: None,
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(Vec::new()),
             allow_managed_hooks_only: None,
             allow_appshots: None,
+            allow_remote_control: None,
             computer_use: None,
             windows: None,
             guardian_policy_config: None,
@@ -995,7 +1152,7 @@ approval_policy = "never"
         let stack = ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
             .expect("config layer stack");
 
-        let rendered = render_to_text(&render_debug_config_lines(&stack));
+        let rendered = render_stack_to_text(&stack);
         let requirements_source = (RequirementSource::LegacyManagedConfigTomlFromMdm).to_string();
         assert!(rendered.contains(&format!(
             "allowed_web_search_modes: disabled (source: {requirements_source})"
@@ -1041,7 +1198,7 @@ approval_policy = "never"
         let stack = ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
             .expect("config layer stack");
 
-        let rendered = render_to_text(&render_debug_config_lines(&stack));
+        let rendered = render_stack_to_text(&stack);
         let requirements_source = (RequirementSource::LegacyManagedConfigTomlFromMdm).to_string();
         assert!(rendered.contains("hooks:"));
         assert!(rendered.contains("handlers=1"));

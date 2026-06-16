@@ -286,6 +286,29 @@ async fn steer_rejection_queues_review_follow_up_before_existing_queued_messages
 }
 
 #[tokio::test]
+async fn esc_with_review_queued_steers_shows_warning_and_does_not_interrupt() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    handle_turn_started(&mut chat, "turn-1");
+    handle_entered_review_mode(&mut chat, "feature branch");
+    let _ = drain_insert_history(&mut rx);
+    chat.input_queue
+        .pending_steers
+        .push_back(pending_steer("review follow-up"));
+    chat.refresh_pending_input_preview();
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert!(!chat.input_queue.submit_pending_steers_after_interrupt);
+    assert_eq!(chat.input_queue.pending_steers.len(), 1);
+    assert_no_submit_op(&mut op_rx);
+
+    let cells = drain_insert_history(&mut rx);
+    let last = lines_to_single_string(cells.last().expect("review warning"));
+    assert_chatwidget_snapshot!("review_submission_warning_snapshot", last);
+}
+
+#[tokio::test]
 async fn live_agent_message_renders_during_review_mode() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -979,25 +1002,6 @@ async fn ctrl_c_interrupts_without_arming_quit_when_double_press_disabled() {
     next_interrupt_op(&mut op_rx);
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
     assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
-}
-
-#[tokio::test]
-async fn ctrl_c_closes_realtime_conversation_before_interrupt_or_quit() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
-    chat.bottom_pane
-        .set_composer_text("recording meter".to_string(), Vec::new(), Vec::new());
-
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
-
-    next_realtime_close_op(&mut op_rx);
-    assert_eq!(
-        chat.realtime_conversation.phase,
-        RealtimeConversationPhase::Stopping
-    );
-    assert_eq!(chat.bottom_pane.composer_text(), "recording meter");
-    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
-    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[tokio::test]

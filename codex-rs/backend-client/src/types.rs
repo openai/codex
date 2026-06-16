@@ -12,10 +12,132 @@ pub use codex_backend_openapi_models::models::RateLimitWindowSnapshot;
 pub use codex_backend_openapi_models::models::SpendControlLimitDetails;
 pub use codex_backend_openapi_models::models::TaskListItem;
 
+use codex_protocol::protocol::RateLimitSnapshot;
 use serde::Deserialize;
 use serde::de::Deserializer;
 use serde_json::Value;
 use std::collections::HashMap;
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct RateLimitResetCreditsSummary {
+    pub available_count: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RateLimitsWithResetCredits {
+    pub rate_limits: Vec<RateLimitSnapshot>,
+    pub rate_limit_reset_credits: Option<RateLimitResetCreditsSummary>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct RateLimitStatusWithResetCredits {
+    #[serde(flatten)]
+    pub rate_limits: RateLimitStatusPayload,
+    pub rate_limit_reset_credits: Option<RateLimitResetCreditsSummary>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConsumeRateLimitResetCreditCode {
+    Reset,
+    NothingToReset,
+    NoCredit,
+    AlreadyRedeemed,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct ConsumeRateLimitResetCreditResponse {
+    pub code: ConsumeRateLimitResetCreditCode,
+    #[serde(default)]
+    pub windows_reset: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct AccountsCheckResponse {
+    pub accounts: Vec<AccountEntry>,
+    pub account_ordering: Vec<String>,
+    pub default_account_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct AccountEntry {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub profile_picture_url: Option<String>,
+    #[serde(default)]
+    pub structure: String,
+}
+
+#[derive(Deserialize)]
+struct RawAccountsCheckResponse {
+    #[serde(default)]
+    accounts: RawAccounts,
+    #[serde(default)]
+    account_ordering: Vec<String>,
+    #[serde(default)]
+    default_account_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawAccounts {
+    List(Vec<AccountEntry>),
+    Map(HashMap<String, ChatGptAccountEntry>),
+}
+
+impl Default for RawAccounts {
+    fn default() -> Self {
+        Self::List(Vec::new())
+    }
+}
+
+#[derive(Deserialize)]
+struct ChatGptAccountEntry {
+    account: ChatGptAccountInfo,
+}
+
+#[derive(Deserialize)]
+struct ChatGptAccountInfo {
+    account_id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    profile_picture_url: Option<String>,
+    #[serde(default)]
+    structure: String,
+}
+
+impl<'de> Deserialize<'de> for AccountsCheckResponse {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawAccountsCheckResponse::deserialize(deserializer)?;
+        let accounts = match raw.accounts {
+            RawAccounts::List(accounts) => accounts,
+            RawAccounts::Map(mut accounts) => raw
+                .account_ordering
+                .iter()
+                .filter_map(|account_id| {
+                    let account = accounts.remove(account_id)?.account;
+                    Some(AccountEntry {
+                        id: account.account_id?,
+                        name: account.name,
+                        profile_picture_url: account.profile_picture_url,
+                        structure: account.structure,
+                    })
+                })
+                .collect(),
+        };
+        Ok(Self {
+            accounts,
+            account_ordering: raw.account_ordering,
+            default_account_id: raw.default_account_id,
+        })
+    }
+}
 
 /// Hand-rolled models for the Cloud Tasks task-details response.
 /// The generated OpenAPI models are pretty bad. This is a half-step
@@ -320,6 +442,27 @@ where
 pub struct TurnAttemptsSiblingTurnsResponse {
     #[serde(default)]
     pub sibling_turns: Vec<HashMap<String, Value>>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct TokenUsageProfile {
+    pub stats: TokenUsageProfileStats,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct TokenUsageProfileStats {
+    pub lifetime_tokens: Option<i64>,
+    pub peak_daily_tokens: Option<i64>,
+    pub longest_running_turn_sec: Option<i64>,
+    pub current_streak_days: Option<i64>,
+    pub longest_streak_days: Option<i64>,
+    pub daily_usage_buckets: Option<Vec<TokenUsageProfileDailyBucket>>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct TokenUsageProfileDailyBucket {
+    pub start_date: String,
+    pub tokens: i64,
 }
 
 #[cfg(test)]

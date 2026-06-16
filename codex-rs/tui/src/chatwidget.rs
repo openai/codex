@@ -44,12 +44,9 @@ use std::time::Instant;
 use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::app_command::AppCommand;
 use crate::app_event::HistoryLookupResponse;
-use crate::app_event::RealtimeAudioDeviceKind;
 use crate::app_server_approval_conversions::file_update_changes_to_display;
 use crate::approval_events::ApplyPatchApprovalRequestEvent;
 use crate::approval_events::ExecApprovalRequestEvent;
-#[cfg(not(target_os = "linux"))]
-use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::bottom_pane::StatusSurfacePreviewData;
@@ -58,13 +55,8 @@ use crate::bottom_pane::TerminalTitleItem;
 use crate::bottom_pane::TerminalTitleSetupView;
 use crate::diff_model::FileChange;
 use crate::git_action_directives::parse_assistant_markdown;
-use crate::legacy_core::DEFAULT_AGENTS_MD_FILENAME;
 use crate::legacy_core::config::Config;
-use crate::legacy_core::config::Constrained;
-use crate::legacy_core::config::ConstraintResult;
 use crate::legacy_core::config::PermissionProfileSnapshot;
-#[cfg(any(target_os = "windows", test))]
-use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::mention_codec::LinkedMention;
 use crate::mention_codec::encode_history_mentions;
 use crate::model_catalog::ModelCatalog;
@@ -127,6 +119,8 @@ use codex_app_server_protocol::TurnPlanStepStatus;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_config::ConfigLayerStackOrdering;
+use codex_config::Constrained;
+use codex_config::ConstraintResult;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::Notifications;
 use codex_config::types::WindowsSandboxModeToml;
@@ -257,11 +251,16 @@ fn queued_message_edit_hint_binding(
         .or_else(|| bindings.first().copied())
 }
 
+fn normalize_thread_name(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event::PermissionProfileSelection;
 use crate::app_event::RateLimitRefreshOrigin;
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
 use crate::auto_review_denials;
@@ -341,7 +340,6 @@ use self::goal_status::GoalStatusState;
 #[cfg(test)]
 use self::goal_status::goal_status_indicator_from_app_goal;
 mod goal_menu;
-mod goal_validation;
 mod ide_context;
 use self::ide_context::IdeContextState;
 mod input_queue;
@@ -388,11 +386,9 @@ use self::rate_limits::app_server_rate_limit_error_kind;
 pub(crate) use self::rate_limits::fallback_limit_label;
 use self::rate_limits::is_app_server_cyber_policy_error;
 pub(crate) use self::rate_limits::limit_label_for_window;
-mod realtime;
+mod reasoning_shortcuts;
 mod rendering;
 mod replay;
-use self::realtime::RealtimeConversationUiState;
-mod reasoning_shortcuts;
 mod review;
 mod review_popups;
 use self::review::ReviewState;
@@ -411,6 +407,8 @@ mod status_controls;
 mod status_surfaces;
 mod streaming;
 use self::status_surfaces::CachedProjectRootName;
+mod tokens;
+pub(crate) use self::tokens::TokenActivityView;
 mod tool_lifecycle;
 mod tool_requests;
 mod transcript;
@@ -418,6 +416,7 @@ use self::transcript::TranscriptState;
 mod turn_lifecycle;
 mod turn_runtime;
 use self::turn_lifecycle::TurnLifecycleState;
+mod usage;
 mod user_messages;
 use self::user_messages::PendingSteer;
 use self::user_messages::PendingSteerCompareKey;
@@ -487,6 +486,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) initial_user_message: Option<UserMessage>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) has_chatgpt_account: bool,
+    pub(crate) has_codex_backend_auth: bool,
     pub(crate) model_catalog: Arc<ModelCatalog>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
@@ -538,6 +538,7 @@ pub(crate) struct ChatWidget {
     /// The currently active collaboration mask, if any.
     active_collaboration_mask: Option<CollaborationModeMask>,
     has_chatgpt_account: bool,
+    has_codex_backend_auth: bool,
     model_catalog: Arc<ModelCatalog>,
     session_telemetry: SessionTelemetry,
     session_header: SessionHeader,
@@ -549,6 +550,14 @@ pub(crate) struct ChatWidget {
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
     next_status_refresh_request_id: u64,
+    refreshing_token_activity_output: Option<tokens::PendingTokenActivityOutput>,
+    completed_token_activity_output: Option<history_cell::CompositeHistoryCell>,
+    next_token_activity_request_id: u64,
+    pending_rate_limit_reset_request_id: Option<u64>,
+    pending_rate_limit_reset_hint_request_id: Option<u64>,
+    pending_rate_limit_reset_hint: Option<PlainHistoryCell>,
+    available_rate_limit_reset_credits: Option<i64>,
+    next_rate_limit_reset_request_id: u64,
     plan_type: Option<PlanType>,
     codex_rate_limit_reached_type: Option<RateLimitReachedType>,
     rate_limit_warnings: RateLimitWarningState,
@@ -560,6 +569,7 @@ pub(crate) struct ChatWidget {
     stream_controller: Option<StreamController>,
     // Stream lifecycle controller for proposed plan output.
     plan_stream_controller: Option<PlanStreamController>,
+    pending_stream_consolidations: usize,
     /// Holds the platform clipboard lease so copied text remains available while supported.
     clipboard_lease: Option<crate::clipboard_copy::ClipboardLease>,
     copy_last_response_binding: Vec<KeyBinding>,
@@ -595,6 +605,9 @@ pub(crate) struct ChatWidget {
     ide_context: IdeContextState,
     plugins_cache: PluginsCacheState,
     plugins_fetch_state: PluginListFetchState,
+    plugin_remote_sections_loading: bool,
+    plugin_remote_sections_loaded: bool,
+    plugin_remote_section_errors: Vec<crate::app_event::PluginRemoteSectionError>,
     plugin_install_apps_needing_auth: Vec<AppSummary>,
     plugin_install_auth_flow: Option<PluginInstallAuthFlowState>,
     plugins_active_tab_id: Option<String>,
@@ -716,7 +729,6 @@ pub(crate) struct ChatWidget {
     current_goal_status_indicator: Option<GoalStatusIndicator>,
     current_goal_status: Option<GoalStatusState>,
     external_editor_state: ExternalEditorState,
-    realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_display: Option<UserMessageDisplay>,
     last_non_retry_error: Option<(String, String)>,
 }
@@ -860,16 +872,16 @@ fn patch_approval_request_from_params(
 
 fn request_permissions_from_params(
     params: codex_app_server_protocol::PermissionsRequestApprovalParams,
-) -> RequestPermissionsEvent {
-    RequestPermissionsEvent {
+) -> std::io::Result<RequestPermissionsEvent> {
+    Ok(RequestPermissionsEvent {
         turn_id: params.turn_id,
         call_id: params.item_id,
         environment_id: params.environment_id,
         started_at_ms: params.started_at_ms,
         reason: params.reason,
-        permissions: params.permissions.into(),
+        permissions: params.permissions.try_into()?,
         cwd: Some(params.cwd),
-    }
+    })
 }
 
 fn token_usage_info_from_app_server(token_usage: ThreadTokenUsage) -> TokenUsageInfo {
@@ -920,15 +932,6 @@ impl ChatWidget {
             .get(&thread_id)
             .cloned()
             .unwrap_or_default()
-    }
-
-    fn realtime_conversation_enabled(&self) -> bool {
-        self.config.features.enabled(Feature::RealtimeConversation)
-            && cfg!(not(target_os = "linux"))
-    }
-
-    fn realtime_audio_device_selection_enabled(&self) -> bool {
-        self.realtime_conversation_enabled()
     }
 
     fn restore_retry_status_header_if_present(&mut self) {
@@ -1182,6 +1185,7 @@ impl ChatWidget {
         if let Some(active) = self.transcript.active_cell.take() {
             self.transcript.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
+            self.request_pending_usage_output_insertion();
         }
     }
 
@@ -1396,6 +1400,7 @@ impl ChatWidget {
                 tool.mark_failed();
             }
             self.add_boxed_history(cell);
+            self.request_pending_usage_output_insertion();
         }
     }
 
@@ -1657,9 +1662,8 @@ impl ChatWidget {
 
     /// Update resize-sensitive chat widget state after the terminal width changes.
     ///
-    /// The app calls this even when terminal resize reflow is disabled so live stream wrapping
-    /// remains consistent with the current viewport. Finalized transcript rebuilding stays gated at
-    /// the app layer.
+    /// Live stream wrapping stays consistent with the current viewport while finalized transcript
+    /// rebuilding runs through app-level resize reflow.
     pub(crate) fn on_terminal_resize(&mut self, width: u16) {
         let had_rendered_width = self.last_rendered_width.get().is_some();
         self.last_rendered_width.set(Some(width as usize));
@@ -1855,7 +1859,6 @@ impl ChatWidget {
     pub(crate) fn sync_plugin_mentions_config(&mut self, config: &Config) {
         self.config.features = config.features.clone();
         self.config.config_layer_stack = config.config_layer_stack.clone();
-        self.config.realtime = config.realtime.clone();
         self.config.memories = config.memories.clone();
         self.config.terminal_resize_reflow = config.terminal_resize_reflow;
         self.sync_mentions_v2_enabled();
@@ -1885,12 +1888,12 @@ impl ChatWidget {
         self.current_rollout_path.clone()
     }
 
-    /// Returns a cache key describing the current in-flight active cell for the transcript overlay.
+    /// Returns a cache key describing the current in-flight cells for the transcript overlay.
     ///
     /// `Ctrl+T` renders committed transcript cells plus a render-only live tail derived from the
-    /// current active cell, and the overlay caches that tail; this key is what it uses to decide
-    /// whether it must recompute. When there is no active cell, this returns `None` so the overlay
-    /// can drop the tail entirely.
+    /// current active, hook, and asynchronous usage cells, and the overlay caches that tail; this
+    /// key is what it uses to decide whether it must recompute. When there are no live cells, this
+    /// returns `None` so the overlay can drop the tail entirely.
     ///
     /// If callers mutate the active cell's transcript output without bumping the revision (or
     /// providing an appropriate animation tick), the overlay will keep showing a stale tail while
@@ -1898,7 +1901,13 @@ impl ChatWidget {
     pub(crate) fn active_cell_transcript_key(&self) -> Option<ActiveCellTranscriptKey> {
         let cell = self.transcript.active_cell.as_ref();
         let hook_cell = self.active_hook_cell.as_ref();
-        if cell.is_none() && hook_cell.is_none() {
+        let token_activity_cell = self.pending_token_activity_output();
+        let rate_limit_reset_hint = self.pending_rate_limit_reset_hint();
+        if cell.is_none()
+            && hook_cell.is_none()
+            && token_activity_cell.is_none()
+            && rate_limit_reset_hint.is_none()
+        {
             return None;
         }
         Some(ActiveCellTranscriptKey {
@@ -1936,6 +1945,20 @@ impl ChatWidget {
             }
             lines.extend(hook_lines);
         }
+        if let Some(token_activity_cell) = self.pending_token_activity_output() {
+            let token_activity_lines = token_activity_cell.transcript_hyperlink_lines(width);
+            if !token_activity_lines.is_empty() && !lines.is_empty() {
+                lines.push(HyperlinkLine::from(""));
+            }
+            lines.extend(token_activity_lines);
+        }
+        if let Some(rate_limit_reset_hint) = self.pending_rate_limit_reset_hint() {
+            let hint_lines = rate_limit_reset_hint.transcript_hyperlink_lines(width);
+            if !hint_lines.is_empty() && !lines.is_empty() {
+                lines.push(HyperlinkLine::from(""));
+            }
+            lines.extend(hint_lines);
+        }
         (!lines.is_empty()).then_some(lines)
     }
 
@@ -1961,23 +1984,6 @@ impl ChatWidget {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-impl ChatWidget {
-    pub(crate) fn update_recording_meter_in_place(&mut self, id: &str, text: &str) -> bool {
-        let updated = self.bottom_pane.update_recording_meter_in_place(id, text);
-        if updated {
-            self.request_redraw();
-        }
-        updated
-    }
-
-    pub(crate) fn remove_recording_meter_placeholder(&mut self, id: &str) {
-        self.bottom_pane.remove_recording_meter_placeholder(id);
-        // Ensure the UI redraws to reflect placeholder removal.
-        self.request_redraw();
-    }
-}
-
 fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
     summary.responses_api_overhead_ms > 0
         || summary.responses_api_inference_time_ms > 0
@@ -1989,7 +1995,6 @@ fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
 
 impl Drop for ChatWidget {
     fn drop(&mut self) {
-        self.reset_realtime_conversation_state();
         self.stop_rate_limit_poller();
     }
 }

@@ -18,6 +18,7 @@ use tracing::warn;
 
 const MARKETPLACE_MANIFEST_RELATIVE_PATHS: &[&str] = &[
     ".agents/plugins/marketplace.json",
+    ".agents/plugins/api_marketplace.json",
     ".claude-plugin/marketplace.json",
 ];
 
@@ -257,6 +258,19 @@ pub fn find_marketplace_manifest_path(root: &Path) -> Option<AbsolutePathBuf> {
         })
 }
 
+fn supported_marketplace_manifest_path(path: &Path) -> Option<AbsolutePathBuf> {
+    if !path.is_file() {
+        return None;
+    }
+    if !MARKETPLACE_MANIFEST_RELATIVE_PATHS
+        .iter()
+        .any(|relative_path| marketplace_root_from_layout(path, relative_path).is_some())
+    {
+        return None;
+    }
+    AbsolutePathBuf::try_from(path.to_path_buf()).ok()
+}
+
 fn invalid_marketplace_layout_error(path: &AbsolutePathBuf) -> MarketplaceError {
     MarketplaceError::InvalidMarketplaceFile {
         path: path.to_path_buf(),
@@ -366,6 +380,12 @@ fn discover_marketplace_paths_from_roots(
     }
 
     for root in additional_roots {
+        if let Some(path) = supported_marketplace_manifest_path(root.as_path())
+            && !paths.contains(&path)
+        {
+            paths.push(path);
+            continue;
+        }
         // Curated marketplaces can now come from an HTTP-downloaded directory that is not a git
         // checkout, so check the root directly before falling back to repo-root discovery.
         if let Some(path) = find_marketplace_manifest_path(root.as_path())

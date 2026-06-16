@@ -411,7 +411,7 @@ async fn configured_pet_load_is_deferred_until_after_construction() {
     let mut cfg = test_config().await;
     cfg.tui_pet = Some(crate::pets::DEFAULT_PET_ID.to_string());
     crate::pets::write_test_pack(&cfg.codex_home);
-    let resolved_model = crate::legacy_core::test_support::get_model_offline(cfg.model.as_deref());
+    let resolved_model = get_model_offline_for_tests(cfg.model.as_deref());
     let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let init = ChatWidgetInit {
         config: cfg.clone(),
@@ -421,6 +421,7 @@ async fn configured_pet_load_is_deferred_until_after_construction() {
         initial_user_message: None,
         enhanced_keys_supported: false,
         has_chatgpt_account: false,
+        has_codex_backend_auth: false,
         model_catalog: test_model_catalog(&cfg),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
@@ -2168,6 +2169,32 @@ async fn interrupted_turn_clears_visible_running_hook() {
         "interrupted_turn_clears_visible_running_hook",
         format!(
             "before interrupt:\n{before_interrupt}after interrupt:\n{}",
+            active_hook_blob(&chat)
+        )
+    );
+}
+
+#[tokio::test]
+async fn completed_turn_clears_visible_running_hook() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    handle_hook_started(
+        &mut chat,
+        hook_started_run(
+            "post-tool-use:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::PostToolUse,
+            /*status_message*/ None,
+        ),
+    );
+    reveal_running_hooks(&mut chat);
+    let before_completion = active_hook_blob(&chat);
+
+    handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
+
+    assert_chatwidget_snapshot!(
+        "completed_turn_clears_visible_running_hook",
+        format!(
+            "before completion:\n{before_completion}after completion:\n{}",
             active_hook_blob(&chat)
         )
     );

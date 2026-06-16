@@ -1,0 +1,5 @@
+---
+source: tui/src/app/history_ui_tests.rs
+expression: render_cell(&cell)
+---
+• Opened this session in Codex Desktop.

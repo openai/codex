@@ -8,21 +8,16 @@ pub(super) use super::*;
 pub(super) use crate::app_command::AppCommand as Op;
 pub(super) use crate::app_event::AppEvent;
 pub(super) use crate::app_event::ExitMode;
-#[cfg(not(target_os = "linux"))]
-pub(super) use crate::app_event::RealtimeAudioDeviceKind;
 pub(super) use crate::app_event_sender::AppEventSender;
 pub(super) use crate::approval_events::ApplyPatchApprovalRequestEvent;
 pub(super) use crate::approval_events::ExecApprovalRequestEvent;
 pub(super) use crate::bottom_pane::LocalImageAttachment;
 pub(super) use crate::bottom_pane::MentionBinding;
 pub(super) use crate::bottom_pane::QueuedInputAction;
-pub(super) use crate::chatwidget::realtime::RealtimeConversationPhase;
 pub(super) use crate::diff_model::FileChange;
 pub(super) use crate::history_cell::UserHistoryCell;
 pub(super) use crate::legacy_core::config::Config;
 pub(super) use crate::legacy_core::config::ConfigBuilder;
-pub(super) use crate::legacy_core::config::Constrained;
-pub(super) use crate::legacy_core::config::ConstraintError;
 pub(super) use crate::model_catalog::ModelCatalog;
 pub(super) use crate::test_backend::VT100Backend;
 pub(super) use crate::test_support::PathBufExt;
@@ -106,8 +101,6 @@ pub(super) use codex_app_server_protocol::ServerNotification;
 pub(super) use codex_app_server_protocol::SkillSummary;
 pub(super) use codex_app_server_protocol::ThreadClosedNotification;
 pub(super) use codex_app_server_protocol::ThreadItem as AppServerThreadItem;
-pub(super) use codex_app_server_protocol::ThreadRealtimeClosedNotification;
-pub(super) use codex_app_server_protocol::ThreadRealtimeErrorNotification;
 pub(super) use codex_app_server_protocol::ToolRequestUserInputOption;
 pub(super) use codex_app_server_protocol::ToolRequestUserInputParams;
 pub(super) use codex_app_server_protocol::ToolRequestUserInputQuestion;
@@ -120,6 +113,8 @@ pub(super) use codex_app_server_protocol::UserInput;
 pub(super) use codex_app_server_protocol::UserInput as AppServerUserInput;
 pub(super) use codex_app_server_protocol::WarningNotification;
 pub(super) use codex_config::ConfigLayerStack;
+pub(super) use codex_config::Constrained;
+pub(super) use codex_config::ConstraintError;
 pub(super) use codex_config::RequirementSource;
 pub(super) use codex_config::types::ApprovalsReviewer;
 pub(super) use codex_config::types::Notifications;
@@ -129,6 +124,8 @@ pub(super) use codex_core_skills::model::SkillMetadata;
 pub(super) use codex_features::FEATURES;
 pub(super) use codex_features::Feature;
 pub(super) use codex_git_utils::CommitLogEntry;
+pub(super) use codex_models_manager::test_support::construct_model_info_offline_for_tests;
+pub(super) use codex_models_manager::test_support::get_model_offline_for_tests;
 pub(super) use codex_otel::RuntimeMetricsSummary;
 pub(super) use codex_otel::SessionTelemetry;
 pub(super) use codex_protocol::ThreadId;
@@ -167,6 +164,7 @@ pub(super) use codex_terminal_detection::TerminalInfo;
 pub(super) use codex_terminal_detection::TerminalName;
 pub(super) use codex_utils_absolute_path::AbsolutePathBuf;
 pub(super) use codex_utils_approval_presets::builtin_approval_presets;
+pub(super) use codex_utils_path_uri::ApiPathString;
 pub(super) use crossterm::event::KeyCode;
 pub(super) use crossterm::event::KeyEvent;
 pub(super) use crossterm::event::KeyModifiers;
@@ -216,14 +214,32 @@ macro_rules! assert_chatwidget_snapshot {
     }};
 }
 
+fn next_goal_draft(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    expected_thread_id: ThreadId,
+) -> crate::goal_files::GoalDraft {
+    loop {
+        let event = rx.try_recv().expect("expected goal draft event");
+        if let AppEvent::SetThreadGoalDraft {
+            thread_id, draft, ..
+        } = event
+        {
+            assert_eq!(thread_id, expected_thread_id);
+            return draft;
+        }
+    }
+}
+
 mod app_server;
 mod approval_requests;
 mod composer_submission;
+#[path = "tests/config_errors_tests.rs"]
+mod config_errors;
 mod exec_flow;
 mod goal_menu;
 mod goal_validation;
 mod guardian;
-mod helpers;
+pub(crate) mod helpers;
 mod history_replay;
 mod mcp_startup;
 mod permissions;
@@ -236,6 +252,7 @@ mod status_and_layout;
 mod status_command_tests;
 mod status_surface_previews;
 mod terminal_title;
+mod usage;
 
 pub(crate) use helpers::make_chatwidget_manual_with_sender;
 pub(crate) use helpers::set_chatgpt_auth;

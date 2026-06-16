@@ -1,5 +1,4 @@
-#![allow(clippy::expect_used)]
-
+use core_test_support::test_codex::local_selections;
 use std::fs;
 use std::sync::Arc;
 
@@ -11,6 +10,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use core_test_support::PathBufExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
@@ -50,7 +50,7 @@ fn user_instructions_wrapper_count(request: &ResponsesRequest) -> usize {
     request
         .message_input_texts("user")
         .iter()
-        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
+        .filter(|text| text.starts_with("# AGENTS.md instructions"))
         .count()
 }
 
@@ -112,7 +112,8 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
     let test = builder.build(&server).await?;
     let preturn_context_diff_cwd = test.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
     fs::create_dir_all(&preturn_context_diff_cwd)?;
-    let first_turn_cwd = test.cwd_path().to_path_buf();
+    let preturn_context_diff_cwd = preturn_context_diff_cwd.abs();
+    let first_turn_cwd = test.config.cwd.clone();
     let (first_sandbox_policy, first_permission_profile) =
         turn_permission_fields(PermissionProfile::read_only(), first_turn_cwd.as_path());
 
@@ -122,12 +123,11 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
                 text: "first turn".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(first_turn_cwd),
+                environments: Some(local_selections(first_turn_cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(first_sandbox_policy),
                 permission_profile: first_permission_profile,
@@ -135,7 +135,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
                         model: test.session_configured.model.clone(),
-                        reasoning_effort: test.config.model_reasoning_effort,
+                        reasoning_effort: test.config.model_reasoning_effort.clone(),
                         developer_instructions: None,
                     },
                 }),
@@ -158,12 +158,11 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
                 text: "second turn with context updates".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(preturn_context_diff_cwd),
+                environments: Some(local_selections(preturn_context_diff_cwd)),
                 approval_policy: Some(AskForApproval::OnRequest),
                 sandbox_policy: Some(second_sandbox_policy),
                 permission_profile: second_permission_profile,
@@ -172,7 +171,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
                         model: test.session_configured.model.clone(),
-                        reasoning_effort: test.config.model_reasoning_effort,
+                        reasoning_effort: test.config.model_reasoning_effort.clone(),
                         developer_instructions: None,
                     },
                 }),
@@ -239,6 +238,8 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
         cwd_two.join("AGENTS.md"),
         "# AGENTS two\n\n<INSTRUCTIONS>\nTurn two agents instructions.\n</INSTRUCTIONS>\n",
     )?;
+    let cwd_one = cwd_one.abs();
+    let cwd_two = cwd_two.abs();
     let (first_sandbox_policy, first_permission_profile) =
         turn_permission_fields(PermissionProfile::read_only(), cwd_one.as_path());
 
@@ -248,12 +249,11 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
                 text: "first turn in agents_one".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd_one.clone()),
+                environments: Some(local_selections(cwd_one.clone())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(first_sandbox_policy),
                 permission_profile: first_permission_profile,
@@ -261,7 +261,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
                         model: test.session_configured.model.clone(),
-                        reasoning_effort: test.config.model_reasoning_effort,
+                        reasoning_effort: test.config.model_reasoning_effort.clone(),
                         developer_instructions: None,
                     },
                 }),
@@ -282,12 +282,11 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
                 text: "second turn in agents_two".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd_two),
+                environments: Some(local_selections(cwd_two)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(second_sandbox_policy),
                 permission_profile: second_permission_profile,
@@ -295,7 +294,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
                         model: test.session_configured.model.clone(),
-                        reasoning_effort: test.config.model_reasoning_effort,
+                        reasoning_effort: test.config.model_reasoning_effort.clone(),
                         developer_instructions: None,
                     },
                 }),
@@ -362,7 +361,6 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
     .await;
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "seed resume history".into(),
                 text_elements: Vec::new(),
@@ -397,6 +395,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
     let resume_override_cwd = resumed.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
     fs::create_dir_all(&resume_override_cwd)?;
+    let resume_override_cwd = resume_override_cwd.abs();
     let (sandbox_policy, permission_profile) = turn_permission_fields(
         PermissionProfile::read_only(),
         resume_override_cwd.as_path(),
@@ -408,12 +407,11 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
                 text: "resume and change personality".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(resume_override_cwd),
+                environments: Some(local_selections(resume_override_cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -422,7 +420,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
                         model: resumed.session_configured.model.clone(),
-                        reasoning_effort: resumed.config.model_reasoning_effort,
+                        reasoning_effort: resumed.config.model_reasoning_effort.clone(),
                         developer_instructions: None,
                     },
                 }),
@@ -478,7 +476,6 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     .await;
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "seed resume history".into(),
                 text_elements: Vec::new(),
@@ -508,10 +505,11 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
     let resume_override_cwd = resumed.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
     fs::create_dir_all(&resume_override_cwd)?;
+    let resume_override_cwd = resume_override_cwd.abs();
     core_test_support::submit_thread_settings(
         &resumed.codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(resume_override_cwd),
+            environments: Some(local_selections(resume_override_cwd)),
             model: Some("gpt-5.2".to_string()),
             ..Default::default()
         },
@@ -520,7 +518,6 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     resumed
         .codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "first resumed turn after model override".into(),
                 text_elements: Vec::new(),

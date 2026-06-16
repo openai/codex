@@ -85,6 +85,12 @@
             "null"
           ]
         },
+        "allowRemoteControl": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "allowedApprovalPolicies": {
           "items": {
             "$ref": "#/definitions/AskForApproval"
@@ -94,12 +100,12 @@
             "null"
           ]
         },
-        "allowedPermissions": {
-          "items": {
-            "type": "string"
+        "allowedPermissionProfiles": {
+          "additionalProperties": {
+            "type": "boolean"
           },
           "type": [
-            "array",
+            "object",
             "null"
           ]
         },
@@ -138,6 +144,12 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "defaultPermissions": {
+          "type": [
+            "string",
+            "null"
           ]
         },
         "enforceResidency": {

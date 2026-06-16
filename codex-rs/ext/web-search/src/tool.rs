@@ -26,7 +26,7 @@ use http::HeaderMap;
 use url::Url;
 
 use crate::history::recent_input;
-use crate::output::EncryptedSearchOutput;
+use crate::output::SearchOutput;
 use crate::schema::commands_schema;
 
 pub(crate) const WEB_NAMESPACE: &str = "web";
@@ -39,7 +39,6 @@ pub(crate) struct WebSearchTool {
     pub(crate) settings: SearchSettings,
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolCall> for WebSearchTool {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced(WEB_NAMESPACE, RUN_TOOL_NAME)
@@ -67,14 +66,20 @@ impl ToolExecutor<ToolCall> for WebSearchTool {
     }
 
     fn exposure(&self) -> ToolExposure {
-        ToolExposure::DirectModelOnly
+        ToolExposure::Direct
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
         true
     }
 
-    async fn handle(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
+    fn handle(&self, call: ToolCall) -> codex_extension_api::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(call))
+    }
+}
+
+impl WebSearchTool {
+    async fn handle_call(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let commands = parse_commands(&call)?;
         let command_action = command_action(&commands);
         let provider = self
@@ -114,9 +119,7 @@ impl ToolExecutor<ToolCall> for WebSearchTool {
             .emit_completed(web_search_item(&call.call_id, command_action))
             .await;
 
-        Ok(Box::new(EncryptedSearchOutput::new(
-            response.encrypted_output,
-        )))
+        Ok(Box::new(SearchOutput::new(response.output)))
     }
 }
 

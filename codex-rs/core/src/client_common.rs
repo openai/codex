@@ -2,6 +2,8 @@ pub use codex_api::ResponseEvent;
 use codex_config::types::Personality;
 use codex_protocol::error::Result;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_tools::ToolSpec;
 use futures::Stream;
@@ -52,8 +54,54 @@ impl Default for Prompt {
 }
 
 impl Prompt {
-    pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
-        self.input.clone()
+    pub(crate) fn get_formatted_input_for_request(
+        &self,
+        use_responses_lite: bool,
+    ) -> Vec<ResponseItem> {
+        let mut input = self.input.clone();
+        if use_responses_lite {
+            strip_image_details(&mut input);
+        }
+        input
+    }
+}
+
+fn strip_image_details(items: &mut [ResponseItem]) {
+    for item in items {
+        match item {
+            ResponseItem::Message { content, .. } => {
+                for content_item in content {
+                    if let ContentItem::InputImage { detail, .. } = content_item {
+                        *detail = None;
+                    }
+                }
+            }
+            ResponseItem::FunctionCallOutput { output, .. }
+            | ResponseItem::CustomToolCallOutput { output, .. } => {
+                if let Some(content) = output.content_items_mut() {
+                    for content_item in content {
+                        if let FunctionCallOutputContentItem::InputImage { detail, .. } =
+                            content_item
+                        {
+                            *detail = None;
+                        }
+                    }
+                }
+            }
+            ResponseItem::Reasoning { .. }
+            | ResponseItem::AgentMessage { .. }
+            | ResponseItem::LocalShellCall { .. }
+            | ResponseItem::FunctionCall { .. }
+            | ResponseItem::ToolSearchCall { .. }
+            | ResponseItem::CustomToolCall { .. }
+            | ResponseItem::ToolSearchOutput { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::ImageGenerationCall { .. }
+            | ResponseItem::Compaction { .. }
+            | ResponseItem::CompactionTrigger { .. }
+            | ResponseItem::ContextCompaction { .. }
+            | ResponseItem::Other => {}
+        }
     }
 }
 

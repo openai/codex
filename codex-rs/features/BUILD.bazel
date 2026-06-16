@@ -2,13 +2,13 @@ load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
     name = "features",
-    crate_name = "codex_features",
     compile_data = glob(
         include = ["**"],
+        allow_empty = True,
         exclude = [
             "BUILD.bazel",
             "Cargo.toml",
         ],
-        allow_empty = True,
     ),
+    crate_name = "codex_features",
 )

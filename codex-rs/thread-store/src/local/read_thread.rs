@@ -325,6 +325,7 @@ async fn stored_thread_from_sqlite_metadata(
         permission_profile_from_metadata_value(&metadata.sandbox_policy, metadata.cwd.as_path());
     StoredThread {
         thread_id: metadata.id,
+        extra_config: None,
         rollout_path: Some(rollout_path),
         forked_from_id,
         parent_thread_id,
@@ -390,6 +391,7 @@ fn stored_thread_from_meta_line(
     let rollout_path = codex_rollout::plain_rollout_path(path.as_path());
     StoredThread {
         thread_id: meta_line.meta.id,
+        extra_config: None,
         rollout_path: Some(rollout_path),
         forked_from_id: meta_line.meta.forked_from_id,
         parent_thread_id: meta_line.meta.parent_thread_id,
@@ -729,8 +731,9 @@ mod tests {
         builder.model_provider = Some(config.default_model_provider_id.clone());
         builder.cwd = home.path().to_path_buf();
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
+        let permission_profile: PermissionProfile = PermissionProfile::Disabled;
         metadata.sandbox_policy =
-            serde_json::to_string(&PermissionProfile::Disabled).expect("serialize profile");
+            serde_json::to_string(&permission_profile).expect("serialize profile");
         runtime
             .upsert_thread(&metadata)
             .await

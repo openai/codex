@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use anyhow::Error;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
@@ -48,11 +49,11 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
             .supported_reasoning_efforts
             .iter()
             .map(|preset| ReasoningEffortOption {
-                reasoning_effort: preset.effort,
+                reasoning_effort: preset.effort.clone(),
                 description: preset.description.clone(),
             })
             .collect(),
-        default_reasoning_effort: preset.default_reasoning_effort,
+        default_reasoning_effort: preset.default_reasoning_effort.clone(),
         input_modalities: preset.input_modalities.clone(),
         // `write_models_cache()` round-trips through a simplified ModelInfo fixture that does not
         // preserve personality placeholders in base instructions, so app-server list results from
@@ -164,10 +165,11 @@ async fn list_models_uses_chatgpt_remote_catalog_as_source_of_truth() -> Result<
         "slug": "chatgpt-remote-only",
         "display_name": "ChatGPT Remote Only",
         "description": "Remote-only model for app-server model/list coverage",
-        "default_reasoning_level": "medium",
+        "default_reasoning_level": "max",
         "supported_reasoning_levels": [
-            {"effort": "low", "description": "low"},
-            {"effort": "medium", "description": "medium"}
+            {"effort": "max", "description": "Maximum"},
+            {"effort": "low", "description": "Low"},
+            {"effort": "focused", "description": "Focused"}
         ],
         "shell_type": "shell_command",
         "visibility": "list",
@@ -238,10 +240,24 @@ openai_base_url = "{server_uri}/v1"
     } = to_response::<ModelListResponse>(response)?;
     let mut expected_presets: Vec<ModelPreset> = vec![remote_model.into()];
     ModelPreset::mark_default_by_picker_visibility(&mut expected_presets);
-    let expected_items = expected_presets
+    let mut expected_items = expected_presets
         .iter()
         .map(model_from_preset)
         .collect::<Vec<_>>();
+    expected_items[0].supported_reasoning_efforts = vec![
+        ReasoningEffortOption {
+            reasoning_effort: "max".parse().map_err(Error::msg)?,
+            description: "Maximum".to_string(),
+        },
+        ReasoningEffortOption {
+            reasoning_effort: "low".parse().map_err(Error::msg)?,
+            description: "Low".to_string(),
+        },
+        ReasoningEffortOption {
+            reasoning_effort: "focused".parse().map_err(Error::msg)?,
+            description: "Focused".to_string(),
+        },
+    ];
 
     assert_eq!(items, expected_items);
     assert!(next_cursor.is_none());
