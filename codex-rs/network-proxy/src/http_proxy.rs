@@ -392,7 +392,16 @@ async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
     };
 
     let proxy = if allow_upstream_proxy {
-        proxy_for_connect()
+        let respect_system_proxy = match app_state.respect_system_proxy().await {
+            Ok(respect_system_proxy) => respect_system_proxy,
+            Err(err) => {
+                error!("failed to read system proxy setting: {err}");
+                return Ok(());
+            }
+        };
+        let target_host = target.host.to_string();
+        let target_url = https_url_for_host_port(&target_host, target.port);
+        proxy_for_connect(&target_url, respect_system_proxy)
     } else {
         None
     };
@@ -797,7 +806,19 @@ async fn http_plain_proxy(
         Err(resp) => return Ok(resp),
     };
     let client = if allow_upstream_proxy {
-        UpstreamClient::from_env_proxy(app_state.clone())
+        let respect_system_proxy = match app_state
+            .respect_system_proxy()
+            .await
+            .map_err(|err| internal_error("failed to read system proxy setting", err))
+        {
+            Ok(respect_system_proxy) => respect_system_proxy,
+            Err(resp) => return Ok(resp),
+        };
+        if respect_system_proxy {
+            UpstreamClient::from_system_proxy(app_state.clone())
+        } else {
+            UpstreamClient::from_env_proxy(app_state.clone())
+        }
     } else {
         UpstreamClient::direct(app_state.clone())
     };
@@ -846,6 +867,15 @@ fn client_addr<T: ExtensionsRef>(input: &T) -> Option<String> {
         .extensions()
         .get::<SocketInfo>()
         .map(|info| info.peer_addr().to_string())
+}
+
+fn https_url_for_host_port(host: &str, port: u16) -> String {
+    let host = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+    format!("https://{host}:{port}/")
 }
 
 fn validate_absolute_form_host_header(

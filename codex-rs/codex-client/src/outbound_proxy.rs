@@ -84,6 +84,14 @@ impl fmt::Display for RouteFailureClass {
     }
 }
 
+/// URL-specific system proxy decision from the platform resolver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SystemProxyRouteDecision {
+    Direct,
+    Proxy { url: String },
+    Unavailable { failure: RouteFailureClass },
+}
+
 /// Marker enabling fixed system/PAC/WPAD, environment, then direct routing.
 /// Resolved endpoints and platform details remain internal to the client builder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,6 +247,27 @@ enum SystemProxyDecision {
     Direct,
     Proxy { url: String },
     Unavailable { failure: RouteFailureClass },
+}
+
+impl From<SystemProxyDecision> for SystemProxyRouteDecision {
+    fn from(decision: SystemProxyDecision) -> Self {
+        match decision {
+            SystemProxyDecision::Direct => Self::Direct,
+            SystemProxyDecision::Proxy { url } => Self::Proxy { url },
+            SystemProxyDecision::Unavailable { failure } => Self::Unavailable { failure },
+        }
+    }
+}
+
+/// Resolves system proxy/PAC/WPAD routing for a single outbound URL.
+pub fn resolve_system_proxy_for_url(request_url: &str) -> SystemProxyRouteDecision {
+    let Some(origin) = RequestOrigin::parse(request_url) else {
+        return SystemProxyRouteDecision::Unavailable {
+            failure: RouteFailureClass::InvalidProxyConfig,
+        };
+    };
+
+    resolve_system_proxy(request_url, &origin).into()
 }
 
 fn resolve_system_proxy(request_url: &str, origin: &RequestOrigin) -> SystemProxyDecision {

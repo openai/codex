@@ -546,6 +546,12 @@ impl NetworkProxyState {
         Ok(guard.config.network.allow_upstream_proxy)
     }
 
+    pub async fn respect_system_proxy(&self) -> Result<bool> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(guard.config.network.respect_system_proxy)
+    }
+
     pub async fn allow_local_binding(&self) -> Result<bool> {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;

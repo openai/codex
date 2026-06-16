@@ -129,6 +129,8 @@ pub struct NetworkProxySettings {
     pub enable_socks5_udp: bool,
     pub allow_upstream_proxy: bool,
     #[serde(default)]
+    pub respect_system_proxy: bool,
+    #[serde(default)]
     pub dangerously_allow_non_loopback_proxy: bool,
     #[serde(default)]
     pub dangerously_allow_all_unix_sockets: bool,
@@ -154,6 +156,7 @@ impl Default for NetworkProxySettings {
             socks_url: default_socks_url(),
             enable_socks5_udp: true,
             allow_upstream_proxy: true,
+            respect_system_proxy: false,
             dangerously_allow_non_loopback_proxy: false,
             dangerously_allow_all_unix_sockets: false,
             mode: NetworkMode::default(),
@@ -586,6 +589,7 @@ mod tests {
                 socks_url: "http://127.0.0.1:8081".to_string(),
                 enable_socks5_udp: true,
                 allow_upstream_proxy: true,
+                respect_system_proxy: false,
                 dangerously_allow_non_loopback_proxy: false,
                 dangerously_allow_all_unix_sockets: false,
                 mode: NetworkMode::Full,
@@ -649,6 +653,7 @@ mod tests {
                     "socks_url": "http://127.0.0.1:8081",
                     "enable_socks5_udp": true,
                     "allow_upstream_proxy": true,
+                    "respect_system_proxy": false,
                     "dangerously_allow_non_loopback_proxy": false,
                     "dangerously_allow_all_unix_sockets": false,
                     "mode": "full",

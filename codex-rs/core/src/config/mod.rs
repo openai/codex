@@ -3329,6 +3329,9 @@ impl Config {
                     network_proxy,
                 );
             }
+            configured_network_proxy_config
+                .network
+                .respect_system_proxy = respect_system_proxy;
             configured_network_proxy_config.network.enabled = true;
         }
         let approval_policy_was_explicit =
@@ -4089,6 +4092,8 @@ impl Config {
                         network_proxy,
                     );
                 }
+                configured_network_proxy_config.network.respect_system_proxy =
+                    self.respect_system_proxy;
                 configured_network_proxy_config.network.enabled = true;
             }
             configured_network_proxy_config
