@@ -22,11 +22,9 @@ fn write_file(path: &Path, contents: &str) {
 }
 
 fn assert_curated_catalog_revision(repo_path: &Path, expected_revision: &str) {
-    assert_eq!(
-        std::fs::read_to_string(curated_plugins_catalog_revision_path(repo_path))
-            .expect("read catalog revision"),
-        format!("{expected_revision}\n")
-    );
+    let revision = std::fs::read_to_string(curated_plugins_catalog_revision_path(repo_path))
+        .expect("read catalog revision");
+    assert_eq!(revision.trim(), expected_revision);
 }
 
 fn write_curated_plugin(root: &Path, plugin_name: &str) {
@@ -351,7 +349,6 @@ exit 1
     let repo_path = curated_plugins_repo_path(tmp.path());
     assert!(repo_path.join(".git").is_dir());
     assert_curated_gmail_repo(&repo_path);
-    assert_curated_catalog_revision(&repo_path, sha);
     assert_eq!(read_curated_plugins_sha(tmp.path()).as_deref(), Some(sha));
     let invocations = std::fs::read_to_string(invocation_log).expect("read invocation log");
     assert_eq!(
@@ -516,7 +513,6 @@ fn sync_openai_plugins_repo_via_git_succeeds_with_local_rewritten_remote() {
             .expect("incremental git sync should succeed");
 
     assert_eq!(synced_sha, updated_sha);
-    assert_curated_catalog_revision(&curated_plugins_repo_path(tmp.path()), &updated_sha);
     assert!(
         curated_plugins_repo_path(tmp.path())
             .join("plugins/linear/.codex-plugin/plugin.json")

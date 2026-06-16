@@ -2,7 +2,6 @@ use anyhow::Context;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_login::CodexAuth;
-use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use std::collections::HashSet;
 use tracing::warn;
@@ -12,7 +11,10 @@ use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::PluginsConfigInput;
 use crate::PluginsManager;
 use crate::marketplace::MarketplacePluginInstallPolicy;
+use crate::plugin_catalog::PluginCatalogCapabilityError;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
+
+const MAX_PLUGIN_CATALOG_SNAPSHOT_ATTEMPTS: usize = 2;
 
 const TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST: &[&str] = &[
     "github@openai-curated",
@@ -76,17 +78,7 @@ impl PluginsManager {
             return Ok(Vec::new());
         }
 
-        let use_remote_global_catalog =
-            input.plugins.remote_plugin_enabled && auth.is_some_and(CodexAuth::uses_codex_backend);
-        let marketplaces = self
-            .list_marketplaces_for_config(
-                &input.plugins,
-                &[],
-                /*include_openai_curated*/ !use_remote_global_catalog,
-            )
-            .context("failed to list plugin marketplaces for tool suggestions")?
-            .marketplaces;
-        let remote_installed_marketplaces = if use_remote_global_catalog {
+        let remote_installed_marketplaces = if input.plugins.remote_plugin_enabled {
             self.build_remote_installed_plugin_marketplaces_from_cache(&[
                 REMOTE_GLOBAL_MARKETPLACE_NAME,
             ])
@@ -94,53 +86,71 @@ impl PluginsManager {
             None
         };
 
-        let mut discoverable_plugins = Vec::<ToolSuggestDiscoverablePlugin>::new();
-        for marketplace in marketplaces {
-            let marketplace_name = marketplace.name;
-
-            for plugin in marketplace.plugins {
-                let is_configured_plugin = input.configured_plugin_ids.contains(plugin.id.as_str());
-                let is_fallback_plugin = is_tool_suggest_fallback_plugin(&plugin.id);
-                if plugin.installed
-                    || plugin.policy.installation == MarketplacePluginInstallPolicy::NotAvailable
-                    || input.disabled_plugin_ids.contains(plugin.id.as_str())
-                    || (!is_configured_plugin && !is_fallback_plugin)
-                {
-                    continue;
-                }
-
-                let plugin_id = plugin.id.clone();
-
-                match self
-                    .read_plugin_detail_for_marketplace_plugin(
-                        &input.plugins,
-                        &marketplace_name,
-                        plugin,
-                    )
-                    .await
-                {
-                    Ok(plugin) => {
-                        let plugin: PluginCapabilitySummary = plugin.into();
-                        discoverable_plugins.push(ToolSuggestDiscoverablePlugin {
-                            id: plugin.config_name,
-                            remote_plugin_id: None,
-                            name: plugin.display_name,
-                            description: plugin.description,
-                            has_skills: plugin.has_skills,
-                            mcp_server_names: plugin.mcp_server_names,
-                            app_connector_ids: plugin
-                                .app_connector_ids
-                                .into_iter()
-                                .map(|connector_id| connector_id.0)
-                                .collect(),
-                        });
+        let auth_mode = self.auth_mode();
+        let mut snapshot_attempt = 0;
+        let mut discoverable_plugins = 'snapshot: loop {
+            snapshot_attempt += 1;
+            let (marketplace_outcome, plugin_catalog_snapshot) = self
+                .list_marketplaces_with_plugin_catalog_for_config(
+                    &input.plugins,
+                    &[],
+                    /*include_openai_curated*/ true,
+                )
+                .context("failed to list plugin marketplaces for tool suggestions")?;
+            let mut discoverable_plugins = Vec::<ToolSuggestDiscoverablePlugin>::new();
+            for marketplace in marketplace_outcome.marketplaces {
+                for plugin in marketplace.plugins {
+                    let is_configured_plugin =
+                        input.configured_plugin_ids.contains(plugin.id.as_str());
+                    let is_fallback_plugin = is_tool_suggest_fallback_plugin(&plugin.id);
+                    if plugin.installed
+                        || plugin.policy.installation
+                            == MarketplacePluginInstallPolicy::NotAvailable
+                        || input.disabled_plugin_ids.contains(plugin.id.as_str())
+                        || (!is_configured_plugin && !is_fallback_plugin)
+                    {
+                        continue;
                     }
-                    Err(err) => {
-                        warn!("failed to load discoverable plugin suggestion {plugin_id}: {err:#}")
+
+                    let plugin_id = plugin.id.clone();
+                    match plugin_catalog_snapshot.capability_facts(&plugin.id).await {
+                        Ok(Some(facts)) => {
+                            let plugin = facts.into_runtime_summary(/*auth_mode*/ auth_mode);
+                            discoverable_plugins.push(ToolSuggestDiscoverablePlugin {
+                                id: plugin.config_name,
+                                remote_plugin_id: None,
+                                name: plugin.display_name,
+                                description: plugin.description,
+                                has_skills: plugin.has_skills,
+                                mcp_server_names: plugin.mcp_server_names,
+                                app_connector_ids: plugin
+                                    .app_connector_ids
+                                    .into_iter()
+                                    .map(|connector_id| connector_id.0)
+                                    .collect(),
+                            });
+                        }
+                        Ok(None) => warn!(
+                            "plugin catalog snapshot is missing discoverable plugin {plugin_id}"
+                        ),
+                        Err(PluginCatalogCapabilityError::SourceChanged)
+                            if snapshot_attempt < MAX_PLUGIN_CATALOG_SNAPSHOT_ATTEMPTS =>
+                        {
+                            continue 'snapshot;
+                        }
+                        Err(PluginCatalogCapabilityError::SourceChanged) => {
+                            return Err(anyhow::anyhow!(
+                                "plugin catalog source kept changing while loading tool suggestions"
+                            ));
+                        }
+                        Err(err) => warn!(
+                            "failed to load discoverable plugin suggestion {plugin_id}: {err:#}"
+                        ),
                     }
                 }
             }
-        }
+            break discoverable_plugins;
+        };
         if let Some(remote_installed_marketplaces) = remote_installed_marketplaces.as_ref() {
             let mut installed_app_connector_ids = self
                 .plugins_for_config(&input.plugins)

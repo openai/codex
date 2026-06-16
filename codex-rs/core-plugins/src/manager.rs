@@ -417,7 +417,7 @@ impl PluginsManager {
             non_curated_cache_refresh_state: RwLock::new(NonCuratedCacheRefreshState::default()),
             loaded_plugins_cache: RwLock::new(LoadedPluginsCache::default()),
             loaded_plugins_load_semaphore: Semaphore::new(/*permits*/ 1),
-            plugin_catalog: PluginCatalog::default(),
+            plugin_catalog: PluginCatalog::new(restriction_product),
             remote_installed_plugins_cache: RwLock::new(None),
             remote_installed_plugins_cache_refresh_state: RwLock::new(
                 RemoteInstalledPluginsCacheRefreshState::default(),
@@ -1351,14 +1351,34 @@ impl PluginsManager {
         additional_roots: &[AbsolutePathBuf],
         include_openai_curated: bool,
     ) -> Result<ConfiguredMarketplaceListOutcome, MarketplaceError> {
+        self.list_marketplaces_with_plugin_catalog_for_config(
+            config,
+            additional_roots,
+            include_openai_curated,
+        )
+        .map(|(outcome, _snapshot)| outcome)
+    }
+
+    pub(crate) fn list_marketplaces_with_plugin_catalog_for_config(
+        &self,
+        config: &PluginsConfigInput,
+        additional_roots: &[AbsolutePathBuf],
+        include_openai_curated: bool,
+    ) -> Result<(ConfiguredMarketplaceListOutcome, PluginCatalogSnapshot), MarketplaceError> {
         if !config.plugins_enabled {
-            return Ok(ConfiguredMarketplaceListOutcome::default());
+            return Ok((
+                ConfiguredMarketplaceListOutcome::default(),
+                PluginCatalogSnapshot::default(),
+            ));
         }
 
+        let snapshot = self.plugin_catalog_snapshot_for_config(
+            config,
+            additional_roots,
+            include_openai_curated,
+        )?;
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
-        let marketplace_outcome = self
-            .plugin_catalog_snapshot_for_config(config, additional_roots, include_openai_curated)?
-            .marketplace_outcome();
+        let marketplace_outcome = snapshot.marketplace_outcome();
         let mut seen_plugin_keys = HashSet::new();
         let marketplaces = marketplace_outcome
             .marketplaces
@@ -1430,10 +1450,13 @@ impl PluginsManager {
             })
             .collect();
 
-        Ok(ConfiguredMarketplaceListOutcome {
-            marketplaces,
-            errors: marketplace_outcome.errors,
-        })
+        Ok((
+            ConfiguredMarketplaceListOutcome {
+                marketplaces,
+                errors: marketplace_outcome.errors,
+            },
+            snapshot,
+        ))
     }
 
     pub fn discover_marketplaces_for_config(
@@ -1669,35 +1692,19 @@ impl PluginsManager {
         additional_roots: &[AbsolutePathBuf],
         include_openai_curated: bool,
     ) -> Result<PluginCatalogSnapshot, MarketplaceError> {
-        self.plugin_catalog.snapshot(&self.plugin_catalog_sources(
-            config,
-            additional_roots,
-            include_openai_curated,
-        ))
-    }
-
-    fn plugin_catalog_sources(
-        &self,
-        config: &PluginsConfigInput,
-        additional_roots: &[AbsolutePathBuf],
-        include_openai_curated: bool,
-    ) -> Vec<PluginCatalogSource> {
         let mut sources = Vec::new();
         if let Some(home) = home_dir().and_then(|home| AbsolutePathBuf::try_from(home).ok()) {
             sources.push(PluginCatalogSource::home(home));
         }
-        let roots = self.marketplace_roots_with_revisions(
-            config,
-            additional_roots,
-            include_openai_curated,
-        );
+        let roots =
+            self.marketplace_roots_with_revisions(config, additional_roots, include_openai_curated);
         sources.extend(roots.into_iter().map(|(root, revision)| {
             PluginCatalogSource::filesystem_root(
                 root,
                 PluginCatalogLoadMode::for_revision(revision),
             )
         }));
-        sources
+        self.plugin_catalog.snapshot(&sources)
     }
 
     pub fn maybe_start_plugin_startup_tasks_for_config(
@@ -2287,7 +2294,9 @@ impl PluginsManager {
     }
 }
 
-fn remote_plugin_install_required_description(source: &MarketplacePluginSource) -> String {
+pub(crate) fn remote_plugin_install_required_description(
+    source: &MarketplacePluginSource,
+) -> String {
     let source_description = match source {
         MarketplacePluginSource::Git {
             url,

@@ -208,7 +208,7 @@ async fn includes_openai_curated_when_remote_enabled_without_auth() {
 }
 
 #[tokio::test]
-async fn deduplicates_configured_marketplace_plugin() {
+async fn deduplicates_and_reprojects_cached_configured_marketplace_plugin() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let plugin_name = "sample";
     let marketplace_name = OPENAI_BUNDLED_MARKETPLACE_NAME;
@@ -229,6 +229,12 @@ async fn deduplicates_configured_marketplace_plugin() {
         ),
     );
     write_curated_plugin(&marketplace_root, plugin_name);
+    write_plugin_app(
+        &marketplace_root,
+        plugin_name,
+        "sample-docs",
+        "connector_sample",
+    );
     write_file(
         &codex_home.path().join(CONFIG_TOML_FILE),
         &format!(
@@ -241,18 +247,55 @@ source = "/tmp/{marketplace_name}"
 "#
         ),
     );
+    write_file(
+        &marketplace_root.join(".codex-marketplace-install.json"),
+        &json!({
+            "source_type": "git",
+            "source": format!("/tmp/{marketplace_name}"),
+            "ref_name": null,
+            "sparse_paths": [],
+            "revision": "revision"
+        })
+        .to_string(),
+    );
 
     let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
-    let discoverable_plugins = list_discoverable_plugins(
+    assert!(plugins_manager.set_auth_mode(Some(AuthMode::Chatgpt)));
+    let chatgpt_projection = list_discoverable_plugins(
+        &plugins_manager,
+        discovery_input(plugins.clone(), &[plugin_id.as_str()], &[], &[]),
+        /*auth*/ None,
+    )
+    .await;
+    let expected = ToolSuggestDiscoverablePlugin {
+        id: plugin_id.clone(),
+        remote_plugin_id: None,
+        name: "sample".to_string(),
+        description: Some(
+            "Plugin that includes skills, MCP servers, and app connectors".to_string(),
+        ),
+        has_skills: true,
+        mcp_server_names: Vec::new(),
+        app_connector_ids: vec!["connector_sample".to_string()],
+    };
+    assert_eq!(chatgpt_projection, vec![expected.clone()]);
+
+    assert!(plugins_manager.set_auth_mode(Some(AuthMode::ApiKey)));
+    let api_key_projection = list_discoverable_plugins(
         &plugins_manager,
         discovery_input(plugins, &[plugin_id.as_str()], &[], &[]),
         /*auth*/ None,
     )
     .await;
-
-    assert_eq!(discoverable_plugins.len(), 1);
-    assert_eq!(discoverable_plugins[0].id, plugin_id);
+    assert_eq!(
+        api_key_projection,
+        vec![ToolSuggestDiscoverablePlugin {
+            mcp_server_names: vec!["sample-docs".to_string()],
+            app_connector_ids: Vec::new(),
+            ..expected
+        }]
+    );
 }
 
 #[tokio::test]
@@ -473,12 +516,12 @@ async fn does_not_reload_marketplace_per_plugin() {
     let logs = String::from_utf8(buffer.lock().expect("buffer lock").clone())
         .expect("utf8 logs")
         .replace('\\', "/");
-    assert_eq!(logs.matches("ignoring interface.defaultPrompt").count(), 8);
-    assert_eq!(logs.matches("gmail/.codex-plugin/plugin.json").count(), 4);
+    assert_eq!(logs.matches("ignoring interface.defaultPrompt").count(), 4);
+    assert_eq!(logs.matches("gmail/.codex-plugin/plugin.json").count(), 2);
     assert_eq!(
         logs.matches("openai-developers/.codex-plugin/plugin.json")
             .count(),
-        4
+        2
     );
 }
 
