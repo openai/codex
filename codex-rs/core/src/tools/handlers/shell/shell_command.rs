@@ -91,11 +91,9 @@ impl ShellCommandHandler {
         cwd: codex_utils_absolute_path::AbsolutePathBuf,
         allow_login_shell: bool,
     ) -> Result<ExecParams, FunctionCallError> {
-        let Some(shell) = turn_environment.shell.as_ref() else {
-            return Err(FunctionCallError::RespondToModel(
-                "shell is unavailable in this session".to_string(),
-            ));
-        };
+        let shell = turn_environment
+            .shell()
+            .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
         let use_login_shell = Self::resolve_use_login_shell(params.login, allow_login_shell)?;
         let command = Self::base_command(shell, &params.command, use_login_shell);
 

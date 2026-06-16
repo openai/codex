@@ -45,6 +45,13 @@ impl TurnSkillsContext {
 
 pub(crate) type ShellSnapshotTask = Shared<BoxFuture<'static, Option<Arc<ShellSnapshotFile>>>>;
 
+#[derive(Clone, Debug, thiserror::Error)]
+#[error("shell is unavailable in environment `{environment_id}`: {reason}")]
+pub(crate) struct ShellUnavailableError {
+    environment_id: String,
+    reason: String,
+}
+
 #[derive(Clone)]
 pub(crate) struct TurnEnvironment {
     pub(crate) environment_id: String,
@@ -56,7 +63,7 @@ pub(crate) struct TurnEnvironment {
     // process-launch boundaries and remove this paired migration state.
     cwd: AbsolutePathBuf,
     cwd_uri: PathUri,
-    pub(crate) shell: Option<shell::Shell>,
+    shell: Result<shell::Shell, ShellUnavailableError>,
     pub(crate) shell_snapshot: ShellSnapshotTask,
 }
 
@@ -65,9 +72,13 @@ impl TurnEnvironment {
         environment_id: String,
         environment: Arc<Environment>,
         cwd: AbsolutePathBuf,
-        shell: Option<shell::Shell>,
+        shell: Result<shell::Shell, String>,
     ) -> Self {
         let cwd_uri = PathUri::from_abs_path(&cwd);
+        let shell = shell.map_err(|reason| ShellUnavailableError {
+            environment_id: environment_id.clone(),
+            reason,
+        });
         Self {
             environment_id,
             environment,
@@ -94,6 +105,10 @@ impl TurnEnvironment {
 
     pub(crate) fn cwd_uri(&self) -> &PathUri {
         &self.cwd_uri
+    }
+
+    pub(crate) fn shell(&self) -> Result<&shell::Shell, &ShellUnavailableError> {
+        self.shell.as_ref()
     }
 
     pub(crate) fn selection(&self) -> TurnEnvironmentSelection {
@@ -553,7 +568,7 @@ impl Session {
         let available_models = models_manager.try_list_models().unwrap_or_default();
         let unified_exec_shell_mode = environments
             .local()
-            .and_then(|environment| environment.shell.as_ref())
+            .and_then(|environment| environment.shell().ok())
             .map_or(UnifiedExecShellMode::Direct, |shell| {
                 UnifiedExecShellMode::for_session(
                     codex_tools::unified_exec_feature_mode_for_features(

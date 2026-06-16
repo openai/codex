@@ -285,12 +285,9 @@ mod tests {
             .first()
             .cloned()
             .expect("default local turn environment");
-        turn.environments.turn_environments[0] = TurnEnvironment::new(
-            current.environment_id,
-            current.environment,
-            cwd,
-            current.shell,
-        );
+        let shell = current.shell().cloned().map_err(ToString::to_string);
+        turn.environments.turn_environments[0] =
+            TurnEnvironment::new(current.environment_id, current.environment, cwd, shell);
     }
 
     #[test]

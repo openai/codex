@@ -125,11 +125,7 @@ pub(crate) async fn execute_user_shell_command(
         session.send_event(turn_context.as_ref(), event).await;
     }
 
-    let Some((turn_environment, environment_shell)) = turn_context
-        .environments
-        .single_local_environment()
-        .and_then(|environment| environment.shell.as_ref().map(|shell| (environment, shell)))
-    else {
+    let Some(turn_environment) = turn_context.environments.single_local_environment() else {
         send_user_shell_error(
             &session,
             turn_context.as_ref(),
@@ -137,6 +133,13 @@ pub(crate) async fn execute_user_shell_command(
         )
         .await;
         return;
+    };
+    let environment_shell = match turn_environment.shell() {
+        Ok(shell) => shell,
+        Err(err) => {
+            send_user_shell_error(&session, turn_context.as_ref(), &err.to_string()).await;
+            return;
+        }
     };
 
     // Execute the user's script under the environment's shell; this

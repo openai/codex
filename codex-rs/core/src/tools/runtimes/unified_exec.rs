@@ -300,7 +300,11 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         let runtime_path_prepends = RuntimePathPrepends::default();
         let command = if environment_is_remote {
             base_command.to_vec()
-        } else if let Some(shell) = req.turn_environment.shell.as_ref() {
+        } else {
+            let shell = req
+                .turn_environment
+                .shell()
+                .map_err(|err| ToolError::Rejected(err.to_string()))?;
             maybe_wrap_shell_lc_with_snapshot(
                 base_command,
                 shell,
@@ -309,10 +313,6 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 &env,
                 &runtime_path_prepends,
             )
-        } else {
-            return Err(ToolError::Rejected(
-                "shell is unavailable in this environment".to_string(),
-            ));
         };
         let command = disable_powershell_profile_for_elevated_windows_sandbox(
             &command,
@@ -434,7 +434,7 @@ mod tests {
             LOCAL_ENVIRONMENT_ID.to_string(),
             Arc::new(Environment::default_for_tests()),
             cwd,
-            /*shell*/ None,
+            /*shell*/ Err("not configured for test".to_string()),
         )
     }
 

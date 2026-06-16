@@ -5692,11 +5692,15 @@ async fn request_permissions_tool_resolves_relative_paths_against_selected_envir
         }))
         .expect("test setup should allow updating approval policy");
     let current_environment = turn_context_mut.environments.turn_environments[0].clone();
+    let current_shell = current_environment
+        .shell()
+        .cloned()
+        .map_err(ToString::to_string);
     turn_context_mut.environments.turn_environments[0] = TurnEnvironment::new(
         "remote".to_string(),
         current_environment.environment,
         environment_cwd.clone(),
-        current_environment.shell,
+        current_shell,
     );
 
     let call_id = "call-1".to_string();
@@ -6321,7 +6325,7 @@ async fn primary_environment_uses_first_turn_environment() {
             "second".to_string(),
             Arc::clone(&first_environment.environment),
             second_cwd.clone(),
-            /*shell*/ None,
+            /*shell*/ Err("not configured for test".to_string()),
         ));
 
     assert_eq!(
@@ -7300,7 +7304,12 @@ async fn build_settings_update_items_emits_environment_item_for_network_changes(
 async fn environment_context_omits_shell_when_environment_shell_is_absent() {
     let (_session, mut turn_context) = make_session_and_context().await;
     for environment in &mut turn_context.environments.turn_environments {
-        environment.shell = None;
+        *environment = TurnEnvironment::new(
+            environment.environment_id.clone(),
+            Arc::clone(&environment.environment),
+            environment.cwd().clone(),
+            Err("not configured for test".to_string()),
+        );
     }
 
     let environment_context =
@@ -7313,12 +7322,19 @@ async fn environment_context_omits_shell_when_environment_shell_is_absent() {
     let primary_environment = turn_context
         .environments
         .turn_environments
-        .first_mut()
+        .first()
+        .cloned()
         .expect("primary environment");
-    primary_environment.shell = Some(crate::shell::Shell {
-        shell_type: crate::shell::ShellType::Cmd,
-        shell_path: PathBuf::from("cmd"),
-    });
+    let primary_cwd = primary_environment.cwd().clone();
+    turn_context.environments.turn_environments[0] = TurnEnvironment::new(
+        primary_environment.environment_id,
+        primary_environment.environment,
+        primary_cwd,
+        Ok(crate::shell::Shell {
+            shell_type: crate::shell::ShellType::Cmd,
+            shell_path: PathBuf::from("cmd"),
+        }),
+    );
 
     let environment_context =
         crate::context::EnvironmentContext::from_turn_context(&turn_context).render();
@@ -9876,7 +9892,8 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
     let shell = turn_context
         .environments
         .single_local_environment()
-        .and_then(|environment| environment.shell.as_ref())
+        .expect("single local environment")
+        .shell()
         .expect("local environment shell");
     let command = shell.derive_exec_args(
         command_script,

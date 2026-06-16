@@ -117,11 +117,8 @@ pub(super) async fn try_run_zsh_fork(
         return Ok(None);
     }
     if !matches!(
-        req.turn_environment
-            .shell
-            .as_ref()
-            .map(|shell| shell.shell_type),
-        Some(ShellType::Zsh)
+        req.turn_environment.shell().map(|shell| shell.shell_type),
+        Ok(ShellType::Zsh)
     ) {
         tracing::warn!("ZshFork backend specified, but environment shell is not Zsh.");
         return Ok(None);

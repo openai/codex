@@ -34,7 +34,7 @@ pub(super) async fn spawn_review_thread(
     let unified_exec_shell_mode = parent_turn_context
         .environments
         .local()
-        .and_then(|environment| environment.shell.as_ref())
+        .and_then(|environment| environment.shell().ok())
         .map_or(UnifiedExecShellMode::Direct, |shell| {
             UnifiedExecShellMode::for_session(
                 codex_tools::unified_exec_feature_mode_for_features(review_features.get()),

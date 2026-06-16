@@ -3526,7 +3526,7 @@ async fn build_hooks_for_config(
     environment: Option<&TurnEnvironment>,
 ) -> Hooks {
     let (hook_shell_program, hook_shell_argv) = environment
-        .and_then(|environment| environment.shell.as_ref())
+        .and_then(|environment| environment.shell().ok())
         .map(|shell| {
             let mut argv = shell.derive_exec_args("", /*use_login_shell*/ false);
             let program = argv.remove(0);

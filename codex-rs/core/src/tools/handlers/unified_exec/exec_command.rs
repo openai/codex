@@ -153,7 +153,7 @@ impl ExecCommandHandler {
             shell_mode_for_environment(&turn.unified_exec_shell_mode, environment.as_ref());
         let resolved_command = get_command(
             &args,
-            turn_environment.shell.as_ref(),
+            turn_environment.shell(),
             &shell_mode,
             turn.config.permissions.allow_login_shell,
         )

@@ -47,8 +47,8 @@ impl EnvironmentContextEnvironment {
                 id: environment.environment_id.clone(),
                 cwd: environment.cwd().clone(),
                 shell: environment
-                    .shell
-                    .as_ref()
+                    .shell()
+                    .ok()
                     .map(|shell| shell.name().to_string()),
             })
             .collect()

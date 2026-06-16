@@ -75,7 +75,7 @@ impl ShellSnapshot {
             return None;
         }
 
-        let shell = environment.shell.clone()?;
+        let shell = environment.shell().ok()?.clone();
         let cwd = environment.cwd().clone();
         Self::build_for_cwd(Arc::clone(config), cwd, shell).await
     }

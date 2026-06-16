@@ -1,4 +1,5 @@
 use crate::sandboxing::SandboxPermissions;
+use crate::session::turn_context::ShellUnavailableError;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::shell::get_shell_by_model_provided_path;
@@ -95,7 +96,7 @@ fn post_unified_exec_tool_use_payload(
 
 pub(crate) fn get_command(
     args: &ExecCommandArgs,
-    environment_shell: Option<&Shell>,
+    environment_shell: Result<&Shell, &ShellUnavailableError>,
     shell_mode: &UnifiedExecShellMode,
     allow_login_shell: bool,
 ) -> Result<ResolvedCommand, String> {
@@ -115,10 +116,10 @@ pub(crate) fn get_command(
                 .shell
                 .as_ref()
                 .map(|shell_str| get_shell_by_model_provided_path(&PathBuf::from(shell_str)));
-            let shell = model_shell
-                .as_ref()
-                .or(environment_shell)
-                .ok_or_else(|| "shell is unavailable in this environment".to_string())?;
+            let shell = match model_shell.as_ref() {
+                Some(shell) => shell,
+                None => environment_shell.map_err(ToString::to_string)?,
+            };
             Ok(ResolvedCommand {
                 command: shell.derive_exec_args(&args.cmd, use_login_shell),
                 shell_type: shell.shell_type,

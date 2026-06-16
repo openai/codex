@@ -20,7 +20,7 @@ fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::
         environment_id.to_string(),
         std::sync::Arc::new(codex_exec_server::Environment::default_for_tests()),
         std::env::temp_dir().abs(),
-        /*shell*/ None,
+        /*shell*/ Err("not configured for test".to_string()),
     )
 }
 

@@ -82,8 +82,7 @@ async fn shell_command_handler_to_exec_params_uses_environment_shell_and_turn_co
     let justification = Some("because tests".to_string());
 
     let expected_command = turn_environment
-        .shell
-        .as_ref()
+        .shell()
         .expect("environment shell")
         .derive_exec_args(&command, /*use_login_shell*/ true);
     let expected_cwd = turn_environment
@@ -185,8 +184,7 @@ async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
     assert_eq!(
         exec_params.command,
         turn_environment
-            .shell
-            .as_ref()
+            .shell()
             .expect("environment shell")
             .derive_exec_args("echo hello", /*use_login_shell*/ false)
     );

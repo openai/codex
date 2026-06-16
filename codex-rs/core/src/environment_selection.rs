@@ -137,23 +137,16 @@ impl ThreadEnvironments {
             })?;
         let shell = if environment.is_remote() {
             match environment.info().await {
-                Ok(info) => match Shell::from_environment_shell_info(info.shell) {
-                    Ok(shell) => Some(shell),
-                    Err(err) => {
-                        tracing::warn!(
-                            "failed to resolve shell for environment `{environment_id}`: {err}"
-                        );
-                        None
-                    }
-                },
-                Err(err) => {
-                    tracing::warn!("failed to get info for environment `{environment_id}`: {err}");
-                    None
-                }
+                Ok(info) => Shell::from_environment_shell_info(info.shell)
+                    .map_err(|err| format!("failed to resolve shell: {err}")),
+                Err(err) => Err(format!("failed to get environment info: {err}")),
             }
         } else {
-            Some(local_shell.clone())
+            Ok(local_shell.clone())
         };
+        if let Err(reason) = &shell {
+            tracing::warn!("shell is unavailable for environment `{environment_id}`: {reason}");
+        }
         let mut turn_environment = TurnEnvironment::new(
             environment_id,
             environment,
@@ -354,7 +347,7 @@ url = "ws://127.0.0.1:8765"
         assert_eq!(
             snapshot
                 .primary()
-                .and_then(|environment| environment.shell.as_ref()),
+                .and_then(|environment| environment.shell().ok()),
             Some(&local_shell)
         );
     }
@@ -409,19 +402,21 @@ url = "ws://127.0.0.1:8765"
             "local"
         );
         assert_eq!(
-            resolved.primary().expect("primary environment").shell,
-            Some(
-                Shell::from_environment_shell_info(
-                    manager
-                        .get_environment("local")
-                        .expect("local environment")
-                        .info()
-                        .await
-                        .expect("local environment info")
-                        .shell
-                )
-                .expect("resolved shell")
+            resolved
+                .primary()
+                .expect("primary environment")
+                .shell()
+                .expect("primary environment shell"),
+            &Shell::from_environment_shell_info(
+                manager
+                    .get_environment("local")
+                    .expect("local environment")
+                    .info()
+                    .await
+                    .expect("local environment info")
+                    .shell
             )
+            .expect("resolved shell")
         );
     }
 
@@ -529,6 +524,17 @@ url = "ws://127.0.0.1:8765"
         }]);
         let changed_snapshot = initial.snapshot().await;
 
+        let shell_error = initial_snapshot
+            .primary()
+            .expect("initial environment")
+            .shell()
+            .expect_err("unreachable remote shell should be unavailable");
+        assert!(
+            shell_error
+                .to_string()
+                .contains("failed to get environment info"),
+            "unexpected shell error: {shell_error}"
+        );
         assert!(Arc::ptr_eq(
             &initial_snapshot
                 .primary()
@@ -574,7 +580,7 @@ url = "ws://127.0.0.1:8765"
                 REMOTE_ENVIRONMENT_ID.to_string(),
                 remote_environment.clone(),
                 cwd.clone(),
-                /*shell*/ None,
+                /*shell*/ Err("not configured for test".to_string()),
             )],
         };
         let multiple = TurnEnvironmentSnapshot {
@@ -584,7 +590,7 @@ url = "ws://127.0.0.1:8765"
                     REMOTE_ENVIRONMENT_ID.to_string(),
                     remote_environment,
                     cwd.clone(),
-                    /*shell*/ None,
+                    /*shell*/ Err("not configured for test".to_string()),
                 ),
             ],
         };

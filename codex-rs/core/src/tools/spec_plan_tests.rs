@@ -598,7 +598,7 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
                     .expect("remote test environment"),
                 ),
                 remote_cwd,
-                /*shell*/ None,
+                /*shell*/ Err("not configured for test".to_string()),
             ),
         );
     })

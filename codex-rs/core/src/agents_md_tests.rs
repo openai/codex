@@ -254,7 +254,7 @@ fn resolved_local_environments<const N: usize>(
                             .expect("local environment"),
                     ),
                     cwd,
-                    /*shell*/ None,
+                    /*shell*/ Err("not configured for test".to_string()),
                 )
             })
             .collect(),
