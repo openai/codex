@@ -239,13 +239,12 @@ mod tests {
         let elicitation = openai_form_elicitation(CustomRequest::new(
             OPENAI_FORM_METHOD,
             Some(json!({
-                "message": "Choose a template",
+                "message": "Choose a file",
                 "requestedSchema": {
                     "type": "object",
                     "properties": {
-                        "template": {
-                            "type": "openai/choice",
-                            "options": []
+                        "path": {
+                            "type": "openai/file"
                         }
                     }
                 }
@@ -257,13 +256,12 @@ mod tests {
             elicitation,
             Elicitation::OpenAiForm {
                 meta: None,
-                message: "Choose a template".to_string(),
+                message: "Choose a file".to_string(),
                 requested_schema: json!({
                     "type": "object",
                     "properties": {
-                        "template": {
-                            "type": "openai/choice",
-                            "options": []
+                        "path": {
+                            "type": "openai/file"
                         }
                     }
                 }),

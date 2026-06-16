@@ -75,7 +75,7 @@ const CALLABLE_TOOL_NAME: &str = "_confirm_action";
 const TOOL_NAME: &str = "calendar_confirm_action";
 const TOOL_CALL_ID: &str = "call-calendar-confirm";
 const ELICITATION_MESSAGE: &str = "Allow this request?";
-const OPENAI_FORM_MESSAGE: &str = "Choose a template";
+const OPENAI_FORM_MESSAGE: &str = "Choose a file";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn mcp_server_elicitation_round_trip() -> Result<()> {
@@ -257,16 +257,12 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
     let requested_schema = json!({
         "type": "object",
         "properties": {
-            "template": {
-                "type": "openai/choice",
-                "presentation": "cards",
-                "options": [{
-                    "value": "monthly-business-review",
-                    "title": "Monthly business review",
-                }],
+            "path": {
+                "type": "openai/file",
+                "title": "Source file",
             },
         },
-        "required": ["template"],
+        "required": ["path"],
     });
     assert_eq!(
         params,
@@ -287,7 +283,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
         serde_json::to_value(McpServerElicitationRequestResponse {
             action: McpServerElicitationAction::Accept,
             content: Some(json!({
-                "template": "monthly-business-review",
+                "path": "/tmp/report.csv",
             })),
             meta: None,
         })?,
@@ -365,7 +361,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
         serde_json::from_str::<Value>(payload)?,
         json!([{
             "type": "text",
-            "text": "accepted monthly-business-review"
+            "text": "accepted /tmp/report.csv"
         }])
     );
 
@@ -478,16 +474,12 @@ impl ServerHandler for ElicitationAppsMcpServer {
                     "requestedSchema": {
                         "type": "object",
                         "properties": {
-                            "template": {
-                                "type": "openai/choice",
-                                "presentation": "cards",
-                                "options": [{
-                                    "value": "monthly-business-review",
-                                    "title": "Monthly business review",
-                                }],
+                            "path": {
+                                "type": "openai/file",
+                                "title": "Source file",
                             },
                         },
-                        "required": ["template"],
+                        "required": ["path"],
                     },
                 })),
             )))
@@ -511,13 +503,13 @@ impl ServerHandler for ElicitationAppsMcpServer {
             json!({
                 "action": "accept",
                 "content": {
-                    "template": "monthly-business-review",
+                    "path": "/tmp/report.csv",
                 },
             })
         );
 
         Ok(CallToolResult::success(vec![Content::text(
-            "accepted monthly-business-review",
+            "accepted /tmp/report.csv",
         )]))
     }
 }
