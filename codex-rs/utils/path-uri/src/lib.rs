@@ -172,8 +172,8 @@ impl PathUri {
     /// URI string is returned instead.
     pub fn inferred_native_path_string(&self) -> String {
         self.infer_path_convention()
-            .and_then(|convention| ApiPathString::from_path_uri(self, convention).ok())
-            .map(ApiPathString::into_string)
+            .and_then(|convention| LegacyAppPathString::from_path_uri(self, convention).ok())
+            .map(LegacyAppPathString::into_string)
             .unwrap_or_else(|| self.to_string())
     }
 

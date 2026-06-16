@@ -53,7 +53,6 @@ use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -3034,28 +3033,18 @@ impl TurnContextItem {
         let file_system_sandbox_policy = match self.file_system_sandbox_policy.clone() {
             Some(file_system_sandbox_policy) => file_system_sandbox_policy,
             None => {
-                let convention = self.cwd.infer_path_convention().ok_or_else(|| {
+                let cwd = self.cwd.to_abs_path().map_err(|err| {
                     std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
+                        err.kind(),
                         format!(
-                            "cannot infer a path convention for legacy permission profile cwd {}",
+                            "cannot hydrate legacy permission profile for cwd {}: {err}",
                             self.cwd
                         ),
                     )
                 })?;
-                if convention != PathConvention::native() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!(
-                            "cannot hydrate legacy permission profile for {convention} cwd {} on a {} host",
-                            self.cwd,
-                            PathConvention::native(),
-                        ),
-                    ));
-                }
                 FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
                     &self.sandbox_policy,
-                    self.cwd.to_abs_path()?.as_path(),
+                    cwd.as_path(),
                 )
             }
         };
@@ -5353,7 +5342,7 @@ mod tests {
         let foreign_cwd = if cfg!(windows) {
             "file:///tmp"
         } else {
-            "file:///C:/windows"
+            "file://server/share"
         };
         let item: TurnContextItem = serde_json::from_value(json!({
             "cwd": foreign_cwd,
