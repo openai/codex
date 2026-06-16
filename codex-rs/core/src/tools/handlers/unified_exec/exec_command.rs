@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::sync::Arc;
 
 use crate::function_tool::FunctionCallError;
@@ -29,6 +28,7 @@ use crate::unified_exec::generate_chunk_id;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
+use codex_shell_command::shell_detect::detect_shell_type;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_output_truncation::approx_token_count;
@@ -160,12 +160,12 @@ impl ExecCommandHandler {
                 ))
             })?;
             if let Some(provided_shell) = args.shell.as_deref() {
-                let matches_environment = provided_shell == environment_shell.name()
-                    || Path::new(provided_shell) == environment_shell.shell_path;
+                let matches_environment =
+                    detect_shell_type(provided_shell) == Some(environment_shell.shell_type);
                 if !matches_environment {
                     return Err(FunctionCallError::RespondToModel(format!(
-                        "`shell` must match the selected remote environment shell `{}`",
-                        environment_shell.shell_path.display()
+                        "`shell` must match the selected remote environment shell type `{}`",
+                        environment_shell.name()
                     )));
                 }
                 args.shell = None;
