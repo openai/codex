@@ -15,7 +15,7 @@ use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_arg0::Arg0DispatchPaths;
-use codex_config::CloudRequirementsLoader;
+use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
@@ -26,7 +26,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_thread_store::CreateThreadParams;
 use codex_thread_store::InMemoryThreadStore;
-use codex_thread_store::ThreadEventPersistenceMode;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -123,18 +122,19 @@ async fn get_conversation_summary_by_thread_id_reads_pathless_store_thread() -> 
     store
         .create_thread(CreateThreadParams {
             thread_id,
+            extra_config: None,
             forked_from_id: None,
             parent_thread_id: None,
             source: SessionSource::Cli,
             thread_source: None,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            multi_agent_version: None,
             metadata: ThreadPersistenceMetadata {
                 cwd: None,
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Disabled,
             },
-            event_persistence_mode: ThreadEventPersistenceMode::default(),
         })
         .await?;
 
@@ -151,7 +151,7 @@ async fn get_conversation_summary_by_thread_id_reads_pathless_store_thread() -> 
         cli_overrides: Vec::new(),
         loader_overrides,
         strict_config: false,
-        cloud_requirements: CloudRequirementsLoader::default(),
+        cloud_config_bundle: CloudConfigBundleLoader::default(),
         thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
         feedback: CodexFeedback::new(),
         log_db: None,

@@ -1,3 +1,4 @@
+use anyhow::Context;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::PathBufExt;
@@ -6,7 +7,6 @@ use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::AskForApproval;
-use codex_app_server_protocol::DeprecationNoticeNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -22,6 +22,8 @@ use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_app_server_protocol::TurnEnvironmentParams;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::loader::project_trust_key;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::set_project_trust_level;
@@ -51,46 +53,6 @@ use super::analytics::wait_for_analytics_payload;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
-
-#[tokio::test]
-async fn thread_start_deprecates_persist_extended_history_true() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let codex_home = TempDir::new()?;
-    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
-
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let req_id = mcp
-        .send_thread_start_request(ThreadStartParams {
-            persist_extended_history: true,
-            ..Default::default()
-        })
-        .await?;
-
-    let notification = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("deprecationNotice"),
-    )
-    .await??;
-    let notice: DeprecationNoticeNotification = serde_json::from_value(
-        notification
-            .params
-            .expect("deprecationNotice params should be present"),
-    )?;
-    assert_eq!(
-        notice.summary,
-        "persistExtendedHistory is deprecated and ignored"
-    );
-
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
-    )
-    .await??;
-
-    Ok(())
-}
 
 #[tokio::test]
 async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
@@ -238,15 +200,15 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_start_resolves_runtime_workspace_roots_against_cwd() -> Result<()> {
+async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
 
     let cwd_tmp = TempDir::new()?;
     let cwd = cwd_tmp.path().to_path_buf();
-    let relative_root = PathBuf::from("extra-root");
-    std::fs::create_dir_all(cwd.join(&relative_root))?;
+    let extra_root = cwd.join("extra-root");
+    std::fs::create_dir_all(&extra_root)?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -254,7 +216,7 @@ async fn thread_start_resolves_runtime_workspace_roots_against_cwd() -> Result<(
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
             cwd: Some(cwd.to_string_lossy().to_string()),
-            runtime_workspace_roots: Some(vec![relative_root.clone()]),
+            runtime_workspace_roots: Some(vec![extra_root.abs()]),
             ..Default::default()
         })
         .await?;
@@ -271,10 +233,7 @@ async fn thread_start_resolves_runtime_workspace_roots_against_cwd() -> Result<(
     } = to_response::<ThreadStartResponse>(resp)?;
 
     assert_eq!(response_cwd, cwd.abs());
-    assert_eq!(
-        runtime_workspace_roots,
-        vec![cwd_tmp.path().join(relative_root).abs()]
-    );
+    assert_eq!(runtime_workspace_roots, vec![extra_root.abs()]);
 
     Ok(())
 }
@@ -334,7 +293,10 @@ async fn thread_start_rejects_unknown_environment_as_invalid_request() -> Result
         .send_thread_start_request(ThreadStartParams {
             environments: Some(vec![TurnEnvironmentParams {
                 environment_id: "missing".to_string(),
-                cwd: codex_home.path().to_path_buf().try_into()?,
+                cwd: codex_utils_absolute_path::AbsolutePathBuf::try_from(
+                    codex_home.path().to_path_buf(),
+                )?
+                .into(),
             }]),
             ..Default::default()
         })
@@ -349,6 +311,40 @@ async fn thread_start_rejects_unknown_environment_as_invalid_request() -> Result
     assert_eq!(error.id, RequestId::Integer(request_id));
     assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
     assert_eq!(error.error.message, "unknown turn environment id `missing`");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_rejects_relative_environment_cwd_as_invalid_request() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            environments: Some(vec![TurnEnvironmentParams {
+                environment_id: "local".to_string(),
+                cwd: serde_json::from_value(json!("relative"))?,
+            }]),
+            ..Default::default()
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.id, RequestId::Integer(request_id));
+    assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert_eq!(
+        error.error.message,
+        "invalid cwd for environment `local`: path `relative` does not use absolute POSIX or Windows path syntax"
+    );
 
     Ok(())
 }
@@ -389,13 +385,137 @@ async fn thread_start_response_includes_loaded_instruction_sources() -> Result<(
         .collect::<Vec<_>>();
     let expected_instruction_sources = vec![
         std::fs::canonicalize(global_agents_path)?,
-        std::fs::canonicalize(project_agents_path)?,
+        project_agents_path,
     ]
     .into_iter()
     .map(normalize_path_for_comparison)
     .collect::<Vec<_>>();
 
     assert_eq!(instruction_sources, expected_instruction_sources);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_response_excludes_empty_project_instruction_source() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    let global_agents_path = codex_home.path().join("AGENTS.md");
+    std::fs::write(&global_agents_path, "global instructions")?;
+    let workspace = TempDir::new()?;
+    let project_agents_path = workspace.path().join("AGENTS.md");
+    std::fs::write(project_agents_path, "")?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        instruction_sources,
+        ..
+    } = to_response::<ThreadStartResponse>(response)?;
+
+    let instruction_sources = instruction_sources
+        .into_iter()
+        .map(normalize_path_for_comparison)
+        .collect::<Vec<_>>();
+    let expected_instruction_sources = vec![normalize_path_for_comparison(std::fs::canonicalize(
+        global_agents_path,
+    )?)];
+
+    assert_eq!(instruction_sources, expected_instruction_sources);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_without_selected_environment_includes_only_global_instruction_source()
+-> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    let global_agents_path = codex_home.path().join("AGENTS.md");
+    std::fs::write(&global_agents_path, "global instructions")?;
+    let workspace = TempDir::new()?;
+    std::fs::write(workspace.path().join("AGENTS.md"), "project instructions")?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            environments: Some(Vec::new()),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        thread,
+        instruction_sources,
+        ..
+    } = to_response::<ThreadStartResponse>(response)?;
+
+    assert_eq!(
+        instruction_sources
+            .into_iter()
+            .map(normalize_path_for_comparison)
+            .collect::<Vec<_>>(),
+        vec![normalize_path_for_comparison(std::fs::canonicalize(
+            global_agents_path,
+        )?)]
+    );
+
+    let turn_request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "inspect instructions".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_request_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .context("failed to fetch received requests")?;
+    let model_request = requests
+        .iter()
+        .find(|request| request.url.path().ends_with("/responses"))
+        .context("expected model request")?;
+    let model_request_body = model_request
+        .body_json::<Value>()
+        .context("model request body should be JSON")?
+        .to_string();
+    assert!(model_request_body.contains("global instructions"));
+    assert!(!model_request_body.contains("project instructions"));
 
     Ok(())
 }
@@ -675,7 +795,7 @@ async fn thread_start_emits_mcp_server_status_updated_notifications() -> Result<
         .send_thread_start_request(ThreadStartParams::default())
         .await?;
 
-    let _: ThreadStartResponse = to_response(
+    let start_response: ThreadStartResponse = to_response(
         timeout(
             DEFAULT_READ_TIMEOUT,
             mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
@@ -712,6 +832,7 @@ async fn thread_start_emits_mcp_server_status_updated_notifications() -> Result<
     assert_eq!(
         starting,
         McpServerStatusUpdatedNotification {
+            thread_id: Some(start_response.thread.id.clone()),
             name: "optional_broken".to_string(),
             status: McpServerStartupState::Starting,
             error: None,
@@ -744,6 +865,7 @@ async fn thread_start_emits_mcp_server_status_updated_notifications() -> Result<
     let ServerNotification::McpServerStatusUpdated(failed) = failed else {
         anyhow::bail!("unexpected notification variant");
     };
+    assert_eq!(failed.thread_id, Some(start_response.thread.id));
     assert_eq!(failed.name, "optional_broken");
     assert_eq!(failed.status, McpServerStartupState::Failed);
     assert!(
@@ -759,10 +881,10 @@ async fn thread_start_emits_mcp_server_status_updated_notifications() -> Result<
 }
 
 #[tokio::test]
-async fn thread_start_surfaces_cloud_requirements_load_errors() -> Result<()> {
+async fn thread_start_surfaces_cloud_config_bundle_load_errors() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/backend-api/wham/config/requirements"))
+        .and(path("/backend-api/wham/config/bundle"))
         .respond_with(
             ResponseTemplate::new(401)
                 .insert_header("content-type", "text/html")
@@ -829,7 +951,7 @@ async fn thread_start_surfaces_cloud_requirements_load_errors() -> Result<()> {
     assert_eq!(
         err.error.data,
         Some(json!({
-            "reason": "cloudRequirements",
+            "reason": "cloudConfigBundle",
             "errorCode": "Auth",
             "action": "relogin",
             "statusCode": 401,

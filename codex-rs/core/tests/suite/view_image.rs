@@ -7,6 +7,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::RemoveOptions;
+use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::PermissionProfile;
@@ -28,6 +29,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
+use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::get_remote_test_env;
@@ -41,7 +43,9 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event_with_timeout;
@@ -74,12 +78,10 @@ fn disabled_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) ->
         turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
     Op::UserInput {
         items,
-        environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
         additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(test.config.cwd.to_path_buf()),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),
             permission_profile,
@@ -132,9 +134,10 @@ fn png_bytes(width: u32, height: u32, rgba: [u8; 4]) -> anyhow::Result<Vec<u8>> 
 
 async fn create_workspace_directory(test: &TestCodex, rel_path: &str) -> anyhow::Result<PathBuf> {
     let abs_path = test.config.cwd.join(rel_path);
+    let abs_path_uri = PathUri::from_path(&abs_path)?;
     test.fs()
         .create_directory(
-            &abs_path,
+            &abs_path_uri,
             CreateDirectoryOptions { recursive: true },
             /*sandbox*/ None,
         )
@@ -149,16 +152,18 @@ async fn write_workspace_file(
 ) -> anyhow::Result<PathBuf> {
     let abs_path = test.config.cwd.join(rel_path);
     if let Some(parent) = abs_path.parent() {
+        let parent_uri = PathUri::from_path(&parent)?;
         test.fs()
             .create_directory(
-                &parent,
+                &parent_uri,
                 CreateDirectoryOptions { recursive: true },
                 /*sandbox*/ None,
             )
             .await?;
     }
+    let abs_path_uri = PathUri::from_path(&abs_path)?;
     test.fs()
-        .write_file(&abs_path, contents, /*sandbox*/ None)
+        .write_file(&abs_path_uri, contents, /*sandbox*/ None)
         .await?;
     Ok(abs_path.into_path_buf())
 }
@@ -176,10 +181,15 @@ async fn write_workspace_png(
 async fn assert_user_turn_local_image_resizes_to(
     original_dimensions: (u32, u32),
     expected_dimensions: (u32, u32),
+    resize_policy: TestImageResizePolicy,
 ) -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_config(move |config| {
+        if resize_policy == TestImageResizePolicy::AllImages {
+            let _ = config.features.enable(Feature::ResizeAllImages);
+        }
+    });
     let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
         codex,
@@ -253,18 +263,42 @@ async fn assert_user_turn_local_image_resizes_to(
     Ok(())
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum TestImageResizePolicy {
+    Legacy,
+    AllImages,
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    assert_user_turn_local_image_resizes_to((2304, 864), (2048, 768)).await
+    assert_user_turn_local_image_resizes_to((2304, 864), (2048, 768), TestImageResizePolicy::Legacy)
+        .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_turn_with_vertical_local_image_resizes_to_square_bounds() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    assert_user_turn_local_image_resizes_to((1024, 4096), (512, 2048)).await
+    assert_user_turn_local_image_resizes_to(
+        (1024, 4096),
+        (512, 2048),
+        TestImageResizePolicy::Legacy,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resize_all_images_applies_patch_budget_to_local_user_image() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    assert_user_turn_local_image_resizes_to(
+        (2048, 2048),
+        (1600, 1600),
+        TestImageResizePolicy::AllImages,
+    )
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -456,10 +490,7 @@ async fn view_image_routes_to_selected_local_environment() -> anyhow::Result<()>
 
     test.submit_turn_with_environments(
         "route local view image",
-        Some(vec![TurnEnvironmentSelection {
-            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-            cwd: test.config.cwd.clone(),
-        }]),
+        Some(vec![local(test.config.cwd.clone())]),
     )
     .await?;
 
@@ -562,6 +593,8 @@ async fn view_image_tool_applies_local_sandbox_read_denies() -> anyhow::Result<(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()> {
+    // TODO(anp): Remove after remote-cwd fixtures use target-native paths.
+    skip_if_wine_exec!(Ok(()), "hardcodes a POSIX remote cwd");
     skip_if_no_network!(Ok(()));
     let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
@@ -572,30 +605,29 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
     let test = builder.build_with_remote_and_local_env(&server).await?;
     let local_cwd = TempDir::new()?;
     fs::write(local_cwd.path().join("remote.png"), b"not a remote image")?;
-    let local_selection = TurnEnvironmentSelection {
-        environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-        cwd: local_cwd.path().abs(),
-    };
+    let local_selection = local(local_cwd.path().abs());
     let remote_cwd = PathBuf::from(format!(
         "/tmp/codex-view-image-routing-{}",
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     ))
     .abs();
     let image_path = remote_cwd.join("remote.png");
+    let remote_cwd_uri = PathUri::from_path(&remote_cwd)?;
     test.fs()
         .create_directory(
-            &remote_cwd,
+            &remote_cwd_uri,
             CreateDirectoryOptions { recursive: true },
             /*sandbox*/ None,
         )
         .await?;
     let png = png_bytes(/*width*/ 1, /*height*/ 1, [0, 255, 0, 255])?;
+    let image_path_uri = PathUri::from_path(&image_path)?;
     test.fs()
-        .write_file(&image_path, png, /*sandbox*/ None)
+        .write_file(&image_path_uri, png, /*sandbox*/ None)
         .await?;
     let remote_selection = TurnEnvironmentSelection {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-        cwd: remote_cwd.clone(),
+        cwd: PathUri::from_abs_path(&remote_cwd),
     };
     let call_id = "call-view-image-multi-env";
     let response_mock = mount_sse_sequence(
@@ -650,7 +682,7 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
 
     test.fs()
         .remove(
-            &remote_cwd,
+            &remote_cwd_uri,
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -1254,6 +1286,72 @@ async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resize_all_images_turns_invalid_view_image_into_placeholder() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        let _ = config.features.enable(Feature::ResizeAllImages);
+    });
+    let test = builder.build_with_remote_env(&server).await?;
+    let TestCodex {
+        codex,
+        session_configured,
+        ..
+    } = &test;
+
+    let rel_path = "assets/invalid-image.json";
+    write_workspace_file(&test, rel_path, br#"{ "message": "hello" }"#.to_vec()).await?;
+    let call_id = "view-image-invalid-placeholder";
+    let arguments = serde_json::json!({ "path": rel_path }).to_string();
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "view_image", &arguments),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let second_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    codex
+        .submit(disabled_user_turn(
+            &test,
+            vec![UserInput::Text {
+                text: "please inspect the image".into(),
+                text_elements: Vec::new(),
+            }],
+            session_configured.model.clone(),
+        ))
+        .await?;
+    wait_for_event_with_timeout(
+        codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
+    )
+    .await;
+
+    let request = second_mock.single_request();
+    assert_eq!(
+        request.function_call_output(call_id).get("output"),
+        Some(&serde_json::json!([{
+            "type": "input_text",
+            "text": "image content omitted because it could not be processed"
+        }]))
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1355,8 +1453,10 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         input_modalities: vec![InputModality::Text],
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        use_responses_lite: false,
         auto_review_model_override: None,
         tool_mode: None,
+        multi_agent_version: None,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         service_tiers: Vec::new(),
@@ -1377,6 +1477,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         context_window: Some(272_000),
         max_context_window: None,
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     };

@@ -71,7 +71,6 @@ impl ExecCommandHandler {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("exec_command")
@@ -92,7 +91,13 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
         true
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl ExecCommandHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
@@ -124,13 +129,21 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                 "unified exec is unavailable in this session".to_string(),
             ));
         };
+        // TODO(anp): Resolve tool paths using the selected environment's native path convention
+        // so unified exec can support relative paths in foreign environments.
+        let native_environment_cwd = turn_environment.cwd().to_abs_path().map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "environment cwd `{}` is not native to the Codex host: {err}",
+                turn_environment.cwd()
+            ))
+        })?;
         let cwd = environment_args
             .workdir
             .as_deref()
             .filter(|workdir| !workdir.is_empty())
             .map_or_else(
-                || turn_environment.cwd.clone(),
-                |workdir| turn_environment.cwd.join(workdir),
+                || native_environment_cwd.clone(),
+                |workdir| native_environment_cwd.join(workdir),
             );
         let environment = Arc::clone(&turn_environment.environment);
         let fs = environment.get_filesystem();
@@ -146,9 +159,16 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
         let process_id = manager.allocate_process_id().await;
         let shell_mode =
             shell_mode_for_environment(&turn.unified_exec_shell_mode, environment.as_ref());
+        // Remote environments may use a different OS and must build commands with their native
+        // shell; fall back to the session shell when the environment did not report one.
+        let shell = turn_environment
+            .shell
+            .clone()
+            .map(Arc::new)
+            .unwrap_or_else(|| session.user_shell());
         let resolved_command = get_command(
             &args,
-            session.user_shell(),
+            shell,
             &shell_mode,
             turn.config.permissions.allow_login_shell,
         )
@@ -173,6 +193,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
         let requested_additional_permissions = additional_permissions.clone();
         let effective_additional_permissions = apply_granted_turn_permissions(
             context.session.as_ref(),
+            &turn_environment.environment_id,
             cwd.as_path(),
             sandbox_permissions,
             additional_permissions,
@@ -264,8 +285,8 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                     yield_time_ms,
                     max_output_tokens,
                     cwd,
-                    sandbox_cwd: turn_environment.cwd.clone(),
-                    environment,
+                    sandbox_cwd: native_environment_cwd,
+                    turn_environment: turn_environment.clone(),
                     shell_mode,
                     network: context.turn.network.clone(),
                     tty,

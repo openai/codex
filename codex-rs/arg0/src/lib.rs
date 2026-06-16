@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs::File;
 use std::future::Future;
 use std::path::Path;
@@ -5,8 +6,11 @@ use std::path::PathBuf;
 
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_exec_server::CODEX_FS_HELPER_ARG1;
+use codex_install_context::InstallContext;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_home_dir::find_codex_home;
+#[cfg(target_os = "windows")]
+use codex_windows_sandbox::CODEX_WINDOWS_SANDBOX_ARG1;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 use tempfile::TempDir;
@@ -97,6 +101,10 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     if argv1 == CODEX_FS_HELPER_ARG1 {
         codex_exec_server::run_fs_helper_main();
     }
+    #[cfg(target_os = "windows")]
+    if argv1 == CODEX_WINDOWS_SANDBOX_ARG1 {
+        codex_windows_sandbox::run_windows_sandbox_wrapper_main();
+    }
     if argv1 == CODEX_CORE_APPLY_PATCH_ARG1 {
         let patch_arg = args.next().and_then(|s| s.to_str().map(str::to_owned));
         let exit_code = match patch_arg {
@@ -138,13 +146,36 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     // before creating any threads/the Tokio runtime.
     load_dotenv();
 
-    match prepend_path_entry_for_codex_aliases() {
-        Ok(path_entry) => Some(path_entry),
+    let (path_entry_guard, updated_path_env_var) = prepare_path_env_var_with_aliases(
+        InstallContext::current(),
+        std::env::var_os("PATH"),
+        prepare_path_entry_for_codex_aliases,
+    );
+    if let Some(updated_path_env_var) = updated_path_env_var {
+        // It is safe to call set_var() because our process is single-threaded at
+        // this point in its execution.
+        unsafe {
+            std::env::set_var("PATH", updated_path_env_var);
+        }
+    }
+    path_entry_guard
+}
+
+fn prepare_path_env_var_with_aliases(
+    install_context: &InstallContext,
+    existing_path: Option<OsString>,
+    prepare_aliases: impl FnOnce(Option<OsString>) -> std::io::Result<(Arg0PathEntryGuard, OsString)>,
+) -> (Option<Arg0PathEntryGuard>, Option<OsString>) {
+    let package_path = path_env_with_package_path_dir(install_context, existing_path.clone());
+    let path_for_aliases = package_path.clone().or(existing_path);
+
+    match prepare_aliases(path_for_aliases) {
+        Ok((path_entry, updated_path_env_var)) => (Some(path_entry), Some(updated_path_env_var)),
         Err(err) => {
             // It is possible that Codex will proceed successfully even if
-            // updating the PATH fails, so warn the user and move on.
-            eprintln!("WARNING: proceeding, even though we could not update PATH: {err}");
-            None
+            // creating helper aliases fails, so warn the user and move on.
+            eprintln!("WARNING: proceeding, even though we could not create PATH aliases: {err}");
+            (None, package_path)
         }
     }
 }
@@ -160,12 +191,13 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
 /// [`codex_linux_sandbox::run_main`] (which never returns). Otherwise we:
 ///
 /// 1.  Load `.env` values from `~/.codex/.env` before creating any threads.
-/// 2.  Construct a Tokio multi-thread runtime.
-/// 3.  Capture the current executable path and derive the
+/// 2.  Spawn a main runtime thread with a controlled stack size.
+/// 3.  Construct a Tokio multi-thread runtime.
+/// 4.  Capture the current executable path and derive the
 ///     `codex-linux-sandbox` helper path (falling back to the current
 ///     executable if needed) so children can re-invoke the sandbox when running
 ///     on Linux.
-/// 4.  Execute the provided async `main_fn` inside that runtime, forwarding any
+/// 5.  Execute the provided async `main_fn` inside that runtime, forwarding any
 ///     error. Note that `main_fn` receives [`Arg0DispatchPaths`], which
 ///     contains the helper executable paths needed to construct
 ///     [`codex_core::config::Config`].
@@ -174,22 +206,33 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
 /// in this workspace that depends on these helper CLIs.
 pub fn arg0_dispatch_or_else<F, Fut>(main_fn: F) -> anyhow::Result<()>
 where
-    F: FnOnce(Arg0DispatchPaths) -> Fut,
+    F: FnOnce(Arg0DispatchPaths) -> Fut + Send + 'static,
     Fut: Future<Output = anyhow::Result<()>>,
 {
     // Retain the TempDir so it exists for the lifetime of the invocation of
     // this executable. Admittedly, we could invoke `keep()` on it, but it
     // would be nice to avoid leaving temporary directories behind, if possible.
     let path_entry_guard = arg0_dispatch();
+    let current_exe = std::env::current_exe().ok();
 
-    // Regular invocation – create a Tokio runtime and execute the provided
-    // async entry-point.
-    let runtime = build_runtime()?;
-    runtime.block_on(run_main_with_arg0_guard(
-        path_entry_guard,
-        std::env::current_exe().ok(),
-        main_fn,
-    ))
+    // Regular invocation. Run the async entry point on a thread with the same
+    // stack budget as Tokio workers; `Runtime::block_on` otherwise runs the
+    // top-level future on the caller's OS stack.
+    let handle = std::thread::Builder::new()
+        .name("codex-main".to_string())
+        .stack_size(TOKIO_WORKER_STACK_SIZE_BYTES)
+        .spawn(move || {
+            let runtime = build_runtime()?;
+            runtime.block_on(run_main_with_arg0_guard(
+                path_entry_guard,
+                current_exe,
+                main_fn,
+            ))
+        })?;
+    match handle.join() {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 async fn run_main_with_arg0_guard<F, Fut>(
@@ -273,15 +316,16 @@ where
 /// - WINDOWS: `apply_patch.bat` batch script to invoke the current executable
 ///   with the hidden `--codex-run-as-apply-patch` flag.
 ///
-/// This temporary directory is prepended to the PATH environment variable so
-/// that `apply_patch` can be on the PATH without requiring the user to
-/// install a separate `apply_patch` executable, simplifying the deployment of
-/// Codex CLI.
+/// Returns the temporary directory guard and the PATH value that prepends the
+/// temporary directory so `apply_patch` can be on the PATH without requiring the
+/// user to install a separate executable, simplifying the deployment of Codex
+/// CLI.
 /// Note: In debug builds the temp-dir guard is disabled to ease local testing.
 ///
-/// IMPORTANT: This function modifies the PATH environment variable, so it MUST
-/// be called before multiple threads are spawned.
-pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGuard> {
+/// IMPORTANT: Callers must update PATH before multiple threads are spawned.
+fn prepare_path_entry_for_codex_aliases(
+    existing_path: Option<OsString>,
+) -> std::io::Result<(Arg0PathEntryGuard, OsString)> {
     let codex_home = find_codex_home()?;
     #[cfg(not(debug_assertions))]
     {
@@ -359,27 +403,7 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
         }
     }
 
-    #[cfg(unix)]
-    const PATH_SEPARATOR: &str = ":";
-
-    #[cfg(windows)]
-    const PATH_SEPARATOR: &str = ";";
-
-    let updated_path_env_var = match std::env::var_os("PATH") {
-        Some(existing_path) => {
-            let mut path_env_var =
-                std::ffi::OsString::with_capacity(path.as_os_str().len() + 1 + existing_path.len());
-            path_env_var.push(path);
-            path_env_var.push(PATH_SEPARATOR);
-            path_env_var.push(existing_path);
-            path_env_var
-        }
-        None => path.as_os_str().to_owned(),
-    };
-
-    unsafe {
-        std::env::set_var("PATH", updated_path_env_var);
-    }
+    let updated_path_env_var = path_env_with_entry(path, existing_path);
 
     let paths = Arg0DispatchPaths {
         codex_self_exe: std::env::current_exe().ok(),
@@ -405,7 +429,41 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
         },
     };
 
-    Ok(Arg0PathEntryGuard::new(temp_dir, lock_file, paths))
+    Ok((
+        Arg0PathEntryGuard::new(temp_dir, lock_file, paths),
+        updated_path_env_var,
+    ))
+}
+
+fn path_env_with_package_path_dir(
+    install_context: &InstallContext,
+    existing_path: Option<OsString>,
+) -> Option<OsString> {
+    let path_dir = install_context
+        .package_layout
+        .as_ref()
+        .and_then(|package_layout| package_layout.path_dir.as_ref())?;
+    Some(path_env_with_entry(path_dir.as_path(), existing_path))
+}
+
+fn path_env_with_entry(path_entry: &Path, existing_path: Option<OsString>) -> OsString {
+    #[cfg(unix)]
+    const PATH_SEPARATOR: &str = ":";
+
+    #[cfg(windows)]
+    const PATH_SEPARATOR: &str = ";";
+
+    let capacity = path_entry.as_os_str().len()
+        + existing_path
+            .as_ref()
+            .map_or(0, |existing_path| 1 + existing_path.len());
+    let mut path_env_var = OsString::with_capacity(capacity);
+    path_env_var.push(path_entry);
+    if let Some(existing_path) = existing_path {
+        path_env_var.push(PATH_SEPARATOR);
+        path_env_var.push(existing_path);
+    }
+    path_env_var
 }
 
 fn janitor_cleanup(temp_root: &Path) -> std::io::Result<()> {
@@ -463,11 +521,24 @@ mod tests {
     use super::run_main_with_arg0_guard;
     #[cfg(unix)]
     use anyhow::ensure;
+    use codex_install_context::CodexPackageLayout;
+    use codex_install_context::InstallContext;
+    use codex_install_context::InstallMethod;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use pretty_assertions::assert_eq;
     use std::fs;
     use std::fs::File;
     use std::path::Path;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    struct PackagePathTestFixture {
+        _temp_dir: TempDir,
+        arg0_dir: PathBuf,
+        existing_dir: PathBuf,
+        install_context: InstallContext,
+        path_dir: AbsolutePathBuf,
+    }
 
     fn create_lock(dir: &Path) -> std::io::Result<File> {
         let lock_path = dir.join(LOCK_FILENAME);
@@ -477,6 +548,37 @@ mod tests {
             .create(true)
             .truncate(false)
             .open(lock_path)
+    }
+
+    fn package_path_test_fixture() -> anyhow::Result<PackagePathTestFixture> {
+        let temp_dir = TempDir::new()?;
+        let arg0_dir = temp_dir.path().join("arg0");
+        let package_dir = temp_dir.path().join("package");
+        let bin_dir = package_dir.join("bin");
+        let path_dir = package_dir.join("codex-path");
+        let existing_dir = temp_dir.path().join("existing-bin");
+        fs::create_dir_all(&arg0_dir)?;
+        fs::create_dir_all(&bin_dir)?;
+        fs::create_dir_all(&path_dir)?;
+        fs::create_dir_all(&existing_dir)?;
+        let path_dir = AbsolutePathBuf::from_absolute_path(path_dir.canonicalize()?)?;
+        let install_context = InstallContext {
+            method: InstallMethod::Other,
+            package_layout: Some(CodexPackageLayout {
+                package_dir: AbsolutePathBuf::from_absolute_path(package_dir.canonicalize()?)?,
+                bin_dir: AbsolutePathBuf::from_absolute_path(bin_dir.canonicalize()?)?,
+                resources_dir: None,
+                path_dir: Some(path_dir.clone()),
+            }),
+        };
+
+        Ok(PackagePathTestFixture {
+            _temp_dir: temp_dir,
+            arg0_dir,
+            existing_dir,
+            install_context,
+            path_dir,
+        })
     }
 
     #[test]
@@ -497,6 +599,63 @@ mod tests {
         assert_eq!(
             linux_sandbox_exe_path(Some(&path_entry), Some(PathBuf::from("/usr/bin/codex"))),
             Some(alias_path),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn path_env_can_prepend_package_path_before_arg0_alias_dir() -> anyhow::Result<()> {
+        let fixture = package_path_test_fixture()?;
+
+        let package_path = super::path_env_with_package_path_dir(
+            &fixture.install_context,
+            Some(fixture.existing_dir.as_os_str().to_owned()),
+        )
+        .expect("package path dir should update PATH");
+        let updated_path = super::path_env_with_entry(&fixture.arg0_dir, Some(package_path));
+
+        assert_eq!(
+            std::env::split_paths(&updated_path).collect::<Vec<_>>(),
+            vec![
+                fixture.arg0_dir,
+                fixture.path_dir.as_path().to_path_buf(),
+                fixture.existing_dir
+            ],
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn package_path_survives_arg0_alias_setup_failure() -> anyhow::Result<()> {
+        let fixture = package_path_test_fixture()?;
+
+        let (path_entry_guard, updated_path_env_var) = super::prepare_path_env_var_with_aliases(
+            &fixture.install_context,
+            Some(fixture.existing_dir.as_os_str().to_owned()),
+            |path_for_aliases| {
+                assert_eq!(
+                    std::env::split_paths(
+                        &path_for_aliases.expect("package PATH should be passed to alias setup")
+                    )
+                    .collect::<Vec<_>>(),
+                    vec![
+                        fixture.path_dir.as_path().to_path_buf(),
+                        fixture.existing_dir.clone()
+                    ],
+                );
+                Err(std::io::Error::other("alias setup failed"))
+            },
+        );
+
+        assert!(path_entry_guard.is_none());
+        let updated_path_env_var =
+            updated_path_env_var.expect("package PATH should survive alias setup failure");
+        assert_eq!(
+            std::env::split_paths(&updated_path_env_var).collect::<Vec<_>>(),
+            vec![
+                fixture.path_dir.as_path().to_path_buf(),
+                fixture.existing_dir
+            ],
         );
         Ok(())
     }

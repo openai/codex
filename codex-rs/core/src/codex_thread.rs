@@ -1,7 +1,5 @@
 use crate::agent::AgentStatus;
 use crate::config::ConstraintResult;
-use crate::goals::ExternalGoalSet;
-use crate::goals::GoalRuntimeEvent;
 use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
@@ -24,6 +22,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
@@ -33,6 +32,7 @@ use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::StoredThread;
@@ -60,7 +60,7 @@ pub struct ThreadConfigSnapshot {
     pub approvals_reviewer: ApprovalsReviewer,
     pub permission_profile: PermissionProfile,
     pub active_permission_profile: Option<ActivePermissionProfile>,
-    pub cwd: AbsolutePathBuf,
+    pub environments: TurnEnvironmentSelections,
     pub workspace_roots: Vec<AbsolutePathBuf>,
     pub profile_workspace_roots: Vec<AbsolutePathBuf>,
     pub ephemeral: bool,
@@ -69,18 +69,64 @@ pub struct ThreadConfigSnapshot {
     pub personality: Option<Personality>,
     pub collaboration_mode: CollaborationMode,
     pub session_source: SessionSource,
+    pub forked_from_thread_id: Option<ThreadId>,
     pub parent_thread_id: Option<ThreadId>,
     pub thread_source: Option<ThreadSource>,
 }
 
+/// Explains why `CodexThread::try_start_turn_if_idle` rejected an automatic
+/// idle turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TryStartTurnIfIdleRejectionReason {
+    /// User/client-triggered mailbox work is already queued and must take
+    /// priority over extension-initiated idle work.
+    PendingTriggerTurn,
+    /// The thread is in Plan mode, where automatic idle work must not start a
+    /// new model turn.
+    PlanMode,
+    /// Another turn or task is active, or the idle reservation was lost before
+    /// the automatic turn could start.
+    Busy,
+}
+
+/// Rejection returned when an extension asks to start automatic idle work but
+/// the thread is not eligible to run it.
+#[derive(Debug)]
+pub struct TryStartTurnIfIdleError {
+    reason: TryStartTurnIfIdleRejectionReason,
+    input: Vec<ResponseItem>,
+}
+
+impl TryStartTurnIfIdleError {
+    pub(crate) fn new(reason: TryStartTurnIfIdleRejectionReason, input: Vec<ResponseItem>) -> Self {
+        Self { reason, input }
+    }
+
+    /// Returns the stable reason the automatic idle turn was rejected.
+    pub fn reason(&self) -> TryStartTurnIfIdleRejectionReason {
+        self.reason
+    }
+
+    /// Consumes the rejection and returns the original model-visible input
+    /// unchanged, so callers can retry, drop, or log it explicitly.
+    pub fn into_input(self) -> Vec<ResponseItem> {
+        self.input
+    }
+}
+
 impl ThreadConfigSnapshot {
+    pub fn cwd(&self) -> &AbsolutePathBuf {
+        &self.environments.legacy_fallback_cwd
+    }
+
+    pub fn environment_selections(&self) -> &[TurnEnvironmentSelection] {
+        &self.environments.environments
+    }
+
     pub fn sandbox_policy(&self) -> SandboxPolicy {
-        let file_system_sandbox_policy = self.permission_profile.file_system_sandbox_policy();
         codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
             &self.permission_profile,
-            &file_system_sandbox_policy,
-            self.permission_profile.network_sandbox_policy(),
-            self.cwd.as_path(),
+            self.cwd().as_path(),
         )
     }
 }
@@ -88,7 +134,7 @@ impl ThreadConfigSnapshot {
 /// Thread settings overrides that app-server validates before starting a turn.
 #[derive(Clone, Default)]
 pub struct CodexThreadSettingsOverrides {
-    pub cwd: Option<PathBuf>,
+    pub environments: Option<TurnEnvironmentSelections>,
     pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub approval_policy: Option<AskForApproval>,
@@ -111,6 +157,14 @@ pub struct CodexThread {
     session_configured: SessionConfiguredEvent,
     rollout_path: Option<PathBuf>,
     out_of_band_elicitation_count: Mutex<u64>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct BackgroundTerminalInfo {
+    pub item_id: String,
+    pub process_id: String,
+    pub command: String,
+    pub cwd: AbsolutePathBuf,
 }
 
 /// Conduit for the bidirectional stream of messages that compose a thread
@@ -166,51 +220,11 @@ impl CodexThread {
         }
     }
 
-    pub async fn apply_goal_resume_runtime_effects(&self) -> anyhow::Result<()> {
+    pub async fn emit_thread_idle_lifecycle_if_idle(&self) {
         self.codex
             .session
-            .goal_runtime_apply(GoalRuntimeEvent::ThreadResumed)
-            .await
-    }
-
-    pub async fn continue_active_goal_if_idle(&self) -> anyhow::Result<()> {
-        self.codex
-            .session
-            .goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
-            .await
-    }
-
-    pub async fn prepare_external_goal_mutation(&self) {
-        if let Err(err) = self
-            .codex
-            .session
-            .goal_runtime_apply(GoalRuntimeEvent::ExternalMutationStarting)
-            .await
-        {
-            tracing::warn!("failed to prepare external goal mutation: {err}");
-        }
-    }
-
-    pub async fn apply_external_goal_set(&self, external_set: ExternalGoalSet) {
-        if let Err(err) = self
-            .codex
-            .session
-            .goal_runtime_apply(GoalRuntimeEvent::ExternalSet { external_set })
-            .await
-        {
-            tracing::warn!("failed to apply external goal status runtime effects: {err}");
-        }
-    }
-
-    pub async fn apply_external_goal_clear(&self) {
-        if let Err(err) = self
-            .codex
-            .session
-            .goal_runtime_apply(GoalRuntimeEvent::ExternalClear)
-            .await
-        {
-            tracing::warn!("failed to apply external goal clear runtime effects: {err}");
-        }
+            .emit_thread_idle_lifecycle_if_idle()
+            .await;
     }
 
     #[doc(hidden)]
@@ -237,6 +251,12 @@ impl CodexThread {
         trace: Option<W3cTraceContext>,
         client_user_message_id: Option<String>,
     ) -> CodexResult<String> {
+        self.codex
+            .session
+            .services
+            .agent_control
+            .ensure_execution_capacity_for_op(self.session_configured.thread_id, &op)
+            .await?;
         self.codex
             .submit_user_input_with_client_user_message_id(op, trace, client_user_message_id)
             .await
@@ -278,11 +298,23 @@ impl CodexThread {
         self.codex.session.inject_if_running(items).await
     }
 
-    /// Starts a regular turn with model-visible items only if the thread is idle.
+    /// Starts an automatic regular turn with model-visible items only when idle
+    /// work is allowed for this thread.
+    ///
+    /// This is the required entry point for extensions that want to launch
+    /// model-visible work from `ThreadLifecycleContributor::on_thread_idle`.
+    /// The call succeeds only if no user/client-triggered turn is queued, no
+    /// task is currently active, and the thread is not in Plan mode. Active
+    /// Review tasks are rejected by the active-task check because Review turns
+    /// are not steerable.
+    ///
+    /// On rejection, the returned error includes a stable reason and carries
+    /// the original `items` unchanged so the caller can decide whether to drop
+    /// them, retry later, or log why no automatic turn was started.
     pub async fn try_start_turn_if_idle(
         &self,
         items: Vec<ResponseItem>,
-    ) -> Result<(), Vec<ResponseItem>> {
+    ) -> Result<(), TryStartTurnIfIdleError> {
         self.codex.session.try_start_turn_if_idle(items).await
     }
 
@@ -315,7 +347,7 @@ impl CodexThread {
         overrides: CodexThreadSettingsOverrides,
     ) -> SessionSettingsUpdate {
         let CodexThreadSettingsOverrides {
-            cwd,
+            environments,
             workspace_roots,
             profile_workspace_roots,
             approval_policy,
@@ -342,7 +374,7 @@ impl CodexThread {
         };
 
         SessionSettingsUpdate {
-            cwd,
+            environments,
             workspace_roots,
             profile_workspace_roots,
             approval_policy,
@@ -372,6 +404,17 @@ impl CodexThread {
         self.codex.agent_status().await
     }
 
+    pub async fn list_background_terminals(&self) -> Vec<BackgroundTerminalInfo> {
+        self.codex.session.list_background_terminals().await
+    }
+
+    pub async fn terminate_background_terminal(&self, process_id: i32) -> bool {
+        self.codex
+            .session
+            .terminate_background_terminal(process_id)
+            .await
+    }
+
     pub(crate) fn subscribe_status(&self) -> watch::Receiver<AgentStatus> {
         self.codex.agent_status.clone()
     }
@@ -394,6 +437,7 @@ impl CodexThread {
             role: "user".to_string(),
             content: vec![ContentItem::InputText { text: message }],
             phase: None,
+            metadata: None,
         };
         self.codex
             .session
@@ -498,8 +542,22 @@ impl CodexThread {
         self.codex.thread_config_snapshot().await
     }
 
+    /// Returns the files that supplied the thread's loaded model instructions.
+    pub async fn instruction_sources(&self) -> Vec<AbsolutePathBuf> {
+        self.codex.instruction_sources().await
+    }
+
     pub async fn config(&self) -> Arc<crate::config::Config> {
         self.codex.session.get_config().await
+    }
+
+    /// Resolves the MCP runtime configuration using this thread's extension data.
+    pub async fn runtime_mcp_config(&self, config: &crate::config::Config) -> codex_mcp::McpConfig {
+        self.codex.session.runtime_mcp_config(config).await
+    }
+
+    pub fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
+        self.codex.session.multi_agent_version()
     }
 
     /// Refresh the thread's layer-backed user config state from a caller-supplied

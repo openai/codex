@@ -207,9 +207,10 @@ fn insert_rmcp_test_server(config: &mut Config, command: String, approval_mode: 
             tools: HashMap::new(),
         },
     );
-    if let Err(err) = config.mcp_servers.set(servers) {
-        panic!("test mcp servers should accept any configuration: {err}");
-    }
+    config
+        .mcp_servers
+        .set(servers)
+        .expect("test mcp servers should accept any configuration");
 }
 
 fn enable_hooks_and_rmcp_server(
@@ -271,9 +272,8 @@ async fn pre_tool_use_blocks_mcp_tool_before_execution(
     let rmcp_test_server_bin = stdio_server_bin()?;
     let test = test_codex()
         .with_pre_build_hook(move |home| {
-            if let Err(error) = write_pre_tool_use_hook(home, block_reason) {
-                panic!("failed to write MCP pre tool use hook fixture: {error}");
-            }
+            write_pre_tool_use_hook(home, block_reason)
+                .expect("failed to write MCP pre tool use hook fixture");
         })
         .with_config(move |config| {
             enable_hooks_and_rmcp_server(
@@ -293,9 +293,10 @@ async fn pre_tool_use_blocks_mcp_tool_before_execution(
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
-    let Some(output) = output_item.get("output").and_then(Value::as_str) else {
-        panic!("blocked MCP tool output should be a string: {output_item:?}");
-    };
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("blocked MCP tool output should be a string");
     assert!(
         output.contains(&format!(
             "Tool call blocked by PreToolUse hook: {block_reason}. Tool: {RMCP_ECHO_TOOL_NAME}"
@@ -319,12 +320,9 @@ async fn pre_tool_use_blocks_mcp_tool_before_execution(
             "tool_input": { "message": RMCP_ECHO_MESSAGE },
         })
     );
-    let Some(transcript_path) = hook_inputs[0]["transcript_path"].as_str() else {
-        panic!(
-            "pre tool use hook transcript_path should be a string: {:?}",
-            hook_inputs[0]["transcript_path"]
-        );
-    };
+    let transcript_path = hook_inputs[0]["transcript_path"]
+        .as_str()
+        .expect("pre tool use hook transcript_path should be a string");
     assert!(
         Path::new(transcript_path).exists(),
         "pre tool use hook transcript_path should be materialized on disk",
@@ -363,9 +361,8 @@ async fn pre_tool_use_rewrites_mcp_tool_before_execution() -> Result<()> {
     let rmcp_test_server_bin = stdio_server_bin()?;
     let test = test_codex()
         .with_pre_build_hook(move |home| {
-            if let Err(error) = write_updating_pre_tool_use_hook(home, rewritten_message) {
-                panic!("failed to write MCP updating pre tool use hook fixture: {error}");
-            }
+            write_updating_pre_tool_use_hook(home, rewritten_message)
+                .expect("failed to write MCP updating pre tool use hook fixture");
         })
         .with_config(move |config| {
             enable_hooks_and_rmcp_server(
@@ -384,9 +381,10 @@ async fn pre_tool_use_rewrites_mcp_tool_before_execution() -> Result<()> {
 
     let final_request = final_mock.single_request();
     let output_item = final_request.function_call_output(call_id);
-    let Some(output) = output_item.get("output").and_then(Value::as_str) else {
-        panic!("MCP tool output should be a string: {output_item:?}");
-    };
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("MCP tool output should be a string");
     assert!(
         output.contains(&format!("ECHOING: {rewritten_message}")),
         "MCP tool should execute the rewritten input",
@@ -460,9 +458,8 @@ async fn post_tool_use_records_mcp_tool_payload_and_context(
     let rmcp_test_server_bin = stdio_server_bin()?;
     let test = test_codex()
         .with_pre_build_hook(move |home| {
-            if let Err(error) = write_post_tool_use_hook(home, post_context) {
-                panic!("failed to write MCP post tool use hook fixture: {error}");
-            }
+            write_post_tool_use_hook(home, post_context)
+                .expect("failed to write MCP post tool use hook fixture");
         })
         .with_config(move |config| {
             enable_hooks_and_rmcp_server(
@@ -487,9 +484,10 @@ async fn post_tool_use_records_mcp_tool_payload_and_context(
         "follow-up request should include MCP post tool use additional context",
     );
     let output_item = final_request.function_call_output(call_id);
-    let Some(output) = output_item.get("output").and_then(Value::as_str) else {
-        panic!("MCP tool output should be a string: {output_item:?}");
-    };
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("MCP tool output should be a string");
     assert!(
         output.contains(&format!("ECHOING: {RMCP_ECHO_MESSAGE}")),
         "MCP tool output should still reach the model",
@@ -520,12 +518,9 @@ async fn post_tool_use_records_mcp_tool_payload_and_context(
             },
         })
     );
-    let Some(transcript_path) = hook_inputs[0]["transcript_path"].as_str() else {
-        panic!(
-            "post tool use hook transcript_path should be a string: {:?}",
-            hook_inputs[0]["transcript_path"]
-        );
-    };
+    let transcript_path = hook_inputs[0]["transcript_path"]
+        .as_str()
+        .expect("post tool use hook transcript_path should be a string");
     assert!(
         Path::new(transcript_path).exists(),
         "post tool use hook transcript_path should be materialized on disk",

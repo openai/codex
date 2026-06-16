@@ -46,7 +46,6 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
     // Kick off a turn that triggers the function call.
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "start sleep".into(),
                 text_elements: Vec::new(),
@@ -104,7 +103,6 @@ async fn interrupt_tool_records_history_entries() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "start history recording".into(),
                 text_elements: Vec::new(),
@@ -126,7 +124,6 @@ async fn interrupt_tool_records_history_entries() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "follow up".into(),
                 text_elements: Vec::new(),
@@ -210,7 +207,6 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "start interrupt marker".into(),
                 text_elements: Vec::new(),
@@ -232,7 +228,6 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "follow up".into(),
                 text_elements: Vec::new(),

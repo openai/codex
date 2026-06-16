@@ -53,6 +53,7 @@ use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
 use codex_protocol::protocol::GitInfo as ProtocolGitInfo;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
@@ -88,6 +89,7 @@ pub enum RolloutRecorderParams {
         thread_source: Option<ThreadSource>,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
+        multi_agent_version: Option<MultiAgentVersion>,
     },
     Resume {
         path: PathBuf,
@@ -173,7 +175,22 @@ impl RolloutRecorderParams {
             thread_source,
             base_instructions,
             dynamic_tools,
+            multi_agent_version: None,
         }
+    }
+
+    pub fn with_multi_agent_version(
+        mut self,
+        multi_agent_version: Option<MultiAgentVersion>,
+    ) -> Self {
+        if let Self::Create {
+            multi_agent_version: version,
+            ..
+        } = &mut self
+        {
+            *version = multi_agent_version;
+        }
+        self
     }
 
     pub fn resume(path: PathBuf) -> Self {
@@ -360,6 +377,7 @@ impl RolloutRecorder {
                 allowed_sources,
                 model_providers,
                 cwd_filters,
+                /*parent_thread_id*/ None,
                 archived,
                 search_term,
             )
@@ -468,6 +486,7 @@ impl RolloutRecorder {
             allowed_sources,
             model_providers,
             cwd_filters,
+            /*parent_thread_id*/ None,
             archived,
             search_term,
         )
@@ -496,6 +515,7 @@ impl RolloutRecorder {
                     allowed_sources,
                     model_providers,
                     cwd_filters,
+                    /*parent_thread_id*/ None,
                     archived,
                     search_term,
                 )
@@ -592,6 +612,7 @@ impl RolloutRecorder {
                     allowed_sources,
                     model_providers,
                     cwd_filter.as_ref().map(std::slice::from_ref),
+                    /*parent_thread_id*/ None,
                     /*archived*/ false,
                     /*search_term*/ None,
                 )
@@ -662,6 +683,7 @@ impl RolloutRecorder {
                 thread_source,
                 base_instructions,
                 dynamic_tools,
+                multi_agent_version,
             } => {
                 let log_file_info = precompute_log_file_info(config, conversation_id)?;
                 let path = log_file_info.path.clone();
@@ -697,6 +719,7 @@ impl RolloutRecorder {
                         Some(dynamic_tools)
                     },
                     memory_mode: (!config.generate_memories()).then_some("disabled".to_string()),
+                    multi_agent_version,
                 };
 
                 (None, Some(log_file_info), path, Some(session_meta))
@@ -850,28 +873,17 @@ impl RolloutRecorder {
 
             // Parse the rollout line structure
             match serde_json::from_value::<RolloutLine>(v.clone()) {
-                Ok(rollout_line) => match rollout_line.item {
-                    RolloutItem::SessionMeta(session_meta_line) => {
-                        // Use the FIRST SessionMeta encountered in the file as the canonical
-                        // thread id and main session information. Keep all items intact.
-                        if thread_id.is_none() {
-                            thread_id = Some(session_meta_line.meta.id);
-                        }
-                        items.push(RolloutItem::SessionMeta(session_meta_line));
+                Ok(rollout_line) => {
+                    let item = rollout_line.item;
+                    // Use the FIRST SessionMeta encountered in the file as the canonical
+                    // thread id and main session information. Keep all items intact.
+                    if thread_id.is_none()
+                        && let RolloutItem::SessionMeta(session_meta_line) = &item
+                    {
+                        thread_id = Some(session_meta_line.meta.id);
                     }
-                    RolloutItem::ResponseItem(item) => {
-                        items.push(RolloutItem::ResponseItem(item));
-                    }
-                    RolloutItem::Compacted(item) => {
-                        items.push(RolloutItem::Compacted(item));
-                    }
-                    RolloutItem::TurnContext(item) => {
-                        items.push(RolloutItem::TurnContext(item));
-                    }
-                    RolloutItem::EventMsg(_ev) => {
-                        items.push(RolloutItem::EventMsg(_ev));
-                    }
-                },
+                    items.push(item);
+                }
                 Err(e) => {
                     trace!("failed to parse rollout line: {e}");
                     parse_errors = parse_errors.saturating_add(1);
@@ -1758,6 +1770,7 @@ async fn resume_candidate_matches_cwd(
             RolloutItem::TurnContext(turn_context) => Some(turn_context.cwd.as_path()),
             RolloutItem::SessionMeta(_)
             | RolloutItem::ResponseItem(_)
+            | RolloutItem::InterAgentCommunication(_)
             | RolloutItem::Compacted(_)
             | RolloutItem::EventMsg(_) => None,
         })

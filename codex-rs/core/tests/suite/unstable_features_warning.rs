@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
 
 use codex_config::CONFIG_TOML_FILE;
 use codex_core::NewThread;
@@ -46,7 +46,6 @@ async fn emits_warning_when_unstable_features_enabled_via_config() {
             config.clone(),
             InitialHistory::New,
             auth_manager,
-            /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
         .await
@@ -93,7 +92,6 @@ async fn suppresses_warning_when_configured() {
             config.clone(),
             InitialHistory::New,
             auth_manager,
-            /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
         .await

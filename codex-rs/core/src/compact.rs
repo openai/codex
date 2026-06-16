@@ -8,12 +8,14 @@ use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
 use crate::hook_runtime::run_pre_compact_hooks;
+use crate::responses_metadata::CodexResponsesMetadata;
+use crate::responses_metadata::CodexResponsesRequestKind;
+use crate::responses_metadata::CompactionTurnMetadata;
 #[cfg(test)]
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
-use crate::turn_metadata::CompactionTurnMetadata;
 use crate::util::backoff;
 use codex_analytics::CodexCompactionEvent;
 use codex_analytics::CompactionImplementation;
@@ -30,6 +32,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ResponseItemMetadata;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -143,12 +146,17 @@ async fn run_compact_task_inner(
     let pre_compact_outcome = run_pre_compact_hooks(&sess, &turn_context, trigger).await;
     match pre_compact_outcome {
         PreCompactHookOutcome::Continue => {}
-        PreCompactHookOutcome::Stopped { reason } => {
-            let error = reason.unwrap_or_else(|| "PreCompact hook stopped execution".to_string());
+        PreCompactHookOutcome::Stopped => {
+            let error = CodexErr::TurnAborted;
             attempt
-                .track(sess.as_ref(), CompactionStatus::Interrupted, Some(error))
+                .track(
+                    sess.as_ref(),
+                    CompactionStatus::Interrupted,
+                    Some(&error),
+                    CompactionAnalyticsDetails::default(),
+                )
                 .await;
-            return Err(CodexErr::TurnAborted);
+            return Err(error);
         }
     }
     let result = run_compact_task_inner_impl(
@@ -160,15 +168,29 @@ async fn run_compact_task_inner(
     )
     .await;
     let status = compaction_status_from_result(&result);
-    let error = result.as_ref().err().map(ToString::to_string);
+    let codex_error = result.as_ref().err();
     if result.is_ok() {
         let post_compact_outcome = run_post_compact_hooks(&sess, &turn_context, trigger).await;
         if let PostCompactHookOutcome::Stopped = post_compact_outcome {
-            attempt.track(sess.as_ref(), status, error).await;
+            attempt
+                .track(
+                    sess.as_ref(),
+                    status,
+                    codex_error,
+                    CompactionAnalyticsDetails::default(),
+                )
+                .await;
             return Err(CodexErr::TurnAborted);
         }
     }
-    attempt.track(sess.as_ref(), status, error).await;
+    attempt
+        .track(
+            sess.as_ref(),
+            status,
+            codex_error,
+            CompactionAnalyticsDetails::default(),
+        )
+        .await;
     result.map(|_| ())
 }
 
@@ -196,6 +218,12 @@ async fn run_compact_task_inner_impl(
     // Reuse one client session so turn-scoped state (sticky routing, websocket incremental
     // request tracking)
     // survives retries within this compact turn.
+    let window_id = sess.current_window_id().await;
+    let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
+        sess.installation_id.clone(),
+        window_id,
+        CodexResponsesRequestKind::Compaction(compaction_metadata),
+    );
 
     loop {
         // Clone is required because of the loop
@@ -209,15 +237,11 @@ async fn run_compact_task_inner_impl(
             personality: turn_context.personality,
             ..Default::default()
         };
-        let window_id = sess.services.model_client.current_window_id();
-        let turn_metadata_header = turn_context
-            .turn_metadata_state
-            .current_header_value_for_compaction(&window_id, compaction_metadata);
         let attempt_result = drain_to_completed(
             &sess,
             turn_context.as_ref(),
             &mut client_session,
-            turn_metadata_header.as_deref(),
+            &responses_metadata,
             &prompt,
         )
         .await;
@@ -240,6 +264,7 @@ async fn run_compact_task_inner_impl(
                     continue;
                 }
                 sess.set_total_tokens_full(turn_context.as_ref()).await;
+                sess.track_turn_codex_error(turn_context.as_ref(), &e);
                 let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
                 sess.send_event(&turn_context, event).await;
                 return Err(e);
@@ -257,6 +282,7 @@ async fn run_compact_task_inner_impl(
                     tokio::time::sleep(delay).await;
                     continue;
                 } else {
+                    sess.track_turn_codex_error(turn_context.as_ref(), &e);
                     let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
                     sess.send_event(&turn_context, event).await;
                     return Err(e);
@@ -272,6 +298,7 @@ async fn run_compact_task_inner_impl(
     let user_messages = collect_user_messages(history_items);
 
     let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
+    let window_id = sess.advance_auto_compact_window_id().await;
 
     if matches!(
         initial_context_injection,
@@ -288,6 +315,7 @@ async fn run_compact_task_inner_impl(
     let compacted_item = CompactedItem {
         message: summary_text.clone(),
         replacement_history: Some(new_history.clone()),
+        window_id: Some(window_id),
     };
     sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
         .await;
@@ -314,6 +342,14 @@ pub(crate) struct CompactionAnalyticsAttempt {
     start_instant: Instant,
 }
 
+#[derive(Clone, Copy, Default)]
+pub(crate) struct CompactionAnalyticsDetails {
+    pub(crate) active_context_tokens_before: Option<i64>,
+    pub(crate) retained_image_count: Option<usize>,
+    pub(crate) compaction_summary_tokens: Option<i64>,
+    pub(crate) cached_input_tokens: Option<i64>,
+}
+
 impl CompactionAnalyticsAttempt {
     pub(crate) async fn begin(
         sess: &Session,
@@ -325,7 +361,7 @@ impl CompactionAnalyticsAttempt {
     ) -> Self {
         let active_context_tokens_before = sess.get_total_token_usage().await;
         Self {
-            thread_id: sess.conversation_id.to_string(),
+            thread_id: sess.thread_id.to_string(),
             turn_id: turn_context.sub_id.clone(),
             trigger,
             reason,
@@ -341,8 +377,17 @@ impl CompactionAnalyticsAttempt {
         self,
         sess: &Session,
         status: CompactionStatus,
-        error: Option<String>,
+        codex_error: Option<&CodexErr>,
+        details: CompactionAnalyticsDetails,
     ) {
+        let CompactionAnalyticsDetails {
+            active_context_tokens_before,
+            retained_image_count,
+            compaction_summary_tokens,
+            cached_input_tokens,
+        } = details;
+        let active_context_tokens_before =
+            active_context_tokens_before.unwrap_or(self.active_context_tokens_before);
         let active_context_tokens_after = sess.get_total_token_usage().await;
         sess.services
             .analytics_events_client
@@ -355,9 +400,14 @@ impl CompactionAnalyticsAttempt {
                 phase: self.phase,
                 strategy: CompactionStrategy::Memento,
                 status,
-                error,
-                active_context_tokens_before: self.active_context_tokens_before,
+                codex_error_kind: codex_error.map(Into::into),
+                codex_error_http_status_code: codex_error
+                    .and_then(CodexErr::http_status_code_value),
+                active_context_tokens_before,
                 active_context_tokens_after,
+                retained_image_count,
+                compaction_summary_tokens,
+                cached_input_tokens,
                 started_at: self.started_at,
                 completed_at: now_unix_seconds(),
                 duration_ms: Some(
@@ -394,7 +444,13 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
     }
 }
 
-pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CompactedUserMessage {
+    message: String,
+    metadata: Option<ResponseItemMetadata>,
+}
+
+pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<CompactedUserMessage> {
     items
         .iter()
         .filter_map(|item| match crate::event_mapping::parse_turn_item(item) {
@@ -402,7 +458,13 @@ pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
                 if is_summary_message(&user.message()) {
                     None
                 } else {
-                    Some(user.message())
+                    Some(CompactedUserMessage {
+                        message: user.message(),
+                        metadata: match item {
+                            ResponseItem::Message { metadata, .. } => metadata.clone(),
+                            _ => None,
+                        },
+                    })
                 }
             }
             _ => None,
@@ -473,7 +535,7 @@ pub(crate) fn insert_initial_context_before_last_real_user_or_summary(
 
 pub(crate) fn build_compacted_history(
     initial_context: Vec<ResponseItem>,
-    user_messages: &[String],
+    user_messages: &[CompactedUserMessage],
     summary_text: &str,
 ) -> Vec<ResponseItem> {
     build_compacted_history_with_limit(
@@ -486,24 +548,28 @@ pub(crate) fn build_compacted_history(
 
 fn build_compacted_history_with_limit(
     mut history: Vec<ResponseItem>,
-    user_messages: &[String],
+    user_messages: &[CompactedUserMessage],
     summary_text: &str,
     max_tokens: usize,
 ) -> Vec<ResponseItem> {
-    let mut selected_messages: Vec<String> = Vec::new();
+    let mut selected_messages: Vec<CompactedUserMessage> = Vec::new();
     if max_tokens > 0 {
         let mut remaining = max_tokens;
         for message in user_messages.iter().rev() {
             if remaining == 0 {
                 break;
             }
-            let tokens = approx_token_count(message);
+            let tokens = approx_token_count(&message.message);
             if tokens <= remaining {
                 selected_messages.push(message.clone());
                 remaining = remaining.saturating_sub(tokens);
             } else {
-                let truncated = truncate_text(message, TruncationPolicy::Tokens(remaining));
-                selected_messages.push(truncated);
+                let truncated =
+                    truncate_text(&message.message, TruncationPolicy::Tokens(remaining));
+                selected_messages.push(CompactedUserMessage {
+                    message: truncated,
+                    metadata: message.metadata.clone(),
+                });
                 break;
             }
         }
@@ -515,9 +581,10 @@ fn build_compacted_history_with_limit(
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
-                text: message.clone(),
+                text: message.message.clone(),
             }],
             phase: None,
+            metadata: message.metadata.clone(),
         });
     }
 
@@ -532,6 +599,7 @@ fn build_compacted_history_with_limit(
         role: "user".to_string(),
         content: vec![ContentItem::InputText { text: summary_text }],
         phase: None,
+        metadata: None,
     });
 
     history
@@ -541,7 +609,7 @@ async fn drain_to_completed(
     sess: &Session,
     turn_context: &TurnContext,
     client_session: &mut ModelClientSession,
-    turn_metadata_header: Option<&str>,
+    responses_metadata: &CodexResponsesMetadata,
     prompt: &Prompt,
 ) -> CodexResult<()> {
     let mut stream = client_session
@@ -549,10 +617,10 @@ async fn drain_to_completed(
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,
-            turn_context.reasoning_effort,
+            turn_context.reasoning_effort.clone(),
             turn_context.reasoning_summary,
             turn_context.config.service_tier.clone(),
-            turn_metadata_header,
+            responses_metadata,
             // Rollout tracing currently models remote compaction only; local compaction streams
             // are left untraced until the reducer has a first-class local compaction lifecycle.
             &InferenceTraceContext::disabled(),

@@ -1,7 +1,10 @@
 use super::*;
 
+mod rate_limit_resets;
+
 // Duration before a browser ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const ACCOUNT_TOKEN_USAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 10);
 // The override is intentionally available only in debug builds, matching the login path below.
 #[cfg(debug_assertions)]
 const LOGIN_ISSUER_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
@@ -131,6 +134,14 @@ impl AccountRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn get_account_token_usage(
+        &self,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.get_account_token_usage_response()
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn send_add_credits_nudge_email(
         &self,
         params: SendAddCreditsNudgeEmailParams,
@@ -149,6 +160,9 @@ impl AccountRequestProcessor {
 
     pub(crate) fn clear_external_auth(&self) {
         self.auth_manager.clear_external_auth();
+        self.thread_manager
+            .plugins_manager()
+            .set_auth_mode(self.auth_manager.get_api_auth_mode());
     }
 
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
@@ -164,6 +178,10 @@ impl AccountRequestProcessor {
         thread_manager: &Arc<ThreadManager>,
         auth: Option<CodexAuth>,
     ) {
+        thread_manager
+            .plugins_manager()
+            .set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
+
         match config_manager
             .load_latest_config(/*fallback_cwd*/ None)
             .await
@@ -277,6 +295,7 @@ impl AccountRequestProcessor {
             &self.config.codex_home,
             &params.api_key,
             self.config.cli_auth_credentials_store_mode,
+            self.config.auth_keyring_backend_kind(),
         ) {
             Ok(()) => {
                 self.auth_manager.reload().await;
@@ -322,9 +341,10 @@ impl AccountRequestProcessor {
             codex_streamlined_login,
             ..LoginServerOptions::new(
                 config.codex_home.to_path_buf(),
-                CLIENT_ID.to_string(),
+                oauth_client_id(),
                 config.forced_chatgpt_workspace_id.clone(),
                 config.cli_auth_credentials_store_mode,
+                config.auth_keyring_backend_kind(),
             )
         };
         #[cfg(debug_assertions)]
@@ -586,7 +606,7 @@ impl AccountRequestProcessor {
         )
         .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
         self.auth_manager.reload().await;
-        self.config_manager.replace_cloud_requirements_loader(
+        self.config_manager.replace_cloud_config_bundle_loader(
             self.auth_manager.clone(),
             self.config.chatgpt_base_url.clone(),
         );
@@ -645,7 +665,7 @@ impl AccountRequestProcessor {
             let auth_manager = thread_manager.auth_manager();
             auth_manager.reload().await;
             config_manager
-                .replace_cloud_requirements_loader(auth_manager.clone(), chatgpt_base_url);
+                .replace_cloud_config_bundle_loader(auth_manager.clone(), chatgpt_base_url);
             config_manager
                 .sync_default_client_residency_requirement()
                 .await;
@@ -767,24 +787,28 @@ impl AccountRequestProcessor {
                     let permanent_refresh_failure =
                         self.auth_manager.refresh_failure_for_auth(&auth).is_some();
                     let auth_mode = auth.api_auth_mode();
-                    let (reported_auth_method, token_opt) =
-                        if matches!(auth, CodexAuth::AgentIdentity(_))
-                            || include_token && permanent_refresh_failure
-                        {
-                            (Some(auth_mode), None)
-                        } else {
-                            match auth.get_token() {
-                                Ok(token) if !token.is_empty() => {
-                                    let tok = if include_token { Some(token) } else { None };
-                                    (Some(auth_mode), tok)
-                                }
-                                Ok(_) => (None, None),
-                                Err(err) => {
-                                    tracing::warn!("failed to get token for auth status: {err}");
-                                    (None, None)
-                                }
+                    let (reported_auth_method, token_opt) = if matches!(
+                        auth,
+                        CodexAuth::AgentIdentity(_) | CodexAuth::PersonalAccessToken(_)
+                    ) || include_token
+                        && permanent_refresh_failure
+                    {
+                        // This response cannot represent the metadata needed to reuse these
+                        // credentials.
+                        (Some(auth_mode), None)
+                    } else {
+                        match auth.get_token() {
+                            Ok(token) if !token.is_empty() => {
+                                let tok = if include_token { Some(token) } else { None };
+                                (Some(auth_mode), tok)
                             }
-                        };
+                            Ok(_) => (None, None),
+                            Err(err) => {
+                                tracing::warn!("failed to get token for auth status: {err}");
+                                (None, None)
+                            }
+                        }
+                    };
                     GetAuthStatusResponse {
                         auth_method: reported_auth_method,
                         auth_token: token_opt,
@@ -816,11 +840,7 @@ impl AccountRequestProcessor {
         );
         let account_state = match provider.account_state() {
             Ok(account_state) => account_state,
-            Err(ProviderAccountError::MissingChatgptAccountDetails) => {
-                return Err(invalid_request(
-                    "email and plan type are required for chatgpt authentication",
-                ));
-            }
+            Err(err) => return Err(invalid_request(err.to_string())),
         };
         let account = account_state.account.map(Account::from);
 
@@ -833,19 +853,113 @@ impl AccountRequestProcessor {
     async fn get_account_rate_limits_response(
         &self,
     ) -> Result<GetAccountRateLimitsResponse, JSONRPCErrorError> {
-        self.fetch_account_rate_limits()
+        let Some(auth) = self.auth_manager.auth().await else {
+            return Err(invalid_request(
+                "codex account authentication required to read rate limits",
+            ));
+        };
+
+        if !auth.uses_codex_backend() {
+            return Err(invalid_request(
+                "chatgpt authentication required to read rate limits",
+            ));
+        }
+
+        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
+            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
+
+        let response = client
+            .get_rate_limits_with_reset_credits()
             .await
-            .map(
-                |(rate_limits, rate_limits_by_limit_id)| GetAccountRateLimitsResponse {
-                    rate_limits: rate_limits.into(),
-                    rate_limits_by_limit_id: Some(
-                        rate_limits_by_limit_id
-                            .into_iter()
-                            .map(|(limit_id, snapshot)| (limit_id, snapshot.into()))
-                            .collect(),
-                    ),
-                },
-            )
+            .map_err(|err| internal_error(format!("failed to fetch codex rate limits: {err}")))?;
+        if response.rate_limits.is_empty() {
+            return Err(internal_error(
+                "failed to fetch codex rate limits: no snapshots returned",
+            ));
+        }
+
+        let rate_limits_by_limit_id: HashMap<_, _> = response
+            .rate_limits
+            .iter()
+            .cloned()
+            .map(|snapshot| {
+                let limit_id = snapshot
+                    .limit_id
+                    .clone()
+                    .unwrap_or_else(|| "codex".to_string());
+                (limit_id, snapshot)
+            })
+            .collect();
+        let rate_limits = response
+            .rate_limits
+            .iter()
+            .find(|snapshot| snapshot.limit_id.as_deref() == Some("codex"))
+            .cloned()
+            .unwrap_or_else(|| response.rate_limits[0].clone());
+
+        Ok(GetAccountRateLimitsResponse {
+            rate_limits: rate_limits.into(),
+            rate_limits_by_limit_id: Some(
+                rate_limits_by_limit_id
+                    .into_iter()
+                    .map(|(limit_id, snapshot)| (limit_id, snapshot.into()))
+                    .collect(),
+            ),
+            rate_limit_reset_credits: response.rate_limit_reset_credits.map(|summary| {
+                RateLimitResetCreditsSummary {
+                    available_count: summary.available_count,
+                }
+            }),
+        })
+    }
+
+    async fn get_account_token_usage_response(
+        &self,
+    ) -> Result<GetAccountTokenUsageResponse, JSONRPCErrorError> {
+        let Some(auth) = self.auth_manager.auth().await else {
+            return Err(invalid_request(
+                "codex account authentication required to read token usage",
+            ));
+        };
+
+        if !auth.uses_codex_backend() {
+            return Err(invalid_request(
+                "chatgpt authentication required to read token usage",
+            ));
+        }
+
+        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
+            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
+        let profile = tokio::time::timeout(
+            ACCOUNT_TOKEN_USAGE_FETCH_TIMEOUT,
+            client.get_token_usage_profile(),
+        )
+        .await
+        .map_err(|_| internal_error("token usage profile fetch timed out"))?
+        .map_err(|err| internal_error(format!("failed to fetch token usage profile: {err}")))?;
+        Ok(Self::account_token_usage_response(profile))
+    }
+
+    fn account_token_usage_response(profile: TokenUsageProfile) -> GetAccountTokenUsageResponse {
+        let stats = profile.stats;
+        GetAccountTokenUsageResponse {
+            summary: AccountTokenUsageSummary {
+                lifetime_tokens: stats.lifetime_tokens,
+                peak_daily_tokens: stats.peak_daily_tokens,
+                longest_running_turn_sec: stats.longest_running_turn_sec,
+                current_streak_days: stats.current_streak_days,
+                longest_streak_days: stats.longest_streak_days,
+            },
+            daily_usage_buckets: stats.daily_usage_buckets.map(|buckets| {
+                buckets
+                    .into_iter()
+                    .map(|bucket| AccountTokenUsageDailyBucket {
+                        start_date: bucket.start_date,
+                        tokens: bucket.tokens,
+                    })
+                    .collect()
+            }),
+        }
     }
 
     async fn send_add_credits_nudge_email_response(
@@ -896,59 +1010,46 @@ impl AccountRequestProcessor {
             AddCreditsNudgeCreditType::UsageLimit => BackendAddCreditsNudgeCreditType::UsageLimit,
         }
     }
+}
 
-    async fn fetch_account_rate_limits(
-        &self,
-    ) -> Result<
-        (
-            CoreRateLimitSnapshot,
-            HashMap<String, CoreRateLimitSnapshot>,
-        ),
-        JSONRPCErrorError,
-    > {
-        let Some(auth) = self.auth_manager.auth().await else {
-            return Err(invalid_request(
-                "codex account authentication required to read rate limits",
-            ));
-        };
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_backend_client::TokenUsageProfileDailyBucket;
+    use codex_backend_client::TokenUsageProfileStats;
+    use pretty_assertions::assert_eq;
 
-        if !auth.uses_codex_backend() {
-            return Err(invalid_request(
-                "chatgpt authentication required to read rate limits",
-            ));
-        }
+    #[test]
+    fn account_token_usage_response_maps_profile_stats_and_daily_buckets() {
+        let response = AccountRequestProcessor::account_token_usage_response(TokenUsageProfile {
+            stats: TokenUsageProfileStats {
+                lifetime_tokens: Some(123),
+                peak_daily_tokens: Some(45),
+                longest_running_turn_sec: Some(67),
+                current_streak_days: Some(8),
+                longest_streak_days: Some(9),
+                daily_usage_buckets: Some(vec![TokenUsageProfileDailyBucket {
+                    start_date: "2026-05-29".to_string(),
+                    tokens: 10,
+                }]),
+            },
+        });
 
-        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
-            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
-
-        let snapshots = client
-            .get_rate_limits_many()
-            .await
-            .map_err(|err| internal_error(format!("failed to fetch codex rate limits: {err}")))?;
-        if snapshots.is_empty() {
-            return Err(internal_error(
-                "failed to fetch codex rate limits: no snapshots returned",
-            ));
-        }
-
-        let rate_limits_by_limit_id: HashMap<String, CoreRateLimitSnapshot> = snapshots
-            .iter()
-            .cloned()
-            .map(|snapshot| {
-                let limit_id = snapshot
-                    .limit_id
-                    .clone()
-                    .unwrap_or_else(|| "codex".to_string());
-                (limit_id, snapshot)
-            })
-            .collect();
-
-        let primary = snapshots
-            .iter()
-            .find(|snapshot| snapshot.limit_id.as_deref() == Some("codex"))
-            .cloned()
-            .unwrap_or_else(|| snapshots[0].clone());
-
-        Ok((primary, rate_limits_by_limit_id))
+        assert_eq!(
+            response,
+            GetAccountTokenUsageResponse {
+                summary: AccountTokenUsageSummary {
+                    lifetime_tokens: Some(123),
+                    peak_daily_tokens: Some(45),
+                    longest_running_turn_sec: Some(67),
+                    current_streak_days: Some(8),
+                    longest_streak_days: Some(9),
+                },
+                daily_usage_buckets: Some(vec![AccountTokenUsageDailyBucket {
+                    start_date: "2026-05-29".to_string(),
+                    tokens: 10,
+                }]),
+            }
+        );
     }
 }

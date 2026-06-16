@@ -45,6 +45,7 @@ use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
+use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::HttpClient;
 use codex_exec_server::ReqwestHttpClient;
@@ -74,7 +75,7 @@ pub(crate) const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.du
 pub(crate) const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str =
     "codex.mcp.tools.fetch_uncached.duration_ms";
 pub(crate) const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
-pub(crate) const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(120);
+pub(crate) const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(300);
 
 const UNTRUSTED_CONNECTOR_META_KEYS: &[&str] = &[
     "connector_id",
@@ -141,6 +142,7 @@ impl AsyncManagedClient {
         server_name: String,
         server: EffectiveMcpServer,
         store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
         cancel_token: CancellationToken,
         tx_event: Sender<Event>,
         elicitation_requests: ElicitationRequestManager,
@@ -179,6 +181,7 @@ impl AsyncManagedClient {
                         &server_name,
                         server.clone(),
                         store_mode,
+                        keyring_backend_kind,
                         runtime_context,
                         runtime_auth_provider,
                     )
@@ -577,6 +580,7 @@ async fn make_rmcp_client(
     server_name: &str,
     server: EffectiveMcpServer,
     store_mode: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
     runtime_context: McpRuntimeContext,
     runtime_auth_provider: Option<SharedAuthProvider>,
 ) -> Result<RmcpClient, StartupOutcomeError> {
@@ -648,6 +652,7 @@ async fn make_rmcp_client(
                 http_headers,
                 env_http_headers,
                 store_mode,
+                keyring_backend_kind,
                 http_client,
                 runtime_auth_provider,
             )

@@ -15,6 +15,7 @@ use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_preserving_symlinks;
+use codex_utils_path_uri::PathUri;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
@@ -39,6 +40,12 @@ const FS_HELPER_BAZEL_BWRAP_ENV_ALLOWLIST: &[&str] = &[
     "TEST_WORKSPACE",
 ];
 
+#[derive(Debug, PartialEq, Eq)]
+struct SandboxCwd {
+    uri: PathUri,
+    native: AbsolutePathBuf,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct FileSystemSandboxRunner {
     runtime_paths: ExecServerRuntimePaths,
@@ -59,21 +66,29 @@ impl FileSystemSandboxRunner {
         request: FsHelperRequest,
     ) -> Result<FsHelperPayload, JSONRPCErrorError> {
         let cwd = sandbox_cwd(sandbox)?;
-        let mut file_system_policy = sandbox.permissions.file_system_sandbox_policy();
+        let native_permissions: PermissionProfile =
+            sandbox.permissions.clone().try_into().map_err(|err| {
+                invalid_request(format!("invalid sandbox permission path URI: {err}"))
+            })?;
+        let mut file_system_policy = native_permissions.file_system_sandbox_policy();
         let helper_read_roots = if sandbox.use_legacy_landlock {
             Vec::new()
         } else {
             helper_read_roots(&self.runtime_paths)
         };
-        add_helper_runtime_permissions(&mut file_system_policy, &helper_read_roots, cwd.as_path());
+        add_helper_runtime_permissions(
+            &mut file_system_policy,
+            &helper_read_roots,
+            cwd.native.as_path(),
+        );
         normalize_file_system_policy_root_aliases(&mut file_system_policy);
         let network_policy = NetworkSandboxPolicy::Restricted;
         let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-            sandbox.permissions.enforcement(),
+            native_permissions.enforcement(),
             &file_system_policy,
             network_policy,
         );
-        let command = self.sandbox_exec_request(&permission_profile, &cwd, sandbox)?;
+        let command = self.sandbox_exec_request(&permission_profile, &cwd.uri, sandbox)?;
         let request_json = serde_json::to_vec(&request).map_err(json_error)?;
         run_command(command, request_json).await
     }
@@ -81,7 +96,7 @@ impl FileSystemSandboxRunner {
     fn sandbox_exec_request(
         &self,
         permission_profile: &PermissionProfile,
-        cwd: &AbsolutePathBuf,
+        cwd: &PathUri,
         sandbox_context: &FileSystemSandboxContext,
     ) -> Result<SandboxExecRequest, JSONRPCErrorError> {
         let helper = &self.runtime_paths.codex_self_exe;
@@ -108,7 +123,7 @@ impl FileSystemSandboxRunner {
                 sandbox,
                 enforce_managed_network: false,
                 network: None,
-                sandbox_policy_cwd: cwd.as_path(),
+                sandbox_policy_cwd: cwd,
                 codex_linux_sandbox_exe: self.runtime_paths.codex_linux_sandbox_exe.as_deref(),
                 use_legacy_landlock: sandbox_context.use_legacy_landlock,
                 windows_sandbox_level: sandbox_context.windows_sandbox_level,
@@ -118,9 +133,12 @@ impl FileSystemSandboxRunner {
     }
 }
 
-fn sandbox_cwd(sandbox: &FileSystemSandboxContext) -> Result<AbsolutePathBuf, JSONRPCErrorError> {
-    if let Some(cwd) = &sandbox.cwd {
-        return Ok(cwd.clone());
+fn sandbox_cwd(sandbox: &FileSystemSandboxContext) -> Result<SandboxCwd, JSONRPCErrorError> {
+    if let Some(uri) = &sandbox.cwd {
+        return Ok(SandboxCwd {
+            native: native_sandbox_cwd(uri)?,
+            uri: uri.clone(),
+        });
     }
 
     if sandbox.has_cwd_dependent_permissions() {
@@ -129,9 +147,15 @@ fn sandbox_cwd(sandbox: &FileSystemSandboxContext) -> Result<AbsolutePathBuf, JS
         ));
     }
 
-    let cwd = current_sandbox_cwd().map_err(io_error)?;
-    AbsolutePathBuf::from_absolute_path(cwd.as_path())
-        .map_err(|err| invalid_request(format!("current directory is not absolute: {err}")))
+    let native = AbsolutePathBuf::from_absolute_path(current_sandbox_cwd().map_err(io_error)?)
+        .map_err(|err| invalid_request(format!("current directory is not absolute: {err}")))?;
+    let uri = PathUri::from_abs_path(&native);
+    Ok(SandboxCwd { uri, native })
+}
+
+fn native_sandbox_cwd(cwd: &PathUri) -> Result<AbsolutePathBuf, JSONRPCErrorError> {
+    cwd.to_abs_path()
+        .map_err(|err| invalid_request(err.to_string()))
 }
 
 fn helper_read_roots(runtime_paths: &ExecServerRuntimePaths) -> Vec<AbsolutePathBuf> {
@@ -327,11 +351,13 @@ mod tests {
     use codex_protocol::permissions::FileSystemSpecialPath;
     use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
 
     use crate::ExecServerRuntimePaths;
 
     use super::FileSystemSandboxRunner;
+    use super::SandboxCwd;
     use super::add_helper_runtime_permissions;
     use super::helper_env;
     use super::helper_env_from_vars;
@@ -489,9 +515,10 @@ mod tests {
             ExecServerRuntimePaths::new(codex_self_exe.clone(), Some(codex_self_exe))
                 .expect("runtime paths");
         let runner = FileSystemSandboxRunner::new(runtime_paths);
-        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let native_cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let cwd = PathUri::from_abs_path(&native_cwd);
         let file_system_policy =
-            restricted_policy(vec![path_entry(cwd.clone(), FileSystemAccessMode::Write)]);
+            restricted_policy(vec![path_entry(native_cwd, FileSystemAccessMode::Write)]);
         let network_policy = NetworkSandboxPolicy::Restricted;
         let permission_profile =
             PermissionProfile::from_runtime_permissions(&file_system_policy, network_policy);
@@ -506,15 +533,42 @@ mod tests {
 
     #[test]
     fn sandbox_cwd_uses_context_cwd() {
-        let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir().as_path())
+        let native_cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir().as_path())
             .expect("absolute cwd");
+        let cwd = PathUri::from_abs_path(&native_cwd);
         let policy = restricted_policy(vec![special_entry(
             FileSystemSpecialPath::project_roots(/*subpath*/ None),
             FileSystemAccessMode::Write,
         )]);
         let sandbox_context = sandbox_context_with_cwd(&policy, cwd.clone());
 
-        assert_eq!(sandbox_cwd(&sandbox_context).expect("sandbox cwd"), cwd);
+        assert_eq!(
+            sandbox_cwd(&sandbox_context).expect("sandbox cwd"),
+            SandboxCwd {
+                uri: cwd,
+                native: native_cwd
+            }
+        );
+    }
+
+    #[test]
+    fn sandbox_cwd_rejects_non_native_context_cwd_without_fallback() {
+        let cwd = non_native_cwd();
+        let policy = restricted_policy(vec![special_entry(
+            FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            FileSystemAccessMode::Write,
+        )]);
+        let sandbox_context = sandbox_context_with_cwd(&policy, cwd.clone());
+
+        let err = sandbox_cwd(&sandbox_context).expect_err("non-native cwd should be rejected");
+
+        assert_eq!(
+            err,
+            crate::rpc::invalid_request(format!(
+                "'{cwd}' is invalid on '{}'",
+                std::env::consts::OS
+            ))
+        );
     }
 
     #[test]
@@ -525,7 +579,7 @@ mod tests {
             },
             access: FileSystemAccessMode::Write,
         }]);
-        let sandbox_context = crate::FileSystemSandboxContext::from_permission_profile(
+        let sandbox_context = codex_file_system::FileSystemSandboxContext::from_permission_profile(
             PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
         );
 
@@ -595,12 +649,21 @@ mod tests {
 
     fn sandbox_context_with_cwd(
         policy: &FileSystemSandboxPolicy,
-        cwd: AbsolutePathBuf,
+        cwd: PathUri,
     ) -> crate::FileSystemSandboxContext {
-        crate::FileSystemSandboxContext::from_permission_profile_with_cwd(
+        codex_file_system::FileSystemSandboxContext::from_permission_profile_with_cwd(
             PermissionProfile::from_runtime_permissions(policy, NetworkSandboxPolicy::Restricted),
             cwd,
         )
+    }
+
+    fn non_native_cwd() -> PathUri {
+        #[cfg(unix)]
+        let uri = "file://server/share/checkout";
+        #[cfg(windows)]
+        let uri = "file:///usr/local/checkout";
+
+        PathUri::parse(uri).expect("non-native cwd URI")
     }
 
     fn path_entry(path: AbsolutePathBuf, access: FileSystemAccessMode) -> FileSystemSandboxEntry {

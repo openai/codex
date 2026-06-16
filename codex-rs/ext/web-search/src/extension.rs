@@ -9,11 +9,11 @@ use codex_api::SearchSettings;
 use codex_core::config::Config;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolContributor;
-use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
@@ -29,7 +29,7 @@ struct WebSearchExtension {
 
 #[derive(Clone)]
 struct WebSearchExtensionConfig {
-    enabled: bool,
+    available: bool,
     provider: ModelProviderInfo,
     settings: SearchSettings,
 }
@@ -38,8 +38,8 @@ impl From<&Config> for WebSearchExtensionConfig {
     fn from(config: &Config) -> Self {
         let web_search_mode = config.web_search_mode.value();
         Self {
-            enabled: config.features.enabled(Feature::StandaloneWebSearch)
-                && config.model_provider.is_openai()
+            // Core selects this executor per turn using the feature flag or model metadata.
+            available: config.model_provider.is_openai()
                 && web_search_mode != WebSearchMode::Disabled,
             provider: config.model_provider.clone(),
             settings: search_settings(config, web_search_mode),
@@ -81,12 +81,16 @@ fn search_settings(config: &Config, web_search_mode: WebSearchMode) -> SearchSet
     }
 }
 
-#[async_trait::async_trait]
 impl ThreadLifecycleContributor<Config> for WebSearchExtension {
-    async fn on_thread_start(&self, input: ThreadStartInput<'_, Config>) {
-        input
-            .thread_store
-            .insert(WebSearchExtensionConfig::from(input.config));
+    fn on_thread_start<'a>(
+        &'a self,
+        input: ThreadStartInput<'a, Config>,
+    ) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            input
+                .thread_store
+                .insert(WebSearchExtensionConfig::from(input.config));
+        })
     }
 }
 
@@ -111,7 +115,7 @@ impl ToolContributor for WebSearchExtension {
         let Some(config) = thread_store.get::<WebSearchExtensionConfig>() else {
             return Vec::new();
         };
-        if !config.enabled {
+        if !config.available {
             return Vec::new();
         }
 
@@ -160,7 +164,7 @@ mod tests {
         let session_store = ExtensionData::new("session");
         let thread_store = ExtensionData::new("11111111-1111-4111-8111-111111111111");
         thread_store.insert(WebSearchExtensionConfig {
-            enabled: true,
+            available: true,
             provider: ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             settings: Default::default(),
         });

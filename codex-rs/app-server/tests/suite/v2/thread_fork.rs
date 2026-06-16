@@ -17,6 +17,7 @@ use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -29,6 +30,12 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::protocol::RolloutItem;
+use codex_rollout::append_rollout_item_to_path;
+use codex_rollout::append_thread_name;
+use codex_rollout::read_session_meta_line;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -50,6 +57,30 @@ use super::analytics::wait_for_analytics_payload;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 #[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+async fn list_threads(mcp: &mut TestAppServer) -> Result<ThreadListResponse> {
+    let list_id = mcp
+        .send_thread_list_request(ThreadListParams {
+            cursor: None,
+            limit: Some(50),
+            sort_key: None,
+            sort_direction: None,
+            model_providers: None,
+            source_kinds: None,
+            archived: None,
+            cwd: None,
+            use_state_db_only: false,
+            search_term: None,
+            parent_thread_id: None,
+        })
+        .await?;
+    let list_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
+    )
+    .await??;
+    to_response::<ThreadListResponse>(list_resp)
+}
 
 #[tokio::test]
 async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
@@ -81,6 +112,9 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         "expected original rollout to exist at {}",
         original_path.display()
     );
+    let mut session_meta = read_session_meta_line(&original_path).await?;
+    session_meta.meta.multi_agent_version = Some(MultiAgentVersion::V1);
+    append_rollout_item_to_path(&original_path, &RolloutItem::SessionMeta(session_meta)).await?;
     let original_contents = std::fs::read_to_string(&original_path)?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
@@ -212,6 +246,50 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     let mut expected_started_thread = thread;
     expected_started_thread.turns.clear();
     assert_eq!(started.thread, expected_started_thread);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_inherits_explicit_source_name_from_session_index() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let source_thread_id = ThreadId::from_string(&conversation_id)?;
+    let source_name = "Renamed parent thread";
+    append_thread_name(codex_home.path(), source_thread_id, source_name).await?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: conversation_id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let fork_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+
+    let ThreadListResponse { data, .. } = list_threads(&mut mcp).await?;
+    let listed = data
+        .iter()
+        .find(|candidate| candidate.id == thread.id)
+        .expect("thread/list should include the forked thread");
+    assert_eq!(listed.name.as_deref(), Some(source_name));
 
     Ok(())
 }
@@ -413,6 +491,13 @@ async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
         "forked",
         "user",
     );
+    assert_eq!(
+        event["event_params"]["forked_from_thread_id"],
+        thread
+            .forked_from_id
+            .as_deref()
+            .expect("forked thread has a source thread")
+    );
     Ok(())
 }
 
@@ -502,10 +587,10 @@ async fn thread_fork_with_empty_path_uses_thread_id() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_fork_surfaces_cloud_requirements_load_errors() -> Result<()> {
+async fn thread_fork_surfaces_cloud_config_bundle_load_errors() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/backend-api/wham/config/requirements"))
+        .and(path("/backend-api/wham/config/bundle"))
         .respond_with(
             ResponseTemplate::new(401)
                 .insert_header("content-type", "text/html")
@@ -586,7 +671,7 @@ async fn thread_fork_surfaces_cloud_requirements_load_errors() -> Result<()> {
     assert_eq!(
         fork_err.error.data,
         Some(json!({
-            "reason": "cloudRequirements",
+            "reason": "cloudConfigBundle",
             "errorCode": "Auth",
             "action": "relogin",
             "statusCode": 401,
@@ -715,26 +800,7 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
     expected_started_thread.turns.clear();
     assert_eq!(started.thread, expected_started_thread);
 
-    let list_id = mcp
-        .send_thread_list_request(ThreadListParams {
-            cursor: None,
-            limit: Some(10),
-            sort_key: None,
-            sort_direction: None,
-            model_providers: None,
-            source_kinds: None,
-            archived: None,
-            cwd: None,
-            use_state_db_only: false,
-            search_term: None,
-        })
-        .await?;
-    let list_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
-    )
-    .await??;
-    let ThreadListResponse { data, .. } = to_response::<ThreadListResponse>(list_resp)?;
+    let ThreadListResponse { data, .. } = list_threads(&mut mcp).await?;
     assert!(
         data.iter().all(|candidate| candidate.id != fork_thread_id),
         "ephemeral forks should not appear in thread/list"
@@ -766,6 +832,120 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn pathless_ephemeral_thread_rejects_codex_home_path_after_reload() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let parent_thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Parent message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let side_thread_id = {
+        let mut app_server = TestAppServer::new(codex_home.path()).await?;
+        timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
+
+        let fork_id = app_server
+            .send_thread_fork_request(ThreadForkParams {
+                thread_id: parent_thread_id,
+                ephemeral: true,
+                ..Default::default()
+            })
+            .await?;
+        let fork_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            app_server.read_stream_until_response_message(RequestId::Integer(fork_id)),
+        )
+        .await??;
+        let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+        assert!(thread.ephemeral);
+        assert_eq!(thread.path, None);
+
+        let turn_id = app_server
+            .send_turn_start_request(TurnStartParams {
+                thread_id: thread.id.clone(),
+                client_user_message_id: None,
+                input: vec![UserInput::Text {
+                    text: "continue".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        let turn_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            app_server.read_stream_until_response_message(RequestId::Integer(turn_id)),
+        )
+        .await??;
+        let _: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            app_server.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
+
+        thread.id
+    };
+
+    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
+    let codex_home_path = codex_home.path().to_path_buf();
+
+    let resume_id = app_server
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: side_thread_id.clone(),
+            path: Some(codex_home_path.clone()),
+            ..Default::default()
+        })
+        .await?;
+    let resume_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_error_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    assert!(
+        resume_err.error.message.contains("path is a directory"),
+        "unexpected resume error: {}",
+        resume_err.error.message
+    );
+    assert!(
+        !resume_err.error.message.contains("Is a directory"),
+        "resume should reject the directory before rollout reading: {}",
+        resume_err.error.message
+    );
+
+    let fork_id = app_server
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: side_thread_id,
+            path: Some(codex_home_path),
+            ..Default::default()
+        })
+        .await?;
+    let fork_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_error_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    assert!(
+        fork_err.error.message.contains("path is a directory"),
+        "unexpected fork error: {}",
+        fork_err.error.message
+    );
+    assert!(
+        !fork_err.error.message.contains("Is a directory"),
+        "fork should reject the directory before rollout reading: {}",
+        fork_err.error.message
+    );
 
     Ok(())
 }

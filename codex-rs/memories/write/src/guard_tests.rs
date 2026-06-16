@@ -11,6 +11,7 @@ fn snapshot(
         primary: primary_used_percent.map(window),
         secondary: secondary_used_percent.map(window),
         credits: None,
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     }

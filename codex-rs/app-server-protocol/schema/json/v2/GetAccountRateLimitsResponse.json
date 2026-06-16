@@ -49,12 +49,34 @@
       ],
       "type": "string"
     },
+    "RateLimitResetCreditsSummary": {
+      "properties": {
+        "availableCount": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "availableCount"
+      ],
+      "type": "object"
+    },
     "RateLimitSnapshot": {
       "properties": {
         "credits": {
           "anyOf": [
             {
               "$ref": "#/definitions/CreditsSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "individualLimit": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpendControlLimitSnapshot"
             },
             {
               "type": "null"
@@ -141,9 +163,44 @@
         "usedPercent"
       ],
       "type": "object"
+    },
+    "SpendControlLimitSnapshot": {
+      "properties": {
+        "limit": {
+          "type": "string"
+        },
+        "remainingPercent": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "resetsAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "used": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "limit",
+        "remainingPercent",
+        "resetsAt",
+        "used"
+      ],
+      "type": "object"
     }
   },
   "properties": {
+    "rateLimitResetCredits": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/RateLimitResetCreditsSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "rateLimits": {
       "allOf": [
         {

@@ -27,7 +27,7 @@
         "read": {
           "description": "This will be removed in favor of `entries`.",
           "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
+            "$ref": "#/definitions/LegacyAppPathString"
           },
           "type": [
             "array",
@@ -37,7 +37,7 @@
         "write": {
           "description": "This will be removed in favor of `entries`.",
           "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
+            "$ref": "#/definitions/LegacyAppPathString"
           },
           "type": [
             "array",
@@ -640,7 +640,7 @@
         {
           "properties": {
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "$ref": "#/definitions/LegacyAppPathString"
             },
             "type": {
               "enum": [
@@ -822,6 +822,9 @@
           "type": "object"
         }
       ]
+    },
+    "LegacyAppPathString": {
+      "type": "string"
     },
     "McpElicitationArrayType": {
       "enum": [
@@ -1590,6 +1593,13 @@
         "cwd": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
+        "environmentId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "itemId": {
           "type": "string"
         },
@@ -1683,6 +1693,15 @@
     "ToolRequestUserInputParams": {
       "description": "EXPERIMENTAL. Params sent with a request_user_input event.",
       "properties": {
+        "autoResolutionMs": {
+          "default": null,
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "itemId": {
           "type": "string"
         },

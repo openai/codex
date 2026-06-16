@@ -1,0 +1,27 @@
+---
+source: tui/src/status/tests.rs
+expression: sanitized
+---
+/status
+
+╭────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.0.0)                  │
+│                                            │
+│ Visit                                      │
+│ https://chatgpt.com/codex/settings/usage   │
+│ for up-to-date                             │
+│ information on rate limits and credits     │
+│                                            │
+│  Model:                  gpt-5.1-codex-max │
+│  Directory: [[workspace]]                  │
+│  Permissions:            Custom (workspace │
+│  Agents.md:              <none>            │
+│                                            │
+│  Token usage:            1.2K total  (800  │
+│  Context window:         100% left (1.2K u │
+│  Monthly credit limit:   68% left          │
+│                          (resets 07:08 on  │
+│                          7 May)            │
+│                          8,000 of 25,000   │
+│                          credits used      │
+╰────────────────────────────────────────────╯

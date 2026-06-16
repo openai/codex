@@ -122,6 +122,7 @@ pub(super) fn stored_thread_from_rollout_item(
 
     Some(StoredThread {
         thread_id,
+        extra_config: None,
         rollout_path: Some(rollout_path),
         forked_from_id: None,
         parent_thread_id: item.parent_thread_id,

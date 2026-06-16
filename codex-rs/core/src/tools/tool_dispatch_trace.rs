@@ -74,7 +74,7 @@ fn tool_dispatch_invocation(invocation: &ToolInvocation) -> Option<ToolDispatchI
     };
 
     Some(ToolDispatchInvocation {
-        thread_id: invocation.session.conversation_id.to_string(),
+        thread_id: invocation.session.thread_id.to_string(),
         codex_turn_id: invocation.turn.sub_id.clone(),
         tool_call_id: invocation.call_id.clone(),
         tool_name: invocation.tool_name.name.clone(),

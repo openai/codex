@@ -14,6 +14,7 @@ In the codex-rs folder where the rust code lives:
 - Avoid bool or ambiguous `Option` parameters that force callers to write hard-to-read code such as `foo(false)` or `bar(None)`. Prefer enums, named methods, newtypes, or other idiomatic Rust API shapes when they keep the callsite self-documenting.
 - When you cannot make that API change and still need a small positional-literal callsite in Rust, follow the `argument_comment_lint` convention:
   - Use an exact `/*param_name*/` comment before opaque literal arguments such as `None`, booleans, and numeric literals when passing them by position.
+  - A method's sole non-self argument is exempt when the method and parameter names match, such as `.enabled(false)` for `fn enabled(&self, enabled: bool)`.
   - Do not add these comments for string or char literals unless the comment adds real clarity; those literals are intentionally exempt from the lint.
   - The parameter name in the comment must exactly match the callee signature.
   - You can run `just argument-comment-lint` to run the lint check locally. This is powered by Bazel, so running it the first time can be slow if Bazel is not warmed up, though incremental invocations should take <15s. Most of the time, it is best to update the PR and let CI take responsibility for checking this (or run it asynchronously in the background after submitting the PR). Note CI checks all three platforms, which the local run does not.
@@ -26,6 +27,8 @@ In the codex-rs folder where the rust code lives:
   - Implementations may still use `async fn foo(&self, ...) -> T` when they satisfy that contract.
   - Do not use `#[allow(async_fn_in_trait)]` as a shortcut around spelling the future contract explicitly.
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
+- Do not add tests for values that are statically defined.
+- Do not add negative tests for logic that was removed.
 - Do not add general product or user-facing documentation to the `docs/` folder. The official Codex documentation lives elsewhere. The exception is app-server API documentation, which is covered by the app-server guidance below.
 - Prefer private modules and explicitly exported public crate API.
 - If you change `ConfigToml` or nested config types, run `just write-config-schema` to update `codex-rs/core/config.schema.json`.
@@ -40,6 +43,10 @@ In the codex-rs folder where the rust code lives:
   directory reads, update the crate's `BUILD.bazel` (`compile_data`, `build_script_data`, or test
   data) or Bazel may fail even when Cargo passes.
 - Do not create small helper methods that are referenced only once.
+- For tracing async work, instrument the function or method definition with
+  `#[tracing::instrument(...)]` instead of attaching spans to futures with
+  `.instrument(...)` at call sites. Before adding instrumentation, check whether the callee—or
+  the implementation method it immediately delegates to—is already instrumented.
 - Avoid large modules:
   - Prefer adding new modules instead of growing existing ones.
   - Target Rust modules under 500 LoC, excluding tests.
@@ -75,6 +82,53 @@ Particularly when introducing a new concept/feature/API, before adding to `codex
 - It is time to introduce a new crate to the Cargo workspace for your new functionality. Refactor existing code as necessary to make this happen.
 
 Likewise, when reviewing code, do not hesitate to push back on PRs that would unnecessarily add code to `codex-core`.
+
+## Code Review Rules
+
+### Crate API surface
+
+Keep crate API surfaces as small as possible. Avoid proliferating test-only helpers.
+
+### Model visible context
+
+Codex maintains a context (history of messages) that is sent to the model in inference requests.
+
+1. No history rewrite - the context must be built up incrementally.
+2. Avoid frequent changes to context that cause cache misses.
+3. No unbounded items - everything injected in the model context must have a bounded size and a hard cap.
+4. No items larger than 10K tokens.
+5. Highlight new individual items that can cross >1k tokens as P0. These need an additional manual review.
+6. All injected fragments must be defined as structs in `core/context` and implement ContextualUserFragment trait
+
+### Breaking changes
+
+Search for breaking changes in external integration surfaces:
+
+- app-server APIs
+- CLI parameters
+- configuration loading
+- resuming sessions from existing rollouts
+
+### Test authoring guidance
+
+For agent changes prefer integration tests over unit tests. Integration tests are under `core/suite` and use `test_codex` to set up a test instance of codex.
+
+Features that change the agent logic MUST add an integration test:
+
+- Provide a list of major logic changes and user-facing behaviors that need to be tested.
+
+If unit tests are needed, put them in a dedicated test file (\*\_tests.rs).
+Avoid test-only functions in the main implementation.
+
+Check whether there are existing helpers to make tests more streamlined and readable.
+
+### Change size guidance (800 lines)
+
+Unless the change is mechanical the total number of changed lines should not exceed 800 lines.
+For complex logic changes the size should be under 500 lines.
+
+If the change is larger, explore whether it can be split into reviewable stages and identify the smallest coherent stage to land first.
+Base the staging suggestion on the actual diff, dependencies, and affected call sites.
 
 ## TUI style conventions
 
@@ -147,6 +201,12 @@ If you don’t have the tool:
 
 - `cargo install --locked cargo-insta`
 
+### Benchmarks
+
+cargo benchmarks can be run with `just bench`, use the divan crate to write new ones.
+
+Use `just bench-smoke` to dry-run the benchmark for a single iteration to ensure it works.
+
 ### Test assertions
 
 - Tests should use pretty_assertions::assert_eq for clearer diffs. Import this at the top of the test module if it isn't already.
@@ -201,6 +261,7 @@ These guidelines apply to app-server protocol work in `codex-rs`, especially:
   `*Params` for request payloads, `*Response` for responses, and `*Notification` for notifications.
 - Expose RPC methods as `<resource>/<method>` and keep `<resource>` singular (for example, `thread/read`, `app/list`).
 - Always expose fields as camelCase on the wire with `#[serde(rename_all = "camelCase")]` unless a tagged union or explicit compatibility requirement needs a targeted rename.
+- Always expose string enum values as camelCase on the wire with matching serde and TS `rename_all = "camelCase"` annotations unless an explicit compatibility requirement needs targeted renames.
 - Exception: config RPC payloads are expected to use snake_case to mirror config.toml keys (see the config read/write/list APIs in `app-server-protocol/src/protocol/v2.rs`).
 - Always set `#[ts(export_to = "v2/")]` on v2 request/response/notification types so generated TypeScript lands in the correct namespace.
 - Never use `#[serde(skip_serializing_if = "Option::is_none")]` for v2 API payload fields.
@@ -241,3 +302,7 @@ This project uses Python 3+. You should not use the `__future__` module.
 
 If you need to worry about feature compatibility between different 3.xx point releases, check the
 closest `pyproject.toml`'s `requires-python` field to see what minimum runtime version is supported.
+
+## Platform Support
+
+Tests and features must support Linux, macOS and Windows unless feature is explicitly OS-specific.

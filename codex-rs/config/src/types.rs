@@ -113,6 +113,26 @@ pub enum OAuthCredentialsStoreMode {
     Keyring,
 }
 
+/// Determine how auth credentials should use keyring-backed storage.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthKeyringBackendKind {
+    /// Store the serialized auth payload directly in the OS keyring.
+    Direct,
+    /// Store auth payloads in the local encrypted secrets file, with the file key in the OS keyring.
+    Secrets,
+}
+
+impl Default for AuthKeyringBackendKind {
+    fn default() -> Self {
+        if cfg!(windows) {
+            Self::Secrets
+        } else {
+            Self::Direct
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum WindowsSandboxModeToml {
@@ -380,6 +400,10 @@ pub struct AppsDefaultConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 
+    /// Reviewer for approval prompts unless overridden by per-app settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+
     /// Whether tools with `destructive_hint = true` are allowed by default.
     #[serde(
         default = "default_enabled",
@@ -424,6 +448,10 @@ pub struct AppConfig {
     /// When `false`, Codex does not surface this app.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+
+    /// Reviewer for approval prompts from this app, overriding the thread default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
 
     /// Whether tools with `destructive_hint = true` are allowed for this app.
     #[serde(default, skip_serializing_if = "Option::is_none")]

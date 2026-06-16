@@ -2,6 +2,7 @@ use super::*;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX;
 use async_channel::bounded;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::ResponseItem;
@@ -80,6 +81,7 @@ async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
                     call_id: "call-1".to_string(),
                     name: "tool".to_string(),
                     input: "{}".to_string(),
+                    metadata: None,
                 },
             }),
         })
@@ -182,9 +184,11 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
 
 #[tokio::test]
 async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
-    let (parent_session, parent_ctx, rx_events) =
+    let (parent_session, mut parent_ctx, rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;
     *parent_session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+    let parent_ctx_mut = Arc::get_mut(&mut parent_ctx).expect("single turn context ref");
+    parent_ctx_mut.environments.turn_environments[0].environment_id = "remote".to_string();
 
     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_tx_events, rx_events_child) = bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -227,6 +231,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
                 RequestPermissionsEvent {
                     call_id: request_call_id,
                     turn_id: "child-turn-1".to_string(),
+                    environment_id: Some("remote".to_string()),
                     started_at_ms: 0,
                     reason: Some("need access".to_string()),
                     permissions: RequestPermissionProfile {
@@ -251,6 +256,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
         panic!("expected RequestPermissions event");
     };
     assert_eq!(request.call_id, call_id.clone());
+    assert_eq!(request.environment_id.as_deref(), Some("remote"));
     assert_eq!(request.cwd, Some(delegated_cwd));
 
     parent_session
@@ -428,6 +434,7 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
                 is_secret: false,
                 options: None,
             }],
+            auto_resolution_ms: None,
         },
         &cancel_token,
     )
@@ -444,4 +451,42 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
             )]),
         })
     );
+}
+
+#[tokio::test]
+async fn delegated_mcp_user_reviewer_returns_none_without_metadata() {
+    let (parent_session, parent_ctx, _rx_events) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    let pending_mcp_invocations = Arc::new(Mutex::new(HashMap::from([(
+        "call-1".to_string(),
+        McpInvocation {
+            server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            tool: "dangerous_tool".to_string(),
+            arguments: None,
+        },
+    )])));
+    let cancel_token = CancellationToken::new();
+
+    let event = RequestUserInputEvent {
+        call_id: "call-1".to_string(),
+        turn_id: "child-turn-1".to_string(),
+        questions: vec![RequestUserInputQuestion {
+            id: format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_call-1"),
+            header: "Approve app tool call?".to_string(),
+            question: "Allow this app tool?".to_string(),
+            is_other: false,
+            is_secret: false,
+            options: None,
+        }],
+        auto_resolution_ms: None,
+    };
+    let response = maybe_auto_review_mcp_request_user_input(
+        &parent_session,
+        &parent_ctx,
+        &pending_mcp_invocations,
+        &event,
+        &cancel_token,
+    )
+    .await;
+    assert_eq!(response, None);
 }

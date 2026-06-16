@@ -3,6 +3,7 @@ module(name = "codex")
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "llvm", version = "0.7.1")
+
 # The upstream LLVM archive contains a few unix-only symlink entries and is
 # missing a couple of MinGW compatibility archives that windows-gnullvm needs
 # during extraction and linking, so patch it until upstream grows native support.
@@ -11,9 +12,11 @@ single_version_override(
     patch_strip = 1,
     patches = [
         "//patches:llvm_rusty_v8_custom_libcxx.patch",
+        "//patches:llvm_windows_arm64_powl.patch",
         "//patches:llvm_windows_symlink_extract.patch",
     ],
 )
+
 # Abseil picks a MinGW pthread TLS path that does not match our hermetic
 # windows-gnullvm toolchain; force it onto the portable C++11 thread-local path.
 single_version_override(
@@ -85,8 +88,10 @@ single_version_override(
         "//patches:rules_cc_rusty_v8_custom_libcxx.patch",
     ],
 )
+
 bazel_dep(name = "rules_platform", version = "0.1.0")
 bazel_dep(name = "rules_rs", version = "0.0.58")
+
 # `rules_rs` still does not model `windows-gnullvm` as a distinct Windows exec
 # platform, so patch it until upstream grows that support for both x86_64 and
 # aarch64.
@@ -94,6 +99,7 @@ single_version_override(
     module_name = "rules_rs",
     patch_strip = 1,
     patches = [
+        "//patches:rules_rs_build_script_deps_annotation.patch",
         "//patches:rules_rs_windows_gnullvm_exec.patch",
         "//patches:rules_rs_windows_exec_linker.patch",
     ],
@@ -101,6 +107,7 @@ single_version_override(
 )
 
 rules_rust = use_extension("@rules_rs//rs/experimental:rules_rust.bzl", "rules_rust")
+
 # Build-script probe binaries inherit CFLAGS/CXXFLAGS from Bazel's C++
 # toolchain. On `windows-gnullvm`, llvm-mingw does not ship
 # `libssp_nonshared`, so strip the forwarded stack-protector flags there.
@@ -125,22 +132,23 @@ nightly_rust = use_extension(
     "rust",
 )
 nightly_rust.toolchain(
-    versions = ["nightly/2025-09-18"],
     dev_components = True,
     edition = "2024",
+    versions = ["nightly/2025-09-18"],
 )
+
 # Keep Windows exec tools on MSVC so Bazel helper binaries link correctly, but
 # lint crate targets as `windows-gnullvm` to preserve the repo's actual cfgs.
 nightly_rust.repository_set(
     name = "rust_windows_x86_64",
     dev_components = True,
     edition = "2024",
-    exec_triple = "x86_64-pc-windows-msvc",
     exec_compatible_with = [
         "@platforms//cpu:x86_64",
         "@platforms//os:windows",
         "@rules_rs//rs/experimental/platforms/constraints:windows_msvc",
     ],
+    exec_triple = "x86_64-pc-windows-msvc",
     target_compatible_with = [
         "@platforms//cpu:x86_64",
         "@platforms//os:windows",
@@ -168,6 +176,7 @@ toolchains.toolchain(
 use_repo(toolchains, "default_rust_toolchains")
 
 register_toolchains("@default_rust_toolchains//:all")
+
 register_toolchains("@rust_toolchains//:all")
 
 crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
@@ -239,7 +248,6 @@ crate.annotation(
         "//patches:aws-lc-sys_windows_msvc_memcmp_probe.patch",
     ],
 )
-
 crate.annotation(
     # The build script only validates embedded source/version metadata.
     crate = "rustc_apfloat",
@@ -247,6 +255,7 @@ crate.annotation(
 )
 
 inject_repo(crate, "zstd")
+
 use_repo(crate, "argument_comment_lint_crates")
 
 bazel_dep(name = "bzip2", version = "1.0.8.bcr.3")
@@ -298,6 +307,11 @@ crate.annotation(
     build_script_data = [
         "@openssl//:gen_dir",
     ],
+    # Build scripts compile in Bazel's exec configuration, so target-specific
+    # optional build deps are otherwise dropped for the musl release platforms.
+    build_script_deps = [
+        "@crates//:openssl-src-300.5.5+3.5.5",
+    ],
     build_script_env = {
         "OPENSSL_DIR": "$(execpath @openssl//:gen_dir)",
         "OPENSSL_NO_VENDOR": "1",
@@ -316,8 +330,12 @@ crate.annotation(
 )
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+
 new_local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
+
+include("//bazel/modules:wine.MODULE.bazel")
 
 new_local_repository(
     name = "v8_targets",
@@ -415,18 +433,18 @@ crate.annotation(
 
 inject_repo(crate, "alsa_lib")
 
-bazel_dep(name = "v8", version = "14.7.173.20")
+bazel_dep(name = "v8", version = "14.9.207.2")
 archive_override(
     module_name = "v8",
-    integrity = "sha256-v/x6I4X38a2wckzUIft3Dh0SUdkuOTokwxyF7lzW8Lc=",
+    integrity = "sha256-tflbZE5srqal6leMxJjK/ZQtwpF96OMGJ6avd5lice4=",
     patch_strip = 3,
     patches = [
         "//patches:v8_module_deps.patch",
         "//patches:v8_bazel_rules.patch",
         "//patches:v8_source_portability.patch",
     ],
-    strip_prefix = "v8-14.7.173.20",
-    urls = ["https://github.com/v8/v8/archive/refs/tags/14.7.173.20.tar.gz"],
+    strip_prefix = "v8-14.9.207.2",
+    urls = ["https://github.com/v8/v8/archive/refs/tags/14.9.207.2.tar.gz"],
 )
 
 http_archive(
@@ -439,12 +457,12 @@ http_archive(
 )
 
 http_archive(
-    name = "v8_crate_147_4_0",
+    name = "v8_crate_149_2_0",
     build_file = "//third_party/v8:v8_crate.BUILD.bazel",
-    sha256 = "2df8fffd507fb18ed000673a83d937f58e60fb07f3306b2274284125b15137cd",
-    strip_prefix = "v8-147.4.0",
+    sha256 = "46dccf61a364b61bbaac70a8ba64a1a1006e87123b7d62eaeec999a3ba31ecdb",
+    strip_prefix = "v8-149.2.0",
     type = "tar.gz",
-    urls = ["https://static.crates.io/crates/v8/v8-147.4.0.crate"],
+    urls = ["https://static.crates.io/crates/v8/v8-149.2.0.crate"],
 )
 
 git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
@@ -452,7 +470,7 @@ git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "g
 git_repository(
     name = "rusty_v8_libcxx",
     build_file = "//third_party/v8:libcxx.BUILD.bazel",
-    commit = "7ab65651aed6802d2599dcb7a73b1f82d5179d05",
+    commit = "99457fa555797f8c5ac3c076ca288d8481d3b23a",
     remote = "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxx.git",
 )
 
@@ -466,25 +484,25 @@ git_repository(
 git_repository(
     name = "rusty_v8_llvm_libc",
     build_file = "//third_party/v8:llvm_libc.BUILD.bazel",
-    commit = "b3aa5bb702ff9e890179fd1e7d3ba346e17ecf8e",
+    commit = "cb952785ccee13811f293f3c419958d1e3ddafbf",
     remote = "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libc.git",
 )
 
 http_file(
-    name = "rusty_v8_147_4_0_aarch64_pc_windows_msvc_archive",
+    name = "rusty_v8_149_2_0_aarch64_pc_windows_msvc_archive",
     downloaded_file_path = "rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
-    sha256 = "1fa3f94d9e09cff1f6bcce94c478e5cb072c0755f6a0357abadb9dd3b48d8127",
+    sha256 = "923f2b6ccdc14526b814e171e34c9aafd7969f12304948857c6696d022f0fb3c",
     urls = [
-        "https://github.com/denoland/rusty_v8/releases/download/v147.4.0/rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
+        "https://github.com/denoland/rusty_v8/releases/download/v149.2.0/rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
     ],
 )
 
 http_file(
-    name = "rusty_v8_147_4_0_x86_64_pc_windows_msvc_archive",
+    name = "rusty_v8_149_2_0_x86_64_pc_windows_msvc_archive",
     downloaded_file_path = "rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
-    sha256 = "e2827ff98b1a9d4c0343000fc5124ac30dfab3007bc0129c168c9355fc2fcd7c",
+    sha256 = "12b5a791b54e92f748738ad8d0d12dad8d281a2d836638ad1aa6678e3b855d9a",
     urls = [
-        "https://github.com/denoland/rusty_v8/releases/download/v147.4.0/rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
+        "https://github.com/denoland/rusty_v8/releases/download/v149.2.0/rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
     ],
 )
 

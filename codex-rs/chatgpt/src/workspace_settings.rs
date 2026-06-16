@@ -3,7 +3,6 @@ use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
 
-use anyhow::Context;
 use codex_core::config::Config;
 use codex_login::CodexAuth;
 use serde::Deserialize;
@@ -93,20 +92,17 @@ pub async fn codex_plugins_enabled_for_workspace(
         return Ok(true);
     }
 
-    let token_data = auth
-        .get_token_data()
-        .context("ChatGPT token data is not available")?;
-    if !token_data.id_token.is_workspace_account() {
+    if !auth.is_workspace_account() {
         return Ok(true);
     }
 
-    let Some(account_id) = token_data.account_id.as_deref().filter(|id| !id.is_empty()) else {
+    let Some(account_id) = auth.get_account_id().filter(|id| !id.is_empty()) else {
         return Ok(true);
     };
 
     let cache_key = WorkspaceSettingsCacheKey {
         chatgpt_base_url: config.chatgpt_base_url.clone(),
-        account_id: account_id.to_string(),
+        account_id: account_id.clone(),
     };
     if let Some(cache) = cache
         && let Some(enabled) = cache.get_codex_plugins_enabled(&cache_key)
@@ -114,7 +110,7 @@ pub async fn codex_plugins_enabled_for_workspace(
         return Ok(enabled);
     }
 
-    let encoded_account_id = encode_path_segment(account_id);
+    let encoded_account_id = encode_path_segment(&account_id);
     let settings: WorkspaceSettingsResponse = chatgpt_get_request_with_timeout(
         config,
         format!("/accounts/{encoded_account_id}/settings"),

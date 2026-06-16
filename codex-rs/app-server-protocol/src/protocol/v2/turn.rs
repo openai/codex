@@ -14,6 +14,7 @@ use codex_protocol::user_input::ByteRange as CoreByteRange;
 use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_protocol::user_input::UserInput as CoreUserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -38,7 +39,7 @@ pub enum TurnStatus {
 #[ts(export_to = "v2/")]
 pub struct TurnEnvironmentParams {
     pub environment_id: String,
-    pub cwd: AbsolutePathBuf,
+    pub cwd: LegacyAppPathString,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -68,7 +69,13 @@ pub struct TurnStartParams {
     #[ts(optional = nullable)]
     pub client_user_message_id: Option<String>,
     pub input: Vec<UserInput>,
-    /// Optional turn-scoped Responses API client metadata.
+    /// Optional metadata to enrich Codex's ResponsesAPI turn metadata.
+    ///
+    /// Entries are flattened into the JSON string sent as
+    /// `client_metadata["x-codex-turn-metadata"]` on ResponsesAPI HTTP and websocket requests.
+    ///
+    /// They are not sent as top-level ResponsesAPI `client_metadata` keys, and reserved keys
+    /// such as `session_id`, `thread_id`, `turn_id`, and `window_id` cannot be overridden.
     #[experimental("turn/start.responsesapiClientMetadata")]
     #[ts(optional = nullable)]
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
@@ -76,7 +83,7 @@ pub struct TurnStartParams {
     #[experimental("turn/start.additionalContext")]
     #[ts(optional = nullable)]
     pub additional_context: Option<HashMap<String, AdditionalContextEntry>>,
-    /// Optional turn-scoped environments.
+    /// Optional environments for this turn and subsequent turns.
     ///
     /// Omitted uses the thread sticky environments. Empty disables
     /// environment access for this turn. Non-empty selects the first
@@ -88,11 +95,10 @@ pub struct TurnStartParams {
     #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
     /// Replace the thread's runtime workspace roots for this turn and
-    /// subsequent turns. Relative paths are resolved against the effective
-    /// cwd for the turn.
+    /// subsequent turns. Paths must be absolute.
     #[experimental("turn/start.runtimeWorkspaceRoots")]
     #[ts(optional = nullable)]
-    pub runtime_workspace_roots: Option<Vec<PathBuf>>,
+    pub runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     /// Override the approval policy for this turn and subsequent turns.
     #[experimental(nested)]
     #[ts(optional = nullable)]
@@ -162,7 +168,13 @@ pub struct TurnSteerParams {
     #[ts(optional = nullable)]
     pub client_user_message_id: Option<String>,
     pub input: Vec<UserInput>,
-    /// Optional turn-scoped Responses API client metadata.
+    /// Optional metadata to enrich Codex's ResponsesAPI turn metadata.
+    ///
+    /// Entries are flattened into the JSON string sent as
+    /// `client_metadata["x-codex-turn-metadata"]` on ResponsesAPI HTTP and websocket requests.
+    ///
+    /// They are not sent as top-level ResponsesAPI `client_metadata` keys, and reserved keys
+    /// such as `session_id`, `thread_id`, `turn_id`, and `window_id` cannot be overridden.
     #[experimental("turn/steer.responsesapiClientMetadata")]
     #[ts(optional = nullable)]
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,

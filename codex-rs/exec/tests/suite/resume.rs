@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
 use anyhow::Context;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;

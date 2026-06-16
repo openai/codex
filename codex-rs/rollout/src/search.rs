@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io;
 use std::path::Path;
@@ -20,21 +21,43 @@ use super::compression;
 const MATCH_CONTEXT_BEFORE_CHARS: usize = 48;
 const MATCH_CONTEXT_AFTER_CHARS: usize = 96;
 
+/// Search matches keyed by the canonical `.jsonl` path for each rollout.
+pub type RolloutSearchMatches = HashMap<PathBuf, Option<String>>;
+
 pub async fn search_rollout_paths(
     rg_command: &Path,
     codex_home: &Path,
     archived: bool,
     search_term: &str,
 ) -> io::Result<HashSet<PathBuf>> {
+    Ok(
+        search_rollout_matches(rg_command, codex_home, archived, search_term)
+            .await?
+            .into_keys()
+            .collect(),
+    )
+}
+
+pub async fn search_rollout_matches(
+    rg_command: &Path,
+    codex_home: &Path,
+    archived: bool,
+    search_term: &str,
+) -> io::Result<RolloutSearchMatches> {
     let root = codex_home.join(if archived {
         ARCHIVED_SESSIONS_SUBDIR
     } else {
         SESSIONS_SUBDIR
     });
-    let search_term = json_escaped_search_term(search_term)?;
-    let mut matches =
-        ripgrep_rollout_paths(rg_command, root.as_path(), search_term.as_str()).await?;
-    matches.extend(scan_compressed_rollout_paths(root.as_path(), search_term.as_str()).await?);
+    let json_search_term = json_escaped_search_term(search_term)?;
+    let Some(plain_matches) =
+        ripgrep_rollout_paths(rg_command, root.as_path(), json_search_term.as_str()).await?
+    else {
+        return scan_rollout_matches(root.as_path(), json_search_term.as_str(), search_term).await;
+    };
+    let mut matches: RolloutSearchMatches =
+        plain_matches.into_iter().map(|path| (path, None)).collect();
+    matches.extend(scan_compressed_rollout_matches(root.as_path(), search_term).await?);
     Ok(matches)
 }
 
@@ -42,9 +65,9 @@ async fn ripgrep_rollout_paths(
     rg_command: &Path,
     root: &Path,
     search_term: &str,
-) -> io::Result<HashSet<PathBuf>> {
+) -> io::Result<Option<HashSet<PathBuf>>> {
     if !tokio::fs::try_exists(root).await.unwrap_or(false) {
-        return Ok(HashSet::new());
+        return Ok(Some(HashSet::new()));
     }
 
     let output = match Command::new(rg_command)
@@ -62,13 +85,13 @@ async fn ripgrep_rollout_paths(
     {
         Ok(output) => output,
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            return scan_rollout_paths(root, search_term).await;
+            return Ok(None);
         }
         Err(err) => return Err(err),
     };
     if !output.status.success() {
         if output.status.code() == Some(1) && output.stderr.is_empty() {
-            return Ok(HashSet::new());
+            return Ok(Some(HashSet::new()));
         }
 
         return Err(io::Error::other(format!(
@@ -88,13 +111,17 @@ async fn ripgrep_rollout_paths(
         matches.insert(path);
     }
 
-    Ok(matches)
+    Ok(Some(matches))
 }
 
-async fn scan_rollout_paths(root: &Path, search_term: &str) -> io::Result<HashSet<PathBuf>> {
-    let mut matches = HashSet::new();
+async fn scan_rollout_matches(
+    root: &Path,
+    json_search_term: &str,
+    search_term: &str,
+) -> io::Result<RolloutSearchMatches> {
+    let mut matches = HashMap::new();
     let mut dirs = vec![root.to_path_buf()];
-    let search_term = case_insensitive_literal_regex(search_term)?;
+    let json_search_term = case_insensitive_literal_regex(json_search_term)?;
 
     while let Some(dir) = dirs.pop() {
         let mut entries = match tokio::fs::read_dir(dir).await {
@@ -115,8 +142,19 @@ async fn scan_rollout_paths(root: &Path, search_term: &str) -> io::Result<HashSe
             let Some(rollout_file) = compression::RolloutFile::from_path(path) else {
                 continue;
             };
-            if rollout_contains(rollout_file.path(), &search_term).await? {
-                matches.insert(rollout_file.into_path());
+            if rollout_file.is_compressed() {
+                if let Some(snippet) =
+                    first_rollout_content_match_snippet(rollout_file.path(), search_term).await?
+                {
+                    matches.insert(
+                        compression::plain_rollout_path(rollout_file.path()),
+                        Some(snippet),
+                    );
+                }
+                continue;
+            }
+            if rollout_contains(rollout_file.path(), &json_search_term).await? {
+                matches.insert(rollout_file.into_path(), None);
             }
         }
     }
@@ -151,13 +189,12 @@ pub async fn first_rollout_content_match_snippet(
     Ok(None)
 }
 
-async fn scan_compressed_rollout_paths(
+async fn scan_compressed_rollout_matches(
     root: &Path,
     search_term: &str,
-) -> io::Result<HashSet<PathBuf>> {
-    let mut matches = HashSet::new();
+) -> io::Result<RolloutSearchMatches> {
+    let mut matches = HashMap::new();
     let mut dirs = vec![root.to_path_buf()];
-    let search_term = case_insensitive_literal_regex(search_term)?;
 
     while let Some(dir) = dirs.pop() {
         let mut entries = match tokio::fs::read_dir(dir).await {
@@ -181,8 +218,13 @@ async fn scan_compressed_rollout_paths(
             if !rollout_file.is_compressed() {
                 continue;
             }
-            if rollout_contains(rollout_file.path(), &search_term).await? {
-                matches.insert(rollout_file.into_path());
+            if let Some(snippet) =
+                first_rollout_content_match_snippet(rollout_file.path(), search_term).await?
+            {
+                matches.insert(
+                    compression::plain_rollout_path(rollout_file.path()),
+                    Some(snippet),
+                );
             }
         }
     }
@@ -241,6 +283,7 @@ fn conversation_text_from_item(item: &RolloutItem) -> Option<String> {
         | RolloutItem::TurnContext(_)
         | RolloutItem::EventMsg(_)
         | RolloutItem::ResponseItem(_)
+        | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::Compacted(_) => None,
     }
 }

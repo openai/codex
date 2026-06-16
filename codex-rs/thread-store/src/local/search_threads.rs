@@ -7,7 +7,7 @@ use codex_rollout::RolloutConfig;
 use codex_rollout::find_thread_names_by_ids;
 use codex_rollout::first_rollout_content_match_snippet;
 use codex_rollout::parse_cursor;
-use codex_rollout::search_rollout_paths;
+use codex_rollout::search_rollout_matches;
 
 use super::LocalThreadStore;
 use super::helpers::distinct_thread_metadata_title;
@@ -64,7 +64,7 @@ pub(super) async fn search_threads(
         generate_memories: false,
     };
     let rg_command = InstallContext::current().rg_command();
-    let matching_paths = search_rollout_paths(
+    let matching_rollouts = search_rollout_matches(
         rg_command.as_path(),
         store.config.codex_home.as_path(),
         params.archived,
@@ -74,7 +74,7 @@ pub(super) async fn search_threads(
     .map_err(|err| ThreadStoreError::Internal {
         message: format!("failed to search rollout contents: {err}"),
     })?;
-    if matching_paths.is_empty() {
+    if matching_rollouts.is_empty() {
         return Ok(ThreadSearchPage {
             items: Vec::new(),
             next_cursor: None,
@@ -93,9 +93,10 @@ pub(super) async fn search_threads(
         cwd_filters: None,
         archived: params.archived,
         search_term: None,
+        parent_thread_id: None,
         use_state_db_only: state_db.is_some(),
     };
-    let mut remaining_paths = matching_paths;
+    let mut remaining_rollouts = matching_rollouts;
 
     loop {
         let page = list_rollout_threads(
@@ -109,16 +110,16 @@ pub(super) async fn search_threads(
         )
         .await?;
         for item in page.items {
-            if !remaining_paths.remove(item.path.as_path()) {
-                continue;
-            }
-            let Some(snippet) =
-                first_rollout_content_match_snippet(item.path.as_path(), search_term)
+            let logical_path = codex_rollout::plain_rollout_path(item.path.as_path());
+            let Some(snippet) = (match remaining_rollouts.remove(logical_path.as_path()) {
+                Some(Some(snippet)) => Some(snippet),
+                Some(None) => first_rollout_content_match_snippet(item.path.as_path(), search_term)
                     .await
                     .map_err(|err| ThreadStoreError::Internal {
                         message: format!("failed to read rollout search match: {err}"),
-                    })?
-            else {
+                    })?,
+                None => None,
+            }) else {
                 continue;
             };
             matching_items.push(ThreadSearchItem { item, snippet });
@@ -128,7 +129,7 @@ pub(super) async fn search_threads(
         }
         page_cursor = page.next_cursor;
         if matching_items.len() > params.page_size
-            || remaining_paths.is_empty()
+            || remaining_rollouts.is_empty()
             || page_cursor.is_none()
         {
             break;

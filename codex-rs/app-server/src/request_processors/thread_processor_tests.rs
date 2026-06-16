@@ -36,6 +36,65 @@ mod thread_list_cwd_filter_tests {
     }
 }
 
+mod background_terminal_pagination_tests {
+    use super::super::paginate_background_terminals;
+    use codex_app_server_protocol::ThreadBackgroundTerminal;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use pretty_assertions::assert_eq;
+
+    fn terminal(process_id: &str) -> ThreadBackgroundTerminal {
+        let cwd = if cfg!(windows) { r"C:\tmp" } else { "/tmp" };
+
+        ThreadBackgroundTerminal {
+            item_id: format!("item-{process_id}"),
+            process_id: process_id.to_string(),
+            command: format!("command-{process_id}"),
+            cwd: AbsolutePathBuf::from_absolute_path(cwd).expect("absolute cwd"),
+            os_pid: None,
+            cpu_percent: None,
+            rss_kb: None,
+        }
+    }
+
+    #[test]
+    fn paginates_with_process_id_cursor() {
+        let terminals = vec![
+            terminal("1"),
+            terminal("2"),
+            terminal("3"),
+            terminal("4"),
+            terminal("5"),
+        ];
+
+        let (data, next_cursor) =
+            paginate_background_terminals(&terminals, /*cursor*/ None, Some(2))
+                .expect("valid page");
+
+        assert_eq!(data, vec![terminal("1"), terminal("2")]);
+        assert_eq!(next_cursor, Some("2".to_string()));
+        let first_cursor = next_cursor;
+
+        let terminals_without_anchor = vec![terminal("1"), terminal("3"), terminal("4")];
+        let (data, next_cursor) =
+            paginate_background_terminals(&terminals_without_anchor, first_cursor.clone(), Some(2))
+                .expect("valid page");
+
+        assert_eq!(data, vec![terminal("3"), terminal("4")]);
+        assert_eq!(next_cursor, None);
+
+        let (data, next_cursor) =
+            paginate_background_terminals(&terminals, first_cursor, Some(2)).expect("valid page");
+
+        assert_eq!(data, vec![terminal("3"), terminal("4")]);
+        assert_eq!(next_cursor, Some("4".to_string()));
+
+        assert!(
+            paginate_background_terminals(&terminals, Some("missing".to_string()), Some(1))
+                .is_err()
+        );
+    }
+}
+
 mod thread_processor_behavior_tests {
     async fn forked_from_id_from_rollout(path: &Path) -> Option<String> {
         codex_core::read_session_meta_line(path)
@@ -54,7 +113,7 @@ mod thread_processor_behavior_tests {
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::ThreadItem;
     use codex_app_server_protocol::ToolRequestUserInputParams;
-    use codex_config::CloudRequirementsLoader;
+    use codex_config::CloudConfigBundleLoader;
     use codex_config::LoaderOverrides;
     use codex_config::SessionThreadConfig;
     use codex_config::StaticThreadConfigLoader;
@@ -77,50 +136,73 @@ mod thread_processor_behavior_tests {
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
+    use codex_protocol::protocol::TurnEnvironmentSelections;
     use codex_state::ThreadMetadataBuilder;
     use codex_thread_store::StoredThread;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
+    use serde_json::Value;
     use serde_json::json;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
 
+    fn dynamic_tool(
+        namespace: Option<&str>,
+        name: impl Into<String>,
+        input_schema: Value,
+        defer_loading: bool,
+    ) -> DynamicToolSpec {
+        let function = DynamicToolFunctionSpec {
+            name: name.into(),
+            description: "test".to_string(),
+            input_schema,
+            defer_loading,
+        };
+        match namespace {
+            Some(namespace) => {
+                DynamicToolSpec::Namespace(codex_app_server_protocol::DynamicToolNamespaceSpec {
+                    name: namespace.to_string(),
+                    description: "test namespace".to_string(),
+                    tools: vec![DynamicToolNamespaceTool::Function(function)],
+                })
+            }
+            None => DynamicToolSpec::Function(function),
+        }
+    }
+
     #[test]
     fn validate_dynamic_tools_rejects_unsupported_input_schema() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: None,
-            name: "my_tool".to_string(),
-            description: "test".to_string(),
-            input_schema: json!({"type": "null"}),
-            defer_loading: false,
-        }];
+        let tools = vec![dynamic_tool(
+            /*namespace*/ None,
+            "my_tool",
+            json!({"type": "null"}),
+            /*defer_loading*/ false,
+        )];
         let err = validate_dynamic_tools(&tools).expect_err("invalid schema");
         assert!(err.contains("my_tool"), "unexpected error: {err}");
     }
 
     #[test]
     fn validate_dynamic_tools_accepts_sanitizable_input_schema() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: None,
-            name: "my_tool".to_string(),
-            description: "test".to_string(),
+        let tools = vec![dynamic_tool(
+            /*namespace*/ None,
+            "my_tool",
             // Missing `type` is common; core sanitizes these to a supported schema.
-            input_schema: json!({"properties": {}}),
-            defer_loading: false,
-        }];
+            json!({"properties": {}}),
+            /*defer_loading*/ false,
+        )];
         validate_dynamic_tools(&tools).expect("valid schema");
     }
 
     #[test]
     fn validate_dynamic_tools_accepts_nullable_field_schema() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: None,
-            name: "my_tool".to_string(),
-            description: "test".to_string(),
-            input_schema: json!({
+        let tools = vec![dynamic_tool(
+            /*namespace*/ None,
+            "my_tool",
+            json!({
                 "type": "object",
                 "properties": {
                     "query": {"type": ["string", "null"]}
@@ -128,45 +210,57 @@ mod thread_processor_behavior_tests {
                 "required": ["query"],
                 "additionalProperties": false
             }),
-            defer_loading: false,
-        }];
+            /*defer_loading*/ false,
+        )];
         validate_dynamic_tools(&tools).expect("valid schema");
     }
 
     #[test]
     fn validate_dynamic_tools_accepts_same_name_in_different_namespaces() {
         let tools = vec![
-            ApiDynamicToolSpec {
-                namespace: Some("codex_app".to_string()),
-                name: "my_tool".to_string(),
-                description: "test".to_string(),
-                input_schema: json!({
+            dynamic_tool(
+                Some("codex_app"),
+                "my_tool",
+                json!({
                     "type": "object",
                     "properties": {},
                     "additionalProperties": false
                 }),
-                defer_loading: true,
-            },
-            ApiDynamicToolSpec {
-                namespace: Some("other_app".to_string()),
-                name: "my_tool".to_string(),
-                description: "test".to_string(),
-                input_schema: json!({
+                /*defer_loading*/ true,
+            ),
+            dynamic_tool(
+                Some("other_app"),
+                "my_tool",
+                json!({
                     "type": "object",
                     "properties": {},
                     "additionalProperties": false
                 }),
-                defer_loading: true,
-            },
+                /*defer_loading*/ true,
+            ),
         ];
         validate_dynamic_tools(&tools).expect("valid schema");
     }
 
     #[test]
     fn validate_dynamic_tools_accepts_responses_compatible_identifiers() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: Some("Codex-App_2".to_string()),
-            name: "lookup-ticket_2".to_string(),
+        let tools = vec![dynamic_tool(
+            Some("Codex-App_2"),
+            "lookup-ticket_2",
+            json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            /*defer_loading*/ true,
+        )];
+        validate_dynamic_tools(&tools).expect("valid schema");
+    }
+
+    #[test]
+    fn validate_dynamic_tools_rejects_duplicate_name_in_same_namespace() {
+        let function = || DynamicToolFunctionSpec {
+            name: "my_tool".to_string(),
             description: "test".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -174,36 +268,17 @@ mod thread_processor_behavior_tests {
                 "additionalProperties": false
             }),
             defer_loading: true,
-        }];
-        validate_dynamic_tools(&tools).expect("valid schema");
-    }
-
-    #[test]
-    fn validate_dynamic_tools_rejects_duplicate_name_in_same_namespace() {
-        let tools = vec![
-            ApiDynamicToolSpec {
-                namespace: Some("codex_app".to_string()),
-                name: "my_tool".to_string(),
-                description: "test".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false
-                }),
-                defer_loading: true,
+        };
+        let tools = vec![DynamicToolSpec::Namespace(
+            codex_app_server_protocol::DynamicToolNamespaceSpec {
+                name: "codex_app".to_string(),
+                description: "test namespace".to_string(),
+                tools: vec![
+                    DynamicToolNamespaceTool::Function(function()),
+                    DynamicToolNamespaceTool::Function(function()),
+                ],
             },
-            ApiDynamicToolSpec {
-                namespace: Some("codex_app".to_string()),
-                name: "my_tool".to_string(),
-                description: "test".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false
-                }),
-                defer_loading: true,
-            },
-        ];
+        )];
         let err = validate_dynamic_tools(&tools).expect_err("duplicate name");
         assert!(err.contains("codex_app"), "unexpected error: {err}");
         assert!(err.contains("my_tool"), "unexpected error: {err}");
@@ -251,53 +326,48 @@ mod thread_processor_behavior_tests {
 
     #[test]
     fn validate_dynamic_tools_rejects_empty_namespace() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: Some("".to_string()),
-            name: "my_tool".to_string(),
-            description: "test".to_string(),
-            input_schema: json!({
+        let tools = vec![dynamic_tool(
+            Some(""),
+            "my_tool",
+            json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
             }),
-            defer_loading: false,
-        }];
+            /*defer_loading*/ false,
+        )];
         let err = validate_dynamic_tools(&tools).expect_err("empty namespace");
-        assert!(err.contains("my_tool"), "unexpected error: {err}");
         assert!(err.contains("namespace"), "unexpected error: {err}");
     }
 
     #[test]
     fn validate_dynamic_tools_rejects_reserved_namespace() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: Some("mcp__server__".to_string()),
-            name: "my_tool".to_string(),
-            description: "test".to_string(),
-            input_schema: json!({
+        let tools = vec![dynamic_tool(
+            Some("mcp__server__"),
+            "my_tool",
+            json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
             }),
-            defer_loading: false,
-        }];
+            /*defer_loading*/ false,
+        )];
         let err = validate_dynamic_tools(&tools).expect_err("reserved namespace");
-        assert!(err.contains("my_tool"), "unexpected error: {err}");
         assert!(err.contains("reserved"), "unexpected error: {err}");
     }
 
     #[test]
     fn validate_dynamic_tools_rejects_name_not_supported_by_responses() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: None,
-            name: "lookup.ticket".to_string(),
-            description: "test".to_string(),
-            input_schema: json!({
+        let tools = vec![dynamic_tool(
+            /*namespace*/ None,
+            "lookup.ticket",
+            json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
             }),
-            defer_loading: false,
-        }];
+            /*defer_loading*/ false,
+        )];
         let err = validate_dynamic_tools(&tools).expect_err("invalid name");
         assert!(err.contains("lookup.ticket"), "unexpected error: {err}");
         assert!(
@@ -308,17 +378,16 @@ mod thread_processor_behavior_tests {
 
     #[test]
     fn validate_dynamic_tools_rejects_namespace_not_supported_by_responses() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: Some("codex.app".to_string()),
-            name: "lookup_ticket".to_string(),
-            description: "test".to_string(),
-            input_schema: json!({
+        let tools = vec![dynamic_tool(
+            Some("codex.app"),
+            "lookup_ticket",
+            json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
             }),
-            defer_loading: true,
-        }];
+            /*defer_loading*/ true,
+        )];
         let err = validate_dynamic_tools(&tools).expect_err("invalid namespace");
         assert!(err.contains("codex.app"), "unexpected error: {err}");
         assert!(
@@ -330,54 +399,59 @@ mod thread_processor_behavior_tests {
     #[test]
     fn validate_dynamic_tools_rejects_name_longer_than_responses_limit() {
         let long_name = "a".repeat(129);
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: None,
-            name: long_name.clone(),
-            description: "test".to_string(),
-            input_schema: json!({
+        let tools = vec![dynamic_tool(
+            /*namespace*/ None,
+            long_name.clone(),
+            json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
             }),
-            defer_loading: false,
-        }];
+            /*defer_loading*/ false,
+        )];
         let err = validate_dynamic_tools(&tools).expect_err("name too long");
         assert!(err.contains("at most 128"), "unexpected error: {err}");
         assert!(err.contains(&long_name), "unexpected error: {err}");
     }
 
     #[test]
-    fn validate_dynamic_tools_rejects_namespace_longer_than_responses_limit() {
+    fn validate_dynamic_tools_rejects_namespace_fields_over_limits() {
         let long_namespace = "a".repeat(65);
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: Some(long_namespace.clone()),
-            name: "lookup_ticket".to_string(),
-            description: "test".to_string(),
-            input_schema: json!({
+        let mut tools = vec![dynamic_tool(
+            Some(&long_namespace),
+            "lookup_ticket",
+            json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
             }),
-            defer_loading: true,
-        }];
+            /*defer_loading*/ true,
+        )];
         let err = validate_dynamic_tools(&tools).expect_err("namespace too long");
         assert!(err.contains("at most 64"), "unexpected error: {err}");
         assert!(err.contains(&long_namespace), "unexpected error: {err}");
+
+        let DynamicToolSpec::Namespace(namespace) = &mut tools[0] else {
+            unreachable!("expected namespace")
+        };
+        namespace.name = "tickets".to_string();
+        namespace.description = "a".repeat(1025);
+        let err = validate_dynamic_tools(&tools).expect_err("namespace description too long");
+        assert!(err.contains("at most 1024"), "unexpected error: {err}");
     }
 
     #[test]
     fn validate_dynamic_tools_rejects_reserved_responses_namespace() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: Some("functions".to_string()),
-            name: "lookup_ticket".to_string(),
-            description: "test".to_string(),
-            input_schema: json!({
+        let tools = vec![dynamic_tool(
+            Some("functions"),
+            "lookup_ticket",
+            json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
             }),
-            defer_loading: true,
-        }];
+            /*defer_loading*/ true,
+        )];
         let err = validate_dynamic_tools(&tools).expect_err("reserved Responses namespace");
         assert!(err.contains("functions"), "unexpected error: {err}");
         assert!(err.contains("Responses API"), "unexpected error: {err}");
@@ -424,6 +498,7 @@ mod thread_processor_behavior_tests {
             ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread");
         let stored_thread = StoredThread {
             thread_id,
+            extra_config: None,
             rollout_path: Some(PathBuf::from("/tmp/thread.jsonl")),
             forked_from_id: None,
             parent_thread_id: None,
@@ -540,9 +615,9 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
-    fn config_load_error_marks_cloud_requirements_failures_for_relogin() {
-        let err = std::io::Error::other(CloudRequirementsLoadError::new(
-            CloudRequirementsLoadErrorCode::Auth,
+    fn config_load_error_marks_cloud_config_bundle_failures_for_relogin() {
+        let err = std::io::Error::other(CloudConfigBundleLoadError::new(
+            CloudConfigBundleLoadErrorCode::Auth,
             Some(401),
             "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
         ));
@@ -552,7 +627,7 @@ mod thread_processor_behavior_tests {
         assert_eq!(
             error.data,
             Some(json!({
-                "reason": "cloudRequirements",
+                "reason": "cloudConfigBundle",
                 "errorCode": "Auth",
                 "action": "relogin",
                 "statusCode": 401,
@@ -567,7 +642,7 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
-    fn config_load_error_leaves_non_cloud_requirements_failures_unmarked() {
+    fn config_load_error_leaves_non_cloud_config_bundle_failures_unmarked() {
         let err = std::io::Error::other("required MCP servers failed to initialize");
 
         let error = config_load_error(&err);
@@ -581,11 +656,11 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
-    fn config_load_error_marks_non_auth_cloud_requirements_failures_without_relogin() {
-        let err = std::io::Error::other(CloudRequirementsLoadError::new(
-            CloudRequirementsLoadErrorCode::RequestFailed,
+    fn config_load_error_marks_non_auth_cloud_config_bundle_failures_without_relogin() {
+        let err = std::io::Error::other(CloudConfigBundleLoadError::new(
+            CloudConfigBundleLoadErrorCode::RequestFailed,
             /*status_code*/ None,
-            "Failed to load cloud requirements (workspace-managed policies).",
+            "Failed to load cloud config bundle (workspace-managed policies).",
         ));
 
         let error = config_load_error(&err);
@@ -593,9 +668,29 @@ mod thread_processor_behavior_tests {
         assert_eq!(
             error.data,
             Some(json!({
-                "reason": "cloudRequirements",
+                "reason": "cloudConfigBundle",
                 "errorCode": "RequestFailed",
-                "detail": "Failed to load cloud requirements (workspace-managed policies).",
+                "detail": "Failed to load cloud config bundle (workspace-managed policies).",
+            }))
+        );
+    }
+
+    #[test]
+    fn config_load_error_marks_invalid_cloud_config_bundle_failures_without_relogin() {
+        let err = std::io::Error::other(CloudConfigBundleLoadError::new(
+            CloudConfigBundleLoadErrorCode::InvalidBundle,
+            /*status_code*/ None,
+            "invalid cloud config bundle: invalid cloud config fragment Base policy (cfg_123)",
+        ));
+
+        let error = config_load_error(&err);
+
+        assert_eq!(
+            error.data,
+            Some(json!({
+                "reason": "cloudConfigBundle",
+                "errorCode": "InvalidBundle",
+                "detail": "invalid cloud config bundle: invalid cloud config fragment Base policy (cfg_123)",
             }))
         );
     }
@@ -627,7 +722,7 @@ mod thread_processor_behavior_tests {
             Vec::new(),
             LoaderOverrides::default(),
             /*strict_config*/ false,
-            CloudRequirementsLoader::default(),
+            CloudConfigBundleLoader::default(),
             Arg0DispatchPaths::default(),
             Arc::new(StaticThreadConfigLoader::new(vec![
                 ThreadConfigSource::Session(SessionThreadConfig {
@@ -688,7 +783,6 @@ mod thread_processor_behavior_tests {
             personality: None,
             exclude_turns: false,
             initial_turns_page: None,
-            persist_extended_history: false,
         };
         let config_snapshot = ThreadConfigSnapshot {
             model: "gpt-5".to_string(),
@@ -698,7 +792,7 @@ mod thread_processor_behavior_tests {
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             permission_profile: codex_protocol::models::PermissionProfile::Disabled,
             active_permission_profile: None,
-            cwd,
+            environments: TurnEnvironmentSelections::new(cwd, Vec::new()),
             workspace_roots: Vec::new(),
             profile_workspace_roots: Vec::new(),
             ephemeral: false,
@@ -714,6 +808,7 @@ mod thread_processor_behavior_tests {
                 },
             },
             session_source: SessionSource::Cli,
+            forked_from_thread_id: None,
             parent_thread_id: None,
             thread_source: None,
         };
@@ -1094,6 +1189,7 @@ mod thread_processor_behavior_tests {
                     turn_id: "turn-1".to_string(),
                     item_id: "call-1".to_string(),
                     questions: vec![],
+                    auto_resolution_ms: None,
                 },
             ))
             .await;

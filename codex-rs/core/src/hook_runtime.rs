@@ -25,6 +25,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
@@ -36,6 +37,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_thread_store::ReadThreadParams;
 use serde_json::Value;
+use tracing::instrument;
 
 use crate::context::ContextualUserFragment;
 use crate::context::HookAdditionalContext;
@@ -97,6 +99,7 @@ impl From<UserPromptSubmitOutcome> for ContextInjectingHookOutcome {
     }
 }
 
+#[instrument(level = "trace", skip_all)]
 pub(crate) async fn run_pending_session_start_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -291,6 +294,7 @@ pub(crate) async fn run_post_tool_use_hooks(
     outcome
 }
 
+#[instrument(level = "trace", skip_all)]
 pub(crate) async fn run_turn_stop_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -382,9 +386,7 @@ pub(crate) async fn run_pre_compact_hooks(
     let outcome = sess.hooks().run_pre_compact(request).await;
     emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
     if outcome.should_stop {
-        PreCompactHookOutcome::Stopped {
-            reason: outcome.stop_reason,
-        }
+        PreCompactHookOutcome::Stopped
     } else {
         PreCompactHookOutcome::Continue
     }
@@ -392,7 +394,7 @@ pub(crate) async fn run_pre_compact_hooks(
 
 pub(crate) enum PreCompactHookOutcome {
     Continue,
-    Stopped { reason: Option<String> },
+    Stopped,
 }
 
 pub(crate) enum PostCompactHookOutcome {
@@ -427,6 +429,7 @@ pub(crate) async fn run_post_compact_hooks(
     }
 }
 
+#[instrument(level = "trace", skip_all)]
 pub(crate) async fn run_legacy_after_agent_hook(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -451,7 +454,7 @@ pub(crate) async fn run_legacy_after_agent_hook(
             triggered_at: chrono::Utc::now(),
             hook_event: codex_hooks::HookEvent::AfterAgent {
                 event: codex_hooks::HookEventAfterAgent {
-                    thread_id: sess.conversation_id,
+                    thread_id: sess.thread_id,
                     turn_id: turn_context.sub_id.clone(),
                     input_messages,
                     last_assistant_message,
@@ -488,7 +491,7 @@ pub(crate) async fn run_legacy_after_agent_hook(
     };
     let event = EventMsg::Error(codex_protocol::protocol::ErrorEvent {
         message,
-        codex_error_info: None,
+        codex_error_info: Some(CodexErrorInfo::Other),
     });
     sess.send_event(turn_context, event).await;
     true
@@ -526,6 +529,10 @@ pub(crate) async fn inspect_pending_input(
             should_stop: false,
             additional_contexts: Vec::new(),
         },
+        TurnInput::InterAgentCommunication(_) => HookRuntimeOutcome {
+            should_stop: false,
+            additional_contexts: Vec::new(),
+        },
     }
 }
 
@@ -546,6 +553,10 @@ pub(crate) async fn record_pending_input(
         }
         TurnInput::ResponseItem(item) => {
             sess.record_conversation_items(turn_context, std::slice::from_ref(&item))
+                .await;
+        }
+        TurnInput::InterAgentCommunication(communication) => {
+            sess.record_inter_agent_communication(turn_context, communication)
                 .await;
         }
     }
@@ -655,7 +666,7 @@ fn track_hook_completed_analytics(
     completed: &HookCompletedEvent,
 ) {
     let (tracking, hook) =
-        hook_run_analytics_payload(sess.conversation_id.to_string(), turn_context, completed);
+        hook_run_analytics_payload(sess.thread_id.to_string(), turn_context, completed);
     sess.services
         .analytics_events_client
         .track_hook_run(tracking, hook);

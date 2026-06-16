@@ -27,7 +27,7 @@
         "read": {
           "description": "This will be removed in favor of `entries`.",
           "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
+            "$ref": "#/definitions/LegacyAppPathString"
           },
           "type": [
             "array",
@@ -37,7 +37,7 @@
         "write": {
           "description": "This will be removed in favor of `entries`.",
           "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
+            "$ref": "#/definitions/LegacyAppPathString"
           },
           "type": [
             "array",
@@ -71,7 +71,7 @@
         {
           "properties": {
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "$ref": "#/definitions/LegacyAppPathString"
             },
             "type": {
               "enum": [
@@ -254,6 +254,9 @@
         }
       ]
     },
+    "LegacyAppPathString": {
+      "type": "string"
+    },
     "RequestPermissionProfile": {
       "additionalProperties": false,
       "properties": {
@@ -284,6 +287,13 @@
   "properties": {
     "cwd": {
       "$ref": "#/definitions/AbsolutePathBuf"
+    },
+    "environmentId": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "itemId": {
       "type": "string"

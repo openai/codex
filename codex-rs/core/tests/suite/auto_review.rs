@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used)]
-
 use anyhow::Result;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -22,6 +20,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
+use core_test_support::TempDirExt;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -33,6 +32,7 @@ use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -150,7 +150,7 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
     )
     .await?;
 
-    let cwd_path = cwd.path().to_path_buf();
+    let cwd_path = cwd.abs();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::read_only(), cwd_path.as_path());
     codex
@@ -159,12 +159,11 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
                 text: "run the Guardian model override check".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd_path),
+                environments: Some(local_selections(cwd_path)),
                 approval_policy: Some(AskForApproval::OnRequest),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -231,8 +230,10 @@ fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> Mod
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        use_responses_lite: false,
         auto_review_model_override: Some(review_model.to_string()),
         tool_mode: None,
+        multi_agent_version: None,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         service_tiers: Vec::new(),
@@ -253,6 +254,7 @@ fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> Mod
         context_window: Some(272_000),
         max_context_window: None,
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     }

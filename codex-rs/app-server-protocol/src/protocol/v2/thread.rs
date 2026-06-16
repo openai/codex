@@ -12,9 +12,15 @@ use super::TurnEnvironmentParams;
 use super::TurnItemsView;
 use super::shared::v2_enum_from_core;
 use codex_experimental_api_macros::ExperimentalApi;
+pub use codex_protocol::capabilities::CapabilityRootLocation;
+pub use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
+pub use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+pub use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
+pub use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
+pub use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::ThreadGoalStatus as CoreThreadGoalStatus;
@@ -35,55 +41,6 @@ use ts_rs::TS;
 pub enum ThreadStartSource {
     Startup,
     Clear,
-}
-
-#[derive(Serialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct DynamicToolSpec {
-    #[ts(optional)]
-    pub namespace: Option<String>,
-    pub name: String,
-    pub description: String,
-    pub input_schema: JsonValue,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub defer_loading: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DynamicToolSpecDe {
-    namespace: Option<String>,
-    name: String,
-    description: String,
-    input_schema: JsonValue,
-    defer_loading: Option<bool>,
-    expose_to_context: Option<bool>,
-}
-
-impl<'de> Deserialize<'de> for DynamicToolSpec {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let DynamicToolSpecDe {
-            namespace,
-            name,
-            description,
-            input_schema,
-            defer_loading,
-            expose_to_context,
-        } = DynamicToolSpecDe::deserialize(deserializer)?;
-
-        Ok(Self {
-            namespace,
-            name,
-            description,
-            input_schema,
-            defer_loading: defer_loading
-                .unwrap_or_else(|| expose_to_context.map(|visible| !visible).unwrap_or(false)),
-        })
-    }
 }
 
 // === Threads, Turns, and Items ===
@@ -108,11 +65,10 @@ pub struct ThreadStartParams {
     pub service_tier: Option<Option<String>>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
-    /// Replace the thread's runtime workspace roots. Relative paths are
-    /// resolved against the effective cwd for the thread.
+    /// Replace the thread's runtime workspace roots. Paths must be absolute.
     #[experimental("thread/start.runtimeWorkspaceRoots")]
     #[ts(optional = nullable)]
-    pub runtime_workspace_roots: Option<Vec<PathBuf>>,
+    pub runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
@@ -153,8 +109,16 @@ pub struct ThreadStartParams {
     #[ts(optional = nullable)]
     pub environments: Option<Vec<TurnEnvironmentParams>>,
     #[experimental("thread/start.dynamicTools")]
+    #[serde(
+        default,
+        deserialize_with = "codex_protocol::dynamic_tools::deserialize_dynamic_tool_specs"
+    )]
     #[ts(optional = nullable)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
+    /// Capability roots selected for this thread by the hosting platform.
+    #[experimental("thread/start.selectedCapabilityRoots")]
+    #[ts(optional = nullable)]
+    pub selected_capability_roots: Option<Vec<SelectedCapabilityRoot>>,
     /// Test-only experimental field used to validate experimental gating and
     /// schema filtering behavior in a stable way.
     #[experimental("thread/start.mockExperimentalField")]
@@ -165,12 +129,6 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.experimentalRawEvents")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub experimental_raw_events: bool,
-    /// Deprecated and ignored by app-server. Kept only so older clients can
-    /// continue sending the field while rollout persistence always uses the
-    /// limited history policy.
-    #[experimental("thread/start.persistFullHistory")]
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub persist_extended_history: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
@@ -365,11 +323,10 @@ pub struct ThreadResumeParams {
     pub service_tier: Option<Option<String>>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
-    /// Replace the thread's runtime workspace roots. Relative paths are
-    /// resolved against the effective cwd for the thread.
+    /// Replace the thread's runtime workspace roots. Paths must be absolute.
     #[experimental("thread/resume.runtimeWorkspaceRoots")]
     #[ts(optional = nullable)]
-    pub runtime_workspace_roots: Option<Vec<PathBuf>>,
+    pub runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
@@ -403,12 +360,6 @@ pub struct ThreadResumeParams {
     #[experimental("thread/resume.initialTurnsPage")]
     #[ts(optional = nullable)]
     pub initial_turns_page: Option<ThreadResumeInitialTurnsPageParams>,
-    /// Deprecated and ignored by app-server. Kept only so older clients can
-    /// continue sending the field while rollout persistence always uses the
-    /// limited history policy.
-    #[experimental("thread/resume.persistFullHistory")]
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub persist_extended_history: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
@@ -522,11 +473,10 @@ pub struct ThreadForkParams {
     pub service_tier: Option<Option<String>>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
-    /// Replace the thread's runtime workspace roots. Relative paths are
-    /// resolved against the effective cwd for the thread.
+    /// Replace the thread's runtime workspace roots. Paths must be absolute.
     #[experimental("thread/fork.runtimeWorkspaceRoots")]
     #[ts(optional = nullable)]
-    pub runtime_workspace_roots: Option<Vec<PathBuf>>,
+    pub runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
@@ -558,12 +508,6 @@ pub struct ThreadForkParams {
     #[experimental("thread/fork.excludeTurns")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
-    /// Deprecated and ignored by app-server. Kept only so older clients can
-    /// continue sending the field while rollout persistence always uses the
-    /// limited history policy.
-    #[experimental("thread/fork.persistFullHistory")]
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub persist_extended_history: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
@@ -609,6 +553,18 @@ pub struct ThreadArchiveParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadArchiveResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadDeleteParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadDeleteResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -977,6 +933,57 @@ pub struct ThreadBackgroundTerminalsCleanResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadBackgroundTerminalsListParams {
+    pub thread_id: String,
+    /// Opaque pagination cursor returned by a previous call.
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    /// Optional page size.
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadBackgroundTerminal {
+    pub item_id: String,
+    pub process_id: String,
+    pub command: String,
+    pub cwd: AbsolutePathBuf,
+    pub os_pid: Option<u32>,
+    pub cpu_percent: Option<f64>,
+    pub rss_kb: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadBackgroundTerminalsListResponse {
+    pub data: Vec<ThreadBackgroundTerminal>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    /// If None, there are no more items to return.
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadBackgroundTerminalsTerminateParams {
+    pub thread_id: String,
+    pub process_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadBackgroundTerminalsTerminateResponse {
+    pub terminated: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadRollbackParams {
     pub thread_id: String,
     /// The number of turns to drop from the end of the thread. Must be >= 1.
@@ -998,7 +1005,7 @@ pub struct ThreadRollbackResponse {
     pub thread: Thread,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadListParams {
@@ -1038,6 +1045,10 @@ pub struct ThreadListParams {
     /// Optional substring filter for the extracted thread title.
     #[ts(optional = nullable)]
     pub search_term: Option<String>,
+    /// Optional direct parent thread filter.
+    #[experimental("thread/list.parentThreadId")]
+    #[ts(optional = nullable)]
+    pub parent_thread_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1366,6 +1377,13 @@ pub struct ThreadStatusChangedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadArchivedNotification {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadDeletedNotification {
     pub thread_id: String,
 }
 

@@ -8,7 +8,7 @@ use super::tool_definition_to_responses_api_tool;
 use crate::JsonSchema;
 use crate::ToolDefinition;
 use crate::ToolName;
-use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -50,8 +50,7 @@ fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {
 
 #[test]
 fn dynamic_tool_to_responses_api_tool_preserves_defer_loading() {
-    let tool = DynamicToolSpec {
-        namespace: None,
+    let tool = DynamicToolFunctionSpec {
         name: "lookup_order".to_string(),
         description: "Look up an order".to_string(),
         input_schema: json!({

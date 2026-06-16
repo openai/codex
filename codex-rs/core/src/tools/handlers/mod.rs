@@ -4,8 +4,8 @@ pub(crate) mod apply_patch;
 pub(crate) mod apply_patch_spec;
 mod dynamic;
 pub(crate) mod extension_tools;
-mod goal;
-pub(crate) mod goal_spec;
+mod get_context_remaining;
+pub(crate) mod get_context_remaining_spec;
 mod list_available_plugins_to_install;
 pub(crate) mod list_available_plugins_to_install_spec;
 mod mcp;
@@ -15,6 +15,8 @@ pub(crate) mod multi_agents;
 pub(crate) mod multi_agents_common;
 pub(crate) mod multi_agents_spec;
 pub(crate) mod multi_agents_v2;
+mod new_context_window;
+pub(crate) mod new_context_window_spec;
 mod plan;
 pub(crate) mod plan_spec;
 mod request_permissions;
@@ -24,6 +26,7 @@ mod request_user_input;
 pub(crate) mod request_user_input_spec;
 mod shell;
 pub(crate) mod shell_spec;
+mod sleep;
 mod test_sync;
 pub(crate) mod test_sync_spec;
 mod tool_search;
@@ -53,22 +56,22 @@ pub use apply_patch::ApplyPatchHandler;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 pub use dynamic::DynamicToolHandler;
-pub use goal::CreateGoalHandler;
-pub use goal::GetGoalHandler;
-pub use goal::UpdateGoalHandler;
+pub use get_context_remaining::GetContextRemainingHandler;
 pub use list_available_plugins_to_install::ListAvailablePluginsToInstallHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::ListMcpResourceTemplatesHandler;
 pub use mcp_resource::ListMcpResourcesHandler;
 pub use mcp_resource::ReadMcpResourceHandler;
+pub use new_context_window::NewContextWindowHandler;
 pub use plan::PlanHandler;
 pub use request_permissions::RequestPermissionsHandler;
 pub use request_plugin_install::RequestPluginInstallHandler;
 pub use request_user_input::RequestUserInputHandler;
 pub use shell::ShellCommandHandler;
 pub(crate) use shell::ShellCommandHandlerOptions;
+pub use sleep::SleepHandler;
 pub use test_sync::TestSyncHandler;
-pub use tool_search::ToolSearchHandler;
+pub(crate) use tool_search::ToolSearchHandlerCache;
 pub use unified_exec::ExecCommandHandler;
 pub(crate) use unified_exec::ExecCommandHandlerOptions;
 pub use unified_exec::WriteStdinHandler;
@@ -250,7 +253,8 @@ pub(super) fn implicit_granted_permissions(
 
 pub(super) async fn apply_granted_turn_permissions(
     session: &Session,
-    cwd: &std::path::Path,
+    environment_id: &str,
+    cwd: &Path,
     sandbox_permissions: SandboxPermissions,
     additional_permissions: Option<AdditionalPermissionProfile>,
 ) -> EffectiveAdditionalPermissions {
@@ -262,8 +266,8 @@ pub(super) async fn apply_granted_turn_permissions(
         };
     }
 
-    let granted_session_permissions = session.granted_session_permissions().await;
-    let granted_turn_permissions = session.granted_turn_permissions().await;
+    let granted_session_permissions = session.granted_session_permissions(environment_id).await;
+    let granted_turn_permissions = session.granted_turn_permissions(environment_id).await;
     let granted_permissions = merge_permission_profiles(
         granted_session_permissions.as_ref(),
         granted_turn_permissions.as_ref(),

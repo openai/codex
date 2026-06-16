@@ -46,6 +46,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::tempdir;
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -138,7 +139,7 @@ async fn execute_mcp_tool_call_records_replayable_correlation() -> anyhow::Resul
         .rollout_thread_trace
         .start_tool_dispatch_trace(|| {
             Some(ToolDispatchInvocation {
-                thread_id: session.conversation_id.to_string(),
+                thread_id: session.thread_id.to_string(),
                 codex_turn_id: turn_context.sub_id.clone(),
                 tool_call_id: "mcp-call".to_string(),
                 tool_name: "search".to_string(),
@@ -280,7 +281,7 @@ fn attach_trace_bundle(
         codex_rollout_trace::ThreadTraceContext::start_root_in_root_for_test(
             root,
             ThreadStartedTraceMetadata {
-                thread_id: session.conversation_id.to_string(),
+                thread_id: session.thread_id.to_string(),
                 agent_path: "/root".to_string(),
                 task_name: None,
                 nickname: None,
@@ -646,7 +647,7 @@ async fn approval_elicitation_request_uses_message_override_and_preserves_tool_p
     assert_eq!(
         request,
         McpServerElicitationRequestParams {
-            thread_id: session.conversation_id.to_string(),
+            thread_id: session.thread_id.to_string(),
             turn_id: Some(turn_context.sub_id),
             server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
             request: McpServerElicitationRequest::Form {
@@ -1256,18 +1257,23 @@ fn codex_apps_auth_failure_metadata() -> McpToolApprovalMetadata {
 
 async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: &TurnContext) {
     let auth = session.services.auth_manager.auth().await;
-    let (manager, _cancel_token) = codex_mcp::McpConnectionManager::new(
+    let manager = codex_mcp::McpConnectionManager::new(
         &HashMap::new(),
         turn_context.config.mcp_oauth_credentials_store_mode,
+        turn_context.config.auth_keyring_backend_kind(),
         HashMap::new(),
         &turn_context.approval_policy,
         turn_context.sub_id.clone(),
         session.get_tx_event(),
+        CancellationToken::new(),
         turn_context.permission_profile(),
-        codex_mcp::McpRuntimeContext::new(Arc::clone(&session.services.environment_manager), {
-            #[allow(deprecated)]
-            turn_context.cwd.to_path_buf()
-        }),
+        codex_mcp::McpRuntimeContext::new(
+            session.services.turn_environments.environment_manager(),
+            {
+                #[allow(deprecated)]
+                turn_context.cwd.to_path_buf()
+            },
+        ),
         turn_context.config.codex_home.to_path_buf(),
         codex_mcp::codex_apps_tools_cache_key(auth.as_ref()),
         /*host_owned_codex_apps_enabled*/ true,
@@ -1278,7 +1284,10 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         /*elicitation_reviewer*/ None,
     )
     .await;
-    *session.services.mcp_connection_manager.write().await = manager;
+    session
+        .services
+        .mcp_connection_manager
+        .store(Arc::new(manager));
 }
 
 #[tokio::test]
@@ -1886,6 +1895,7 @@ async fn persist_codex_app_tool_approval_writes_tool_override() {
                 "calendar".to_string(),
                 AppConfig {
                     enabled: true,
+                    approvals_reviewer: None,
                     destructive_enabled: None,
                     open_world_enabled: None,
                     default_tools_approval_mode: None,

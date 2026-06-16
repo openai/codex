@@ -39,6 +39,7 @@ pub(crate) use review::review_approval_request;
 #[cfg(test)]
 pub(crate) use review::review_approval_request_with_cancel;
 pub(crate) use review::routes_approval_to_guardian;
+pub(crate) use review::routes_approval_to_guardian_with_reviewer;
 pub(crate) use review::spawn_approval_request_review;
 pub(crate) use review_session::GuardianReviewSessionManager;
 pub(crate) use review_session::prompt_cache_key_override_for_review_session;
@@ -167,7 +168,7 @@ use prompt::render_guardian_transcript_entries;
 #[cfg(test)]
 use review::GuardianReviewOutcome;
 #[cfg(test)]
-use review::run_guardian_review_session as run_guardian_review_session_for_test;
+use review::run_guardian_review_session_with_retry as run_guardian_review_session_for_test;
 #[cfg(test)]
 use review_session::build_guardian_review_session_config as build_guardian_review_session_config_for_test;
 

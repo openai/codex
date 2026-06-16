@@ -77,7 +77,7 @@ use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_arg0::Arg0DispatchPaths;
-use codex_config::CloudRequirementsLoader;
+use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
@@ -104,7 +104,9 @@ type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorErro
 fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
     matches!(
         notification,
-        ServerNotification::TurnCompleted(_) | ServerNotification::ThreadSettingsUpdated(_)
+        ServerNotification::TurnCompleted(_)
+            | ServerNotification::ThreadSettingsUpdated(_)
+            | ServerNotification::ExternalAgentConfigImportCompleted(_)
     )
 }
 
@@ -124,8 +126,8 @@ pub struct InProcessStartArgs {
     pub loader_overrides: LoaderOverrides,
     /// Whether config API paths should reject unknown config fields.
     pub strict_config: bool,
-    /// Preloaded cloud requirements provider.
-    pub cloud_requirements: CloudRequirementsLoader,
+    /// Preloaded cloud config bundle provider.
+    pub cloud_config_bundle: CloudConfigBundleLoader,
     /// Loader used to fetch typed thread config sources before a thread starts.
     pub thread_config_loader: Arc<dyn ThreadConfigLoader>,
     /// Feedback sink used by app-server/core telemetry and logs.
@@ -415,7 +417,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
             args.cli_overrides,
             args.loader_overrides,
             args.strict_config,
-            args.cloud_requirements,
+            args.cloud_config_bundle,
             args.arg0_paths.clone(),
             args.thread_config_loader,
         );
@@ -729,6 +731,7 @@ mod tests {
     use super::*;
     use codex_app_server_protocol::ClientInfo;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
+    use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
@@ -772,7 +775,7 @@ mod tests {
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             strict_config: false,
-            cloud_requirements: CloudRequirementsLoader::default(),
+            cloud_config_bundle: CloudConfigBundleLoader::default(),
             thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
             feedback: CodexFeedback::new(),
             log_db: None,
@@ -892,6 +895,14 @@ mod tests {
                     duration_ms: None,
                 },
             })
+        ));
+        assert!(server_notification_requires_delivery(
+            &ServerNotification::ExternalAgentConfigImportCompleted(
+                ExternalAgentConfigImportCompletedNotification {
+                    import_id: "import".to_string(),
+                    item_type_results: Vec::new(),
+                },
+            )
         ));
     }
 }

@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-async-trait = { workspace = true }
+base64 = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 chrono = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
@@ -35,6 +35,8 @@ rama-net = { version = "=0.3.0-alpha.4", features = ["http", "tls"] }
 rama-socks5 = { version = "=0.3.0-alpha.4" }
 rama-tcp = { version = "=0.3.0-alpha.4", features = ["http"] }
 rama-tls-rustls = { version = "=0.3.0-alpha.4", features = ["http"] }
+rustls-native-certs = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

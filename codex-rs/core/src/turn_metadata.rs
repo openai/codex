@@ -6,16 +6,15 @@ use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-use codex_analytics::CompactionImplementation;
-use codex_analytics::CompactionPhase;
-use codex_analytics::CompactionReason;
-use codex_analytics::CompactionStrategy;
-use codex_analytics::CompactionTrigger;
-use codex_utils_string::to_ascii_json_string;
-use serde::Serialize;
 use serde_json::Value;
 use tokio::task::JoinHandle;
 
+use crate::responses_metadata::CodexResponsesMetadata;
+use crate::responses_metadata::CodexResponsesRequestKind;
+use crate::responses_metadata::TurnMetadataWorkspace;
+use crate::responses_metadata::filter_extra_metadata;
+use crate::responses_metadata::subagent_header_value;
+use crate::responses_metadata::subagent_metadata_kind;
 use crate::sandbox_tags::permission_profile_sandbox_tag;
 use codex_git_utils::get_git_remote_urls_assume_git_repo;
 use codex_git_utils::get_git_repo_root;
@@ -26,59 +25,16 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::ThreadSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 const MODEL_KEY: &str = "model";
 const REASONING_EFFORT_KEY: &str = "reasoning_effort";
-const TURN_STARTED_AT_UNIX_MS_KEY: &str = "turn_started_at_unix_ms";
 const USER_INPUT_REQUESTED_DURING_TURN_KEY: &str = "user_input_requested_during_turn";
-const REQUEST_KIND_KEY: &str = "request_kind";
-const COMPACTION_KEY: &str = "compaction";
-const WINDOW_ID_KEY: &str = "window_id";
+const WORKSPACE_KIND_KEY: &str = "workspace_kind";
 
 pub(crate) struct McpTurnMetadataContext<'a> {
     pub(crate) model: &'a str,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
-}
-
-/// Metadata present only on outbound model requests that perform compaction.
-///
-/// These fields describe the operation at dispatch time. Post-response outcomes such as status,
-/// error, duration, and token deltas remain in compaction analytics events.
-#[derive(Clone, Copy, Debug, Serialize)]
-pub(crate) struct CompactionTurnMetadata {
-    trigger: CompactionTrigger,
-    reason: CompactionReason,
-    implementation: CompactionImplementation,
-    phase: CompactionPhase,
-    strategy: CompactionStrategy,
-}
-
-impl CompactionTurnMetadata {
-    pub(crate) fn new(
-        trigger: CompactionTrigger,
-        reason: CompactionReason,
-        implementation: CompactionImplementation,
-        phase: CompactionPhase,
-    ) -> Self {
-        Self {
-            trigger,
-            reason,
-            implementation,
-            phase,
-            strategy: CompactionStrategy::Memento,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum TurnMetadataRequestKind {
-    Turn,
-    Prewarm,
-    Compaction,
-    Memory,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -96,16 +52,6 @@ impl WorkspaceGitMetadata {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Default)]
-struct TurnMetadataWorkspace {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    associated_remote_urls: Option<BTreeMap<String, String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    latest_git_commit_hash: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    has_changes: Option<bool>,
-}
-
 impl From<WorkspaceGitMetadata> for TurnMetadataWorkspace {
     fn from(value: WorkspaceGitMetadata) -> Self {
         Self {
@@ -116,141 +62,40 @@ impl From<WorkspaceGitMetadata> for TurnMetadataWorkspace {
     }
 }
 
-/// Base payload for the outbound model request `x-codex-turn-metadata` header.
-///
-/// Turn-owned state populates identity fields, including optional fork and subagent lineage. A
-/// concrete request kind is added at outbound model dispatch so turns, startup prewarm, and
-/// compaction remain distinguishable. Detached memory requests are constructed as `memory`
-/// directly.
-#[derive(Clone, Debug, Serialize)]
-pub(crate) struct TurnMetadataBag {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    request_kind: Option<TurnMetadataRequestKind>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    session_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    thread_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    forked_from_thread_id: Option<ThreadId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    parent_thread_id: Option<ThreadId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    subagent_kind: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    thread_source: Option<ThreadSource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    turn_id: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    workspaces: BTreeMap<String, TurnMetadataWorkspace>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    sandbox: Option<String>,
-}
-
-impl TurnMetadataBag {
-    fn with_workspace_git_metadata(
-        mut self,
-        repo_root: Option<String>,
-        workspace_git_metadata: Option<WorkspaceGitMetadata>,
-    ) -> Self {
-        if let (Some(repo_root), Some(workspace_git_metadata)) = (repo_root, workspace_git_metadata)
-            && !workspace_git_metadata.is_empty()
-        {
-            self.workspaces
-                .insert(repo_root, workspace_git_metadata.into());
-        }
-        self
-    }
-
-    fn to_header_value(&self) -> Option<String> {
-        to_ascii_json_string(self).ok()
-    }
-}
-
-fn merge_turn_metadata(
-    header: &str,
-    turn_started_at_unix_ms: Option<i64>,
-    responsesapi_client_metadata: Option<&HashMap<String, String>>,
-) -> Option<String> {
-    if turn_started_at_unix_ms.is_none() && responsesapi_client_metadata.is_none() {
-        return None;
-    }
-
-    let mut metadata = serde_json::from_str::<serde_json::Map<String, Value>>(header).ok()?;
-    if let Some(turn_started_at_unix_ms) = turn_started_at_unix_ms {
-        metadata.insert(
-            TURN_STARTED_AT_UNIX_MS_KEY.to_string(),
-            Value::Number(turn_started_at_unix_ms.into()),
-        );
-    }
-    if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
-        for (key, value) in responsesapi_client_metadata {
-            if matches!(
-                key.as_str(),
-                "session_id"
-                    | "thread_id"
-                    | "turn_id"
-                    | TURN_STARTED_AT_UNIX_MS_KEY
-                    | "forked_from_thread_id"
-                    | "parent_thread_id"
-                    | "subagent_kind"
-                    | REQUEST_KIND_KEY
-                    | COMPACTION_KEY
-                    | WINDOW_ID_KEY
-            ) {
-                continue;
-            }
-            metadata
-                .entry(key.clone())
-                .or_insert_with(|| Value::String(value.clone()));
-        }
-    }
-    to_ascii_json_string(&metadata).ok()
-}
-
-pub async fn build_turn_metadata_header(
+#[allow(clippy::too_many_arguments)]
+pub async fn detached_memory_responses_metadata(
+    installation_id: String,
+    session_id: String,
+    thread_id: String,
+    window_id: String,
+    session_source: &SessionSource,
     cwd: &AbsolutePathBuf,
     sandbox: Option<&str>,
-) -> Option<String> {
-    let repo_root = get_git_repo_root(cwd).map(|root| root.to_string_lossy().into_owned());
-
-    let (head_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
-        get_head_commit_hash(cwd),
-        get_git_remote_urls_assume_git_repo(cwd),
-        get_has_changes(cwd),
-    );
-    let latest_git_commit_hash = head_commit_hash.map(|sha| sha.0);
-    TurnMetadataBag {
-        request_kind: Some(TurnMetadataRequestKind::Memory),
-        session_id: None,
-        thread_id: None,
-        forked_from_thread_id: None,
-        parent_thread_id: None,
-        subagent_kind: None,
-        thread_source: None,
-        turn_id: None,
-        workspaces: BTreeMap::new(),
+) -> CodexResponsesMetadata {
+    CodexResponsesMetadata {
+        request_kind: Some(CodexResponsesRequestKind::Memory),
+        subagent_header: subagent_header_value(session_source),
         sandbox: sandbox.map(ToString::to_string),
+        workspaces: memory_workspaces(cwd).await,
+        ..CodexResponsesMetadata::new(installation_id, session_id, thread_id, window_id)
     }
-    .with_workspace_git_metadata(
-        repo_root,
-        Some(WorkspaceGitMetadata {
-            associated_remote_urls,
-            latest_git_commit_hash,
-            has_changes,
-        }),
-    )
-    .to_header_value()
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct TurnMetadataState {
     cwd: AbsolutePathBuf,
     repo_root: Option<String>,
-    base_metadata: TurnMetadataBag,
-    base_header: Option<String>,
-    enriched_header: Arc<RwLock<Option<String>>>,
+    session_id: String,
+    thread_id: String,
+    forked_from_thread_id: Option<ThreadId>,
+    parent_thread_id: Option<ThreadId>,
+    subagent_header: Option<String>,
+    subagent_kind: Option<String>,
+    turn_id: String,
+    sandbox: Option<String>,
+    enriched_workspaces: Arc<RwLock<Option<BTreeMap<String, TurnMetadataWorkspace>>>>,
     turn_started_at_unix_ms: Arc<RwLock<Option<i64>>>,
-    responsesapi_client_metadata: Arc<RwLock<Option<HashMap<String, String>>>>,
+    responsesapi_client_metadata: Arc<RwLock<BTreeMap<String, String>>>,
     user_input_requested_during_turn: Arc<AtomicBool>,
     enrichment_task: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
@@ -263,7 +108,6 @@ impl TurnMetadataState {
         forked_from_thread_id: Option<ThreadId>,
         parent_thread_id: Option<ThreadId>,
         session_source: &SessionSource,
-        thread_source: Option<ThreadSource>,
         turn_id: String,
         cwd: AbsolutePathBuf,
         permission_profile: &PermissionProfile,
@@ -279,79 +123,34 @@ impl TurnMetadataState {
             )
             .to_string(),
         );
-        let subagent_kind = match session_source {
-            SessionSource::SubAgent(subagent_source) => Some(subagent_source.kind().to_string()),
-            SessionSource::Cli
-            | SessionSource::VSCode
-            | SessionSource::Exec
-            | SessionSource::Mcp
-            | SessionSource::Custom(_)
-            | SessionSource::Internal(_)
-            | SessionSource::Unknown => None,
-        };
-        let base_metadata = TurnMetadataBag {
-            request_kind: None,
-            session_id: Some(session_id),
-            thread_id: Some(thread_id),
-            forked_from_thread_id,
-            parent_thread_id,
-            subagent_kind,
-            thread_source,
-            turn_id: Some(turn_id),
-            workspaces: BTreeMap::new(),
-            sandbox,
-        };
-        let base_header = base_metadata.to_header_value();
-
         Self {
             cwd,
             repo_root,
-            base_metadata,
-            base_header,
-            enriched_header: Arc::new(RwLock::new(None)),
+            session_id,
+            thread_id,
+            forked_from_thread_id,
+            parent_thread_id,
+            subagent_header: subagent_header_value(session_source),
+            subagent_kind: subagent_metadata_kind(session_source),
+            turn_id,
+            sandbox,
+            enriched_workspaces: Arc::new(RwLock::new(None)),
             turn_started_at_unix_ms: Arc::new(RwLock::new(None)),
-            responsesapi_client_metadata: Arc::new(RwLock::new(None)),
+            responsesapi_client_metadata: Arc::new(RwLock::new(BTreeMap::new())),
             user_input_requested_during_turn: Arc::new(AtomicBool::new(false)),
             enrichment_task: Arc::new(Mutex::new(None)),
         }
-    }
-
-    pub(crate) fn current_header_value(&self) -> Option<String> {
-        let header = if let Some(header) = self
-            .enriched_header
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .cloned()
-        {
-            header
-        } else {
-            self.base_header.clone()?
-        };
-        let turn_started_at_unix_ms = *self
-            .turn_started_at_unix_ms
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let responsesapi_client_metadata = self
-            .responsesapi_client_metadata
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        merge_turn_metadata(
-            &header,
-            turn_started_at_unix_ms,
-            responsesapi_client_metadata.as_ref(),
-        )
-        .or(Some(header))
     }
 
     pub(crate) fn current_meta_value_for_mcp_request(
         &self,
         context: McpTurnMetadataContext<'_>,
     ) -> Option<serde_json::Value> {
-        let header = self.current_header_value()?;
-        let mut metadata = serde_json::from_str::<serde_json::Map<String, Value>>(&header).ok()?;
-        metadata.remove(REQUEST_KIND_KEY);
+        let Value::Object(mut metadata) =
+            self.responses_metadata_template().turn_metadata_value()?
+        else {
+            return None;
+        };
         metadata.insert(
             MODEL_KEY.to_string(),
             Value::String(context.model.to_string()),
@@ -381,50 +180,18 @@ impl TurnMetadataState {
         Some(Value::Object(metadata))
     }
 
-    fn current_header_value_for_model_request_kind(
+    pub(crate) fn to_responses_metadata(
         &self,
-        window_id: &str,
-        request_kind: TurnMetadataRequestKind,
-    ) -> Option<String> {
-        let header = self.current_header_value()?;
-        let mut metadata = serde_json::from_str::<serde_json::Map<String, Value>>(&header).ok()?;
-        metadata.insert(
-            REQUEST_KIND_KEY.to_string(),
-            serde_json::to_value(request_kind).ok()?,
-        );
-        metadata.insert(
-            WINDOW_ID_KEY.to_string(),
-            Value::String(window_id.to_string()),
-        );
-        to_ascii_json_string(&metadata).ok()
-    }
-
-    pub(crate) fn current_header_value_for_model_request(&self, window_id: &str) -> Option<String> {
-        self.current_header_value_for_model_request_kind(window_id, TurnMetadataRequestKind::Turn)
-    }
-
-    pub(crate) fn current_header_value_for_prewarm(&self, window_id: &str) -> Option<String> {
-        self.current_header_value_for_model_request_kind(
+        installation_id: String,
+        window_id: String,
+        request_kind: CodexResponsesRequestKind,
+    ) -> CodexResponsesMetadata {
+        CodexResponsesMetadata {
+            installation_id,
             window_id,
-            TurnMetadataRequestKind::Prewarm,
-        )
-    }
-
-    pub(crate) fn current_header_value_for_compaction(
-        &self,
-        window_id: &str,
-        compaction: CompactionTurnMetadata,
-    ) -> Option<String> {
-        let header = self.current_header_value_for_model_request_kind(
-            window_id,
-            TurnMetadataRequestKind::Compaction,
-        )?;
-        let mut metadata = serde_json::from_str::<serde_json::Map<String, Value>>(&header).ok()?;
-        metadata.insert(
-            COMPACTION_KEY.to_string(),
-            serde_json::to_value(compaction).ok()?,
-        );
-        to_ascii_json_string(&metadata).ok()
+            request_kind: Some(request_kind),
+            ..self.responses_metadata_template()
+        }
     }
 
     pub(crate) fn mark_user_input_requested_during_turn(&self) {
@@ -440,7 +207,54 @@ impl TurnMetadataState {
             .responsesapi_client_metadata
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Some(responsesapi_client_metadata);
+            filter_extra_metadata(responsesapi_client_metadata);
+    }
+
+    pub(crate) fn workspace_kind(&self) -> Option<String> {
+        self.responsesapi_client_metadata
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(WORKSPACE_KIND_KEY)
+            .cloned()
+    }
+
+    fn responses_metadata_template(&self) -> CodexResponsesMetadata {
+        CodexResponsesMetadata {
+            turn_id: Some(self.turn_id.clone()),
+            forked_from_thread_id: self.forked_from_thread_id,
+            parent_thread_id: self.parent_thread_id,
+            subagent_header: self.subagent_header.clone(),
+            subagent_kind: self.subagent_kind.clone(),
+            sandbox: self.sandbox.clone(),
+            workspaces: self.current_workspaces(),
+            turn_started_at_unix_ms: self.current_turn_started_at_unix_ms(),
+            extra: self
+                .responsesapi_client_metadata
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+            ..CodexResponsesMetadata::new(
+                String::new(),
+                self.session_id.clone(),
+                self.thread_id.clone(),
+                String::new(),
+            )
+        }
+    }
+
+    fn current_workspaces(&self) -> BTreeMap<String, TurnMetadataWorkspace> {
+        self.enriched_workspaces
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .unwrap_or_default()
+    }
+
+    fn current_turn_started_at_unix_ms(&self) -> Option<i64> {
+        *self
+            .turn_started_at_unix_ms
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub(crate) fn set_turn_started_at_unix_ms(&self, turn_started_at_unix_ms: i64) {
@@ -470,20 +284,16 @@ impl TurnMetadataState {
                 return;
             };
 
-            let enriched_metadata = state
-                .base_metadata
-                .clone()
-                .with_workspace_git_metadata(Some(repo_root), Some(workspace_git_metadata));
-            if enriched_metadata.workspaces.is_empty() {
+            if workspace_git_metadata.is_empty() {
                 return;
             }
 
-            if let Some(header_value) = enriched_metadata.to_header_value() {
-                *state
-                    .enriched_header
-                    .write()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(header_value);
-            }
+            let mut workspaces = BTreeMap::new();
+            workspaces.insert(repo_root, workspace_git_metadata.into());
+            *state
+                .enriched_workspaces
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(workspaces);
         }));
     }
 
@@ -511,6 +321,27 @@ impl TurnMetadataState {
             has_changes,
         }
     }
+}
+
+async fn memory_workspaces(cwd: &AbsolutePathBuf) -> BTreeMap<String, TurnMetadataWorkspace> {
+    let repo_root = get_git_repo_root(cwd).map(|root| root.to_string_lossy().into_owned());
+    let (head_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
+        get_head_commit_hash(cwd),
+        get_git_remote_urls_assume_git_repo(cwd),
+        get_has_changes(cwd),
+    );
+    let workspace_git_metadata = WorkspaceGitMetadata {
+        associated_remote_urls,
+        latest_git_commit_hash: head_commit_hash.map(|sha| sha.0),
+        has_changes,
+    };
+    let mut workspaces = BTreeMap::new();
+    if let Some(repo_root) = repo_root
+        && !workspace_git_metadata.is_empty()
+    {
+        workspaces.insert(repo_root, workspace_git_metadata.into());
+    }
+    workspaces
 }
 
 #[cfg(test)]

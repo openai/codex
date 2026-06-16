@@ -4,6 +4,11 @@
 //! from JSONL rollouts and mirrors it into a local SQLite database. Backfill
 //! orchestration and rollout scanning live in `codex-core`.
 
+const _: () = assert!(
+    libsqlite3_sys::SQLITE_VERSION_NUMBER >= 3_051_003,
+    "bundled SQLite must include the WAL-reset corruption fix",
+);
+
 mod audit;
 mod extract;
 pub mod log_db;
@@ -52,21 +57,31 @@ pub use model::ThreadGoalStatus;
 pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadsPage;
+pub use runtime::ExternalAgentConfigImportDetailsRecord;
+pub use runtime::ExternalAgentConfigImportFailureRecord;
+pub use runtime::ExternalAgentConfigImportHistoryRecord;
+pub use runtime::ExternalAgentConfigImportSuccessRecord;
 pub use runtime::GoalAccountingMode;
 pub use runtime::GoalAccountingOutcome;
 pub use runtime::GoalStore;
 pub use runtime::GoalUpdate;
 pub use runtime::MemoryStore;
 pub use runtime::RemoteControlEnrollmentRecord;
+pub use runtime::RuntimeDbBackup;
 pub use runtime::RuntimeDbPath;
 pub use runtime::ThreadFilterOptions;
+pub use runtime::backup_runtime_db_for_fresh_start;
 pub use runtime::goals_db_filename;
 pub use runtime::goals_db_path;
+pub use runtime::is_sqlite_corruption_error;
 pub use runtime::logs_db_filename;
 pub use runtime::logs_db_path;
 pub use runtime::memories_db_filename;
 pub use runtime::memories_db_path;
+pub use runtime::runtime_db_path_for_corruption_error;
 pub use runtime::runtime_db_paths;
+pub use runtime::sqlite_error_detail_is_corruption;
+pub use runtime::sqlite_error_detail_is_lock;
 pub use runtime::sqlite_integrity_check;
 pub use runtime::state_db_filename;
 pub use runtime::state_db_path;

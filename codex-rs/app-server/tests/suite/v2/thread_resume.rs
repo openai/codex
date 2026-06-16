@@ -63,6 +63,8 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::McpToolCallEndEvent;
+use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource as RolloutSessionSource;
@@ -74,6 +76,8 @@ use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
+use codex_rollout::append_rollout_item_to_path;
+use codex_rollout::read_session_meta_line;
 use codex_state::StateRuntime;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses;
@@ -99,6 +103,7 @@ use super::analytics::assert_basic_thread_initialized_event;
 use super::analytics::mount_analytics_capture;
 use super::analytics::thread_initialized_event;
 use super::analytics::wait_for_analytics_payload;
+use super::analytics::wait_for_goal_event;
 
 #[cfg(windows)]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
@@ -253,6 +258,82 @@ async fn thread_resume_with_empty_path_uses_running_thread_id() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let workspace = TempDir::new()?;
+    let project_agents = workspace.path().join("AGENTS.md");
+    std::fs::write(&project_agents, "project instructions")?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        thread,
+        instruction_sources,
+        ..
+    } = to_response::<ThreadStartResponse>(start_resp)?;
+    let project_agents = AbsolutePathBuf::try_from(project_agents)?;
+    assert_eq!(instruction_sources, vec![project_agents.clone()]);
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            client_user_message_id: None,
+            input: vec![UserInput::Text {
+                text: "materialize rollout".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    std::fs::remove_file(project_agents.as_path())?;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        instruction_sources,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(instruction_sources, vec![project_agents]);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_updates_runtime_workspace_roots_for_loaded_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -286,7 +367,10 @@ async fn turn_start_updates_runtime_workspace_roots_for_loaded_thread() -> Resul
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            runtime_workspace_roots: Some(vec![extra_root.clone(), extra_root.join(".")]),
+            runtime_workspace_roots: Some(vec![
+                AbsolutePathBuf::from_absolute_path(&extra_root)?,
+                AbsolutePathBuf::from_absolute_path(extra_root.join("."))?,
+            ]),
             ..Default::default()
         })
         .await?;
@@ -1233,19 +1317,30 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
 }
 
 #[tokio::test]
-async fn thread_goal_clear_deletes_goal_and_notifies() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
+async fn thread_goal_lifecycle_emits_analytics_and_clear_deletes_goal() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        responses::sse(vec![
+            responses::ev_response_created("materialize-thread"),
+            responses::ev_completed("materialize-thread"),
+        ]),
+        responses::sse(vec![
+            responses::ev_response_created("goal-continuation"),
+            responses::ev_completed_with_tokens("goal-continuation", /*total_tokens*/ 200),
+        ]),
+    ])
+    .await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    create_config_toml_with_chatgpt_base_url(codex_home.path(), &server.uri(), &server.uri())?;
     let config_path = codex_home.path().join("config.toml");
     let config = std::fs::read_to_string(&config_path)?;
     std::fs::write(
         &config_path,
         config.replace("personality = true\n", "personality = true\ngoals = true\n"),
     )?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(DEFAULT_READ_TIMEOUT.saturating_mul(2), mcp.initialize()).await??;
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -1287,7 +1382,8 @@ async fn thread_goal_clear_deletes_goal_and_notifies() -> Result<()> {
             "thread/goal/set",
             Some(json!({
                 "threadId": thread.id,
-                "objective": "keep polishing",
+                "objective": "do not serialize this objective",
+                "tokenBudget": 100,
             })),
         )
         .await?;
@@ -1302,6 +1398,55 @@ async fn thread_goal_clear_deletes_goal_and_notifies() -> Result<()> {
         mcp.read_stream_until_notification_message("thread/goal/updated"),
     )
     .await??;
+
+    let created = wait_for_goal_event(&server, DEFAULT_READ_TIMEOUT, "created", "active").await?;
+    let persisted_goal_id = created["event_params"]["goal_id"]
+        .as_str()
+        .expect("created goal id");
+    assert_eq!(created["event_params"]["thread_id"], thread.id);
+    assert_eq!(created["event_params"]["turn_id"], serde_json::Value::Null);
+    assert_eq!(created["event_params"]["has_token_budget"], true);
+    assert!(created["event_params"]["session_id"].is_string());
+    assert!(created["event_params"]["app_server_client"].is_object());
+    assert!(created["event_params"]["runtime"].is_object());
+    assert!(created["event_params"].get("objective").is_none());
+    assert!(created["event_params"].get("token_budget").is_none());
+
+    let usage = wait_for_goal_event(
+        &server,
+        DEFAULT_READ_TIMEOUT,
+        "usage_accounted",
+        "budget_limited",
+    )
+    .await?;
+    let causal_turn_id = usage["event_params"]["turn_id"]
+        .as_str()
+        .expect("accounted usage turn id");
+    assert_eq!(usage["event_params"]["goal_id"], persisted_goal_id);
+    assert_eq!(usage["event_params"]["cumulative_tokens_accounted"], 200);
+    assert!(
+        usage["event_params"]["cumulative_time_accounted_seconds"]
+            .as_i64()
+            .is_some()
+    );
+
+    let status = wait_for_goal_event(
+        &server,
+        DEFAULT_READ_TIMEOUT,
+        "status_changed",
+        "budget_limited",
+    )
+    .await?;
+    assert_eq!(status["event_params"]["goal_id"], persisted_goal_id);
+    assert_eq!(status["event_params"]["turn_id"], causal_turn_id);
+    assert_eq!(
+        status["event_params"]["cumulative_tokens_accounted"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        status["event_params"]["cumulative_time_accounted_seconds"],
+        serde_json::Value::Null
+    );
 
     let clear_id = mcp
         .send_raw_request(
@@ -1324,6 +1469,11 @@ async fn thread_goal_clear_deletes_goal_and_notifies() -> Result<()> {
         mcp.read_stream_until_notification_message("thread/goal/cleared"),
     )
     .await??;
+
+    let cleared =
+        wait_for_goal_event(&server, DEFAULT_READ_TIMEOUT, "cleared", "budget_limited").await?;
+    assert_eq!(cleared["event_params"]["goal_id"], persisted_goal_id);
+    assert_eq!(cleared["event_params"]["turn_id"], serde_json::Value::Null);
 
     let get_id = mcp
         .send_raw_request(
@@ -1805,6 +1955,7 @@ stream_max_retries = 0
         base_instructions: None,
         dynamic_tools: None,
         memory_mode: None,
+        multi_agent_version: None,
     };
     std::fs::write(
         &rollout_path,
@@ -2014,7 +2165,7 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
 async fn thread_resume_defers_updated_at_until_turn_start() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    let rollout = setup_rollout_fixture(codex_home.path(), &server.uri())?;
+    let rollout = setup_rollout_fixture(codex_home.path(), &server.uri()).await?;
     let thread_id = rollout.conversation_id.clone();
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
@@ -2299,6 +2450,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
                     text: "history override".to_string(),
                 }],
                 phase: None,
+                metadata: None,
             }]),
             ..Default::default()
         })
@@ -2405,6 +2557,36 @@ async fn thread_resume_rejects_mismatched_path_for_running_thread_id() -> Result
         primary.read_stream_until_notification_message("turn/started"),
     )
     .await??;
+
+    #[cfg(windows)]
+    {
+        let active_path = thread.path.as_ref().expect("thread should have path");
+        let active_path_display = active_path.as_os_str().to_string_lossy();
+        let equivalent_path = if let Some(path) = active_path_display.strip_prefix(r"\\?\UNC\") {
+            PathBuf::from(format!(r"\\{path}"))
+        } else if let Some(path) = active_path_display.strip_prefix(r"\\?\") {
+            PathBuf::from(path)
+        } else if let Some(path) = active_path_display.strip_prefix(r"\\") {
+            PathBuf::from(format!(r"\\?\UNC\{path}"))
+        } else {
+            PathBuf::from(format!(r"\\?\{active_path_display}"))
+        };
+        let normalized_resume_id = primary
+            .send_thread_resume_request(ThreadResumeParams {
+                thread_id: thread_id.clone(),
+                path: Some(equivalent_path),
+                ..Default::default()
+            })
+            .await?;
+        let normalized_resume_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            primary.read_stream_until_response_message(RequestId::Integer(normalized_resume_id)),
+        )
+        .await??;
+        let ThreadResumeResponse { thread, .. } =
+            to_response::<ThreadResumeResponse>(normalized_resume_resp)?;
+        assert_eq!(thread.id, thread_id);
+    }
 
     let stale_thread_id = Uuid::new_v4().to_string();
     let stale_path = rollout_path(codex_home.path(), "2025-01-01T00-00-00", &stale_thread_id);
@@ -3052,7 +3234,7 @@ async fn thread_resume_with_overrides_defers_updated_at_until_turn_start() -> Re
 async fn thread_resume_fails_when_required_mcp_server_fails_to_initialize() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    let rollout = setup_rollout_fixture(codex_home.path(), &server.uri())?;
+    let rollout = setup_rollout_fixture(codex_home.path(), &server.uri()).await?;
     create_config_toml_with_required_broken_mcp(codex_home.path(), &server.uri())?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
@@ -3087,10 +3269,10 @@ async fn thread_resume_fails_when_required_mcp_server_fails_to_initialize() -> R
 }
 
 #[tokio::test]
-async fn thread_resume_surfaces_cloud_requirements_load_errors() -> Result<()> {
+async fn thread_resume_surfaces_cloud_config_bundle_load_errors() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/backend-api/wham/config/requirements"))
+        .and(path("/backend-api/wham/config/bundle"))
         .respond_with(
             ResponseTemplate::new(401)
                 .insert_header("content-type", "text/html")
@@ -3167,7 +3349,7 @@ async fn thread_resume_surfaces_cloud_requirements_load_errors() -> Result<()> {
     assert_eq!(
         err.error.data,
         Some(json!({
-            "reason": "cloudRequirements",
+            "reason": "cloudConfigBundle",
             "errorCode": "Auth",
             "action": "relogin",
             "statusCode": 401,
@@ -3276,6 +3458,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
             text: history_text.to_string(),
         }],
         phase: None,
+        metadata: None,
     }];
 
     // Resume with explicit history and override the model.
@@ -3615,7 +3798,7 @@ struct RolloutFixture {
     before_modified: std::time::SystemTime,
 }
 
-fn setup_rollout_fixture(codex_home: &Path, server_uri: &str) -> Result<RolloutFixture> {
+async fn setup_rollout_fixture(codex_home: &Path, server_uri: &str) -> Result<RolloutFixture> {
     create_config_toml(codex_home, server_uri)?;
 
     let preview = "Saved user message";
@@ -3632,6 +3815,10 @@ fn setup_rollout_fixture(codex_home: &Path, server_uri: &str) -> Result<RolloutF
         /*git_info*/ None,
     )?;
     let rollout_file_path = rollout_path(codex_home, filename_ts, &conversation_id);
+    let mut session_meta = read_session_meta_line(&rollout_file_path).await?;
+    session_meta.meta.multi_agent_version = Some(MultiAgentVersion::V1);
+    append_rollout_item_to_path(&rollout_file_path, &RolloutItem::SessionMeta(session_meta))
+        .await?;
     set_rollout_mtime(rollout_file_path.as_path(), expected_updated_at_rfc3339)?;
     let before_modified = std::fs::metadata(&rollout_file_path)?.modified()?;
     Ok(RolloutFixture {

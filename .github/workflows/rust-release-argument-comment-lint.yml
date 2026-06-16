@@ -7,6 +7,11 @@ on:
         required: true
         type: boolean
 
+# Cargo's libgit2 transport has been flaky when fetching git dependencies with
+# nested submodules. Prefer the system git CLI across every Cargo invocation.
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
 jobs:
   skip:
     if: ${{ !inputs.publish }}
@@ -52,8 +57,8 @@ jobs:
             runner_binary: argument-comment-lint.exe
             cargo_dylint_binary: cargo-dylint.exe
             runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-x64
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

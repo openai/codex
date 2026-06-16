@@ -38,7 +38,8 @@ use tracing::warn;
 
 const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
 
-pub(crate) fn image_generation_artifact_path(
+/// Returns the host-owned default artifact path for a generated image.
+pub fn image_generation_artifact_path(
     codex_home: &AbsolutePathBuf,
     session_id: &str,
     call_id: &str,
@@ -131,7 +132,8 @@ pub(crate) async fn persist_image_generation_item(
     turn_context: &TurnContext,
     image_item: &mut ImageGenerationItem,
 ) -> Option<AbsolutePathBuf> {
-    let session_id = sess.conversation_id.to_string();
+    image_item.saved_path = None;
+    let session_id = sess.thread_id.to_string();
     match save_image_generation_result(
         &turn_context.config.codex_home,
         &session_id,
@@ -163,18 +165,15 @@ pub(crate) async fn persist_image_generation_item(
     }
 }
 
-pub(crate) async fn finalize_image_generation_item(
+async fn record_image_generation_instructions(
     sess: &Session,
     turn_context: &TurnContext,
-    image_item: &mut ImageGenerationItem,
+    image_item: &ImageGenerationItem,
 ) {
-    if persist_image_generation_item(sess, turn_context, image_item)
-        .await
-        .is_none()
-    {
+    if image_item.saved_path.is_none() {
         return;
     }
-    let session_id = sess.conversation_id.to_string();
+    let session_id = sess.thread_id.to_string();
     let image_output_path =
         image_generation_artifact_path(&turn_context.config.codex_home, &session_id, "<image_id>");
     let image_output_dir = image_output_path
@@ -265,7 +264,7 @@ pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
     }
     state_db::mark_thread_memory_mode_polluted(
         sess.services.state_db.as_deref(),
-        sess.conversation_id,
+        sess.thread_id,
         "record_completed_response_item",
     )
     .await;
@@ -424,7 +423,7 @@ pub(crate) async fn handle_output_item_done(
 
             let payload_preview = call.payload.log_payload().into_owned();
             tracing::info!(
-                thread_id = %ctx.sess.conversation_id,
+                thread_id = %ctx.sess.thread_id,
                 "ToolCall: {} {}",
                 call.tool_name,
                 payload_preview
@@ -530,27 +529,16 @@ pub(crate) async fn handle_non_tool_response_item(
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. } => {
             let mut turn_item = parse_turn_item(item)?;
-            if let TurnItemContributorPolicy::Run(turn_store) = contributor_policy {
-                apply_turn_item_contributors(sess, turn_store, &mut turn_item).await;
-            }
-            if let TurnItem::AgentMessage(agent_message) = &mut turn_item {
-                let combined = agent_message
-                    .content
-                    .iter()
-                    .map(|entry| match entry {
-                        codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
-                    })
-                    .collect::<String>();
-                let (stripped, memory_citation) =
-                    strip_hidden_assistant_markup_and_parse_memory_citation(&combined, plan_mode);
-                agent_message.content =
-                    vec![codex_protocol::items::AgentMessageContent::Text { text: stripped }];
-                if agent_message.memory_citation.is_none() {
-                    agent_message.memory_citation = memory_citation;
-                }
-            }
-            if let TurnItem::ImageGeneration(image_item) = &mut turn_item {
-                finalize_image_generation_item(sess, turn_context, image_item).await;
+            finalize_turn_item(
+                sess,
+                turn_context,
+                contributor_policy,
+                &mut turn_item,
+                plan_mode,
+            )
+            .await;
+            if let TurnItem::ImageGeneration(image_item) = &turn_item {
+                record_image_generation_instructions(sess, turn_context, image_item).await;
             }
             Some(turn_item)
         }
@@ -561,6 +549,39 @@ pub(crate) async fn handle_non_tool_response_item(
             None
         }
         _ => None,
+    }
+}
+
+pub(crate) async fn finalize_turn_item(
+    sess: &Session,
+    turn_context: &TurnContext,
+    contributor_policy: TurnItemContributorPolicy<'_>,
+    turn_item: &mut TurnItem,
+    plan_mode: bool,
+) {
+    if let TurnItemContributorPolicy::Run(turn_store) = contributor_policy {
+        apply_turn_item_contributors(sess, turn_store, turn_item).await;
+    }
+    if let TurnItem::AgentMessage(agent_message) = &mut *turn_item {
+        let combined = agent_message
+            .content
+            .iter()
+            .map(|entry| match entry {
+                codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+            })
+            .collect::<String>();
+        let (stripped, memory_citation) =
+            strip_hidden_assistant_markup_and_parse_memory_citation(&combined, plan_mode);
+        agent_message.content =
+            vec![codex_protocol::items::AgentMessageContent::Text { text: stripped }];
+        if agent_message.memory_citation.is_none() {
+            agent_message.memory_citation = memory_citation;
+        }
+    }
+    if let TurnItem::ImageGeneration(image_item) = &mut *turn_item
+        && image_item.status == "completed"
+    {
+        persist_image_generation_item(sess, turn_context, image_item).await;
     }
 }
 
@@ -605,6 +626,7 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
             Some(ResponseItem::FunctionCallOutput {
                 call_id: call_id.clone(),
                 output: output.clone(),
+                metadata: None,
             })
         }
         ResponseInputItem::CustomToolCallOutput {
@@ -615,12 +637,14 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
             call_id: call_id.clone(),
             name: name.clone(),
             output: output.clone(),
+            metadata: None,
         }),
         ResponseInputItem::McpToolCallOutput { call_id, output } => {
             let output = output.as_function_call_output_payload();
             Some(ResponseItem::FunctionCallOutput {
                 call_id: call_id.clone(),
                 output,
+                metadata: None,
             })
         }
         ResponseInputItem::ToolSearchOutput {
@@ -633,6 +657,7 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
             status: status.clone(),
             execution: execution.clone(),
             tools: tools.clone(),
+            metadata: None,
         }),
         _ => None,
     }

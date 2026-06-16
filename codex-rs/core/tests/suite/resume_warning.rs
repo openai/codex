@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
 
 use codex_core::NewThread;
 use codex_login::CodexAuth;
@@ -37,10 +37,12 @@ fn resume_history(
         network: None,
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
+        comp_hash: None,
         personality: None,
         collaboration_mode: None,
+        multi_agent_version: None,
         realtime_active: None,
-        effort: config.model_reasoning_effort,
+        effort: config.model_reasoning_effort.clone(),
         summary: config
             .model_reasoning_summary
             .unwrap_or(ReasoningSummary::Auto),
@@ -107,7 +109,6 @@ async fn emits_warning_when_resumed_model_differs() {
             config.clone(),
             initial_history,
             auth_manager,
-            /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
         .await

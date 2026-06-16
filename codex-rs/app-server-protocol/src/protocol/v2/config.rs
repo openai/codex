@@ -172,6 +172,7 @@ pub enum AppToolApproval {
 pub struct AppsDefaultConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[serde(default = "default_enabled")]
     pub destructive_enabled: bool,
     #[serde(default = "default_enabled")]
@@ -200,6 +201,7 @@ pub struct AppToolsConfig {
 pub struct AppConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub destructive_enabled: Option<bool>,
     pub open_world_enabled: Option<bool>,
     pub default_tools_approval_mode: Option<AppToolApproval>,
@@ -374,10 +376,12 @@ pub struct ConfigRequirements {
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
     pub allowed_windows_sandbox_implementations: Option<Vec<WindowsSandboxSetupMode>>,
-    pub allowed_permissions: Option<Vec<String>>,
+    pub allowed_permission_profiles: Option<BTreeMap<String, bool>>,
+    pub default_permissions: Option<String>,
     pub allowed_web_search_modes: Option<Vec<WebSearchMode>>,
     pub allow_managed_hooks_only: Option<bool>,
     pub allow_appshots: Option<bool>,
+    pub allow_remote_control: Option<bool>,
     pub computer_use: Option<ComputerUseRequirements>,
     pub feature_requirements: Option<BTreeMap<String, bool>>,
     #[experimental("configRequirements/read.hooks")]
@@ -664,12 +668,73 @@ pub struct ExternalAgentConfigImportParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ExternalAgentConfigImportResponse {}
+pub struct ExternalAgentConfigImportResponse {
+    pub import_id: String,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ExternalAgentConfigImportCompletedNotification {}
+pub struct ExternalAgentConfigImportItemTypeFailure {
+    pub item_type: ExternalAgentConfigMigrationItemType,
+    pub error_type: Option<String>,
+    pub failure_stage: String,
+    pub message: String,
+    pub cwd: Option<PathBuf>,
+    pub source: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportItemTypeSuccess {
+    pub item_type: ExternalAgentConfigMigrationItemType,
+    pub cwd: Option<PathBuf>,
+    pub source: Option<String>,
+    pub target: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportTypeResult {
+    pub item_type: ExternalAgentConfigMigrationItemType,
+    pub successes: Vec<ExternalAgentConfigImportItemTypeSuccess>,
+    pub failures: Vec<ExternalAgentConfigImportItemTypeFailure>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportHistory {
+    pub import_id: String,
+    pub completed_at_ms: i64,
+    pub successes: Vec<ExternalAgentConfigImportItemTypeSuccess>,
+    pub failures: Vec<ExternalAgentConfigImportItemTypeFailure>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportHistoriesReadResponse {
+    pub data: Vec<ExternalAgentConfigImportHistory>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportProgressNotification {
+    pub import_id: String,
+    pub item_type_results: Vec<ExternalAgentConfigImportTypeResult>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportCompletedNotification {
+    pub import_id: String,
+    pub item_type_results: Vec<ExternalAgentConfigImportTypeResult>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

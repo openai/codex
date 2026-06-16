@@ -1,0 +1,14 @@
+---
+source: core/tests/suite/token_budget.rs
+expression: snapshot
+---
+Scenario: New context window tool installs fresh full context before the next follow-up request.
+
+## Final Follow-Up Request
+00:message/developer[3]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <SKILLS_INSTRUCTIONS>
+    [03] <token_budget>\nThread id <THREAD_ID>.\nCurrent context window 1.\nYou have 121600 tokens left in this context window.\n</token_budget>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:function_call/update_plan
+03:function_call_output:Plan updated

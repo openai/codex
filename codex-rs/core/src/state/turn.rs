@@ -1,6 +1,5 @@
 //! Turn-scoped state and active turn metadata scaffolding.
 
-use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -10,14 +9,16 @@ use tokio_util::task::AbortOnDropHandle;
 
 use codex_extension_api::ExtensionData;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use rmcp::model::RequestId;
 use tokio::sync::oneshot;
 
+use crate::agent::control::AgentExecutionGuard;
 use crate::session::TurnInputQueue;
 use crate::session::turn_context::TurnContext;
 use crate::tasks::AnySessionTask;
@@ -76,6 +77,7 @@ pub(crate) struct RunningTask {
     pub(crate) handle: AbortOnDropHandle<()>,
     pub(crate) turn_context: Arc<TurnContext>,
     pub(crate) turn_extension_data: Arc<ExtensionData>,
+    pub(crate) _agent_execution_guard: Option<AgentExecutionGuard>,
     // Timer recorded when the task drops to capture the full turn duration.
     pub(crate) _timer: Option<codex_otel::Timer>,
 }
@@ -90,7 +92,7 @@ pub(crate) struct TurnState {
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pub(crate) pending_input: TurnInputQueue,
     mailbox_delivery_phase: MailboxDeliveryPhase,
-    granted_permissions: Option<AdditionalPermissionProfile>,
+    granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile>,
     strict_auto_review_enabled: bool,
     pub(crate) tool_calls: u64,
     pub(crate) has_memory_citation: bool,
@@ -100,7 +102,7 @@ pub(crate) struct TurnState {
 pub(crate) struct PendingRequestPermissions {
     pub(crate) tx_response: oneshot::Sender<RequestPermissionsResponse>,
     pub(crate) requested_permissions: RequestPermissionProfile,
-    pub(crate) cwd: AbsolutePathBuf,
+    pub(crate) environment: TurnEnvironmentSelection,
 }
 
 impl TurnState {
@@ -204,13 +206,29 @@ impl TurnState {
         self.mailbox_delivery_phase = phase;
     }
 
-    pub(crate) fn record_granted_permissions(&mut self, permissions: AdditionalPermissionProfile) {
-        self.granted_permissions =
-            merge_permission_profiles(self.granted_permissions.as_ref(), Some(&permissions));
+    pub(crate) fn record_granted_permissions(
+        &mut self,
+        environment_id: &str,
+        permissions: AdditionalPermissionProfile,
+    ) {
+        let granted_permissions = merge_permission_profiles(
+            self.granted_permissions_by_environment_id
+                .get(environment_id),
+            Some(&permissions),
+        );
+        if let Some(granted_permissions) = granted_permissions {
+            self.granted_permissions_by_environment_id
+                .insert(environment_id.to_string(), granted_permissions);
+        }
     }
 
-    pub(crate) fn granted_permissions(&self) -> Option<AdditionalPermissionProfile> {
-        self.granted_permissions.clone()
+    pub(crate) fn granted_permissions(
+        &self,
+        environment_id: &str,
+    ) -> Option<AdditionalPermissionProfile> {
+        self.granted_permissions_by_environment_id
+            .get(environment_id)
+            .cloned()
     }
 
     pub(crate) fn enable_strict_auto_review(&mut self) {

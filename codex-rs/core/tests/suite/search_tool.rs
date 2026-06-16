@@ -1,5 +1,5 @@
 #![cfg(not(target_os = "windows"))]
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
 
 use anyhow::Result;
 use codex_config::types::McpServerConfig;
@@ -7,6 +7,9 @@ use codex_config::types::McpServerTransportConfig;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -524,7 +527,6 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     let test = builder.build(&server).await?;
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "Find the calendar create tool".to_string(),
                 text_elements: Vec::new(),
@@ -841,9 +843,7 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
     );
     let output = tool_search_output_item(&requests[1], call_id);
     let spawn_agent = namespace_child_tool(&output, "multi_agent_v1", "spawn_agent")
-        .unwrap_or_else(|| {
-            panic!("expected tool_search to return multi_agent_v1.spawn_agent: {output:?}")
-        });
+        .expect("tool_search should return multi_agent_v1.spawn_agent");
     assert_eq!(
         spawn_agent.get("defer_loading").and_then(Value::as_bool),
         Some(true)
@@ -852,8 +852,11 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
         .get("description")
         .and_then(Value::as_str)
         .expect("spawn_agent description should be present");
-    assert!(description.contains("Only use `spawn_agent` if and only if"));
+    assert!(description.contains(
+        "Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work."
+    ));
     assert!(description.contains("### Designing delegated subtasks"));
+    assert!(!description.contains("### When to delegate vs. do the subtask yourself"));
 
     Ok(())
 }
@@ -914,23 +917,24 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
         "required": ["mode"],
         "additionalProperties": false,
     });
-    let dynamic_tool = DynamicToolSpec {
-        namespace: Some("codex_app".to_string()),
-        name: tool_name.to_string(),
-        description: tool_description.to_string(),
-        input_schema: input_schema.clone(),
-        defer_loading: true,
-    };
+    let dynamic_tool = DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+        name: "codex_app".to_string(),
+        description: "Automation tools.".to_string(),
+        tools: vec![DynamicToolNamespaceTool::Function(
+            DynamicToolFunctionSpec {
+                name: tool_name.to_string(),
+                description: tool_description.to_string(),
+                input_schema: input_schema.clone(),
+                defer_loading: true,
+            },
+        )],
+    });
 
     let mut builder = test_codex().with_config(configure_search_capable_model);
     let base_test = builder.build(&server).await?;
     let new_thread = base_test
         .thread_manager
-        .start_thread_with_tools(
-            base_test.config.clone(),
-            vec![dynamic_tool],
-            /*persist_extended_history*/ false,
-        )
+        .start_thread_with_tools(base_test.config.clone(), vec![dynamic_tool])
         .await?;
     let mut test = base_test;
     test.codex = new_thread.thread;
@@ -938,7 +942,6 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "Use the automation tool".to_string(),
                 text_elements: Vec::new(),
@@ -1001,7 +1004,7 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
         vec![json!({
             "type": "namespace",
             "name": "codex_app",
-            "description": "Tools in the codex_app namespace.",
+            "description": "Automation tools.",
             "tools": [{
                 "type": "function",
                 "name": tool_name,
@@ -1249,7 +1252,6 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "Find the rmcp echo tool and call it.".to_string(),
                 text_elements: Vec::new(),
@@ -1539,31 +1541,33 @@ async fn tool_search_matches_dynamic_tools_by_name_description_namespace_and_sch
     )
     .await;
 
-    let dynamic_tool = DynamicToolSpec {
-        namespace: Some("orbit_ops".to_string()),
-        name: "quasar_ping_beacon".to_string(),
-        description: "Trigger the saffron metronome workflow for reminder follow-ups.".to_string(),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "chrono_spec": { "type": "string" },
-                "targetThreadId": { "type": "string" },
+    let dynamic_tool = DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+        name: "orbit_ops".to_string(),
+        description: "Orbital reminder operations.".to_string(),
+        tools: vec![DynamicToolNamespaceTool::Function(
+            DynamicToolFunctionSpec {
+                name: "quasar_ping_beacon".to_string(),
+                description: "Trigger the saffron metronome workflow for reminder follow-ups."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "chrono_spec": { "type": "string" },
+                        "targetThreadId": { "type": "string" },
+                    },
+                    "required": ["chrono_spec"],
+                    "additionalProperties": false,
+                }),
+                defer_loading: true,
             },
-            "required": ["chrono_spec"],
-            "additionalProperties": false,
-        }),
-        defer_loading: true,
-    };
+        )],
+    });
 
     let mut builder = test_codex().with_config(configure_search_capable_model);
     let base_test = builder.build(&server).await?;
     let new_thread = base_test
         .thread_manager
-        .start_thread_with_tools(
-            base_test.config.clone(),
-            vec![dynamic_tool],
-            /*persist_extended_history*/ false,
-        )
+        .start_thread_with_tools(base_test.config.clone(), vec![dynamic_tool])
         .await?;
     let mut test = base_test;
     test.codex = new_thread.thread;
@@ -1571,7 +1575,6 @@ async fn tool_search_matches_dynamic_tools_by_name_description_namespace_and_sch
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "Search for the dynamic tool".to_string(),
                 text_elements: Vec::new(),

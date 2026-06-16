@@ -1,9 +1,9 @@
 use std::fs;
 use std::path::Path;
 
+use crate::OPENAI_API_CURATED_MARKETPLACE_NAME;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::PluginsConfigInput;
-use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_config::loader::load_config_layers_state;
@@ -58,6 +58,32 @@ pub(crate) fn write_curated_plugin(root: &Path, plugin_name: &str) {
 }
 
 pub(crate) fn write_openai_curated_marketplace(root: &Path, plugin_names: &[&str]) {
+    write_curated_marketplace(
+        root,
+        "marketplace.json",
+        OPENAI_CURATED_MARKETPLACE_NAME,
+        /*display_name*/ None,
+        plugin_names,
+    );
+}
+
+pub(crate) fn write_openai_api_curated_marketplace(root: &Path, plugin_names: &[&str]) {
+    write_curated_marketplace(
+        root,
+        "api_marketplace.json",
+        OPENAI_API_CURATED_MARKETPLACE_NAME,
+        Some("OpenAI Curated"),
+        plugin_names,
+    );
+}
+
+fn write_curated_marketplace(
+    root: &Path,
+    manifest_name: &str,
+    marketplace_name: &str,
+    display_name: Option<&str>,
+    plugin_names: &[&str],
+) {
     let plugins = plugin_names
         .iter()
         .map(|plugin_name| {
@@ -73,11 +99,21 @@ pub(crate) fn write_openai_curated_marketplace(root: &Path, plugin_names: &[&str
         })
         .collect::<Vec<_>>()
         .join(",\n");
+    let interface = display_name
+        .map(|display_name| {
+            format!(
+                r#"
+  "interface": {{
+    "displayName": "{display_name}"
+  }},"#
+            )
+        })
+        .unwrap_or_default();
     write_file(
-        &root.join(".agents/plugins/marketplace.json"),
+        &root.join(".agents/plugins").join(manifest_name),
         &format!(
             r#"{{
-  "name": "{OPENAI_CURATED_MARKETPLACE_NAME}",
+  "name": "{marketplace_name}",{interface}
   "plugins": [
 {plugins}
   ]
@@ -87,10 +123,6 @@ pub(crate) fn write_openai_curated_marketplace(root: &Path, plugin_names: &[&str
     for plugin_name in plugin_names {
         write_curated_plugin(root, plugin_name);
     }
-}
-
-pub(crate) fn write_curated_plugin_sha(codex_home: &Path) {
-    write_curated_plugin_sha_with(codex_home, TEST_CURATED_PLUGIN_SHA);
 }
 
 pub(crate) fn write_curated_plugin_sha_with(codex_home: &Path, sha: &str) {
@@ -106,7 +138,6 @@ pub(crate) async fn load_plugins_config(codex_home: &Path, cwd: &Path) -> Plugin
         Some(cwd),
         &[],
         LoaderOverrides::without_managed_config_for_tests(),
-        CloudRequirementsLoader::default(),
         &NoopThreadConfigLoader,
     )
     .await

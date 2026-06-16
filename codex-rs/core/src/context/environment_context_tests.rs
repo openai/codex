@@ -22,7 +22,6 @@ fn fake_shell_name() -> String {
     let shell = crate::shell::Shell {
         shell_type: ShellType::Bash,
         shell_path: PathBuf::from("/bin/bash"),
-        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     };
     shell.name().to_string()
 }
@@ -178,8 +177,10 @@ fn turn_context_item_filesystem_uses_workspace_roots_instead_of_cwd() {
         network: None,
         file_system_sandbox_policy: None,
         model: "gpt-5".to_string(),
+        comp_hash: None,
         personality: None,
         collaboration_mode: None,
+        multi_agent_version: None,
         realtime_active: None,
         effort: None,
         summary: codex_protocol::config_types::ReasoningSummary::Auto,

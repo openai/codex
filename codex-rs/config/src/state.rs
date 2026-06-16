@@ -5,6 +5,7 @@ use super::fingerprint::record_origins;
 use super::fingerprint::version_for_toml;
 use super::key_aliases::normalized_with_key_aliases;
 use super::merge::merge_toml_values;
+use crate::CloudConfigBundleLoader;
 use crate::ProfileV2Name;
 use codex_app_server_protocol::ConfigLayer;
 use codex_app_server_protocol::ConfigLayerMetadata;
@@ -21,6 +22,7 @@ use toml::Value as TomlValue;
 pub struct ConfigLoadOptions {
     pub loader_overrides: LoaderOverrides,
     pub strict_config: bool,
+    pub cloud_config_bundle: CloudConfigBundleLoader,
 }
 
 impl From<LoaderOverrides> for ConfigLoadOptions {
@@ -28,6 +30,7 @@ impl From<LoaderOverrides> for ConfigLoadOptions {
         Self {
             loader_overrides,
             strict_config: false,
+            cloud_config_bundle: CloudConfigBundleLoader::default(),
         }
     }
 }
@@ -70,14 +73,18 @@ impl LoaderOverrides {
         }
     }
 
-    /// Returns overrides with host MDM disabled and managed config loaded from `managed_config_path`.
+    /// Returns overrides with host MDM disabled and managed config loaded from
+    /// `managed_config_path`. System requirements are loaded from a sibling
+    /// `requirements.toml` fixture.
     ///
     /// This is intended for tests that supply an explicit managed config fixture.
     pub fn with_managed_config_path_for_tests(managed_config_path: PathBuf) -> Self {
+        let system_requirements_path = managed_config_path.with_file_name("requirements.toml");
         Self {
             user_config_path: None,
             user_config_profile: None,
             managed_config_path: Some(managed_config_path),
+            system_requirements_path: Some(system_requirements_path),
             ..Self::without_managed_config_for_tests()
         }
     }
@@ -471,8 +478,8 @@ impl ConfigLayerStack {
 
     /// Returns the merged config-layer view.
     ///
-    /// This only merges ordinary config layers and does not apply requirements
-    /// such as cloud requirements.
+    /// This only merges ordinary config layers. Requirements are composed and
+    /// tracked separately.
     pub fn effective_config(&self) -> TomlValue {
         let mut merged = TomlValue::Table(toml::map::Map::new());
         for layer in self.get_layers(

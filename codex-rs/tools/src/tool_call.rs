@@ -1,8 +1,12 @@
 use crate::FunctionCallError;
 use crate::ToolName;
 use crate::ToolPayload;
+use codex_file_system::ExecutorFileSystem;
+use codex_file_system::FileSystemSandboxContext;
+use codex_protocol::items::ImageGenerationItem;
 use codex_protocol::items::WebSearchItem;
 use codex_protocol::models::ResponseItem;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use std::future::Future;
 use std::pin::Pin;
@@ -29,20 +33,14 @@ impl ConversationHistory {
 /// Future returned when an extension tool emits a visible turn-item lifecycle event.
 pub type TurnItemEmissionFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
-/// Future returned when an image-generation extension publishes completed image bytes.
-pub type ImageGenerationCompletionFuture<'a> =
-    Pin<Box<dyn Future<Output = Option<String>> + Send + 'a>>;
-
-/// Visible turn items that an extension fully owns and may emit as-is.
-///
-/// Add only item kinds that require no additional host finalization before
-/// persistence or client delivery. Richer items need a host-owned publish path.
+/// Visible turn items that an extension may publish into the host lifecycle.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExtensionTurnItem {
     WebSearch(WebSearchItem),
+    ImageGeneration(ImageGenerationItem),
 }
 
-/// Host-provided capability for extension tools to emit finalized visible turn items.
+/// Host-provided capability for extension tools to emit visible turn items.
 ///
 /// Implementations route lifecycle events through the host's normal item event
 /// pipeline, including any persistence and client delivery owned by the host.
@@ -50,21 +48,21 @@ pub trait TurnItemEmitter: Send + Sync {
     /// Emits the beginning of one visible turn item.
     fn emit_started<'a>(&'a self, item: ExtensionTurnItem) -> TurnItemEmissionFuture<'a>;
 
-    /// Emits the completion of one visible turn item.
+    /// Emits one visible turn item after host-owned finalization.
     fn emit_completed<'a>(&'a self, item: ExtensionTurnItem) -> TurnItemEmissionFuture<'a>;
+}
 
-    /// Publishes image bytes for host persistence and visible completion.
-    ///
-    /// Returns persisted-artifact context for the extension's model-facing
-    /// function output when the host saves the generated image successfully.
-    fn image_generation_completed<'a>(
-        &'a self,
-        _call_id: String,
-        _prompt: String,
-        _result: String,
-    ) -> ImageGenerationCompletionFuture<'a> {
-        Box::pin(std::future::ready(None))
-    }
+/// Host-owned turn environment summary visible to extension tools.
+#[derive(Clone)]
+pub struct ToolEnvironment {
+    /// Stable host environment id used to route executor-scoped capabilities.
+    pub environment_id: String,
+    /// Effective working directory for this turn in the environment.
+    pub cwd: AbsolutePathBuf,
+    /// Filesystem implementation for this environment.
+    pub file_system: Arc<dyn ExecutorFileSystem>,
+    /// Sandbox context to use for filesystem operations.
+    pub file_system_sandbox_context: FileSystemSandboxContext,
 }
 
 /// Turn-item emitter used when a caller does not expose visible item emission.
@@ -90,6 +88,7 @@ pub struct ToolCall {
     pub truncation_policy: TruncationPolicy,
     pub conversation_history: ConversationHistory,
     pub turn_item_emitter: Arc<dyn TurnItemEmitter>,
+    pub environments: Vec<ToolEnvironment>,
     pub payload: ToolPayload,
 }
 
@@ -103,6 +102,7 @@ impl std::fmt::Debug for ToolCall {
             .field("truncation_policy", &self.truncation_policy)
             .field("conversation_history", &self.conversation_history)
             .field("turn_item_emitter", &"<host turn item emitter>")
+            .field("environment_count", &self.environments.len())
             .field("payload", &self.payload)
             .finish()
     }

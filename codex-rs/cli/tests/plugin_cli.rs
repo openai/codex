@@ -2,8 +2,11 @@ use anyhow::Result;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::MarketplaceConfigUpdate;
 use codex_config::record_user_marketplace;
+use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
+use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -336,6 +339,138 @@ async fn marketplace_list_shows_configured_marketplace_names() -> Result<()> {
 }
 
 #[tokio::test]
+async fn marketplace_list_json_prints_configured_marketplaces() -> Result<()> {
+    let (codex_home, source) = setup_local_marketplace()?;
+    let source_path = source.path().display().to_string();
+
+    let assert = codex_command(codex_home.path())?
+        .args(["plugin", "marketplace", "list", "--json"])
+        .assert()
+        .success();
+    let stdout = assert.get_output().stdout.as_slice();
+    let actual: serde_json::Value = serde_json::from_slice(stdout)?;
+
+    assert_eq!(
+        actual,
+        json!({
+            "marketplaces": [
+                {
+                    "name": "debug",
+                    "root": source_path,
+                    "marketplaceSource": {
+                        "sourceType": "local",
+                        "source": source_path,
+                    },
+                },
+            ],
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_list_json_includes_configured_git_marketplace_source() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let marketplace_root = codex_home
+        .path()
+        .join(".tmp")
+        .join("marketplaces")
+        .join("debug");
+    write_plugins_enabled_config(codex_home.path())?;
+    write_marketplace_source(&marketplace_root)?;
+    let update = MarketplaceConfigUpdate {
+        last_updated: "2026-06-04T08:39:49Z",
+        last_revision: Some("abc123"),
+        source_type: "git",
+        source: "https://example.com/acme/agent-skills.git",
+        ref_name: None,
+        sparse_paths: &[],
+    };
+    record_user_marketplace(codex_home.path(), "debug", &update)?;
+    let normalized_root = canonicalize_existing_preserving_symlinks(&marketplace_root)?;
+
+    let assert = codex_command(codex_home.path())?
+        .args(["plugin", "marketplace", "list", "--json"])
+        .assert()
+        .success();
+    let stdout = assert.get_output().stdout.as_slice();
+    let actual: serde_json::Value = serde_json::from_slice(stdout)?;
+
+    assert_eq!(
+        actual,
+        json!({
+            "marketplaces": [
+                {
+                    "name": "debug",
+                    "root": normalized_root.display().to_string(),
+                    "marketplaceSource": {
+                        "sourceType": "git",
+                        "source": "https://example.com/acme/agent-skills.git",
+                    },
+                },
+            ],
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_list_json_keys_configured_source_by_root() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let home = TempDir::new()?;
+    let marketplace_root = codex_home
+        .path()
+        .join(".tmp")
+        .join("marketplaces")
+        .join("debug");
+    write_plugins_enabled_config(codex_home.path())?;
+    write_marketplace_source(home.path())?;
+    write_marketplace_source(&marketplace_root)?;
+    let update = MarketplaceConfigUpdate {
+        last_updated: "2026-06-04T08:39:49Z",
+        last_revision: Some("abc123"),
+        source_type: "git",
+        source: "https://example.com/acme/agent-skills.git",
+        ref_name: None,
+        sparse_paths: &[],
+    };
+    record_user_marketplace(codex_home.path(), "debug", &update)?;
+    let normalized_root = canonicalize_existing_preserving_symlinks(&marketplace_root)?;
+
+    let assert = codex_command(codex_home.path())?
+        .env("HOME", home.path())
+        .args(["plugin", "marketplace", "list", "--json"])
+        .assert()
+        .success();
+    let stdout = assert.get_output().stdout.as_slice();
+    let actual: serde_json::Value = serde_json::from_slice(stdout)?;
+
+    assert_eq!(
+        actual,
+        json!({
+            "marketplaces": [
+                {
+                    "name": "debug",
+                    "root": home.path().display().to_string(),
+                },
+                {
+                    "name": "debug",
+                    "root": normalized_root.display().to_string(),
+                    "marketplaceSource": {
+                        "sourceType": "git",
+                        "source": "https://example.com/acme/agent-skills.git",
+                    },
+                },
+            ],
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn marketplace_list_includes_home_marketplace_when_present() -> Result<()> {
     let codex_home = TempDir::new()?;
     let home = TempDir::new()?;
@@ -490,6 +625,172 @@ async fn plugin_list_prints_plugins_in_a_table() -> Result<()> {
 }
 
 #[tokio::test]
+async fn plugin_list_json_prints_available_plugins_when_requested() -> Result<()> {
+    let (codex_home, source) = setup_local_marketplace()?;
+    let plugin_path = source.path().join("plugins").join("sample");
+    let source_path = source.path().to_string_lossy().into_owned();
+
+    let assert = codex_command(codex_home.path())?
+        .args(["plugin", "list", "--available", "--json"])
+        .assert()
+        .success();
+    let stdout = assert.get_output().stdout.as_slice();
+    let actual: serde_json::Value = serde_json::from_slice(stdout)?;
+
+    assert_eq!(
+        actual,
+        json!({
+            "installed": [],
+            "available": [
+                {
+                    "pluginId": "sample@debug",
+                    "name": "sample",
+                    "marketplaceName": "debug",
+                    "version": "1.2.3",
+                    "installed": false,
+                    "enabled": false,
+                    "source": {
+                        "source": "local",
+                        "path": plugin_path.display().to_string(),
+                    },
+                    "marketplaceSource": {
+                        "sourceType": "local",
+                        "source": source_path,
+                    },
+                    "installPolicy": "AVAILABLE",
+                    "authPolicy": "ON_INSTALL",
+                },
+            ],
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_json_includes_configured_git_marketplace_source() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let marketplace_root = codex_home
+        .path()
+        .join(".tmp")
+        .join("marketplaces")
+        .join("debug");
+    write_plugins_enabled_config(codex_home.path())?;
+    write_marketplace_source(&marketplace_root)?;
+    let update = MarketplaceConfigUpdate {
+        last_updated: "2026-06-04T08:39:49Z",
+        last_revision: Some("abc123"),
+        source_type: "git",
+        source: "https://example.com/acme/agent-skills.git",
+        ref_name: None,
+        sparse_paths: &[],
+    };
+    record_user_marketplace(codex_home.path(), "debug", &update)?;
+    let plugin_path = marketplace_root.join("plugins").join("sample");
+    let normalized_plugin_path = canonicalize_existing_preserving_symlinks(&plugin_path)?;
+
+    let assert = codex_command(codex_home.path())?
+        .args(["plugin", "list", "--available", "--json"])
+        .assert()
+        .success();
+    let stdout = assert.get_output().stdout.as_slice();
+    let actual: serde_json::Value = serde_json::from_slice(stdout)?;
+
+    assert_eq!(
+        actual,
+        json!({
+            "installed": [],
+            "available": [
+                {
+                    "pluginId": "sample@debug",
+                    "name": "sample",
+                    "marketplaceName": "debug",
+                    "version": "1.2.3",
+                    "installed": false,
+                    "enabled": false,
+                    "source": {
+                        "source": "local",
+                        "path": normalized_plugin_path.display().to_string(),
+                    },
+                    "marketplaceSource": {
+                        "sourceType": "git",
+                        "source": "https://example.com/acme/agent-skills.git",
+                    },
+                    "installPolicy": "AVAILABLE",
+                    "authPolicy": "ON_INSTALL",
+                },
+            ],
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_json_prints_installed_plugins() -> Result<()> {
+    let (codex_home, source) = setup_local_marketplace()?;
+    let plugin_path = source.path().join("plugins").join("sample");
+    let source_path = source.path().to_string_lossy().into_owned();
+
+    codex_command(codex_home.path())?
+        .args(["plugin", "add", "sample@debug"])
+        .assert()
+        .success();
+
+    let assert = codex_command(codex_home.path())?
+        .args(["plugin", "list", "--json"])
+        .assert()
+        .success();
+    let stdout = assert.get_output().stdout.as_slice();
+    let actual: serde_json::Value = serde_json::from_slice(stdout)?;
+
+    assert_eq!(
+        actual,
+        json!({
+            "installed": [
+                {
+                    "pluginId": "sample@debug",
+                    "name": "sample",
+                    "marketplaceName": "debug",
+                    "version": "1.2.3",
+                    "installed": true,
+                    "enabled": true,
+                    "source": {
+                        "source": "local",
+                        "path": plugin_path.display().to_string(),
+                    },
+                    "marketplaceSource": {
+                        "sourceType": "local",
+                        "source": source_path,
+                    },
+                    "installPolicy": "AVAILABLE",
+                    "authPolicy": "ON_INSTALL",
+                },
+            ],
+            "available": [],
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_available_requires_json() -> Result<()> {
+    let (codex_home, _source) = setup_local_marketplace()?;
+
+    codex_command(codex_home.path())?
+        .args(["plugin", "list", "--available"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "the following required arguments were not provided",
+        ))
+        .stderr(contains("--json"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_list_shows_installed_version_when_plugin_is_installed() -> Result<()> {
     let (codex_home, _source) = setup_local_marketplace()?;
 
@@ -629,6 +930,69 @@ async fn plugin_add_and_remove_updates_installed_plugin_config() -> Result<()> {
 
     let config = std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE))?;
     assert!(!config.contains("[plugins.\"sample@debug\"]"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_add_json_prints_install_outcome() -> Result<()> {
+    let (codex_home, _source) = setup_local_marketplace()?;
+
+    let assert = codex_command(codex_home.path())?
+        .args(["plugin", "add", "sample@debug", "--json"])
+        .assert()
+        .success();
+    let stdout = assert.get_output().stdout.as_slice();
+    let actual: serde_json::Value = serde_json::from_slice(stdout)?;
+    let installed_path = codex_home.path().join("plugins/cache/debug/sample/1.2.3");
+    let normalized_installed_path = canonicalize_existing_preserving_symlinks(&installed_path)?;
+
+    assert_eq!(
+        actual,
+        json!({
+            "pluginId": "sample@debug",
+            "name": "sample",
+            "marketplaceName": "debug",
+            "version": "1.2.3",
+            "installedPath": normalized_installed_path.display().to_string(),
+            "authPolicy": "ON_INSTALL",
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_remove_json_prints_remove_outcome() -> Result<()> {
+    let (codex_home, _source) = setup_local_marketplace()?;
+
+    codex_command(codex_home.path())?
+        .args(["plugin", "add", "sample@debug"])
+        .assert()
+        .success();
+
+    let assert = codex_command(codex_home.path())?
+        .args([
+            "plugin",
+            "remove",
+            "sample",
+            "--marketplace",
+            "debug",
+            "--json",
+        ])
+        .assert()
+        .success();
+    let stdout = assert.get_output().stdout.as_slice();
+    let actual: serde_json::Value = serde_json::from_slice(stdout)?;
+
+    assert_eq!(
+        actual,
+        json!({
+            "pluginId": "sample@debug",
+            "name": "sample",
+            "marketplaceName": "debug",
+        })
+    );
 
     Ok(())
 }

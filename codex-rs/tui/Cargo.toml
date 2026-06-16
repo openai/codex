@@ -31,7 +31,7 @@ codex-app-server-client = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-install-context = { workspace = true }
-codex-cloud-requirements = { workspace = true }
+codex-cloud-config = { workspace = true }
 codex-config = { workspace = true }
 codex-connectors = { workspace = true }
 codex-core-plugins = { workspace = true }
@@ -49,7 +49,6 @@ codex-models-manager = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
-codex-realtime-webrtc = { workspace = true }
 codex-rollout = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-shell-command = { workspace = true }
@@ -125,9 +124,6 @@ uuid = { workspace = true }
 codex-windows-sandbox = { workspace = true }
 tokio-util = { workspace = true, features = ["time"] }
 
-[target.'cfg(not(target_os = "linux"))'.dependencies]
-cpal = "0.15"
-
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
@@ -155,6 +151,7 @@ codex-cli = { workspace = true }
 codex-mcp = { workspace = true }
 core_test_support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
+codex-utils-path-uri = { workspace = true }
 assert_matches = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 insta = { workspace = true }

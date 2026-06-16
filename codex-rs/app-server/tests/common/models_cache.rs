@@ -18,7 +18,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         slug: preset.id.clone(),
         display_name: preset.display_name.clone(),
         description: Some(preset.description.clone()),
-        default_reasoning_level: Some(preset.default_reasoning_effort),
+        default_reasoning_level: Some(preset.default_reasoning_effort.clone()),
         supported_reasoning_levels: preset.supported_reasoning_efforts.clone(),
         shell_type: ConfigShellToolType::ShellCommand,
         visibility: if preset.show_in_picker {
@@ -47,13 +47,16 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         context_window: Some(272_000),
         max_context_window: None,
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        use_responses_lite: false,
         auto_review_model_override: None,
         tool_mode: None,
+        multi_agent_version: None,
     }
 }
 

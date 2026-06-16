@@ -14,8 +14,10 @@
 //! `SessionSource::SubAgent(ThreadSpawn { parent_thread_id, .. })` edges until no new children are
 //! found. The primary thread itself is never included in the output.
 
+use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::SubAgentSource;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -26,6 +28,7 @@ pub(crate) struct LoadedSubagentThread {
     pub(crate) thread_id: ThreadId,
     pub(crate) agent_nickname: Option<String>,
     pub(crate) agent_role: Option<String>,
+    pub(crate) agent_path: Option<String>,
 }
 
 /// Walks the spawn tree rooted at `primary_thread_id` and returns every descendant subagent.
@@ -84,6 +87,7 @@ pub(crate) fn find_loaded_subagent_threads_for_primary(
                     thread_id,
                     agent_nickname: thread.agent_nickname,
                     agent_role: thread.agent_role,
+                    agent_path: thread_spawn_agent_path(&thread.source),
                 })
         })
         .collect();
@@ -91,16 +95,22 @@ pub(crate) fn find_loaded_subagent_threads_for_primary(
     loaded_threads
 }
 
-fn thread_spawn_parent_thread_id(
-    source: &codex_app_server_protocol::SessionSource,
-) -> Option<ThreadId> {
-    let value = serde_json::to_value(source).ok()?;
-    let parent_thread_id = value
-        .get("subAgent")?
-        .get("thread_spawn")?
-        .get("parent_thread_id")?
-        .as_str()?;
-    ThreadId::from_string(parent_thread_id).ok()
+fn thread_spawn_agent_path(source: &SessionSource) -> Option<String> {
+    match source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_path, .. }) => {
+            agent_path.clone().map(String::from)
+        }
+        _ => None,
+    }
+}
+
+fn thread_spawn_parent_thread_id(source: &SessionSource) -> Option<ThreadId> {
+    match source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        }) => Some(*parent_thread_id),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -209,11 +219,13 @@ mod tests {
                     thread_id: child_thread_id,
                     agent_nickname: Some("Scout".to_string()),
                     agent_role: Some("explorer".to_string()),
+                    agent_path: None,
                 },
                 LoadedSubagentThread {
                     thread_id: grandchild_thread_id,
                     agent_nickname: Some("Atlas".to_string()),
                     agent_role: Some("worker".to_string()),
+                    agent_path: None,
                 },
             ]
         );

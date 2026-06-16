@@ -7,11 +7,13 @@ use crate::ConfigContributor;
 use crate::ContextContributor;
 use crate::ExtensionData;
 use crate::ExtensionEventSink;
+use crate::McpServerContributor;
 use crate::NoopExtensionEventSink;
 use crate::ThreadLifecycleContributor;
 use crate::TokenUsageContributor;
 use crate::ToolContributor;
 use crate::ToolLifecycleContributor;
+use crate::TurnInputContributor;
 use crate::TurnItemContributor;
 use crate::TurnLifecycleContributor;
 
@@ -23,6 +25,8 @@ pub struct ExtensionRegistryBuilder<C: Sync> {
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
     token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
     context_contributors: Vec<Arc<dyn ContextContributor>>,
+    mcp_server_contributors: Vec<Arc<dyn McpServerContributor<C>>>,
+    turn_input_contributors: Vec<Arc<dyn TurnInputContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
     tool_lifecycle_contributors: Vec<Arc<dyn ToolLifecycleContributor>>,
     turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
@@ -39,6 +43,8 @@ impl<C: Sync> Default for ExtensionRegistryBuilder<C> {
             token_usage_contributors: Vec::new(),
             approval_review_contributors: Vec::new(),
             context_contributors: Vec::new(),
+            mcp_server_contributors: Vec::new(),
+            turn_input_contributors: Vec::new(),
             tool_contributors: Vec::new(),
             tool_lifecycle_contributors: Vec::new(),
             turn_item_contributors: Vec::new(),
@@ -98,6 +104,16 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
         self.context_contributors.push(contributor);
     }
 
+    /// Registers one runtime MCP server contributor.
+    pub fn mcp_server_contributor(&mut self, contributor: Arc<dyn McpServerContributor<C>>) {
+        self.mcp_server_contributors.push(contributor);
+    }
+
+    /// Registers one turn-input contributor.
+    pub fn turn_input_contributor(&mut self, contributor: Arc<dyn TurnInputContributor>) {
+        self.turn_input_contributors.push(contributor);
+    }
+
     /// Registers one native tool contributor.
     pub fn tool_contributor(&mut self, contributor: Arc<dyn ToolContributor>) {
         self.tool_contributors.push(contributor);
@@ -123,6 +139,8 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
             token_usage_contributors: self.token_usage_contributors,
             approval_review_contributors: self.approval_review_contributors,
             context_contributors: self.context_contributors,
+            mcp_server_contributors: self.mcp_server_contributors,
+            turn_input_contributors: self.turn_input_contributors,
             tool_contributors: self.tool_contributors,
             tool_lifecycle_contributors: self.tool_lifecycle_contributors,
             turn_item_contributors: self.turn_item_contributors,
@@ -138,6 +156,8 @@ pub struct ExtensionRegistry<C: Sync> {
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
     token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
     context_contributors: Vec<Arc<dyn ContextContributor>>,
+    mcp_server_contributors: Vec<Arc<dyn McpServerContributor<C>>>,
+    turn_input_contributors: Vec<Arc<dyn TurnInputContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
     tool_lifecycle_contributors: Vec<Arc<dyn ToolLifecycleContributor>>,
     turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
@@ -193,6 +213,16 @@ impl<C: Sync> ExtensionRegistry<C> {
     /// Returns the registered prompt contributors.
     pub fn context_contributors(&self) -> &[Arc<dyn ContextContributor>] {
         &self.context_contributors
+    }
+
+    /// Returns the registered runtime MCP server contributors.
+    pub fn mcp_server_contributors(&self) -> &[Arc<dyn McpServerContributor<C>>] {
+        &self.mcp_server_contributors
+    }
+
+    /// Returns the registered turn-input contributors.
+    pub fn turn_input_contributors(&self) -> &[Arc<dyn TurnInputContributor>] {
+        &self.turn_input_contributors
     }
 
     /// Returns the registered native tool contributors.

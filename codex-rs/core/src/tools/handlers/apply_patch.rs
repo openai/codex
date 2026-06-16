@@ -52,6 +52,7 @@ use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 
 const APPLY_PATCH_ARGUMENT_DIFF_BUFFER_INTERVAL: Duration = Duration::from_millis(500);
 /// Handles freeform `apply_patch` requests and routes verified patches to the
@@ -265,6 +266,7 @@ fn apply_patch_payload_command(payload: &ToolPayload) -> Option<String> {
 async fn effective_patch_permissions(
     session: &Session,
     turn: &TurnContext,
+    environment_id: &str,
     action: &ApplyPatchAction,
     cwd: &AbsolutePathBuf,
 ) -> (
@@ -274,8 +276,14 @@ async fn effective_patch_permissions(
 ) {
     let file_paths = file_paths_for_action(action);
     let granted_permissions = merge_permission_profiles(
-        session.granted_session_permissions().await.as_ref(),
-        session.granted_turn_permissions().await.as_ref(),
+        session
+            .granted_session_permissions(environment_id)
+            .await
+            .as_ref(),
+        session
+            .granted_turn_permissions(environment_id)
+            .await
+            .as_ref(),
     );
     let base_file_system_sandbox_policy = turn.file_system_sandbox_policy();
     let file_system_sandbox_policy = effective_file_system_sandbox_policy(
@@ -284,6 +292,7 @@ async fn effective_patch_permissions(
     );
     let effective_additional_permissions = apply_granted_turn_permissions(
         session,
+        environment_id,
         cwd.as_path(),
         crate::sandboxing::SandboxPermissions::UseDefault,
         write_permissions_for_paths(&file_paths, &file_system_sandbox_policy, cwd),
@@ -297,7 +306,6 @@ async fn effective_patch_permissions(
     )
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ApplyPatchHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("apply_patch")
@@ -307,7 +315,13 @@ impl ToolExecutor<ToolInvocation> for ApplyPatchHandler {
         create_apply_patch_freeform_tool(self.multi_environment)
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl ApplyPatchHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
@@ -345,16 +359,32 @@ impl ToolExecutor<ToolInvocation> for ApplyPatchHandler {
                 "apply_patch is unavailable in this session".to_string(),
             ));
         };
-        let cwd = turn_environment.cwd.clone();
+        // TODO(anp): Migrate apply-patch verification and permission accounting to PathUri so
+        // patches can target environment-native foreign paths without host projection.
+        let cwd = turn_environment.cwd().to_abs_path().map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "apply_patch cwd `{}` is not native to the Codex host: {err}",
+                turn_environment.cwd()
+            ))
+        })?;
         let fs = turn_environment.environment.get_filesystem();
-        let sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None, &cwd);
+        let sandbox = turn.file_system_sandbox_context(
+            /*additional_permissions*/ None,
+            turn_environment.cwd(),
+        );
         match codex_apply_patch::verify_apply_patch_args(args, &cwd, fs.as_ref(), Some(&sandbox))
             .await
         {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
                 let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
-                    effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes, &cwd)
-                        .await;
+                    effective_patch_permissions(
+                        session.as_ref(),
+                        turn.as_ref(),
+                        &turn_environment.environment_id,
+                        &changes,
+                        &cwd,
+                    )
+                    .await;
                 match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
                     .await
                 {
@@ -364,8 +394,11 @@ impl ToolExecutor<ToolInvocation> for ApplyPatchHandler {
                     }
                     InternalApplyPatchInvocation::DelegateToRuntime(apply) => {
                         let changes = convert_apply_patch_to_protocol(&apply.action);
-                        let emitter =
-                            ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
+                        let emitter = ToolEmitter::apply_patch_for_environment(
+                            changes.clone(),
+                            apply.auto_approved,
+                            turn_environment.environment_id.clone(),
+                        );
                         let event_ctx = ToolEventCtx::new(
                             session.as_ref(),
                             turn.as_ref(),
@@ -500,13 +533,22 @@ pub(crate) async fn intercept_apply_patch(
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
-    let sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None, cwd);
+    let sandbox_cwd = PathUri::from_abs_path(cwd);
+    let sandbox =
+        turn.file_system_sandbox_context(/*additional_permissions*/ None, &sandbox_cwd);
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, Some(&sandbox))
         .await
     {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
             let (approval_keys, effective_additional_permissions, file_system_sandbox_policy) =
-                effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes, cwd).await;
+                effective_patch_permissions(
+                    session.as_ref(),
+                    turn.as_ref(),
+                    &turn_environment.environment_id,
+                    &changes,
+                    cwd,
+                )
+                .await;
             match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
                 .await
             {
@@ -516,7 +558,11 @@ pub(crate) async fn intercept_apply_patch(
                 }
                 InternalApplyPatchInvocation::DelegateToRuntime(apply) => {
                     let changes = convert_apply_patch_to_protocol(&apply.action);
-                    let emitter = ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
+                    let emitter = ToolEmitter::apply_patch_for_environment(
+                        changes.clone(),
+                        apply.auto_approved,
+                        turn_environment.environment_id.clone(),
+                    );
                     let event_ctx = ToolEventCtx::new(
                         session.as_ref(),
                         turn.as_ref(),

@@ -203,7 +203,7 @@ impl ThreadMetadataBuilder {
             created_at,
             updated_at,
             source,
-            thread_source: self.thread_source,
+            thread_source: self.thread_source.clone(),
             agent_nickname: self.agent_nickname.clone(),
             agent_role: self.agent_role.clone(),
             agent_path: self
@@ -640,13 +640,13 @@ mod tests {
     }
 
     #[test]
-    fn thread_row_ignores_unknown_reasoning_effort_values() {
+    fn thread_row_preserves_model_defined_reasoning_effort_values() {
         let metadata = ThreadMetadata::try_from(thread_row(Some("future")))
             .expect("thread metadata should parse");
 
         assert_eq!(
             metadata,
-            expected_thread_metadata(/*reasoning_effort*/ None)
+            expected_thread_metadata(Some(ReasoningEffort::Custom("future".to_string())))
         );
     }
 }

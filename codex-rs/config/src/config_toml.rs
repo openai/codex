@@ -372,6 +372,10 @@ pub struct ConfigToml {
     /// `/v1/realtime`
     /// connection) without changing normal provider HTTP requests.
     pub experimental_realtime_ws_base_url: Option<String>,
+    /// Experimental / do not use. Overrides only the WebRTC realtime call
+    /// creation base URL. This is separate from `experimental_realtime_ws_base_url`
+    /// because WebRTC call creation is HTTP, while sideband control is websocket.
+    pub experimental_realtime_webrtc_call_base_url: Option<String>,
     /// Experimental / do not use. Selects the realtime websocket model/snapshot
     /// used for the `Op::RealtimeConversation` connection.
     pub experimental_realtime_ws_model: Option<String>,
@@ -583,12 +587,14 @@ pub enum RealtimeTransport {
     Websocket,
 }
 
+pub use codex_protocol::protocol::RealtimeConversationArchitecture as RealtimeArchitecture;
 pub use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
 pub use codex_protocol::protocol::RealtimeVoice;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeConfig {
+    pub architecture: RealtimeArchitecture,
     pub version: RealtimeWsVersion,
     #[serde(rename = "type")]
     pub session_type: RealtimeWsMode,
@@ -599,6 +605,7 @@ pub struct RealtimeConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeToml {
+    pub architecture: Option<RealtimeArchitecture>,
     pub version: Option<RealtimeWsVersion>,
     #[serde(rename = "type")]
     pub session_type: Option<RealtimeWsMode>,
@@ -724,36 +731,27 @@ impl ConfigToml {
     pub async fn derive_permission_profile(
         &self,
         sandbox_mode_override: Option<SandboxMode>,
-        profile_sandbox_mode: Option<SandboxMode>,
         windows_sandbox_level: WindowsSandboxLevel,
         active_project: Option<&ProjectConfig>,
         permission_profile_constraint: Option<&crate::Constrained<PermissionProfile>>,
     ) -> PermissionProfile {
-        let sandbox_mode_was_explicit = sandbox_mode_override.is_some()
-            || profile_sandbox_mode.is_some()
-            || self.sandbox_mode.is_some();
-        let resolved_sandbox_mode = sandbox_mode_override
-            .or(profile_sandbox_mode)
-            .or(self.sandbox_mode)
-            .or(if sandbox_mode_was_explicit {
-                None
-            } else {
+        let configured_sandbox_mode = sandbox_mode_override.or(self.sandbox_mode);
+        let resolved_sandbox_mode = configured_sandbox_mode
+            .or_else(|| {
                 // If no sandbox_mode is set but this directory has a trust decision,
                 // default to workspace-write except on unsandboxed Windows where we
                 // default to read-only.
-                active_project.and_then(|p| {
-                    if p.is_trusted() || p.is_untrusted() {
+                active_project
+                    .filter(|project| project.is_trusted() || project.is_untrusted())
+                    .map(|_| {
                         if cfg!(target_os = "windows")
                             && windows_sandbox_level == WindowsSandboxLevel::Disabled
                         {
-                            Some(SandboxMode::ReadOnly)
+                            SandboxMode::ReadOnly
                         } else {
-                            Some(SandboxMode::WorkspaceWrite)
+                            SandboxMode::WorkspaceWrite
                         }
-                    } else {
-                        None
-                    }
-                })
+                    })
             })
             .unwrap_or_default();
         let effective_sandbox_mode = if cfg!(target_os = "windows")
@@ -791,7 +789,7 @@ impl ConfigToml {
             },
             SandboxMode::DangerFullAccess => PermissionProfile::Disabled,
         };
-        if !sandbox_mode_was_explicit
+        if configured_sandbox_mode.is_none()
             && let Some(constraint) = permission_profile_constraint
             && let Err(err) = constraint.can_set(&permission_profile)
         {
