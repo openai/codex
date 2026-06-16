@@ -1179,7 +1179,12 @@ impl Session {
                 session_configuration.permission_profile(),
                 mcp_runtime_context,
                 config.codex_home.to_path_buf(),
-                codex_apps_tools_cache_key(auth),
+                codex_apps_tools_cache_key(
+                    auth,
+                    config
+                        .features
+                        .enabled(codex_features::Feature::PluginServicePreview),
+                ),
                 config.prefix_mcp_tool_names(),
                 client_elicitation_capability,
                 sess.services

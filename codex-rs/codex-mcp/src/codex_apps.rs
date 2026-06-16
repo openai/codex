@@ -16,7 +16,6 @@ use anyhow::Context;
 use codex_login::CodexAuth;
 use codex_protocol::mcp::McpServerInfo;
 use codex_utils_plugins::mcp_connector::sanitize_name;
-use codex_utils_plugins::plugin_service_routing::plugin_service_preview_enabled;
 use serde::Deserialize;
 use serde::Serialize;
 use sha1::Digest;
@@ -31,12 +30,15 @@ pub struct CodexAppsToolsCacheKey {
     pub(crate) plugin_service_preview: bool,
 }
 
-pub fn codex_apps_tools_cache_key(auth: Option<&CodexAuth>) -> CodexAppsToolsCacheKey {
+pub fn codex_apps_tools_cache_key(
+    auth: Option<&CodexAuth>,
+    plugin_service_preview: bool,
+) -> CodexAppsToolsCacheKey {
     CodexAppsToolsCacheKey {
         account_id: auth.and_then(CodexAuth::get_account_id),
         chatgpt_user_id: auth.and_then(CodexAuth::get_chatgpt_user_id),
         is_workspace_account: auth.is_some_and(CodexAuth::is_workspace_account),
-        plugin_service_preview: plugin_service_preview_enabled(),
+        plugin_service_preview,
     }
 }
 

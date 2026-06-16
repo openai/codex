@@ -1,7 +1,6 @@
 use super::RemotePluginDirectoryItem;
 use super::RemotePluginServiceConfig;
 use codex_login::CodexAuth;
-use codex_utils_plugins::plugin_service_routing::plugin_service_preview_enabled;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;
@@ -28,7 +27,7 @@ impl RemotePluginCatalogCacheKey {
             account_id: auth.get_account_id(),
             chatgpt_user_id: auth.get_chatgpt_user_id(),
             is_workspace_account: auth.is_workspace_account(),
-            plugin_service_preview: plugin_service_preview_enabled(),
+            plugin_service_preview: config.plugin_service_preview,
         }
     }
 }

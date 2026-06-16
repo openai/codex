@@ -224,6 +224,7 @@ remote_plugin = true
         codex_home.path(),
         &RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
+            plugin_service_preview: false,
         },
         Some(&auth),
     )

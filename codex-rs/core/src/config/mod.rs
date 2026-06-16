@@ -1478,6 +1478,7 @@ impl Config {
             self.features.enabled(Feature::RemotePlugin),
             self.chatgpt_base_url.clone(),
         )
+        .plugin_service_preview(self.features.enabled(Feature::PluginServicePreview))
     }
 
     /// Applies managed MCP requirements to servers supplied by one plugin.
@@ -1565,6 +1566,7 @@ impl Config {
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             use_legacy_landlock: self.features.use_legacy_landlock(),
             apps_enabled: self.features.enabled(Feature::Apps),
+            plugin_service_preview: self.features.enabled(Feature::PluginServicePreview),
             prefix_mcp_tool_names: self.prefix_mcp_tool_names(),
             client_elicitation_capability: if self.features.enabled(Feature::AuthElicitation) {
                 ElicitationCapability {

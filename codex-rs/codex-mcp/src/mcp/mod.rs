@@ -34,7 +34,6 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_utils_plugins::plugin_service_routing::PLUGIN_SERVICE_PREVIEW_COOKIE;
-use codex_utils_plugins::plugin_service_routing::plugin_service_preview_enabled;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
@@ -137,6 +136,8 @@ pub struct McpConfig {
     /// ChatGPT auth is checked separately before a materialized host-owned Apps
     /// server can be used.
     pub apps_enabled: bool,
+    /// Whether built-in plugin-service requests should use preview routing.
+    pub plugin_service_preview: bool,
     /// Whether model-visible MCP tool namespaces should keep the legacy
     /// `mcp__` prefix.
     pub prefix_mcp_tool_names: bool,
@@ -302,7 +303,7 @@ pub async fn read_mcp_resource(
         PermissionProfile::default(),
         runtime_context,
         config.codex_home.clone(),
-        codex_apps_tools_cache_key(auth),
+        codex_apps_tools_cache_key(auth, config.plugin_service_preview),
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
         /*supports_openai_form_elicitation*/ false,
@@ -375,7 +376,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         PermissionProfile::default(),
         runtime_context,
         config.codex_home.clone(),
-        codex_apps_tools_cache_key(auth),
+        codex_apps_tools_cache_key(auth, config.plugin_service_preview),
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
         /*supports_openai_form_elicitation*/ false,
@@ -453,11 +454,12 @@ fn codex_apps_mcp_url_for_base_url(base_url: &str) -> String {
 pub fn codex_apps_mcp_server_config(
     chatgpt_base_url: &str,
     apps_mcp_product_sku: Option<&str>,
+    plugin_service_preview: bool,
 ) -> McpServerConfig {
     mcp_server_config_for_url(
         codex_apps_mcp_url_for_base_url(chatgpt_base_url),
         apps_mcp_product_sku,
-        plugin_service_preview_enabled(),
+        plugin_service_preview,
     )
 }
 
@@ -465,6 +467,7 @@ pub fn codex_apps_mcp_server_config(
 pub fn hosted_plugin_runtime_mcp_server_config(
     chatgpt_base_url: &str,
     apps_mcp_product_sku: Option<&str>,
+    plugin_service_preview: bool,
 ) -> McpServerConfig {
     let base_url = normalize_codex_apps_base_url(chatgpt_base_url);
     let base_url = if base_url.contains("/backend-api") || base_url.contains("/api/codex") {
@@ -475,7 +478,7 @@ pub fn hosted_plugin_runtime_mcp_server_config(
     mcp_server_config_for_url(
         format!("{base_url}/ps/mcp"),
         apps_mcp_product_sku,
-        plugin_service_preview_enabled(),
+        plugin_service_preview,
     )
 }
 

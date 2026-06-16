@@ -281,7 +281,7 @@ pub async fn delete_remote_plugin_share(
     let url = format!("{base_url}/public/plugins/workspace/{remote_plugin_id}");
     let client = build_reqwest_client();
     let request = authenticated_request(client.delete(&url), auth)?;
-    send_and_expect_status(request, &url, &[StatusCode::NO_CONTENT]).await?;
+    send_and_expect_status(config, request, &url, &[StatusCode::NO_CONTENT]).await?;
     if let Err(err) = local_paths::remove_plugin_share_local_path(codex_home, remote_plugin_id) {
         warn!(
             remote_plugin_id = %remote_plugin_id,
@@ -319,7 +319,8 @@ pub async fn update_remote_plugin_share_targets(
             targets,
         },
     );
-    let response: RemotePluginShareUpdateTargetsResponse = send_and_decode(request, &url).await?;
+    let response: RemotePluginShareUpdateTargetsResponse =
+        send_and_decode(config, request, &url).await?;
     Ok(RemotePluginShareUpdateTargetsResult {
         principals: response.principals,
         discoverability: response.discoverability,
@@ -384,7 +385,7 @@ async fn get_created_workspace_plugins_page(
     if let Some(page_token) = page_token {
         request = request.query(&[("pageToken", page_token)]);
     }
-    send_and_decode(request, &url).await
+    send_and_decode(config, request, &url).await
 }
 
 async fn create_workspace_plugin_upload(
@@ -405,7 +406,7 @@ async fn create_workspace_plugin_upload(
             plugin_id: remote_plugin_id,
         },
     );
-    send_and_decode(request, &url).await
+    send_and_decode(config, request, &url).await
 }
 
 async fn put_workspace_plugin_upload(
@@ -452,7 +453,7 @@ async fn finalize_workspace_plugin_upload(
     };
     let client = build_reqwest_client();
     let request = authenticated_request(client.post(&url), auth)?.json(&body);
-    send_and_decode(request, &url).await
+    send_and_decode(config, request, &url).await
 }
 
 fn archive_filename(plugin_path: &Path) -> Result<String, RemotePluginCatalogError> {
@@ -489,11 +490,12 @@ fn archive_plugin_for_upload_with_limit(
 }
 
 async fn send_and_expect_status(
+    config: &RemotePluginServiceConfig,
     request: RequestBuilder,
     url_for_error: &str,
     expected_statuses: &[StatusCode],
 ) -> Result<(), RemotePluginCatalogError> {
-    let response = send_plugin_service_request(request)
+    let response = send_plugin_service_request(config, request)
         .await
         .map_err(|source| RemotePluginCatalogError::Request {
             url: url_for_error.to_string(),

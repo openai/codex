@@ -16,7 +16,6 @@ use codex_plugin::AppDeclaration;
 use codex_plugin::PluginId;
 use codex_plugin::app_connector_ids_from_declarations;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_plugins::plugin_service_routing::plugin_service_preview_enabled;
 use codex_utils_plugins::plugin_service_routing::plugin_service_routing_cookie;
 use reqwest::RequestBuilder;
 use reqwest::header::COOKIE;
@@ -123,6 +122,7 @@ const REMOTE_INSTALLED_MARKETPLACE_DISPLAY_ORDER: [(&str, &str); 6] = [
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemotePluginServiceConfig {
     pub chatgpt_base_url: String,
+    pub plugin_service_preview: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -824,7 +824,7 @@ pub async fn fetch_recommended_plugins(
     let request = authenticated_request(client.get(&url), auth)?
         .timeout(RECOMMENDED_PLUGINS_TIMEOUT)
         .query(&[("scope", "GLOBAL")]);
-    let response: RecommendedPluginsResponse = send_and_decode(request, &url).await?;
+    let response: RecommendedPluginsResponse = send_and_decode(config, request, &url).await?;
     Ok(recommended_plugins_mode(response))
 }
 
@@ -1128,7 +1128,7 @@ pub async fn fetch_remote_plugin_skill_detail(
     let url = remote_plugin_skill_detail_url(config, plugin_id, skill_name)?;
     let client = build_reqwest_client();
     let request = authenticated_request(client.get(&url), auth)?;
-    let response: RemotePluginSkillDetailResponse = send_and_decode(request, &url).await?;
+    let response: RemotePluginSkillDetailResponse = send_and_decode(config, request, &url).await?;
     if response.plugin_id != plugin_id {
         return Err(RemotePluginCatalogError::UnexpectedPluginId {
             expected: plugin_id.to_string(),
@@ -1289,7 +1289,7 @@ pub async fn install_remote_plugin(
             .query(&[("includeAppsNeedingAuth", "true")]),
         auth,
     )?;
-    let response: RemotePluginMutationResponse = send_and_decode(request, &url).await?;
+    let response: RemotePluginMutationResponse = send_and_decode(config, request, &url).await?;
     if response.id != plugin_id {
         return Err(RemotePluginCatalogError::UnexpectedPluginId {
             expected: plugin_id.to_string(),
@@ -1327,7 +1327,7 @@ pub async fn uninstall_remote_plugin(
     let url = format!("{base_url}/ps/plugins/{plugin_id}/uninstall");
     let client = build_reqwest_client();
     let request = authenticated_request(client.post(&url), auth)?;
-    let response: RemotePluginMutationResponse = send_and_decode(request, &url).await?;
+    let response: RemotePluginMutationResponse = send_and_decode(config, request, &url).await?;
     if response.id != plugin_id {
         return Err(RemotePluginCatalogError::UnexpectedPluginId {
             expected: plugin_id.to_string(),
@@ -1744,7 +1744,7 @@ async fn get_remote_plugin_list_page(
     if let Some(page_token) = page_token {
         request = request.query(&[("pageToken", page_token)]);
     }
-    send_and_decode(request, &url).await
+    send_and_decode(config, request, &url).await
 }
 
 async fn get_remote_shared_workspace_plugins_page(
@@ -1760,7 +1760,7 @@ async fn get_remote_shared_workspace_plugins_page(
     if let Some(page_token) = page_token {
         request = request.query(&[("pageToken", page_token)]);
     }
-    send_and_decode(request, &url).await
+    send_and_decode(config, request, &url).await
 }
 
 async fn get_remote_plugin_installed_page(
@@ -1781,7 +1781,7 @@ async fn get_remote_plugin_installed_page(
     if let Some(page_token) = page_token {
         request = request.query(&[("pageToken", page_token)]);
     }
-    send_and_decode(request, &url).await
+    send_and_decode(config, request, &url).await
 }
 
 async fn fetch_plugin_detail(
@@ -1797,7 +1797,7 @@ async fn fetch_plugin_detail(
     if include_download_urls {
         request = request.query(&[("includeDownloadUrls", true)]);
     }
-    send_and_decode(request, &url).await
+    send_and_decode(config, request, &url).await
 }
 
 fn remote_plugin_skill_detail_url(
@@ -1842,10 +1842,11 @@ fn authenticated_request(
 }
 
 async fn send_and_decode<T: for<'de> Deserialize<'de>>(
+    config: &RemotePluginServiceConfig,
     request: RequestBuilder,
     url: &str,
 ) -> Result<T, RemotePluginCatalogError> {
-    let response = send_plugin_service_request(request)
+    let response = send_plugin_service_request(config, request)
         .await
         .map_err(|source| RemotePluginCatalogError::Request {
             url: url.to_string(),
@@ -1868,9 +1869,10 @@ async fn send_and_decode<T: for<'de> Deserialize<'de>>(
 }
 
 pub(super) async fn send_plugin_service_request(
+    config: &RemotePluginServiceConfig,
     request: RequestBuilder,
 ) -> Result<reqwest::Response, reqwest::Error> {
-    send_plugin_service_request_with_preview(request, plugin_service_preview_enabled()).await
+    send_plugin_service_request_with_preview(request, config.plugin_service_preview).await
 }
 
 async fn send_plugin_service_request_with_preview(

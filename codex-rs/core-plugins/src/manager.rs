@@ -104,6 +104,7 @@ pub struct PluginsConfigInput {
     pub config_layer_stack: ConfigLayerStack,
     pub plugins_enabled: bool,
     pub remote_plugin_enabled: bool,
+    pub plugin_service_preview: bool,
     pub chatgpt_base_url: String,
 }
 
@@ -118,8 +119,14 @@ impl PluginsConfigInput {
             config_layer_stack,
             plugins_enabled,
             remote_plugin_enabled,
+            plugin_service_preview: false,
             chatgpt_base_url,
         }
+    }
+
+    pub fn plugin_service_preview(mut self, plugin_service_preview: bool) -> Self {
+        self.plugin_service_preview = plugin_service_preview;
+        self
     }
 }
 
@@ -219,6 +226,7 @@ struct ConfiguredMarketplaceUpgradeState {
 fn remote_plugin_service_config(config: &PluginsConfigInput) -> RemotePluginServiceConfig {
     RemotePluginServiceConfig {
         chatgpt_base_url: config.chatgpt_base_url.clone(),
+        plugin_service_preview: config.plugin_service_preview,
     }
 }
 

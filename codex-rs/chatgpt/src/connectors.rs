@@ -18,10 +18,10 @@ pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_o
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status;
 pub use codex_core::connectors::list_cached_accessible_connectors_from_mcp_tools;
 pub use codex_core::connectors::with_app_enabled_state;
+use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
-use codex_utils_plugins::plugin_service_routing::plugin_service_preview_enabled;
 
 const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -129,7 +129,7 @@ fn connector_directory_cache_context(
             auth.get_chatgpt_user_id(),
             auth.is_workspace_account(),
         )
-        .plugin_service_preview(plugin_service_preview_enabled()),
+        .plugin_service_preview(config.features.enabled(Feature::PluginServicePreview)),
     )
 }
 

@@ -41,7 +41,6 @@ use codex_mcp::codex_apps_tools_cache_key;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::effective_mcp_servers;
 use codex_mcp::tool_plugin_provenance;
-use codex_utils_plugins::plugin_service_routing::plugin_service_preview_enabled;
 
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
 
@@ -273,7 +272,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         // one exists, but do not reintroduce the old hidden-local fallback.
         McpRuntimeContext::new(environment_manager, config.cwd.to_path_buf()),
         config.codex_home.to_path_buf(),
-        codex_apps_tools_cache_key(auth.as_ref()),
+        codex_apps_tools_cache_key(auth.as_ref(), mcp_config.plugin_service_preview),
         mcp_config.prefix_mcp_tool_names,
         mcp_config.client_elicitation_capability,
         /*supports_openai_form_elicitation*/ false,
@@ -462,7 +461,7 @@ async fn cached_directory_connectors_for_tool_suggest_with_auth(
             auth.get_chatgpt_user_id(),
             is_workspace_account,
         )
-        .plugin_service_preview(plugin_service_preview_enabled()),
+        .plugin_service_preview(config.features.enabled(Feature::PluginServicePreview)),
     );
 
     codex_connectors::cached_directory_connectors(&cache_context).unwrap_or_default()

@@ -32,6 +32,9 @@ impl McpServerContributor<Config> for HostedPluginRuntimeExtension {
                 config: Box::new(hosted_plugin_runtime_mcp_server_config(
                     &config.chatgpt_base_url,
                     config.apps_mcp_product_sku.as_deref(),
+                    config
+                        .features
+                        .enabled(codex_features::Feature::PluginServicePreview),
                 )),
             }]
         })

@@ -544,6 +544,7 @@ mod tests {
             .await;
         let config = RemotePluginServiceConfig {
             chatgpt_base_url: format!("{}/backend-api", server.uri()),
+            plugin_service_preview: false,
         };
         let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
 

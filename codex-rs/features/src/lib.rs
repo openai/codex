@@ -189,6 +189,11 @@ pub enum Feature {
     ComputerUse,
     /// Temporary internal-only flag for PS-backed remote plugin catalog development.
     RemotePlugin,
+    /// Route eligible plugin-service requests to the preview deployment.
+    ///
+    /// This is a routing selector, not an authorization boundary. The gateway must only honor the
+    /// corresponding cookie for internal traffic.
+    PluginServicePreview,
     /// Enable remote plugin sharing flows.
     PluginSharing,
     /// Removed compatibility flag retained as a no-op.
@@ -1140,6 +1145,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RemotePlugin,
         key: "remote_plugin",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::PluginServicePreview,
+        key: "plugin_service_preview",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

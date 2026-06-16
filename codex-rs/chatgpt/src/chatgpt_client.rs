@@ -1,8 +1,8 @@
 use codex_core::config::Config;
+use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::default_client::chatgpt_cloudflare_cookie_header;
 use codex_login::default_client::create_client;
-use codex_utils_plugins::plugin_service_routing::plugin_service_preview_enabled;
 use codex_utils_plugins::plugin_service_routing::plugin_service_routing_cookie;
 
 use anyhow::Context;
@@ -91,7 +91,9 @@ async fn chatgpt_get_request_with_timeout_inner<T: DeserializeOwned>(
         .header(OAI_PRODUCT_SKU_HEADER, CODEX_PRODUCT_SKU)
         .header("Content-Type", "application/json");
 
-    if matches!(routing, ChatgptRequestRouting::PluginService) && plugin_service_preview_enabled() {
+    if matches!(routing, ChatgptRequestRouting::PluginService)
+        && config.features.enabled(Feature::PluginServicePreview)
+    {
         let cloudflare_cookie = chatgpt_cloudflare_cookie_header(&url);
         let existing_cookie_headers = cloudflare_cookie.as_deref().into_iter().collect::<Vec<_>>();
         if let Some(routing_cookie) =

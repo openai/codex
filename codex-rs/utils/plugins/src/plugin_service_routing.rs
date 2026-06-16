@@ -1,23 +1,9 @@
-use std::ffi::OsStr;
-
-/// Process signal set by an eligible host to opt plugin-service requests into preview routing.
-pub const CODEX_PLUGIN_SERVICE_PREVIEW_ENV_VAR: &str = "CODEX_PLUGIN_SERVICE_PREVIEW";
-
-const PLUGIN_SERVICE_PREVIEW_ENABLED_VALUE: &str = "1";
 const PLUGIN_SERVICE_PREVIEW_COOKIE_NAME: &[u8] = b"oai-chat-plugin-service-preview";
 /// Routing cookie added to eligible plugin-service requests.
-pub const PLUGIN_SERVICE_PREVIEW_COOKIE: &str = "oai-chat-plugin-service-preview=true";
-
-/// Returns whether the host opted this process into plugin-service preview routing.
 ///
-/// The host owns employee eligibility. This signal is defense-in-depth routing, not an
-/// authorization boundary; authentication and authorization remain the responsibility of the
-/// existing request path and plugin-service.
-pub fn plugin_service_preview_enabled() -> bool {
-    plugin_service_preview_enabled_from_value(
-        std::env::var_os(CODEX_PLUGIN_SERVICE_PREVIEW_ENV_VAR).as_deref(),
-    )
-}
+/// This cookie is intentionally public and untrusted. It selects a deployment after normal
+/// authentication; the gateway must independently restrict preview routing to internal traffic.
+pub const PLUGIN_SERVICE_PREVIEW_COOKIE: &str = "oai-chat-plugin-service-preview=true";
 
 /// Rewrites plugin-service cookies so callers cannot override the process routing signal.
 ///
@@ -47,10 +33,6 @@ pub fn plugin_service_routing_cookie(
     }
 
     (!cookies.is_empty()).then(|| cookies.join(&b"; "[..]))
-}
-
-fn plugin_service_preview_enabled_from_value(value: Option<&OsStr>) -> bool {
-    value == Some(OsStr::new(PLUGIN_SERVICE_PREVIEW_ENABLED_VALUE))
 }
 
 fn trim_cookie_whitespace(mut value: &[u8]) -> &[u8] {
