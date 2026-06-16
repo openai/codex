@@ -1904,12 +1904,17 @@ fn mcp_server_elicitation_request_from_core_openai_form_request() {
     let requested_schema = json!({
         "type": "object",
         "properties": {
-            "path": {
-                "type": "openai/file",
-                "title": "Source file",
+            "template": {
+                "type": "openai/imagePicker",
+                "title": "Template",
+                "items": [{
+                    "id": "monthly-review",
+                    "title": "Monthly review",
+                    "image": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=",
+                }],
             },
         },
-        "required": ["path"],
+        "required": ["template"],
     });
     let request = McpServerElicitationRequest::try_from(CoreElicitationRequest::OpenAiForm {
         meta: None,

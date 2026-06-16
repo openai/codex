@@ -1236,11 +1236,18 @@ mod tests {
                     .send_request(ServerRequest::CustomRequest(CustomRequest::new(
                         "openai/form",
                         Some(serde_json::json!({
-                            "message": "Choose a file",
+                            "message": "Select a template",
                             "requestedSchema": {
                                 "type": "object",
                                 "properties": {
-                                    "path": { "type": "openai/file" }
+                                    "template": {
+                                        "type": "openai/imagePicker",
+                                        "items": [{
+                                            "id": "monthly-review",
+                                            "title": "Monthly review",
+                                            "image": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4="
+                                        }]
+                                    }
                                 }
                             }
                         })),

@@ -239,12 +239,17 @@ mod tests {
         let elicitation = openai_form_elicitation(CustomRequest::new(
             OPENAI_FORM_METHOD,
             Some(json!({
-                "message": "Choose a file",
+                "message": "Select a template",
                 "requestedSchema": {
                     "type": "object",
                     "properties": {
-                        "path": {
-                            "type": "openai/file"
+                        "template": {
+                            "type": "openai/imagePicker",
+                            "items": [{
+                                "id": "monthly-review",
+                                "title": "Monthly review",
+                                "image": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4="
+                            }]
                         }
                     }
                 }
@@ -256,12 +261,17 @@ mod tests {
             elicitation,
             Elicitation::OpenAiForm {
                 meta: None,
-                message: "Choose a file".to_string(),
+                message: "Select a template".to_string(),
                 requested_schema: json!({
                     "type": "object",
                     "properties": {
-                        "path": {
-                            "type": "openai/file"
+                        "template": {
+                            "type": "openai/imagePicker",
+                            "items": [{
+                                "id": "monthly-review",
+                                "title": "Monthly review",
+                                "image": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4="
+                            }]
                         }
                     }
                 }),
