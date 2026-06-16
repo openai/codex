@@ -33,8 +33,9 @@ async fn main() -> Result<()> {
     }
 
     WineExecServer
-        .scope(|exec_server_url| async move {
+        .scope_with_command_context(|exec_server_url, command_context| async move {
             let mut command = Command::new(test_binary);
+            command_context.apply_to_command(&mut command);
             command
                 .env(TEST_ENVIRONMENT_ENV_VAR, "wine-exec")
                 .env(REMOTE_EXEC_SERVER_URL_ENV_VAR, exec_server_url)

@@ -1,6 +1,7 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("wine_test_support can only run on Linux");
 
+use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fs;
 use std::future::Future;
@@ -18,6 +19,8 @@ use tokio::process::Child;
 use tokio::process::ChildStdout;
 use tokio::process::Command as TokioCommand;
 
+const WINE_TEST_PREFIX_ENV_VAR: &str = "CODEX_WINE_TEST_PREFIX";
+
 /// Builds a command that runs a Windows executable in an isolated Wine prefix.
 pub struct WineTestCommand {
     executable: PathBuf,
@@ -32,6 +35,16 @@ pub struct WineTestCommand {
 /// blocking cleanup without introducing a second panic.
 pub struct WineTestProcess {
     processes: Option<WineProcesses>,
+}
+
+/// Ambient context for launching another Windows process in an active test prefix.
+///
+/// Applying this context to a host command does not transfer ownership of the
+/// prefix. The command must finish before the [`WineTestProcess`] that created
+/// this context is shut down.
+#[derive(Clone, Debug)]
+pub struct WineTestCommandContext {
+    prefix: PathBuf,
 }
 
 struct WineProcesses {
@@ -119,6 +132,16 @@ impl WineTestProcess {
         stdout
     }
 
+    /// Returns a context that a host subprocess can use to join this Wine prefix.
+    pub fn command_context(&self) -> WineTestCommandContext {
+        let Some(processes) = self.processes.as_ref() else {
+            panic!("Wine process guard is missing");
+        };
+        WineTestCommandContext {
+            prefix: processes.prefix.path().to_path_buf(),
+        }
+    }
+
     /// Runs `future`, then asynchronously tears down Wine before returning.
     ///
     /// If both the scoped operation and teardown fail, the operation error is
@@ -146,6 +169,26 @@ impl WineTestProcess {
         self.processes.take();
         result
     }
+}
+
+impl WineTestCommandContext {
+    /// Exports this context to a host command and its descendants.
+    pub fn apply_to_command(&self, command: &mut TokioCommand) {
+        command.env(WINE_TEST_PREFIX_ENV_VAR, &self.prefix);
+    }
+}
+
+/// Builds a Wine command that joins the prefix exported by [`WineTestCommandContext`].
+pub fn ambient_wine_command(executable: impl AsRef<OsStr>) -> Result<StdCommand> {
+    let prefix = PathBuf::from(
+        std::env::var_os(WINE_TEST_PREFIX_ENV_VAR)
+            .with_context(|| format!("{WINE_TEST_PREFIX_ENV_VAR} must be set"))?,
+    );
+    let runtime = WineRuntimePaths::from_runfiles()?;
+    let mut command = StdCommand::new(&runtime.wine);
+    configure_wine_environment(&mut command, &runtime, &prefix);
+    command.arg(executable);
+    Ok(command)
 }
 
 impl Drop for WineTestProcess {

@@ -5,6 +5,7 @@ _WINE_RUNTIME_BINARIES = {
     "pwsh-runtime-marker": "@powershell_windows_x86_64//:runtime_marker",
     "wine": "@wine_linux_x86_64//:wine",
     "wine-runtime-marker": "@wine_linux_x86_64//:runtime_marker",
+    "wine-test-exec": "//bazel/rules/testing/wine:wine-test-exec",
     "wineserver": "@wine_linux_x86_64//:wineserver",
 }
 

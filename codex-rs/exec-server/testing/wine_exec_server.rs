@@ -7,6 +7,7 @@ use anyhow::Result;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use wine_test_support::WineTestCommand;
+use wine_test_support::WineTestCommandContext;
 
 /// Runs the Windows exec-server under Wine for the duration of a scoped operation.
 pub struct WineExecServer;
@@ -18,11 +19,24 @@ impl WineExecServer {
         F: FnOnce(String) -> Fut,
         Fut: Future<Output = Result<T>>,
     {
+        self.scope_with_command_context(|exec_server_url, _context| {
+            operation(exec_server_url)
+        })
+        .await
+    }
+
+    /// Starts the server and passes its URL and shared-prefix command context to `operation`.
+    pub async fn scope_with_command_context<T, F, Fut>(self, operation: F) -> Result<T>
+    where
+        F: FnOnce(String, WineTestCommandContext) -> Fut,
+        Fut: Future<Output = Result<T>>,
+    {
         let executable = codex_utils_cargo_bin::cargo_bin("wine-windows-exec-server")?;
         let mut exec_server = WineTestCommand::new(executable)
             .env("CODEX_HOME", r"C:\codex-home")
             .spawn()?;
         let stdout = exec_server.take_stdout();
+        let command_context = exec_server.command_context();
 
         exec_server
             .scope(async move {
@@ -36,7 +50,7 @@ impl WineExecServer {
                         break line;
                     }
                 };
-                operation(exec_server_url).await
+                operation(exec_server_url, command_context).await
             })
             .await
     }

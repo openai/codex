@@ -29,6 +29,20 @@ rust_library(
 )
 
 rust_binary(
+    name = "wine-test-exec",
+    testonly = True,
+    srcs = ["src/exec.rs"],
+    crate_name = "wine_test_exec",
+    crate_root = "src/exec.rs",
+    edition = "2024",
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        ":wine_test_support",
+        "@crates//:anyhow",
+    ],
+)
+
+rust_binary(
     name = "windows-smoke",
     testonly = True,
     srcs = ["fixtures/windows_smoke.rs"],

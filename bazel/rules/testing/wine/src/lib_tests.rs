@@ -149,6 +149,41 @@ async fn scope_returns_value_and_tears_down() -> Result<()> {
 }
 
 #[tokio::test]
+async fn exported_command_context_reuses_active_prefix() -> Result<()> {
+    let process = waiting_smoke_process().await?;
+    let prefix = prefix_path(&process);
+    let prefix_after_scope = prefix.clone();
+    let marker = prefix.join("drive_c").join("shared-prefix-marker");
+    let context = process.command_context();
+    let wrapper = codex_utils_cargo_bin::cargo_bin("wine-test-exec")?;
+    let smoke = codex_utils_cargo_bin::cargo_bin("wine-smoke")?;
+
+    process
+        .scope(async move {
+            let mut command = TokioCommand::new(wrapper);
+            context.apply_to_command(&mut command);
+            let output = command
+                .arg(smoke)
+                .arg("--write-prefix-marker")
+                .output()
+                .await
+                .context("run Windows process through exported Wine test context")?;
+            anyhow::ensure!(
+                output.status.success(),
+                "shared-prefix command failed: stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout).trim(),
+                String::from_utf8_lossy(&output.stderr).trim(),
+            );
+            assert_eq!(fs::read(&marker)?, b"shared prefix");
+            Ok(())
+        })
+        .await?;
+
+    assert_prefix_removed(&prefix_after_scope);
+    Ok(())
+}
+
+#[tokio::test]
 async fn scope_returns_body_error_and_tears_down() -> Result<()> {
     let process = waiting_smoke_process().await?;
     let prefix = prefix_path(&process);

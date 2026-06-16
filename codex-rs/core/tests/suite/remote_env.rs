@@ -4,11 +4,8 @@ use codex_config::types::ApprovalsReviewer;
 use codex_core::config::Constrained;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
-use codex_exec_server::ExecParams;
-use codex_exec_server::ExecProcessEvent;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
-use codex_exec_server::ProcessId;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
@@ -31,8 +28,6 @@ use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_path_uri::ApiPathString;
-use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
@@ -282,13 +277,13 @@ fn assert_normalized_path_rejected(error: &std::io::Error) {
     }
 }
 
-fn remote_exec(script: &str) -> Result<()> {
+fn remote_exec_docker(command: &str) -> Result<()> {
     let remote_env = get_remote_test_env().context("remote env should be configured")?;
     let container_name = remote_env
         .docker_container_name()
         .context("test requires direct access to the Docker container")?;
     let output = Command::new("docker")
-        .args(["exec", container_name, "sh", "-lc", script])
+        .args(["exec", container_name, "sh", "-lc", command])
         .output()?;
     assert!(
         output.status.success(),
@@ -297,6 +292,36 @@ fn remote_exec(script: &str) -> Result<()> {
         String::from_utf8_lossy(&output.stderr).trim(),
     );
     Ok(())
+}
+
+fn remote_exec_wine_powershell(command: &str) -> Result<()> {
+    let wrapper = codex_utils_cargo_bin::cargo_bin("wine-test-exec")?;
+    let output = Command::new(wrapper)
+        .args([
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            command,
+        ])
+        .output()
+        .context("run remote Wine command")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "remote Wine command failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout).trim(),
+        String::from_utf8_lossy(&output.stderr).trim(),
+    );
+    Ok(())
+}
+
+fn remote_exec(linux_command: &str, windows_command: &str) -> Result<()> {
+    match core_test_support::test_environment() {
+        TestEnvironment::Docker { .. } => remote_exec_docker(linux_command),
+        TestEnvironment::WineExec => remote_exec_wine_powershell(windows_command),
+        TestEnvironment::Local => anyhow::bail!("test requires a remote environment"),
+    }
 }
 
 async fn exec_command_routing_output(
@@ -1039,7 +1064,7 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_test_env_sandboxed_read_rejects_symlink_parent_dotdot_escape() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    let Some(remote_env) = get_remote_test_env() else {
+    let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
     };
 
@@ -1055,87 +1080,27 @@ async fn remote_test_env_sandboxed_read_rejects_symlink_parent_dotdot_escape() -
     let outside_dir_uri = PathUri::from_abs_path(&outside_dir);
     let secret_path_uri = PathUri::from_abs_path(&secret_path);
     let symlink_path_uri = allowed_dir_uri.join("link")?;
-    file_system
-        .create_directory(
-            &allowed_dir_uri,
-            CreateDirectoryOptions { recursive: true },
-            /*sandbox*/ None,
-        )
-        .await?;
-    file_system
-        .create_directory(
-            &outside_dir_uri,
-            CreateDirectoryOptions { recursive: true },
-            /*sandbox*/ None,
-        )
-        .await?;
-    file_system
-        .write_file(&secret_path_uri, b"nope".to_vec(), /*sandbox*/ None)
-        .await?;
-
-    match remote_env {
-        TestEnvironment::Docker { .. } => remote_exec(&format!(
-            "ln -s {} {}",
-            outside_dir.display(),
-            allowed_dir.join("link").display(),
-        ))?,
-        TestEnvironment::WineExec => {
-            let shell = test_env.environment().info().await?.shell;
-            let symlink_path =
-                ApiPathString::from_path_uri(&symlink_path_uri, PathConvention::Windows)?;
-            let outside_dir =
-                ApiPathString::from_path_uri(&outside_dir_uri, PathConvention::Windows)?;
-            let script = format!(
-                "$ErrorActionPreference = 'Stop'; New-Item -ItemType SymbolicLink -Path '{}' -Target '{}' | Out-Null",
-                symlink_path.as_str(),
-                outside_dir.as_str(),
-            );
-            let process = test_env
-                .environment()
-                .get_exec_backend()
-                .start(ExecParams {
-                    process_id: ProcessId::from("remote-env-create-symlink"),
-                    argv: vec![
-                        shell.path,
-                        "-NoLogo".to_string(),
-                        "-NoProfile".to_string(),
-                        "-NonInteractive".to_string(),
-                        "-Command".to_string(),
-                        script,
-                    ],
-                    cwd: PathUri::from_abs_path(test_env.cwd()),
-                    env_policy: None,
-                    env: Default::default(),
-                    tty: false,
-                    pipe_stdin: false,
-                    arg0: None,
-                })
-                .await?
-                .process;
-            let mut events = process.subscribe_events();
-            let mut output = Vec::new();
-            let mut exit_code = None;
-            loop {
-                match events.recv().await? {
-                    ExecProcessEvent::Output(chunk) => {
-                        output.extend(chunk.chunk.into_inner());
-                    }
-                    ExecProcessEvent::Exited {
-                        exit_code: code, ..
-                    } => exit_code = Some(code),
-                    ExecProcessEvent::Closed { .. } => break,
-                    ExecProcessEvent::Failed(message) => anyhow::bail!(message),
-                }
-            }
-            assert_eq!(
-                exit_code,
-                Some(0),
-                "creating remote symlink failed: {}",
-                String::from_utf8_lossy(&output),
-            );
-        }
-        TestEnvironment::Local => unreachable!("test requires a remote environment"),
-    }
+    let linux_setup_command = format!(
+        "rm -rf {root}; mkdir -p {allowed} {outside}; printf nope > {secret}; ln -s {outside} {allowed}/link",
+        root = root.display(),
+        allowed = allowed_dir.display(),
+        outside = outside_dir.display(),
+        secret = secret_path.display(),
+    );
+    let windows_setup_command = format!(
+        r#"$ErrorActionPreference = 'Stop'
+$root = ([Uri]'{root_uri}').LocalPath
+$allowed = ([Uri]'{allowed_dir_uri}').LocalPath
+$outside = ([Uri]'{outside_dir_uri}').LocalPath
+$secret = ([Uri]'{secret_path_uri}').LocalPath
+$link = ([Uri]'{symlink_path_uri}').LocalPath
+Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $allowed -Force | Out-Null
+New-Item -ItemType Directory -Path $outside -Force | Out-Null
+[System.IO.File]::WriteAllText($secret, 'nope')
+New-Item -ItemType SymbolicLink -Path $link -Target $outside | Out-Null"#,
+    );
+    remote_exec(&linux_setup_command, &windows_setup_command)?;
 
     let requested_path = allowed_dir_uri.join("link/../secret.txt")?;
     let sandbox = read_only_sandbox(allowed_dir.to_path_buf());
@@ -1145,16 +1110,13 @@ async fn remote_test_env_sandboxed_read_rejects_symlink_parent_dotdot_escape() -
     };
     assert_normalized_path_rejected(&error);
 
-    file_system
-        .remove(
-            &root_uri,
-            RemoveOptions {
-                recursive: true,
-                force: true,
-            },
-            /*sandbox*/ None,
-        )
-        .await?;
+    let linux_cleanup_command = format!("rm -rf {}", root.display());
+    let windows_cleanup_command = format!(
+        r#"$ErrorActionPreference = 'Stop'
+$root = ([Uri]'{root_uri}').LocalPath
+Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue"#,
+    );
+    remote_exec(&linux_cleanup_command, &windows_cleanup_command)?;
     Ok(())
 }
 
@@ -1176,7 +1138,7 @@ async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
     let allowed_dir = root.join("allowed");
     let outside_file = root.join("outside").join("keep.txt");
     let symlink_path = allowed_dir.join("link");
-    remote_exec(&format!(
+    remote_exec_docker(&format!(
         "rm -rf {root}; mkdir -p {allowed} {outside_parent}; printf outside > {outside}; ln -s {outside} {symlink}",
         root = root.display(),
         allowed = allowed_dir.display(),
@@ -1248,7 +1210,7 @@ async fn remote_test_env_copy_preserves_symlink_source() -> Result<()> {
     let outside_file = root.join("outside").join("outside.txt");
     let source_symlink = allowed_dir.join("link");
     let copied_symlink = allowed_dir.join("copied-link");
-    remote_exec(&format!(
+    remote_exec_docker(&format!(
         "rm -rf {root}; mkdir -p {allowed} {outside_parent}; printf outside > {outside}; ln -s {outside} {source}",
         root = root.display(),
         allowed = allowed_dir.display(),
