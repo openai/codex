@@ -322,7 +322,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             attempt.sandbox,
             attempt.windows_sandbox_level,
         );
-        let command = if matches!(session_shell.shell_type, ShellType::PowerShell) {
+        let command = if matches!(req.shell_type, ShellType::PowerShell) {
             prefix_powershell_script_with_utf8(&command)
         } else {
             command
