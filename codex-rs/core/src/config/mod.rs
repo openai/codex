@@ -2510,12 +2510,10 @@ fn network_proxy_toml_config(features: Option<&FeaturesToml>) -> Option<&Network
     }
 }
 
-/// Resolves `features.respect_system_proxy` for the initial cloud-config bootstrap.
+/// Bootstrap-only resolver for the cloud-config fetch.
 ///
-/// This runs before cloud-managed config can be fetched, so it can only use
-/// the already loaded config layers. The full [`Config`] load path resolves the
-/// same raw TOML through [`ManagedFeatures`] and remains authoritative after
-/// cloud config is available.
+/// Call before a cloud-config bundle is available. Final [`Config`] loading
+/// resolves the effective feature value after all layers are available.
 pub fn resolve_bootstrap_respect_system_proxy(
     cfg: &ConfigToml,
     feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
