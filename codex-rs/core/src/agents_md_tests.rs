@@ -256,7 +256,6 @@ fn resolved_local_environments<const N: usize>(
                     PathUri::from_abs_path(&cwd),
                     /*shell*/ None,
                 )
-                .expect("turn environment")
             })
             .collect(),
     }

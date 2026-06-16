@@ -359,11 +359,18 @@ impl ApplyPatchHandler {
                 "apply_patch is unavailable in this session".to_string(),
             ));
         };
-        let cwd = turn_environment.cwd().clone();
+        // TODO(anp): Migrate apply-patch verification and permission accounting to PathUri so
+        // patches can target environment-native foreign paths without host projection.
+        let cwd = turn_environment.cwd().to_abs_path().map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "apply_patch cwd `{}` is not native to the Codex host: {err}",
+                turn_environment.cwd()
+            ))
+        })?;
         let fs = turn_environment.environment.get_filesystem();
         let sandbox = turn.file_system_sandbox_context(
             /*additional_permissions*/ None,
-            turn_environment.cwd_uri(),
+            turn_environment.cwd(),
         );
         match codex_apply_patch::verify_apply_patch_args(args, &cwd, fs.as_ref(), Some(&sandbox))
             .await

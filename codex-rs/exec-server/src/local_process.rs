@@ -156,10 +156,11 @@ impl LocalProcess {
             .argv
             .split_first()
             .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
-        let native_cwd = params.cwd.to_abs_path().map_err(|err| {
+        let native_cwd = params.cwd.to_abs_path().map_err(|_| {
             invalid_params(format!(
-                "cwd URI `{}` is not valid on this exec-server host: {err}",
-                params.cwd
+                "'{}' is invalid on '{}'",
+                params.cwd,
+                std::env::consts::OS
             ))
         })?;
 
@@ -815,12 +816,7 @@ mod tests {
         #[cfg(windows)]
         let uri = "file:///usr/local/checkout";
         let cwd = PathUri::parse(uri).expect("non-native cwd URI");
-        let source = cwd
-            .to_abs_path()
-            .expect_err("cwd should not be native to this host");
-        let expected = invalid_params(format!(
-            "cwd URI `{cwd}` is not valid on this exec-server host: {source}"
-        ));
+        let expected = invalid_params(format!("'{cwd}' is invalid on '{}'", std::env::consts::OS));
         let mut params = test_exec_params(HashMap::new());
         params.cwd = cwd;
 

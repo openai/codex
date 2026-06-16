@@ -97,6 +97,10 @@ impl ApiPathString {
         &self.0
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn into_string(self) -> String {
         self.0
     }

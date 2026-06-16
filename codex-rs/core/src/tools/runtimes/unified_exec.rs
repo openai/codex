@@ -51,6 +51,7 @@ use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_tools::UnifiedExecShellMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
@@ -63,7 +64,7 @@ pub struct UnifiedExecRequest {
     pub shell_type: ShellType,
     pub hook_command: String,
     pub process_id: i32,
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
     pub sandbox_cwd: AbsolutePathBuf,
     pub turn_environment: TurnEnvironment,
     pub env: HashMap<String, String>,
@@ -84,7 +85,7 @@ pub struct UnifiedExecRequest {
 #[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct UnifiedExecApprovalKey {
     pub command: Vec<String>,
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
@@ -147,19 +148,26 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         &'b mut self,
         req: &'b UnifiedExecRequest,
         ctx: ApprovalCtx<'b>,
-    ) -> BoxFuture<'b, ReviewDecision> {
+    ) -> BoxFuture<'b, Result<ReviewDecision, ToolError>> {
         let keys = self.approval_keys(req);
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         let command = req.command.clone();
-        let cwd = req.cwd.clone();
         let retry_reason = ctx.retry_reason.clone();
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
         let guardian_review_id = ctx.guardian_review_id.clone();
         Box::pin(async move {
+            // TODO(anp): Migrate command approval payloads to PathUri so approvals can represent
+            // working directories native to a remote environment.
+            let cwd = req.cwd.to_abs_path().map_err(|err| {
+                ToolError::Rejected(format!(
+                    "command cwd `{}` is not native to the Codex host: {err}",
+                    req.cwd
+                ))
+            })?;
             if let Some(review_id) = guardian_review_id {
-                return review_approval_request(
+                return Ok(review_approval_request(
                     session,
                     turn,
                     review_id,
@@ -174,28 +182,30 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                     },
                     retry_reason,
                 )
-                .await;
+                .await);
             }
-            with_cached_approval(&session.services, "unified_exec", keys, || async move {
-                let available_decisions = None;
-                session
-                    .request_command_approval(
-                        turn,
-                        call_id,
-                        /*approval_id*/ None,
-                        command,
-                        cwd.clone(),
-                        reason,
-                        ctx.network_approval_context.clone(),
-                        req.exec_approval_requirement
-                            .proposed_execpolicy_amendment()
-                            .cloned(),
-                        req.additional_permissions.clone(),
-                        available_decisions,
-                    )
-                    .await
-            })
-            .await
+            Ok(
+                with_cached_approval(&session.services, "unified_exec", keys, || async move {
+                    let available_decisions = None;
+                    session
+                        .request_command_approval(
+                            turn,
+                            call_id,
+                            /*approval_id*/ None,
+                            command,
+                            cwd.clone(),
+                            reason,
+                            ctx.network_approval_context.clone(),
+                            req.exec_approval_requirement
+                                .proposed_execpolicy_amendment()
+                                .cloned(),
+                            req.additional_permissions.clone(),
+                            available_decisions,
+                        )
+                        .await
+                })
+                .await,
+            )
         })
     }
 
@@ -238,6 +248,9 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         );
         let network =
             managed_network_for_sandbox_permissions(req.network.as_ref(), sandbox_permissions)?;
+        // TODO(anp): Migrate guardian network approval triggers to PathUri so remote working
+        // directories do not suppress managed-network approval context.
+        let cwd = req.cwd.to_abs_path().ok()?;
         Some(NetworkApprovalSpec {
             network: Some(network.clone()),
             mode: NetworkApprovalMode::Deferred,
@@ -245,7 +258,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 call_id: ctx.call_id.clone(),
                 tool_name: flat_tool_name(&ctx.tool_name).into_owned(),
                 command: req.command.clone(),
-                cwd: req.cwd.clone(),
+                cwd,
                 sandbox_permissions: req.sandbox_permissions,
                 additional_permissions: req.additional_permissions.clone(),
                 justification: req.justification.clone(),
@@ -398,6 +411,9 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .env_for(command, options, managed_network)
             .map_err(ToolError::Codex)?;
         exec_env.exec_server_env_config = req.exec_server_env_config.clone();
+        if req.turn_environment.environment.is_remote() {
+            exec_env.cwd = req.cwd.clone();
+        }
         self.manager
             .open_session_with_exec_env(
                 req.process_id,
@@ -435,7 +451,7 @@ mod tests {
         TurnEnvironment::new(
             LOCAL_ENVIRONMENT_ID.to_string(),
             Arc::new(Environment::default_for_tests()),
-            cwd,
+            PathUri::from_abs_path(&cwd),
             /*shell*/ None,
         )
     }
@@ -477,7 +493,7 @@ mod tests {
             shell_type: ShellType::Sh,
             hook_command: "pwd".to_string(),
             process_id: 1000,
-            cwd,
+            cwd: PathUri::from_abs_path(&cwd),
             sandbox_cwd: sandbox_cwd.clone(),
             turn_environment: test_turn_environment(sandbox_cwd.clone()),
             env: HashMap::new(),
@@ -576,7 +592,7 @@ mod tests {
             shell_type: ShellType::Zsh,
             hook_command: "echo hi".to_string(),
             process_id: 1000,
-            cwd: cwd.clone(),
+            cwd: PathUri::from_abs_path(&cwd),
             sandbox_cwd: cwd.clone(),
             turn_environment: test_turn_environment(cwd),
             env: HashMap::new(),

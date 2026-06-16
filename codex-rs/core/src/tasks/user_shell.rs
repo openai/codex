@@ -162,7 +162,17 @@ pub(crate) async fn execute_user_shell_command(
 
     let call_id = Uuid::new_v4().to_string();
     let raw_command = command;
-    let cwd = turn_environment.cwd().clone();
+    // TODO(anp): Migrate user-shell events and execution plumbing to PathUri so this local-only
+    // feature does not need to project the selected environment cwd onto the Codex host.
+    let Ok(cwd) = turn_environment.cwd().to_abs_path() else {
+        send_user_shell_error(
+            &session,
+            turn_context.as_ref(),
+            "shell working directory is not native to the Codex host",
+        )
+        .await;
+        return;
+    };
 
     let parsed_cmd = parse_command(&display_command);
     session
@@ -185,7 +195,7 @@ pub(crate) async fn execute_user_shell_command(
     let permission_profile = PermissionProfile::Disabled;
     let exec_env = ExecRequest {
         command: exec_command.clone(),
-        cwd: cwd.clone(),
+        cwd: turn_environment.cwd().clone(),
         env: exec_env_map,
         exec_server_env_config: None,
         // `/shell` is the explicit full-access escape hatch, so it must not

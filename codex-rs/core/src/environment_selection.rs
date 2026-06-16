@@ -97,7 +97,7 @@ impl ThreadEnvironments {
             }
             let turn_environment = match current.turn_environments.iter().find(|environment| {
                 environment.environment_id == selected_environment.environment_id
-                    && environment.cwd_uri() == &selected_environment.cwd
+                    && environment.cwd() == &selected_environment.cwd
             }) {
                 Some(environment) => environment.clone(),
                 None => match Self::resolve_selection(
@@ -159,13 +159,7 @@ impl ThreadEnvironments {
             environment,
             selected_environment.cwd.clone(),
             shell,
-        )
-        .map_err(|err| {
-            CodexErr::InvalidRequest(format!(
-                "turn environment cwd `{}` is not valid on this host: {err}",
-                selected_environment.cwd
-            ))
-        })?;
+        );
         let task = shell_snapshot
             .clone()
             .build(turn_environment.clone())
@@ -227,8 +221,10 @@ impl TurnEnvironmentSnapshot {
         (!environment.environment.is_remote()).then_some(environment)
     }
 
-    pub(crate) fn single_local_environment_cwd(&self) -> Option<&AbsolutePathBuf> {
-        self.single_local_environment().map(TurnEnvironment::cwd)
+    pub(crate) fn single_local_environment_cwd(&self) -> Option<AbsolutePathBuf> {
+        // TODO(anp): Migrate local-environment consumers to PathUri so this compatibility
+        // conversion can be removed.
+        self.single_local_environment()?.cwd().to_abs_path().ok()
     }
 }
 
@@ -571,15 +567,12 @@ url = "ws://127.0.0.1:8765"
                 .expect("remote environment"),
         );
         let remote = TurnEnvironmentSnapshot {
-            turn_environments: vec![
-                TurnEnvironment::new(
-                    REMOTE_ENVIRONMENT_ID.to_string(),
-                    remote_environment.clone(),
-                    cwd_uri.clone(),
-                    /*shell*/ None,
-                )
-                .expect("remote turn environment"),
-            ],
+            turn_environments: vec![TurnEnvironment::new(
+                REMOTE_ENVIRONMENT_ID.to_string(),
+                remote_environment.clone(),
+                cwd_uri.clone(),
+                /*shell*/ None,
+            )],
         };
         let multiple = TurnEnvironmentSnapshot {
             turn_environments: vec![
@@ -589,12 +582,11 @@ url = "ws://127.0.0.1:8765"
                     remote_environment,
                     cwd_uri,
                     /*shell*/ None,
-                )
-                .expect("remote turn environment"),
+                ),
             ],
         };
 
-        assert_eq!(local.single_local_environment_cwd(), Some(&cwd));
+        assert_eq!(local.single_local_environment_cwd(), Some(cwd));
         assert_eq!(remote.single_local_environment_cwd(), None);
         assert_eq!(multiple.single_local_environment_cwd(), None);
     }

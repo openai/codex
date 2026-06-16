@@ -3,7 +3,6 @@ use crate::SkillLoadOutcome;
 use crate::agents_md::LoadedAgentsMd;
 use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::TurnEnvironmentSnapshot;
-use crate::path_utils;
 use crate::shell_snapshot::ShellSnapshotFile;
 use codex_core_skills::HostLoadedSkills;
 use codex_file_system::FileSystemSandboxContext;
@@ -49,13 +48,7 @@ pub(crate) type ShellSnapshotTask = Shared<BoxFuture<'static, Option<Arc<ShellSn
 pub(crate) struct TurnEnvironment {
     pub(crate) environment_id: String,
     pub(crate) environment: Arc<Environment>,
-    // Keep both representations together while cwd consumers migrate to URI semantics. Keeping
-    // them synchronized means neither representation can be exposed through a mutable reference;
-    // updates must rebuild the validated pair through `TurnEnvironment::new`. Once
-    // `TurnEnvironment::cwd` itself becomes a `PathUri`, convert only at native filesystem and
-    // process-launch boundaries and remove this paired migration state.
-    cwd: AbsolutePathBuf,
-    cwd_uri: PathUri,
+    cwd: PathUri,
     pub(crate) shell: Option<shell::Shell>,
     pub(crate) shell_snapshot: ShellSnapshotTask,
 }
@@ -64,22 +57,20 @@ impl TurnEnvironment {
     pub(crate) fn new(
         environment_id: String,
         environment: Arc<Environment>,
-        cwd_uri: PathUri,
+        cwd: PathUri,
         shell: Option<shell::Shell>,
-    ) -> std::io::Result<Self> {
-        let cwd = cwd_uri.to_abs_path()?;
-        Ok(Self {
+    ) -> Self {
+        Self {
             environment_id,
             environment,
             cwd,
-            cwd_uri,
             shell,
             shell_snapshot: futures::future::ready(None).boxed().shared(),
-        })
+        }
     }
 
-    pub(crate) fn shell_snapshot(&self, cwd: &AbsolutePathBuf) -> Option<AbsolutePathBuf> {
-        if !path_utils::paths_match_after_normalization(self.cwd.as_path(), cwd.as_path()) {
+    pub(crate) fn shell_snapshot(&self, cwd: &PathUri) -> Option<AbsolutePathBuf> {
+        if &self.cwd != cwd {
             return None;
         }
         self.shell_snapshot
@@ -88,18 +79,14 @@ impl TurnEnvironment {
             .map(ShellSnapshotFile::path)
     }
 
-    pub(crate) fn cwd(&self) -> &AbsolutePathBuf {
+    pub(crate) fn cwd(&self) -> &PathUri {
         &self.cwd
-    }
-
-    pub(crate) fn cwd_uri(&self) -> &PathUri {
-        &self.cwd_uri
     }
 
     pub(crate) fn selection(&self) -> TurnEnvironmentSelection {
         TurnEnvironmentSelection {
             environment_id: self.environment_id.clone(),
-            cwd: self.cwd_uri.clone(),
+            cwd: self.cwd.clone(),
         }
     }
 }
@@ -110,7 +97,6 @@ impl std::fmt::Debug for TurnEnvironment {
             .field("environment_id", &self.environment_id)
             .field("environment", &self.environment)
             .field("cwd", &self.cwd)
-            .field("cwd_uri", &self.cwd_uri)
             .field("shell", &self.shell)
             .finish_non_exhaustive()
     }
@@ -755,9 +741,11 @@ impl Session {
     ) -> Arc<TurnContext> {
         let turn_environments = self.services.turn_environments.snapshot().await;
         let primary_turn_environment = turn_environments.primary().cloned();
+        // TODO(anp): Migrate per-turn config and legacy TurnContext cwd consumers to PathUri so
+        // a foreign primary environment does not fall back to the session's host cwd.
         let cwd = primary_turn_environment
             .as_ref()
-            .map(|turn_environment| turn_environment.cwd().clone())
+            .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
             .unwrap_or_else(|| session_configuration.cwd().clone());
         let per_turn_config = Self::build_per_turn_config(&session_configuration, cwd.clone());
         {

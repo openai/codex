@@ -250,6 +250,9 @@ impl CommandExecManager {
         let (program, args) = command
             .split_first()
             .ok_or_else(|| invalid_request("command must not be empty"))?;
+        let cwd = cwd
+            .to_abs_path()
+            .map_err(|err| invalid_request(format!("invalid command cwd: {err}")))?;
         {
             let mut sessions = self.sessions.lock().await;
             if sessions.contains_key(&process_key) {

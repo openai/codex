@@ -597,10 +597,9 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
                     ))
                     .expect("remote test environment"),
                 ),
-                codex_utils_path_uri::PathUri::from_abs_path(&remote_cwd),
+                remote_cwd,
                 /*shell*/ None,
-            )
-            .expect("remote turn environment"),
+            ),
         );
     })
     .await;

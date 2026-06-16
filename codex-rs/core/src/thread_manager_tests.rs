@@ -23,7 +23,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
-use codex_utils_path_uri::ApiPathString;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
@@ -297,126 +296,6 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
     assert!(report.submit_failed.is_empty());
     assert!(report.timed_out.is_empty());
     assert!(manager.list_thread_ids().await.is_empty());
-}
-
-#[tokio::test]
-async fn start_thread_rejects_explicit_local_environment_when_default_provider_is_disabled() {
-    let temp_dir = tempdir().expect("tempdir");
-    let mut config = test_config().await;
-    config.codex_home = temp_dir.path().join("codex-home").abs();
-    config.cwd = config.codex_home.abs();
-    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
-
-    let runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
-        std::env::current_exe().expect("current exe path"),
-        /*codex_linux_sandbox_exe*/ None,
-    )
-    .expect("runtime paths");
-    let environment_manager = Arc::new(
-        codex_exec_server::EnvironmentManager::create_for_tests(
-            Some("none".to_string()),
-            Some(runtime_paths),
-        )
-        .await,
-    );
-    let manager = ThreadManager::with_models_provider_and_home_for_tests(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-        config.codex_home.to_path_buf(),
-        environment_manager,
-    );
-
-    let result = manager
-        .start_thread_with_options(StartThreadOptions {
-            config: config.clone(),
-            initial_history: InitialHistory::New,
-            session_source: None,
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: vec![TurnEnvironmentSelection {
-                environment_id: "local".to_string(),
-                cwd: PathUri::from_abs_path(&config.cwd),
-            }],
-            thread_extension_init: Default::default(),
-        })
-        .await;
-    let err = match result {
-        Ok(_) => panic!("explicit local environment should not resolve when provider is disabled"),
-        Err(err) => err,
-    };
-
-    assert_eq!(err.to_string(), "unknown turn environment id `local`");
-    assert!(manager.list_thread_ids().await.is_empty());
-}
-
-#[tokio::test]
-async fn native_environment_selections_preserve_selected_path_syntax() {
-    let temp_dir = tempdir().expect("tempdir");
-    let mut config = test_config().await;
-    config.codex_home = temp_dir.path().join("codex-home").abs();
-    config.cwd = temp_dir.path().join("workspace").abs();
-    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
-    std::fs::create_dir_all(&config.cwd).expect("create workspace");
-
-    let manager = ThreadManager::with_models_provider_and_home_for_tests(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-        config.codex_home.to_path_buf(),
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-    );
-    let selections = manager
-        .resolve_native_environment_selections([(
-            "local".to_string(),
-            ApiPathString::from_abs_path(&config.cwd),
-        )])
-        .expect("resolve local selection");
-
-    assert_eq!(
-        selections,
-        vec![TurnEnvironmentSelection {
-            environment_id: "local".to_string(),
-            cwd: PathUri::from_abs_path(&config.cwd),
-        }]
-    );
-}
-
-#[tokio::test]
-async fn native_environment_selections_reject_duplicate_ids() {
-    let temp_dir = tempdir().expect("tempdir");
-    let mut config = test_config().await;
-    config.codex_home = temp_dir.path().join("codex-home").abs();
-    config.cwd = temp_dir.path().join("workspace").abs();
-    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
-
-    let manager = ThreadManager::with_models_provider_and_home_for_tests(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-        config.codex_home.to_path_buf(),
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-    );
-    let native_cwd = ApiPathString::from_abs_path(&config.cwd);
-    let error = manager
-        .resolve_native_environment_selections([
-            ("local".to_string(), native_cwd.clone()),
-            ("local".to_string(), native_cwd),
-        ])
-        .expect_err("duplicate ids must fail");
-
-    assert_eq!(error.to_string(), "duplicate turn environment id `local`");
-
-    let error = manager
-        .resolve_native_environment_selections([(
-            "local".to_string(),
-            serde_json::from_value(serde_json::json!("relative"))
-                .expect("API path should deserialize"),
-        )])
-        .expect_err("relative cwd must fail at the environment boundary");
-    assert_eq!(
-        error.to_string(),
-        "invalid cwd for environment `local`: path `relative` does not use absolute POSIX or Windows path syntax"
-    );
 }
 
 #[tokio::test]
@@ -727,11 +606,11 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     assert_eq!(resumed_turn.environments.turn_environments.len(), 1);
     assert_eq!(
         resumed_turn.environments.turn_environments[0].cwd(),
-        &default_cwd
+        &PathUri::from_abs_path(&default_cwd)
     );
     assert_ne!(
         resumed_turn.environments.turn_environments[0].cwd(),
-        &selected_cwd
+        &PathUri::from_abs_path(&selected_cwd)
     );
 
     let forked = manager
@@ -754,11 +633,11 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     assert_eq!(forked_turn.environments.turn_environments.len(), 1);
     assert_eq!(
         forked_turn.environments.turn_environments[0].cwd(),
-        &default_cwd
+        &PathUri::from_abs_path(&default_cwd)
     );
     assert_ne!(
         forked_turn.environments.turn_environments[0].cwd(),
-        &selected_cwd
+        &PathUri::from_abs_path(&selected_cwd)
     );
 }
 

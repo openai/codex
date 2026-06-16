@@ -66,7 +66,6 @@ use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
 use codex_thread_store::UpdateThreadMetadataParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_path_uri::ApiPathString;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
@@ -471,33 +470,6 @@ impl ThreadManager {
                 })?;
         }
         Ok(())
-    }
-
-    /// Resolves environment-native cwd strings without applying the Codex host's path rules.
-    pub fn resolve_native_environment_selections(
-        &self,
-        environments: impl IntoIterator<Item = (String, ApiPathString)>,
-    ) -> CodexResult<Vec<TurnEnvironmentSelection>> {
-        let environments = environments.into_iter();
-        let mut selections = Vec::with_capacity(environments.size_hint().0);
-        for (environment_id, cwd) in environments {
-            let convention = cwd.infer_absolute_path_convention().ok_or_else(|| {
-                CodexErr::InvalidRequest(format!(
-                    "invalid cwd for environment `{environment_id}`: path `{cwd}` does not use absolute POSIX or Windows path syntax"
-                ))
-            })?;
-            let cwd = cwd.to_path_uri(convention).map_err(|err| {
-                CodexErr::InvalidRequest(format!(
-                    "invalid cwd for environment `{environment_id}`: {err}"
-                ))
-            })?;
-            selections.push(TurnEnvironmentSelection {
-                environment_id,
-                cwd,
-            });
-        }
-        self.validate_environment_selections(&selections)?;
-        Ok(selections)
     }
 
     pub fn get_models_manager(&self) -> SharedModelsManager {
