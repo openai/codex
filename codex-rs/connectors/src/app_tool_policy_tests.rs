@@ -521,7 +521,7 @@ fn default_tools_enable_overrides_app_level_hints() {
 }
 
 #[test]
-fn evaluator_uses_apps_default_tools_approval_mode() {
+fn evaluator_uses_apps_default_tools_approval_mode_only_with_connector_id() {
     let apps_config = AppsConfigToml {
         default: Some(AppsDefaultConfig {
             default_tools_approval_mode: Some(AppToolApproval::Prompt),
@@ -533,23 +533,35 @@ fn evaluator_uses_apps_default_tools_approval_mode() {
         apps: HashMap::new(),
     };
 
-    for connector_id in [Some("calendar"), None] {
-        assert_eq!(
+    assert_eq!(
+        [
             policy_from_apps_config(
                 Some(&apps_config),
-                connector_id,
+                Some("calendar"),
                 "events/list",
                 /*tool_title*/ None,
                 /*destructive_hint*/ None,
                 /*open_world_hint*/ None,
                 /*managed_approval*/ None,
             ),
+            policy_from_apps_config(
+                Some(&apps_config),
+                /*connector_id*/ None,
+                "events/list",
+                /*tool_title*/ None,
+                /*destructive_hint*/ None,
+                /*open_world_hint*/ None,
+                /*managed_approval*/ None,
+            ),
+        ],
+        [
             AppToolPolicy {
                 enabled: true,
                 approval: AppToolApproval::Prompt,
-            }
-        );
-    }
+            },
+            AppToolPolicy::default(),
+        ]
+    );
 }
 
 #[test]

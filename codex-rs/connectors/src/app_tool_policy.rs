@@ -163,9 +163,9 @@ fn app_tool_policy_from_apps_config(
         .or_else(|| tool_config.and_then(|tool| tool.approval_mode))
         .or_else(|| app.and_then(|app| app.default_tools_approval_mode))
         .or_else(|| {
-            apps_config
-                .default
-                .as_ref()
+            input
+                .connector_id
+                .and_then(|_| apps_config.default.as_ref())
                 .and_then(|defaults| defaults.default_tools_approval_mode)
         })
         .unwrap_or(AppToolApproval::Auto);
