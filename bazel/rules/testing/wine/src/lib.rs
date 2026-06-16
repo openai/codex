@@ -31,15 +31,6 @@ pub struct WineTestCommand {
     env: Vec<(OsString, OsString)>,
 }
 
-/// Owns a Wine process and its isolated wineserver.
-///
-/// Call [`Self::scope`] or [`Self::shutdown`] on every successful path. A
-/// normal unguarded drop panics, while a drop during unwinding performs
-/// blocking cleanup without introducing a second panic.
-pub struct WineTestProcess {
-    processes: Option<WineProcesses>,
-}
-
 /// Captured output and exit status from a Wine test command.
 #[derive(Debug, PartialEq, Eq)]
 pub struct WineCommandOutput {
@@ -49,6 +40,15 @@ pub struct WineCommandOutput {
     pub stderr: Vec<u8>,
     /// Process exit code reported by the PTY backend.
     pub exit_code: i32,
+}
+
+/// Owns a Wine process and its isolated wineserver.
+///
+/// Call [`Self::scope`] or [`Self::shutdown`] on every successful path. A
+/// normal unguarded drop panics, while a drop during unwinding performs
+/// blocking cleanup without introducing a second panic.
+pub struct WineTestProcess {
+    processes: Option<WineProcesses>,
 }
 
 struct WineProcesses {
