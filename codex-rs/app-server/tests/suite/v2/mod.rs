@@ -12,6 +12,8 @@ mod connection_handling_websocket;
 #[cfg(unix)]
 mod connection_handling_websocket_unix;
 mod dynamic_tools;
+#[cfg(not(target_os = "windows"))]
+mod executor_mcp;
 mod executor_skills;
 mod experimental_api;
 mod experimental_feature_list;
@@ -39,6 +41,7 @@ mod plugin_read;
 mod plugin_share;
 mod plugin_uninstall;
 mod process_exec;
+mod rate_limit_reset_credits;
 mod rate_limits;
 mod realtime_conversation;
 mod remote_control;

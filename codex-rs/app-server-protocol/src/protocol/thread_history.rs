@@ -124,6 +124,14 @@ impl ThreadHistoryBuilder {
             .or_else(|| self.turns.last().cloned())
     }
 
+    pub fn turn_snapshot(&self, turn_id: &str) -> Option<Turn> {
+        self.current_turn
+            .as_ref()
+            .filter(|turn| turn.id == turn_id)
+            .map(Turn::from)
+            .or_else(|| self.turns.iter().find(|turn| turn.id == turn_id).cloned())
+    }
+
     /// Returns the index of the active turn snapshot within the finished turn list.
     ///
     /// When a turn is still open, this is the index it will occupy after
@@ -233,7 +241,9 @@ impl ThreadHistoryBuilder {
             RolloutItem::EventMsg(event) => self.handle_event(event),
             RolloutItem::Compacted(payload) => self.handle_compacted(payload),
             RolloutItem::ResponseItem(item) => self.handle_response_item(item),
-            RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {}
+            RolloutItem::InterAgentCommunication(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::SessionMeta(_) => {}
         }
     }
 
@@ -3371,6 +3381,7 @@ mod tests {
                     text: "plain text".into(),
                 }],
                 phase: None,
+                metadata: None,
             }),
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),

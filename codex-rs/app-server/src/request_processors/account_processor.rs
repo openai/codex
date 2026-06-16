@@ -1,5 +1,7 @@
 use super::*;
 
+mod rate_limit_resets;
+
 // Duration before a browser ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const ACCOUNT_TOKEN_USAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 10);
@@ -293,6 +295,7 @@ impl AccountRequestProcessor {
             &self.config.codex_home,
             &params.api_key,
             self.config.cli_auth_credentials_store_mode,
+            self.config.auth_keyring_backend_kind(),
         ) {
             Ok(()) => {
                 self.auth_manager.reload().await;
@@ -338,9 +341,10 @@ impl AccountRequestProcessor {
             codex_streamlined_login,
             ..LoginServerOptions::new(
                 config.codex_home.to_path_buf(),
-                CLIENT_ID.to_string(),
+                oauth_client_id(),
                 config.forced_chatgpt_workspace_id.clone(),
                 config.cli_auth_credentials_store_mode,
+                config.auth_keyring_backend_kind(),
             )
         };
         #[cfg(debug_assertions)]
@@ -849,19 +853,64 @@ impl AccountRequestProcessor {
     async fn get_account_rate_limits_response(
         &self,
     ) -> Result<GetAccountRateLimitsResponse, JSONRPCErrorError> {
-        self.fetch_account_rate_limits()
+        let Some(auth) = self.auth_manager.auth().await else {
+            return Err(invalid_request(
+                "codex account authentication required to read rate limits",
+            ));
+        };
+
+        if !auth.uses_codex_backend() {
+            return Err(invalid_request(
+                "chatgpt authentication required to read rate limits",
+            ));
+        }
+
+        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
+            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
+
+        let response = client
+            .get_rate_limits_with_reset_credits()
             .await
-            .map(
-                |(rate_limits, rate_limits_by_limit_id)| GetAccountRateLimitsResponse {
-                    rate_limits: rate_limits.into(),
-                    rate_limits_by_limit_id: Some(
-                        rate_limits_by_limit_id
-                            .into_iter()
-                            .map(|(limit_id, snapshot)| (limit_id, snapshot.into()))
-                            .collect(),
-                    ),
-                },
-            )
+            .map_err(|err| internal_error(format!("failed to fetch codex rate limits: {err}")))?;
+        if response.rate_limits.is_empty() {
+            return Err(internal_error(
+                "failed to fetch codex rate limits: no snapshots returned",
+            ));
+        }
+
+        let rate_limits_by_limit_id: HashMap<_, _> = response
+            .rate_limits
+            .iter()
+            .cloned()
+            .map(|snapshot| {
+                let limit_id = snapshot
+                    .limit_id
+                    .clone()
+                    .unwrap_or_else(|| "codex".to_string());
+                (limit_id, snapshot)
+            })
+            .collect();
+        let rate_limits = response
+            .rate_limits
+            .iter()
+            .find(|snapshot| snapshot.limit_id.as_deref() == Some("codex"))
+            .cloned()
+            .unwrap_or_else(|| response.rate_limits[0].clone());
+
+        Ok(GetAccountRateLimitsResponse {
+            rate_limits: rate_limits.into(),
+            rate_limits_by_limit_id: Some(
+                rate_limits_by_limit_id
+                    .into_iter()
+                    .map(|(limit_id, snapshot)| (limit_id, snapshot.into()))
+                    .collect(),
+            ),
+            rate_limit_reset_credits: response.rate_limit_reset_credits.map(|summary| {
+                RateLimitResetCreditsSummary {
+                    available_count: summary.available_count,
+                }
+            }),
+        })
     }
 
     async fn get_account_token_usage_response(
@@ -960,61 +1009,6 @@ impl AccountRequestProcessor {
             AddCreditsNudgeCreditType::Credits => BackendAddCreditsNudgeCreditType::Credits,
             AddCreditsNudgeCreditType::UsageLimit => BackendAddCreditsNudgeCreditType::UsageLimit,
         }
-    }
-
-    async fn fetch_account_rate_limits(
-        &self,
-    ) -> Result<
-        (
-            CoreRateLimitSnapshot,
-            HashMap<String, CoreRateLimitSnapshot>,
-        ),
-        JSONRPCErrorError,
-    > {
-        let Some(auth) = self.auth_manager.auth().await else {
-            return Err(invalid_request(
-                "codex account authentication required to read rate limits",
-            ));
-        };
-
-        if !auth.uses_codex_backend() {
-            return Err(invalid_request(
-                "chatgpt authentication required to read rate limits",
-            ));
-        }
-
-        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
-            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
-
-        let snapshots = client
-            .get_rate_limits_many()
-            .await
-            .map_err(|err| internal_error(format!("failed to fetch codex rate limits: {err}")))?;
-        if snapshots.is_empty() {
-            return Err(internal_error(
-                "failed to fetch codex rate limits: no snapshots returned",
-            ));
-        }
-
-        let rate_limits_by_limit_id: HashMap<String, CoreRateLimitSnapshot> = snapshots
-            .iter()
-            .cloned()
-            .map(|snapshot| {
-                let limit_id = snapshot
-                    .limit_id
-                    .clone()
-                    .unwrap_or_else(|| "codex".to_string());
-                (limit_id, snapshot)
-            })
-            .collect();
-
-        let primary = snapshots
-            .iter()
-            .find(|snapshot| snapshot.limit_id.as_deref() == Some("codex"))
-            .cloned()
-            .unwrap_or_else(|| snapshots[0].clone());
-
-        Ok((primary, rate_limits_by_limit_id))
     }
 }
 

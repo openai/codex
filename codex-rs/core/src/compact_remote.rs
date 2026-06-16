@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use crate::Prompt;
 use crate::client::CompactConversationRequestSettings;
@@ -43,6 +44,7 @@ const CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE: &str =
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    turn_state: Arc<OnceLock<String>>,
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
     phase: CompactionPhase,
@@ -50,6 +52,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     run_remote_compact_task_inner(
         &sess,
         &turn_context,
+        Some(turn_state),
         initial_context_injection,
         CompactionTrigger::Auto,
         reason,
@@ -75,6 +78,7 @@ pub(crate) async fn run_remote_compact_task(
     run_remote_compact_task_inner(
         &sess,
         &turn_context,
+        /*turn_state*/ None,
         InitialContextInjection::DoNotInject,
         CompactionTrigger::Manual,
         CompactionReason::UserRequested,
@@ -87,6 +91,7 @@ pub(crate) async fn run_remote_compact_task(
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    turn_state: Option<Arc<OnceLock<String>>>,
     initial_context_injection: InitialContextInjection,
     trigger: CompactionTrigger,
     reason: CompactionReason,
@@ -130,6 +135,7 @@ async fn run_remote_compact_task_inner(
     let result = run_remote_compact_task_inner_impl(
         sess,
         turn_context,
+        turn_state,
         initial_context_injection,
         compaction_metadata,
         &mut analytics_details,
@@ -163,6 +169,7 @@ async fn run_remote_compact_task_inner(
 async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    turn_state: Option<Arc<OnceLock<String>>>,
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
     analytics_details: &mut CompactionAnalyticsDetails,
@@ -237,6 +244,7 @@ async fn run_remote_compact_task_inner_impl(
         .compact_conversation_history(
             &prompt,
             &turn_context.model_info,
+            turn_state,
             CompactConversationRequestSettings {
                 effort: turn_context.reasoning_effort.clone(),
                 summary: turn_context.reasoning_summary,
@@ -336,7 +344,7 @@ pub(crate) fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
         ResponseItem::Message { .. } => false,
         ResponseItem::AgentMessage { .. } => true,
         ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => true,
-        ResponseItem::CompactionTrigger => false,
+        ResponseItem::CompactionTrigger { .. } => false,
         ResponseItem::Reasoning { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
@@ -395,29 +403,38 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
 
 fn rewritten_output_for_context_window(item: &ResponseItem) -> Option<ResponseItem> {
     Some(match item {
-        ResponseItem::FunctionCallOutput { call_id, output } => ResponseItem::FunctionCallOutput {
+        ResponseItem::FunctionCallOutput {
+            call_id,
+            output,
+            metadata,
+        } => ResponseItem::FunctionCallOutput {
             call_id: call_id.clone(),
             output: truncated_output_payload(output),
+            metadata: metadata.clone(),
         },
         ResponseItem::CustomToolCallOutput {
             call_id,
             name,
             output,
+            metadata,
         } => ResponseItem::CustomToolCallOutput {
             call_id: call_id.clone(),
             name: name.clone(),
             output: truncated_output_payload(output),
+            metadata: metadata.clone(),
         },
         ResponseItem::ToolSearchOutput {
             call_id,
             status,
             execution,
+            metadata,
             ..
         } => ResponseItem::ToolSearchOutput {
             call_id: call_id.clone(),
             status: status.clone(),
             execution: execution.clone(),
             tools: Vec::new(),
+            metadata: metadata.clone(),
         },
         _ => return None,
     })

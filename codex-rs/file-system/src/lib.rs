@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::FileSystemPath;
@@ -10,8 +10,10 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use std::future::Future;
 use std::io;
 use std::path::Path;
+use std::pin::Pin;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreateDirectoryOptions {
@@ -34,6 +36,8 @@ pub struct FileMetadata {
     pub is_directory: bool,
     pub is_file: bool,
     pub is_symlink: bool,
+    /// Size in bytes.
+    pub size: u64,
     pub created_at_ms: i64,
     pub modified_at_ms: i64,
 }
@@ -48,9 +52,9 @@ pub struct ReadDirectoryEntry {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSystemSandboxContext {
-    pub permissions: PermissionProfile,
+    pub permissions: PermissionProfile<PathUri>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<AbsolutePathBuf>,
+    pub cwd: Option<PathUri>,
     pub windows_sandbox_level: WindowsSandboxLevel,
     #[serde(default)]
     pub windows_sandbox_private_desktop: bool,
@@ -59,34 +63,44 @@ pub struct FileSystemSandboxContext {
 }
 
 impl FileSystemSandboxContext {
-    pub fn from_legacy_sandbox_policy(sandbox_policy: SandboxPolicy, cwd: AbsolutePathBuf) -> Self {
+    pub fn from_legacy_sandbox_policy(
+        sandbox_policy: SandboxPolicy,
+        cwd: PathUri,
+    ) -> io::Result<Self> {
+        // Legacy policy projection materializes native roots, so convert at the receiving-host
+        // boundary while retaining the URI in the resulting sandbox context.
+        let native_cwd = cwd.to_abs_path()?;
         let file_system_sandbox_policy =
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, &cwd);
-        let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-            &file_system_sandbox_policy,
-            NetworkSandboxPolicy::from(&sandbox_policy),
-        );
-        Self::from_permission_profile_with_cwd(permissions, cwd)
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+                &sandbox_policy,
+                &native_cwd,
+            );
+        let permissions =
+            PermissionProfile::<AbsolutePathBuf>::from_runtime_permissions_with_enforcement(
+                SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+                &file_system_sandbox_policy,
+                NetworkSandboxPolicy::from(&sandbox_policy),
+            );
+        Ok(Self::from_permission_profile_with_cwd(permissions, cwd))
     }
 
-    pub fn from_permission_profile(permissions: PermissionProfile) -> Self {
+    pub fn from_permission_profile(permissions: PermissionProfile<AbsolutePathBuf>) -> Self {
         Self::from_permissions_and_cwd(permissions, /*cwd*/ None)
     }
 
     pub fn from_permission_profile_with_cwd(
-        permissions: PermissionProfile,
-        cwd: AbsolutePathBuf,
+        permissions: PermissionProfile<AbsolutePathBuf>,
+        cwd: PathUri,
     ) -> Self {
         Self::from_permissions_and_cwd(permissions, Some(cwd))
     }
 
     fn from_permissions_and_cwd(
-        permissions: PermissionProfile,
-        cwd: Option<AbsolutePathBuf>,
+        permissions: PermissionProfile<AbsolutePathBuf>,
+        cwd: Option<PathUri>,
     ) -> Self {
         Self {
-            permissions,
+            permissions: permissions.into(),
             cwd,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
@@ -95,14 +109,36 @@ impl FileSystemSandboxContext {
     }
 
     pub fn should_run_in_sandbox(&self) -> bool {
-        let file_system_policy = self.permissions.file_system_sandbox_policy();
+        let Ok(permissions) =
+            PermissionProfile::<AbsolutePathBuf>::try_from(self.permissions.clone())
+        else {
+            // A sandbox context for another host must not select the unsandboxed filesystem.
+            return true;
+        };
+        let file_system_policy = permissions.file_system_sandbox_policy();
         matches!(file_system_policy.kind, FileSystemSandboxKind::Restricted)
             && !file_system_policy.has_full_disk_write_access()
     }
 
     pub fn has_cwd_dependent_permissions(&self) -> bool {
-        let file_system_policy = self.permissions.file_system_sandbox_policy();
-        file_system_policy_has_cwd_dependent_entries(&file_system_policy)
+        match &self.permissions {
+            PermissionProfile::Managed {
+                file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+                ..
+            } => entries.iter().any(|entry| match &entry.path {
+                FileSystemPath::GlobPattern { pattern } => !Path::new(pattern).is_absolute(),
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::ProjectRoots { .. },
+                } => true,
+                FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => false,
+            }),
+            PermissionProfile::Managed {
+                file_system: ManagedFileSystemPermissions::Unrestricted,
+                ..
+            }
+            | PermissionProfile::Disabled
+            | PermissionProfile::External { .. } => false,
+        }
     }
 
     pub fn drop_cwd_if_unused(mut self) -> Self {
@@ -113,88 +149,78 @@ impl FileSystemSandboxContext {
     }
 }
 
-fn file_system_policy_has_cwd_dependent_entries(
-    file_system_policy: &FileSystemSandboxPolicy,
-) -> bool {
-    file_system_policy
-        .entries
-        .iter()
-        .any(|entry| match &entry.path {
-            FileSystemPath::GlobPattern { pattern } => !Path::new(pattern).is_absolute(),
-            FileSystemPath::Special {
-                value: FileSystemSpecialPath::ProjectRoots { .. },
-            } => true,
-            FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => false,
-        })
-}
-
 pub type FileSystemResult<T> = io::Result<T>;
+
+/// Future returned by [`ExecutorFileSystem`] operations.
+pub type ExecutorFileSystemFuture<'a, T> =
+    Pin<Box<dyn Future<Output = FileSystemResult<T>> + Send + 'a>>;
 
 /// Abstract filesystem access used by components that may operate locally or via
 /// a remote environment.
-#[async_trait]
 pub trait ExecutorFileSystem: Send + Sync {
     /// Resolves a path within this filesystem.
-    async fn canonicalize(
-        &self,
-        path: &PathUri,
-        sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<PathUri>;
+    fn canonicalize<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, PathUri>;
 
-    async fn read_file(
-        &self,
-        path: &PathUri,
-        sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<Vec<u8>>;
+    fn read_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<u8>>;
 
     /// Reads a file and decodes it as UTF-8 text.
-    async fn read_file_text(
-        &self,
-        path: &PathUri,
-        sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<String> {
-        let bytes = self.read_file(path, sandbox).await?;
-        String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+    fn read_file_text<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, String> {
+        Box::pin(async move {
+            let bytes = self.read_file(path, sandbox).await?;
+            String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+        })
     }
 
-    async fn write_file(
-        &self,
-        path: &PathUri,
+    fn write_file<'a>(
+        &'a self,
+        path: &'a PathUri,
         contents: Vec<u8>,
-        sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<()>;
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()>;
 
-    async fn create_directory(
-        &self,
-        path: &PathUri,
+    fn create_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
         create_directory_options: CreateDirectoryOptions,
-        sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<()>;
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()>;
 
-    async fn get_metadata(
-        &self,
-        path: &PathUri,
-        sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<FileMetadata>;
+    fn get_metadata<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileMetadata>;
 
-    async fn read_directory(
-        &self,
-        path: &PathUri,
-        sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<Vec<ReadDirectoryEntry>>;
+    fn read_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>>;
 
-    async fn remove(
-        &self,
-        path: &PathUri,
+    fn remove<'a>(
+        &'a self,
+        path: &'a PathUri,
         remove_options: RemoveOptions,
-        sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<()>;
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()>;
 
-    async fn copy(
-        &self,
-        source_path: &PathUri,
-        destination_path: &PathUri,
+    fn copy<'a>(
+        &'a self,
+        source_path: &'a PathUri,
+        destination_path: &'a PathUri,
         copy_options: CopyOptions,
-        sandbox: Option<&FileSystemSandboxContext>,
-    ) -> FileSystemResult<()>;
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()>;
 }

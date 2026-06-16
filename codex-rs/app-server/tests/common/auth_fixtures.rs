@@ -9,6 +9,7 @@ use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
+use codex_login::AuthKeyringBackendKind;
 use codex_login::save_auth;
 use codex_login::token_data::TokenData;
 use codex_login::token_data::parse_chatgpt_jwt_claims;
@@ -168,5 +169,11 @@ pub fn write_chatgpt_auth(
         bedrock_api_key: None,
     };
 
-    save_auth(codex_home, &auth, cli_auth_credentials_store_mode).context("write auth.json")
+    save_auth(
+        codex_home,
+        &auth,
+        cli_auth_credentials_store_mode,
+        AuthKeyringBackendKind::default(),
+    )
+    .context("write auth.json")
 }

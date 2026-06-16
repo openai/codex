@@ -5,7 +5,6 @@ use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::config::ThreadStoreConfig;
 use crate::environment_selection::default_thread_environment_selections;
-use crate::environment_selection::resolve_environment_selections;
 use crate::mcp::McpManager;
 use crate::rollout::truncation;
 use crate::session::Codex;
@@ -78,6 +77,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
+use tracing::instrument;
 use tracing::warn;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
@@ -272,11 +272,11 @@ impl ThreadManager {
         let codex_home = config.codex_home.clone();
         let restriction_product = session_source.restriction_product();
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
-        let plugins_manager = Arc::new(PluginsManager::new_with_restriction_product(
+        let plugins_manager = Arc::new(PluginsManager::new_with_options(
             codex_home.to_path_buf(),
             restriction_product,
+            auth_manager.get_api_auth_mode(),
         ));
-        plugins_manager.set_auth_mode(auth_manager.get_api_auth_mode());
         let mcp_manager = Arc::new(McpManager::new_with_extensions(
             Arc::clone(&plugins_manager),
             Arc::clone(&extensions),
@@ -367,11 +367,11 @@ impl ThreadManager {
         };
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let restriction_product = SessionSource::Exec.restriction_product();
-        let plugins_manager = Arc::new(PluginsManager::new_with_restriction_product(
+        let plugins_manager = Arc::new(PluginsManager::new_with_options(
             codex_home.clone(),
             restriction_product,
+            auth_manager.get_api_auth_mode(),
         ));
-        plugins_manager.set_auth_mode(auth_manager.get_api_auth_mode());
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new_with_restriction_product(
             skills_codex_home,
@@ -451,8 +451,25 @@ impl ThreadManager {
         &self,
         environments: &[TurnEnvironmentSelection],
     ) -> CodexResult<()> {
-        resolve_environment_selections(self.state.environment_manager.as_ref(), environments)
-            .map(|_| ())
+        let mut environment_ids = HashSet::with_capacity(environments.len());
+        for environment in environments {
+            if !environment_ids.insert(environment.environment_id.as_str()) {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "duplicate turn environment id `{}`",
+                    environment.environment_id
+                )));
+            }
+            self.state
+                .environment_manager
+                .get_environment(&environment.environment_id)
+                .ok_or_else(|| {
+                    CodexErr::InvalidRequest(format!(
+                        "unknown turn environment id `{}`",
+                        environment.environment_id
+                    ))
+                })?;
+        }
+        Ok(())
     }
 
     pub fn get_models_manager(&self) -> SharedModelsManager {
@@ -685,6 +702,7 @@ impl ThreadManager {
         .await
     }
 
+    #[instrument(level = "trace", skip_all)]
     pub async fn resume_thread_with_history(
         &self,
         config: Config,
@@ -1364,8 +1382,6 @@ impl ThreadManagerState {
                 threads.remove(&resumed.conversation_id);
             }
         }
-        let environment_selections =
-            resolve_environment_selections(self.environment_manager.as_ref(), &environments)?;
         let user_instructions = self
             .user_instructions_for_spawn(&session_source, parent_thread_id, forked_from_thread_id)
             .await;
@@ -1407,7 +1423,7 @@ impl ThreadManagerState {
             parent_rollout_thread_trace,
             user_shell_override,
             parent_trace,
-            environment_selections,
+            environment_selections: environments,
             thread_extension_init,
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),

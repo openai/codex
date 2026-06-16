@@ -13,7 +13,6 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-async-trait = { workspace = true }
 base64 = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-execpolicy = { workspace = true }

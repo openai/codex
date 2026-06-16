@@ -292,7 +292,7 @@ fn instruction_fragments(request: &responses::ResponsesRequest) -> Vec<String> {
     request
         .message_input_texts("user")
         .into_iter()
-        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
+        .filter(|text| text.starts_with("# AGENTS.md instructions"))
         .collect()
 }
 
@@ -306,14 +306,13 @@ fn instruction_fragments_in_items(items: &[Value]) -> Vec<String> {
         .filter_map(|item| item.get("content").and_then(Value::as_array))
         .flatten()
         .filter_map(|span| span.get("text").and_then(Value::as_str))
-        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
+        .filter(|text| text.starts_with("# AGENTS.md instructions"))
         .map(str::to_string)
         .collect()
 }
 
-fn expected_instruction_fragment(cwd: &AbsolutePathBuf, contents: &str) -> String {
-    let cwd = cwd.as_path().display();
-    format!("# AGENTS.md instructions for {cwd}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
+fn expected_instruction_fragment(contents: &str) -> String {
+    format!("# AGENTS.md instructions\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
 }
 
 fn assert_single_instruction_fragment(request: &responses::ResponsesRequest, expected: &str) {
@@ -1193,7 +1192,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
                 !item
                     .get("text")
                     .and_then(|text| text.as_str())
-                    .is_some_and(|text| text.starts_with("# AGENTS.md instructions for "))
+                    .is_some_and(|text| text.starts_with("# AGENTS.md instructions"))
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -2004,9 +2003,11 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
                 text: remote_summary.to_string(),
             }],
             phase: None,
+            metadata: None,
         },
         codex_protocol::models::ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+            metadata: None,
         },
     ];
     let compact_mock =
@@ -4010,9 +4011,11 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
                 text: "REMOTE_COMPACT_SUMMARY".to_string(),
             }],
             phase: None,
+            metadata: None,
         },
         codex_protocol::models::ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+            metadata: None,
         },
     ];
     let compact_mock =
@@ -4135,9 +4138,11 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
                 text: "REMOTE_COMPACT_SUMMARY".to_string(),
             }],
             phase: None,
+            metadata: None,
         },
         codex_protocol::models::ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+            metadata: None,
         },
     ];
     let compact_mock =
@@ -4629,8 +4634,7 @@ async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Resu
     // path now contains new text.
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 3);
-    let expected_fragment =
-        expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    let expected_fragment = expected_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
     assert_single_instruction_fragment(&requests[0], &expected_fragment);
     assert_single_instruction_fragment(&requests[1], &expected_fragment);
     assert_single_instruction_fragment(&requests[2], &expected_fragment);
@@ -4702,8 +4706,7 @@ async fn mid_turn_compaction_keeps_the_creation_time_global_instructions() -> Re
     // Assert the initial, compact, and resumed requests all keep the old snapshot and source.
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 3);
-    let expected_fragment =
-        expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    let expected_fragment = expected_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
     assert_single_instruction_fragment(&requests[0], &expected_fragment);
     assert_single_instruction_fragment(&requests[1], &expected_fragment);
     assert_single_instruction_fragment(&requests[2], &expected_fragment);
@@ -4776,7 +4779,7 @@ async fn remote_v2_compaction_keeps_creation_time_instructions_after_same_path_m
     // creation-time item despite the file-backed source now containing new text.
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 3);
-    let old_fragment = expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    let old_fragment = expected_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
     assert_single_instruction_fragment(&requests[0], &old_fragment);
     assert_single_instruction_fragment(&requests[1], &old_fragment);
     assert_single_instruction_fragment(&requests[2], &old_fragment);

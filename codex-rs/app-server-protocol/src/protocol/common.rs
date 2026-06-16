@@ -56,6 +56,17 @@ impl AuthMode {
             Self::ApiKey | Self::AgentIdentity | Self::BedrockApiKey => false,
         }
     }
+
+    /// Returns whether this mode is backed by Codex services rather than a direct model API.
+    pub fn uses_codex_backend(self) -> bool {
+        match self {
+            Self::Chatgpt
+            | Self::ChatgptAuthTokens
+            | Self::AgentIdentity
+            | Self::PersonalAccessToken => true,
+            Self::ApiKey | Self::BedrockApiKey => false,
+        }
+    }
 }
 
 macro_rules! experimental_reason_expr {
@@ -603,6 +614,7 @@ client_request_definitions! {
     },
     ThreadList => "thread/list" {
         params: v2::ThreadListParams,
+        inspect_params: true,
         serialization: None,
         response: v2::ThreadListResponse,
     },
@@ -819,6 +831,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadRealtimeAppendTextResponse,
     },
+    #[experimental("thread/realtime/appendSpeech")]
+    ThreadRealtimeAppendSpeech => "thread/realtime/appendSpeech" {
+        params: v2::ThreadRealtimeAppendSpeechParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadRealtimeAppendSpeechResponse,
+    },
     #[experimental("thread/realtime/stop")]
     ThreadRealtimeStop => "thread/realtime/stop" {
         params: v2::ThreadRealtimeStopParams,
@@ -864,13 +882,13 @@ client_request_definitions! {
     },
     #[experimental("remoteControl/enable")]
     RemoteControlEnable => "remoteControl/enable" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: #[serde(skip_serializing_if = "Option::is_none")] v2::NullableRemoteControlEnableParams,
         serialization: global("remote-control"),
         response: v2::RemoteControlEnableResponse,
     },
     #[experimental("remoteControl/disable")]
     RemoteControlDisable => "remoteControl/disable" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: #[serde(skip_serializing_if = "Option::is_none")] v2::NullableRemoteControlDisableParams,
         serialization: global("remote-control"),
         response: v2::RemoteControlDisableResponse,
     },
@@ -990,6 +1008,12 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         serialization: None,
         response: v2::GetAccountRateLimitsResponse,
+    },
+
+    ConsumeAccountRateLimitResetCredit => "account/rateLimitResetCredit/consume" {
+        params: v2::ConsumeAccountRateLimitResetCreditParams,
+        serialization: global("account-auth"),
+        response: v2::ConsumeAccountRateLimitResetCreditResponse,
     },
 
     GetAccountTokenUsage => "account/usage/read" {
@@ -1647,6 +1671,7 @@ mod tests {
     use codex_protocol::account::PlanType;
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
     use codex_protocol::parse_command::ParsedCommand;
+    use codex_protocol::protocol::RealtimeConversationArchitecture;
     use codex_protocol::protocol::RealtimeConversationVersion;
     use codex_protocol::protocol::RealtimeOutputModality;
     use codex_protocol::protocol::RealtimeVoice;
@@ -3012,9 +3037,13 @@ mod tests {
         let request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
+                architecture: Some(RealtimeConversationArchitecture::Avas),
+                codex_responses_as_items: None,
+                codex_response_item_prefix: None,
                 thread_id: "thr_123".to_string(),
                 model: Some("realtime-treatment-model".to_string()),
                 output_modality: RealtimeOutputModality::Audio,
+                include_startup_context: Some(false),
                 prompt: Some(Some("You are on a call".to_string())),
                 realtime_session_id: Some("sess_456".to_string()),
                 transport: None,
@@ -3027,9 +3056,13 @@ mod tests {
                 "method": "thread/realtime/start",
                 "id": 9,
                 "params": {
+                    "architecture": "avas",
                     "threadId": "thr_123",
+                    "codexResponsesAsItems": null,
+                    "codexResponseItemPrefix": null,
                     "model": "realtime-treatment-model",
                     "outputModality": "audio",
+                    "includeStartupContext": false,
                     "prompt": "You are on a call",
                     "realtimeSessionId": "sess_456",
                     "transport": null,
@@ -3047,9 +3080,13 @@ mod tests {
         let default_prompt_request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
+                architecture: None,
+                codex_responses_as_items: None,
+                codex_response_item_prefix: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
+                include_startup_context: None,
                 prompt: None,
                 realtime_session_id: None,
                 transport: None,
@@ -3062,9 +3099,13 @@ mod tests {
                 "method": "thread/realtime/start",
                 "id": 9,
                 "params": {
+                    "architecture": null,
                     "threadId": "thr_123",
+                    "codexResponsesAsItems": null,
+                    "codexResponseItemPrefix": null,
                     "model": null,
                     "outputModality": "audio",
+                    "includeStartupContext": null,
                     "realtimeSessionId": null,
                     "transport": null,
                     "version": null,
@@ -3077,9 +3118,13 @@ mod tests {
         let null_prompt_request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
+                architecture: None,
+                codex_responses_as_items: None,
+                codex_response_item_prefix: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
+                include_startup_context: None,
                 prompt: Some(None),
                 realtime_session_id: None,
                 transport: None,
@@ -3092,9 +3137,13 @@ mod tests {
                 "method": "thread/realtime/start",
                 "id": 9,
                 "params": {
+                    "architecture": null,
                     "threadId": "thr_123",
+                    "codexResponsesAsItems": null,
+                    "codexResponseItemPrefix": null,
                     "model": null,
                     "outputModality": "audio",
+                    "includeStartupContext": null,
                     "prompt": null,
                     "realtimeSessionId": null,
                     "transport": null,
@@ -3138,6 +3187,29 @@ mod tests {
             null_prompt_request,
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_realtime_append_speech() -> Result<()> {
+        let request = ClientRequest::ThreadRealtimeAppendSpeech {
+            request_id: RequestId::Integer(10),
+            params: v2::ThreadRealtimeAppendSpeechParams {
+                thread_id: "thr_123".to_string(),
+                text: "Short voice update".to_string(),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/realtime/appendSpeech",
+                "id": 10,
+                "params": {
+                    "threadId": "thr_123",
+                    "text": "Short voice update"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
         Ok(())
     }
 
@@ -3250,9 +3322,13 @@ mod tests {
         let request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(1),
             params: v2::ThreadRealtimeStartParams {
+                architecture: None,
+                codex_responses_as_items: None,
+                codex_response_item_prefix: None,
                 thread_id: "thr_123".to_string(),
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
+                include_startup_context: None,
                 prompt: Some(Some("You are on a call".to_string())),
                 realtime_session_id: None,
                 transport: None,

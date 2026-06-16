@@ -33,6 +33,50 @@ fn record_duration_records_histogram() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn record_duration_seconds_uses_fractional_seconds_and_scaled_buckets() -> Result<()> {
+    let (metrics, exporter) = build_metrics_with_defaults(&[])?;
+
+    for duration in [
+        Duration::from_millis(200),
+        Duration::from_secs(1),
+        Duration::from_millis(4900),
+    ] {
+        metrics.record_duration_seconds_with_description(
+            "codex.request_duration_seconds",
+            "Duration of Codex requests in seconds.",
+            duration,
+            &[("method", "initialize")],
+        )?;
+    }
+    metrics.shutdown()?;
+
+    let resource_metrics = latest_metrics(&exporter);
+    let (bounds, bucket_counts, sum, count) =
+        histogram_data(&resource_metrics, "codex.request_duration_seconds");
+    assert_eq!(
+        bounds,
+        vec![
+            0.0, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
+        ]
+    );
+    assert_eq!(
+        bucket_counts,
+        vec![0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0]
+    );
+    assert!((sum - 6.1).abs() < f64::EPSILON * 8.0);
+    assert_eq!(count, 3);
+    let metric = crate::harness::find_metric(&resource_metrics, "codex.request_duration_seconds")
+        .unwrap_or_else(|| panic!("metric codex.request_duration_seconds missing"));
+    assert_eq!(metric.unit(), "s");
+    assert_eq!(
+        metric.description(),
+        "Duration of Codex requests in seconds."
+    );
+
+    Ok(())
+}
+
 // Ensures time_result returns the closure output and records timing.
 #[test]
 fn timer_result_records_success() -> Result<()> {

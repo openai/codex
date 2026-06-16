@@ -21,25 +21,27 @@ use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
+use crate::connection::WEBSOCKET_KEEPALIVE_INTERVAL;
 use crate::relay_proto::RelayData;
+use crate::relay_proto::RelayHandshake;
 use crate::relay_proto::RelayMessageFrame;
 use crate::relay_proto::RelayResume;
 use crate::relay_proto::relay_message_frame;
 use crate::server::ConnectionProcessor;
 
 const RELAY_MESSAGE_FRAME_VERSION: u32 = 1;
-
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum RelayFrameBodyKind {
+pub(crate) enum RelayFrameBodyKind {
     Data,
     Ack,
     Resume,
     Reset,
     Heartbeat,
+    Handshake,
 }
 
 impl RelayMessageFrame {
-    fn data(stream_id: String, seq: u32, payload: Vec<u8>) -> Self {
+    pub(crate) fn data(stream_id: String, seq: u32, payload: Vec<u8>) -> Self {
         Self {
             version: RELAY_MESSAGE_FRAME_VERSION,
             stream_id,
@@ -54,7 +56,7 @@ impl RelayMessageFrame {
         }
     }
 
-    fn resume(stream_id: String) -> Self {
+    pub(crate) fn resume(stream_id: String) -> Self {
         Self {
             version: RELAY_MESSAGE_FRAME_VERSION,
             stream_id,
@@ -66,7 +68,19 @@ impl RelayMessageFrame {
         }
     }
 
-    fn validate(&self) -> Result<RelayFrameBodyKind, ExecServerError> {
+    pub(crate) fn handshake(stream_id: String, payload: Vec<u8>) -> Self {
+        Self {
+            version: RELAY_MESSAGE_FRAME_VERSION,
+            stream_id,
+            ack: 0,
+            ack_bits: 0,
+            body: Some(relay_message_frame::Body::Handshake(RelayHandshake {
+                payload,
+            })),
+        }
+    }
+
+    pub(crate) fn validate(&self) -> Result<RelayFrameBodyKind, ExecServerError> {
         if self.version != RELAY_MESSAGE_FRAME_VERSION {
             return Err(ExecServerError::Protocol(format!(
                 "unsupported relay message frame version {}",
@@ -98,27 +112,56 @@ impl RelayMessageFrame {
                 Ok(RelayFrameBodyKind::Reset)
             }
             Some(relay_message_frame::Body::Heartbeat(_)) => Ok(RelayFrameBodyKind::Heartbeat),
+            Some(relay_message_frame::Body::Handshake(handshake)) => {
+                if handshake.payload.is_empty() {
+                    return Err(ExecServerError::Protocol(
+                        "relay handshake message frame is missing payload".to_string(),
+                    ));
+                }
+                Ok(RelayFrameBodyKind::Handshake)
+            }
             None => Err(ExecServerError::Protocol(
                 "relay message frame is missing body".to_string(),
             )),
         }
     }
 
-    fn into_jsonrpc_message(self) -> Result<JSONRPCMessage, ExecServerError> {
+    pub(crate) fn into_data(self) -> Result<RelayData, ExecServerError> {
         let kind = self.validate()?;
         if kind != RelayFrameBodyKind::Data {
             return Err(ExecServerError::Protocol(
                 "expected relay data message frame".to_string(),
             ));
         }
-        let payload = match self.body {
-            Some(relay_message_frame::Body::Data(data)) => data.payload,
-            _ => Vec::new(),
-        };
+        match self.body {
+            Some(relay_message_frame::Body::Data(data)) => Ok(data),
+            _ => Err(ExecServerError::Protocol(
+                "expected relay data message frame".to_string(),
+            )),
+        }
+    }
+
+    fn into_jsonrpc_message(self) -> Result<JSONRPCMessage, ExecServerError> {
+        let payload = self.into_data()?.payload;
         serde_json::from_slice(&payload).map_err(ExecServerError::Json)
     }
 
-    fn into_reset_reason(self) -> Option<String> {
+    pub(crate) fn into_handshake_payload(self) -> Result<Vec<u8>, ExecServerError> {
+        let kind = self.validate()?;
+        if kind != RelayFrameBodyKind::Handshake {
+            return Err(ExecServerError::Protocol(
+                "expected relay handshake message frame".to_string(),
+            ));
+        }
+        match self.body {
+            Some(relay_message_frame::Body::Handshake(handshake)) => Ok(handshake.payload),
+            _ => Err(ExecServerError::Protocol(
+                "expected relay handshake message frame".to_string(),
+            )),
+        }
+    }
+
+    pub(crate) fn into_reset_reason(self) -> Option<String> {
         match self.body {
             Some(relay_message_frame::Body::Reset(reset)) if !reset.reason.is_empty() => {
                 Some(reset.reason)
@@ -128,17 +171,50 @@ impl RelayMessageFrame {
     }
 }
 
-fn encode_relay_message_frame(frame: &RelayMessageFrame) -> Vec<u8> {
+pub(crate) fn encode_relay_message_frame(frame: &RelayMessageFrame) -> Vec<u8> {
     frame.encode_to_vec()
 }
 
-fn decode_relay_message_frame(payload: &[u8]) -> Result<RelayMessageFrame, ExecServerError> {
+pub(crate) fn decode_relay_message_frame(
+    payload: &[u8],
+) -> Result<RelayMessageFrame, ExecServerError> {
     RelayMessageFrame::decode(payload)
         .map_err(|err| ExecServerError::Protocol(format!("invalid relay message frame: {err}")))
 }
 
-fn jsonrpc_payload(message: &JSONRPCMessage) -> Result<Vec<u8>, ExecServerError> {
+pub(crate) fn jsonrpc_payload(message: &JSONRPCMessage) -> Result<Vec<u8>, ExecServerError> {
     serde_json::to_vec(message).map_err(ExecServerError::Json)
+}
+
+enum RelayEventSendError {
+    IncomingClosed,
+    WebSocketClosed,
+}
+
+async fn send_event_with_keepalive<T, E>(
+    websocket: &mut T,
+    keepalive: &mut tokio::time::Interval,
+    incoming_tx: &mpsc::Sender<JsonRpcConnectionEvent>,
+    event: JsonRpcConnectionEvent,
+) -> Result<(), RelayEventSendError>
+where
+    T: Sink<Message, Error = E> + Unpin,
+{
+    let send = incoming_tx.send(event);
+    tokio::pin!(send);
+    loop {
+        tokio::select! {
+            result = &mut send => {
+                return result.map_err(|_| RelayEventSendError::IncomingClosed);
+            }
+            _ = keepalive.tick() => {
+                websocket
+                    .send(Message::Ping(Vec::new().into()))
+                    .await
+                    .map_err(|_| RelayEventSendError::WebSocketClosed)?;
+            }
+        }
+    }
 }
 
 pub(crate) fn harness_connection_from_websocket<T, E>(
@@ -168,6 +244,11 @@ where
             return;
         }
 
+        let mut keepalive = tokio::time::interval_at(
+            tokio::time::Instant::now() + WEBSOCKET_KEEPALIVE_INTERVAL,
+            WEBSOCKET_KEEPALIVE_INTERVAL,
+        );
+        keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut next_seq = 0u32;
         loop {
             tokio::select! {
@@ -189,6 +270,12 @@ where
                         .await
                         .is_err()
                     {
+                        let _ = disconnected_tx.send(true);
+                        break;
+                    }
+                }
+                _ = keepalive.tick() => {
+                    if websocket.send(Message::Ping(Vec::new().into())).await.is_err() {
                         let _ = disconnected_tx.send(true);
                         break;
                     }
@@ -226,12 +313,20 @@ where
                             match kind {
                                 RelayFrameBodyKind::Data => match frame.into_jsonrpc_message() {
                                     Ok(message) => {
-                                        if incoming_tx
-                                            .send(JsonRpcConnectionEvent::Message(message))
-                                            .await
-                                            .is_err()
+                                        match send_event_with_keepalive(
+                                            &mut websocket,
+                                            &mut keepalive,
+                                            &incoming_tx,
+                                            JsonRpcConnectionEvent::Message(message),
+                                        )
+                                        .await
                                         {
-                                            break;
+                                            Ok(()) => {}
+                                            Err(RelayEventSendError::IncomingClosed) => break,
+                                            Err(RelayEventSendError::WebSocketClosed) => {
+                                                let _ = disconnected_tx.send(true);
+                                                break;
+                                            }
                                         }
                                     }
                                     Err(err) => {
@@ -253,7 +348,8 @@ where
                                 }
                                 RelayFrameBodyKind::Ack
                                 | RelayFrameBodyKind::Resume
-                                | RelayFrameBodyKind::Heartbeat => {}
+                                | RelayFrameBodyKind::Heartbeat
+                                | RelayFrameBodyKind::Handshake => {}
                             }
                         }
                         Some(Ok(Message::Close(_))) | None => {
@@ -308,14 +404,25 @@ pub(crate) async fn run_multiplexed_environment<S>(
     let (physical_outgoing_tx, mut physical_outgoing_rx) =
         mpsc::channel::<Vec<u8>>(CHANNEL_CAPACITY);
 
+    let mut keepalive = tokio::time::interval_at(
+        tokio::time::Instant::now() + WEBSOCKET_KEEPALIVE_INTERVAL,
+        WEBSOCKET_KEEPALIVE_INTERVAL,
+    );
+    keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut streams: HashMap<String, VirtualStream> = HashMap::new();
-    loop {
+    'websocket: loop {
         let frame = tokio::select! {
             maybe_encoded = physical_outgoing_rx.recv() => {
                 let Some(encoded) = maybe_encoded else {
                     break;
                 };
                 if websocket.send(Message::Binary(encoded.into())).await.is_err() {
+                    break;
+                }
+                continue;
+            }
+            _ = keepalive.tick() => {
+                if websocket.send(Message::Ping(Vec::new().into())).await.is_err() {
                     break;
                 }
                 continue;
@@ -361,6 +468,7 @@ pub(crate) async fn run_multiplexed_environment<S>(
                         continue;
                     }
                 };
+
                 let stream = streams.entry(stream_id.clone()).or_insert_with(|| {
                     spawn_virtual_stream(
                         stream_id.clone(),
@@ -368,13 +476,20 @@ pub(crate) async fn run_multiplexed_environment<S>(
                         physical_outgoing_tx.clone(),
                     )
                 });
-                if stream
-                    .incoming_tx
-                    .send(JsonRpcConnectionEvent::Message(message))
-                    .await
-                    .is_err()
+                let incoming_tx = stream.incoming_tx.clone();
+                match send_event_with_keepalive(
+                    &mut websocket,
+                    &mut keepalive,
+                    &incoming_tx,
+                    JsonRpcConnectionEvent::Message(message),
+                )
+                .await
                 {
-                    streams.remove(&stream_id);
+                    Ok(()) => {}
+                    Err(RelayEventSendError::IncomingClosed) => {
+                        streams.remove(&stream_id);
+                    }
+                    Err(RelayEventSendError::WebSocketClosed) => break 'websocket,
                 }
             }
             RelayFrameBodyKind::Reset => {
@@ -384,7 +499,8 @@ pub(crate) async fn run_multiplexed_environment<S>(
             }
             RelayFrameBodyKind::Ack
             | RelayFrameBodyKind::Resume
-            | RelayFrameBodyKind::Heartbeat => {}
+            | RelayFrameBodyKind::Heartbeat
+            | RelayFrameBodyKind::Handshake => {}
         }
     }
 
@@ -468,14 +584,17 @@ mod tests {
     use std::task::Poll;
     use std::time::Duration;
 
+    use codex_app_server_protocol::JSONRPCError;
     use codex_app_server_protocol::JSONRPCRequest;
     use codex_app_server_protocol::RequestId;
     use futures::Sink;
     use futures::Stream;
     use futures::channel::mpsc as futures_mpsc;
     use futures::task::AtomicWaker;
+    use pretty_assertions::assert_eq;
     use tokio::net::TcpListener;
     use tokio::time::timeout;
+    use tokio_tungstenite::WebSocketStream;
     use tokio_tungstenite::accept_async;
     use tokio_tungstenite::connect_async;
     use tokio_tungstenite::tungstenite::Message;
@@ -483,11 +602,15 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn harness_connection_receives_relay_data() -> anyhow::Result<()> {
+    async fn harness_connection_sends_keepalive_and_receives_relay_data() -> anyhow::Result<()> {
         let (client_websocket, mut server_websocket) = websocket_pair().await?;
         let mut connection =
             harness_connection_from_websocket(client_websocket, "test".to_string());
         let stream_id = read_resume_stream_id(&mut server_websocket).await?;
+        read_keepalive_ping(&mut server_websocket).await?;
+        server_websocket
+            .send(Message::Pong(b"keepalive".to_vec().into()))
+            .await?;
         let message = test_jsonrpc_message();
 
         server_websocket
@@ -506,6 +629,126 @@ mod tests {
         ));
 
         drop(connection);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn multiplexed_environment_sends_keepalive_and_processes_relay_data() -> anyhow::Result<()>
+    {
+        let (client_websocket, mut server_websocket) = websocket_pair().await?;
+        let runtime_paths = crate::ExecServerRuntimePaths::new(
+            std::env::current_exe()?,
+            /*codex_linux_sandbox_exe*/ None,
+        )
+        .map_err(anyhow::Error::from)?;
+        let environment_task = tokio::spawn(run_multiplexed_environment(
+            client_websocket,
+            ConnectionProcessor::new(runtime_paths),
+        ));
+
+        read_keepalive_ping(&mut server_websocket).await?;
+        server_websocket
+            .send(Message::Pong(b"keepalive".to_vec().into()))
+            .await?;
+        let stream_id = "test-stream".to_string();
+        let request = test_jsonrpc_message();
+        server_websocket
+            .send(Message::Binary(
+                encode_relay_message_frame(&RelayMessageFrame::data(
+                    stream_id.clone(),
+                    /*seq*/ 0,
+                    jsonrpc_payload(&request)?,
+                ))
+                .into(),
+            ))
+            .await?;
+
+        let response_frame = timeout(Duration::from_secs(1), async {
+            loop {
+                let message = server_websocket
+                    .next()
+                    .await
+                    .expect("websocket should stay open")?;
+                match message {
+                    Message::Binary(payload) => {
+                        return decode_relay_message_frame(payload.as_ref())
+                            .map_err(anyhow::Error::from);
+                    }
+                    Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
+                    Message::Text(text) => {
+                        anyhow::bail!("expected binary relay frame, got text: {text}");
+                    }
+                    Message::Close(_) => {
+                        anyhow::bail!("websocket closed before relay response");
+                    }
+                }
+            }
+        })
+        .await??;
+        let expected_message = JSONRPCMessage::Error(JSONRPCError {
+            id: RequestId::Integer(1),
+            error: crate::rpc::method_not_found(
+                "exec-server stub does not implement `test` yet".to_string(),
+            ),
+        });
+        assert_eq!(
+            response_frame,
+            RelayMessageFrame::data(
+                stream_id,
+                /*seq*/ 0,
+                jsonrpc_payload(&expected_message)?,
+            )
+        );
+
+        environment_task.abort();
+        let _ = environment_task.await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn send_event_with_keepalive_pings_while_incoming_queue_is_full() -> anyhow::Result<()> {
+        let (mut websocket, _control, mut outbound_rx) =
+            ControlledWebSocket::new(/*write_ready*/ true);
+        let (incoming_tx, mut incoming_rx) = mpsc::channel(/*buffer*/ 1);
+        let message = test_jsonrpc_message();
+        let expected_message = message.clone();
+        incoming_tx
+            .send(JsonRpcConnectionEvent::MalformedMessage {
+                reason: "first".to_string(),
+            })
+            .await?;
+        let mut keepalive = tokio::time::interval_at(
+            tokio::time::Instant::now() + WEBSOCKET_KEEPALIVE_INTERVAL,
+            WEBSOCKET_KEEPALIVE_INTERVAL,
+        );
+        keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        let send_task = tokio::spawn(async move {
+            send_event_with_keepalive(
+                &mut websocket,
+                &mut keepalive,
+                &incoming_tx,
+                JsonRpcConnectionEvent::Message(message),
+            )
+            .await
+        });
+
+        assert!(matches!(
+            timeout(Duration::from_secs(1), outbound_rx.next()).await?,
+            Some(Message::Ping(_))
+        ));
+        assert!(matches!(
+            incoming_rx.recv().await,
+            Some(JsonRpcConnectionEvent::MalformedMessage { reason }) if reason == "first"
+        ));
+        assert!(matches!(
+            timeout(Duration::from_secs(1), send_task).await??,
+            Ok(())
+        ));
+        assert!(matches!(
+            incoming_rx.recv().await,
+            Some(JsonRpcConnectionEvent::Message(actual)) if actual == expected_message
+        ));
         Ok(())
     }
 
@@ -610,6 +853,21 @@ mod tests {
         let frame = decode_relay_message_frame(payload.as_ref())?;
         assert_eq!(frame.validate()?, RelayFrameBodyKind::Resume);
         Ok(frame.stream_id)
+    }
+
+    async fn read_keepalive_ping(
+        websocket: &mut WebSocketStream<tokio::net::TcpStream>,
+    ) -> anyhow::Result<()> {
+        loop {
+            let Some(message) = timeout(Duration::from_secs(1), websocket.next()).await? else {
+                anyhow::bail!("websocket closed before keepalive ping");
+            };
+            match message? {
+                Message::Ping(_) => return Ok(()),
+                Message::Binary(_) | Message::Text(_) | Message::Pong(_) | Message::Frame(_) => {}
+                Message::Close(_) => anyhow::bail!("websocket closed before keepalive ping"),
+            }
+        }
     }
 
     fn test_jsonrpc_message() -> JSONRPCMessage {

@@ -37,6 +37,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -181,6 +182,42 @@ async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_test_env_exposes_bash_shell_to_model() -> Result<()> {
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let test = test_codex().build_with_remote_env(&server).await?;
+
+    test.submit_turn("report remote environment").await?;
+
+    let request = response_mock.single_request();
+    let environment_context = request
+        .message_input_texts("user")
+        .into_iter()
+        .find(|text| text.starts_with("<environment_context>"))
+        .context("environment context should be model visible")?;
+    assert_eq!(
+        environment_context
+            .lines()
+            .find(|line| line.trim_start().starts_with("<shell>")),
+        Some("  <shell>bash</shell>"),
+    );
+
+    Ok(())
+}
+
 fn absolute_path(path: PathBuf) -> AbsolutePathBuf {
     match AbsolutePathBuf::try_from(path) {
         Ok(path) => path,
@@ -315,7 +352,7 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
         .await?;
     let remote_selection = TurnEnvironmentSelection {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-        cwd: remote_cwd.clone(),
+        cwd: PathUri::from_abs_path(&remote_cwd),
     };
     let multi_env_output = exec_command_routing_output(
         &test,
@@ -471,7 +508,7 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
             local(local_cwd.path().abs()),
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                cwd: remote_cwd.clone(),
+                cwd: PathUri::from_abs_path(&remote_cwd),
             },
         ],
     )
@@ -546,7 +583,7 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
 
     test.fs()
         .remove(
-            &PathUri::from_abs_path(&remote_cwd)?,
+            &PathUri::from_abs_path(&remote_cwd),
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -611,7 +648,7 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
             local(local_cwd.path().abs()),
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                cwd: remote_cwd.clone(),
+                cwd: PathUri::from_abs_path(&remote_cwd),
             },
         ]),
     )
@@ -694,7 +731,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         local(local_cwd.path().abs()),
         TurnEnvironmentSelection {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-            cwd: remote_cwd.clone(),
+            cwd: PathUri::from_abs_path(&remote_cwd),
         },
     ];
     let local_patch = format!(
@@ -892,7 +929,7 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
             local(local_cwd.path().abs()),
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                cwd: remote_cwd.clone(),
+                cwd: PathUri::from_abs_path(&remote_cwd),
             },
         ]),
     )
@@ -1055,7 +1092,7 @@ async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
 
     let symlink_exists = file_system
         .get_metadata(
-            &PathUri::from_abs_path(&absolute_path(symlink_path))?,
+            &PathUri::from_abs_path(&absolute_path(symlink_path)),
             /*sandbox*/ None,
         )
         .await

@@ -6,7 +6,8 @@ use codex_utils_path_uri::PathUri;
 use std::path::Path;
 use std::path::PathBuf;
 
-const DISCOVERABLE_PLUGIN_MANIFEST_PATHS: &[&str] =
+/// Ordered plugin manifest paths recognized beneath a plugin root.
+pub const DISCOVERABLE_PLUGIN_MANIFEST_PATHS: &[&str] =
     &[".codex-plugin/plugin.json", ".claude-plugin/plugin.json"];
 
 pub fn find_plugin_manifest_path(plugin_root: &Path) -> Option<PathBuf> {
@@ -30,7 +31,7 @@ async fn plugin_manifest_name(
     let mut manifest_path = None;
     for relative_path in DISCOVERABLE_PLUGIN_MANIFEST_PATHS {
         let candidate = plugin_root.join(relative_path);
-        let candidate_uri = PathUri::from_abs_path(&candidate).ok()?;
+        let candidate_uri = PathUri::from_abs_path(&candidate);
         match fs.get_metadata(&candidate_uri, /*sandbox*/ None).await {
             Ok(metadata) if metadata.is_file => {
                 manifest_path = Some(candidate);
@@ -40,7 +41,7 @@ async fn plugin_manifest_name(
         }
     }
     let manifest_path = manifest_path?;
-    let manifest_path_uri = PathUri::from_abs_path(&manifest_path).ok()?;
+    let manifest_path_uri = PathUri::from_abs_path(&manifest_path);
     let contents = fs
         .read_file_text(&manifest_path_uri, /*sandbox*/ None)
         .await

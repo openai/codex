@@ -1,11 +1,12 @@
 use super::PluginLoadOutcome;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
+use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
 use crate::loader::PluginHookLoadOutcome;
 use crate::loader::configured_curated_plugin_ids_from_codex_home;
 use crate::loader::curated_plugin_cache_version;
 use crate::loader::installed_plugin_telemetry_metadata;
-use crate::loader::load_plugin_app_metadata;
+use crate::loader::load_plugin_apps;
 use crate::loader::load_plugin_hooks;
 use crate::loader::load_plugin_hooks_from_layer_stack;
 use crate::loader::load_plugin_mcp_servers;
@@ -63,6 +64,7 @@ use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
+use codex_plugin::app_connector_ids_from_declarations;
 use codex_plugin::prompt_safe_plugin_description;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
@@ -77,6 +79,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tokio::sync::Semaphore;
+use tracing::instrument;
 use tracing::warn;
 
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
@@ -206,9 +209,19 @@ fn featured_plugin_ids_cache_key(
 
 fn project_plugin_load_outcome_for_auth(
     outcome: PluginLoadOutcome,
-    _auth_mode: Option<AuthMode>,
+    auth_mode: Option<AuthMode>,
 ) -> PluginLoadOutcome {
-    outcome
+    let mut plugins = outcome.plugins().to_vec();
+    for plugin in &mut plugins {
+        let plugin_active = plugin.is_active();
+        apply_app_mcp_routing_policy(
+            &mut plugin.apps,
+            &mut plugin.mcp_servers,
+            auth_mode,
+            plugin_active,
+        );
+    }
+    PluginLoadOutcome::from_plugins(plugins)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -353,12 +366,13 @@ struct PluginLoadCacheKey {
 
 impl PluginsManager {
     pub fn new(codex_home: PathBuf) -> Self {
-        Self::new_with_restriction_product(codex_home, Some(Product::Codex))
+        Self::new_with_options(codex_home, Some(Product::Codex), /*auth_mode*/ None)
     }
 
-    pub fn new_with_restriction_product(
+    pub fn new_with_options(
         codex_home: PathBuf,
         restriction_product: Option<Product>,
+        auth_mode: Option<AuthMode>,
     ) -> Self {
         // Product restrictions are enforced at marketplace admission time for a given CODEX_HOME:
         // listing, install, and curated refresh all consult this restriction context before new
@@ -385,7 +399,7 @@ impl PluginsManager {
                 GlobalRemoteCatalogCacheRefreshState::default(),
             ),
             restriction_product,
-            auth_mode: RwLock::new(None),
+            auth_mode: RwLock::new(auth_mode),
             analytics_events_client: RwLock::new(None),
         }
     }
@@ -432,6 +446,11 @@ impl PluginsManager {
             .await
     }
 
+    #[instrument(
+        level = "trace",
+        skip_all,
+        fields(force_reload, plugins_enabled = config.plugins_enabled)
+    )]
     pub(crate) async fn plugins_for_config_with_force_reload(
         &self,
         config: &PluginsConfigInput,
@@ -1188,6 +1207,7 @@ impl PluginsManager {
         })
     }
 
+    #[instrument(level = "trace", skip_all)]
     pub async fn read_plugin_detail_for_marketplace_plugin(
         &self,
         config: &PluginsConfigInput,
@@ -1292,13 +1312,18 @@ impl PluginsManager {
                 event_name: hook.event_name,
             })
             .collect();
-        let app_metadata = load_plugin_app_metadata(source_path.as_path()).await;
-        let apps = app_metadata.iter().map(|app| app.id.clone()).collect();
-        let app_category_by_id = app_metadata
-            .into_iter()
-            .filter_map(|app| app.category.map(|category| (app.id.0, category)))
-            .collect();
-        let mut mcp_server_names = load_plugin_mcp_servers(source_path.as_path())
+        let app_declarations = load_plugin_apps(source_path.as_path()).await;
+        let apps = app_connector_ids_from_declarations(&app_declarations);
+        let mut seen_app_connector_ids = HashSet::new();
+        let mut app_category_by_id = HashMap::new();
+        for app in &app_declarations {
+            if seen_app_connector_ids.insert(app.connector_id.0.as_str())
+                && let Some(category) = &app.category
+            {
+                app_category_by_id.insert(app.connector_id.0.clone(), category.clone());
+            }
+        }
+        let mut mcp_server_names = load_plugin_mcp_servers(source_path.as_path(), self.auth_mode())
             .await
             .into_keys()
             .collect::<Vec<_>>();

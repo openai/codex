@@ -23,7 +23,7 @@ use crate::tools::handlers::RequestUserInputHandler;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
 use crate::tools::handlers::TestSyncHandler;
-use crate::tools::handlers::ToolSearchHandler;
+use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WriteStdinHandler;
 use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
@@ -59,6 +59,7 @@ use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_mcp::ToolInfo;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -146,6 +147,7 @@ struct CoreToolPlanContext<'a> {
     discoverable_tools: Option<&'a [DiscoverableTool]>,
     extension_tool_executors: &'a [Arc<dyn ToolExecutor<ExtensionToolCall>>],
     dynamic_tools: &'a [DynamicToolSpec],
+    tool_search_handler_cache: &'a ToolSearchHandlerCache,
     default_agent_type_description: &'a str,
     wait_agent_timeouts: WaitAgentTimeoutOptions,
 }
@@ -154,8 +156,10 @@ struct CoreToolPlanContext<'a> {
 pub(crate) fn build_tool_router(
     turn_context: &TurnContext,
     params: ToolRouterParams<'_>,
+    tool_search_handler_cache: &ToolSearchHandlerCache,
 ) -> ToolRouter {
-    let (model_visible_specs, registry) = build_tool_specs_and_registry(turn_context, params);
+    let (model_visible_specs, registry) =
+        build_tool_specs_and_registry(turn_context, params, tool_search_handler_cache);
     ToolRouter::from_parts(registry, model_visible_specs)
 }
 
@@ -163,6 +167,7 @@ pub(crate) fn build_tool_router(
 fn build_tool_specs_and_registry(
     turn_context: &TurnContext,
     params: ToolRouterParams<'_>,
+    tool_search_handler_cache: &ToolSearchHandlerCache,
 ) -> (Vec<ToolSpec>, ToolRegistry) {
     let ToolRouterParams {
         mcp_tools,
@@ -180,6 +185,7 @@ fn build_tool_specs_and_registry(
         discoverable_tools: discoverable_tools.as_deref(),
         extension_tool_executors: &extension_tool_executors,
         dynamic_tools,
+        tool_search_handler_cache,
         default_agent_type_description: &default_agent_type_description,
         wait_agent_timeouts: wait_agent_timeout_options(turn_context),
     };
@@ -643,9 +649,12 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     planned_tools.add(PlanHandler);
 
     if turn_context.config.experimental_request_user_input_enabled {
-        planned_tools.add(RequestUserInputHandler {
-            available_modes: request_user_input_available_modes(features),
-        });
+        planned_tools.add_with_exposure(
+            RequestUserInputHandler {
+                available_modes: request_user_input_available_modes(features),
+            },
+            ToolExposure::DirectModelOnly,
+        );
     }
 
     if features.enabled(Feature::RequestPermissionsTool) {
@@ -654,7 +663,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
 
     if features.enabled(Feature::TokenBudget) {
         planned_tools.add_with_exposure(NewContextWindowHandler, ToolExposure::DirectModelOnly);
-        planned_tools.add_with_exposure(GetContextRemainingHandler, ToolExposure::DirectModelOnly);
+        planned_tools.add(GetContextRemainingHandler);
     }
 
     if tool_suggest_enabled(turn_context)
@@ -810,16 +819,34 @@ fn add_mcp_runtime_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut 
 }
 
 fn add_dynamic_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
-    for tool in context.dynamic_tools {
-        let Some(handler) = DynamicToolHandler::new(tool) else {
-            tracing::error!(
-                "Failed to convert dynamic tool {:?} to OpenAI tool",
-                tool.name
-            );
-            continue;
-        };
-
-        planned_tools.add(handler);
+    for spec in context.dynamic_tools {
+        match spec {
+            DynamicToolSpec::Function(tool) => {
+                let Some(handler) = DynamicToolHandler::new(tool) else {
+                    tracing::error!(
+                        "Failed to convert dynamic tool {:?} to OpenAI tool",
+                        tool.name
+                    );
+                    continue;
+                };
+                planned_tools.add(handler);
+            }
+            DynamicToolSpec::Namespace(namespace) => {
+                for tool in &namespace.tools {
+                    let DynamicToolNamespaceTool::Function(tool) = tool;
+                    let Some(handler) = DynamicToolHandler::new_in_namespace(namespace, tool)
+                    else {
+                        tracing::error!(
+                            "Failed to convert dynamic tool {:?}.{:?} to OpenAI tool",
+                            namespace.name,
+                            tool.name
+                        );
+                        continue;
+                    };
+                    planned_tools.add(handler);
+                }
+            }
+        }
     }
 }
 
@@ -853,7 +880,8 @@ fn append_tool_search_executor(
         return;
     }
 
-    planned_tools.add(ToolSearchHandler::new(search_infos));
+    let handler: PlannedRuntime = context.tool_search_handler_cache.get_or_build(search_infos);
+    planned_tools.add_arc(handler);
 }
 
 fn prepend_code_mode_executors(

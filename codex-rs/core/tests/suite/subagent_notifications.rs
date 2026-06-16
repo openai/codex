@@ -1103,6 +1103,114 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plaintext_multi_agent_v2_completion_sends_agent_message() -> Result<()> {
+    let server = start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": "opaque-encrypted-message",
+        "task_name": "worker",
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-parent-1"),
+            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_completed("resp-parent-1"),
+        ]),
+    )
+    .await;
+    let child_request = mount_response_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, "\"type\":\"agent_message\""),
+        sse_response(sse(vec![
+            ev_response_created("resp-child-1"),
+            ev_assistant_message("msg-child-1", "child done"),
+            ev_completed("resp-child-1"),
+        ]))
+        .set_delay(Duration::from_secs(1)),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, SPAWN_CALL_ID) && !body_contains(req, "<subagent_notification>")
+        },
+        sse(vec![
+            ev_response_created("resp-parent-2"),
+            ev_assistant_message("msg-parent-2", "parent done"),
+            ev_completed("resp-parent-2"),
+        ]),
+    )
+    .await;
+    let notification = "<subagent_notification>\n{\"agent_path\":\"/root/worker\",\"status\":{\"completed\":\"child done\"}}\n</subagent_notification>";
+    // If the child is still running when the parent turn starts, wait_agent blocks
+    // until mailbox delivery. The follow-up request must then contain that delivery.
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, TURN_2_NO_WAIT_PROMPT)
+                && !body_contains(req, "<subagent_notification>")
+        },
+        sse(vec![
+            ev_response_created("resp-parent-3"),
+            ev_function_call("wait-agent-call", "wait_agent", "{}"),
+            ev_completed("resp-parent-3"),
+        ]),
+    )
+    .await;
+    let agent_request = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, TURN_2_NO_WAIT_PROMPT)
+                && body_contains(req, "<subagent_notification>")
+        },
+        sse(vec![
+            ev_response_created("resp-parent-4"),
+            ev_assistant_message("msg-parent-4", "done"),
+            ev_completed("resp-parent-4"),
+        ]),
+    )
+    .await;
+    let test = test_codex()
+        .with_model("koffing")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn(TURN_1_PROMPT).await?;
+    let _ = wait_for_requests(&child_request).await?;
+    test.submit_turn(TURN_2_NO_WAIT_PROMPT).await?;
+
+    let request = wait_for_requests(&agent_request)
+        .await?
+        .pop()
+        .expect("agent message request");
+    assert_eq!(
+        request.inputs_of_type("agent_message"),
+        vec![json!({
+            "type": "agent_message",
+            "author": "/root/worker",
+            "recipient": "/root",
+            "content": [{
+                "type": "input_text",
+                "text": notification,
+            }],
+        })]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn skills_toggle_skips_instructions_for_parent_and_spawned_child() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

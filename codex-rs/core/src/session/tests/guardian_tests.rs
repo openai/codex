@@ -1,6 +1,5 @@
 use super::*;
 use crate::compact::InitialContextInjection;
-use crate::environment_selection::ResolvedTurnEnvironments;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::sandboxing::SandboxPermissions;
@@ -536,6 +535,7 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
                     text: "stale developer message".to_string(),
                 }],
                 phase: None,
+                metadata: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -544,6 +544,7 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
                     text: "summary".to_string(),
                 }],
                 phase: None,
+                metadata: None,
             },
         ],
         InitialContextInjection::BeforeLastUserMessage,
@@ -729,9 +730,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell_override: None,
         parent_trace: None,
-        environment_selections: ResolvedTurnEnvironments {
-            turn_environments: Vec::new(),
-        },
+        environment_selections: Vec::new(),
         thread_extension_init: codex_extension_api::ExtensionDataInit::default(),
         analytics_events_client: None,
         thread_store,

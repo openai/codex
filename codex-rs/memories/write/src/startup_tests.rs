@@ -11,6 +11,7 @@ use codex_git_utils::reset_git_repository;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::ModelProvider;
+use codex_model_provider::ModelProviderFuture;
 use codex_model_provider::ProviderAccountResult;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
@@ -38,10 +39,8 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
-use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::time::Duration;
@@ -616,13 +615,7 @@ impl ModelProvider for MockMemoryModelProvider {
         self.delegate.auth_manager()
     }
 
-    fn auth<'life0, 'async_trait>(
-        &'life0 self,
-    ) -> Pin<Box<dyn Future<Output = Option<CodexAuth>> + Send + 'async_trait>>
-    where
-        'life0: 'async_trait,
-        Self: 'async_trait,
-    {
+    fn auth(&self) -> ModelProviderFuture<'_, Option<CodexAuth>> {
         let delegate = Arc::clone(&self.delegate);
         Box::pin(async move { delegate.auth().await })
     }
@@ -692,6 +685,7 @@ async fn seed_stage1_candidate(
                 text: "remember this startup test conversation".to_string(),
             }],
             phase: None,
+            metadata: None,
         }),
     };
     let jsonl = serde_json::to_string(&line)?;

@@ -23,6 +23,7 @@ use crate::protocol::SandboxPolicy;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::ImageProcessingError;
+use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 
 use crate::mcp::CallToolResult;
@@ -62,22 +63,59 @@ impl SandboxPermissions {
     }
 }
 
-#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, JsonSchema, TS)]
-pub struct FileSystemPermissions {
-    pub entries: Vec<FileSystemSandboxEntry>,
+#[derive(Debug, Clone, Eq, Hash, PartialEq, JsonSchema, TS)]
+pub struct FileSystemPermissions<PathType = AbsolutePathBuf> {
+    pub entries: Vec<FileSystemSandboxEntry<PathType>>,
     pub glob_scan_max_depth: Option<NonZeroUsize>,
 }
 
-pub type LegacyReadWriteRoots = (Option<Vec<AbsolutePathBuf>>, Option<Vec<AbsolutePathBuf>>);
+impl From<FileSystemPermissions<AbsolutePathBuf>> for FileSystemPermissions<PathUri> {
+    fn from(value: FileSystemPermissions<AbsolutePathBuf>) -> Self {
+        FileSystemPermissions {
+            entries: value
+                .entries
+                .into_iter()
+                .map(FileSystemSandboxEntry::<PathUri>::from)
+                .collect(),
+            glob_scan_max_depth: value.glob_scan_max_depth,
+        }
+    }
+}
 
-impl FileSystemPermissions {
+impl TryFrom<FileSystemPermissions<PathUri>> for FileSystemPermissions<AbsolutePathBuf> {
+    type Error = io::Error;
+
+    fn try_from(value: FileSystemPermissions<PathUri>) -> Result<Self, Self::Error> {
+        Ok(FileSystemPermissions {
+            entries: value
+                .entries
+                .into_iter()
+                .map(FileSystemSandboxEntry::<AbsolutePathBuf>::try_from)
+                .collect::<io::Result<_>>()?,
+            glob_scan_max_depth: value.glob_scan_max_depth,
+        })
+    }
+}
+
+impl<PathType> Default for FileSystemPermissions<PathType> {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            glob_scan_max_depth: None,
+        }
+    }
+}
+
+pub type LegacyReadWriteRoots<PathType = AbsolutePathBuf> =
+    (Option<Vec<PathType>>, Option<Vec<PathType>>);
+impl<PathType> FileSystemPermissions<PathType> {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
     pub fn from_read_write_roots(
-        read: Option<Vec<AbsolutePathBuf>>,
-        write: Option<Vec<AbsolutePathBuf>>,
+        read: Option<Vec<PathType>>,
+        write: Option<Vec<PathType>>,
     ) -> Self {
         let mut entries = Vec::new();
         if let Some(read) = read {
@@ -98,21 +136,25 @@ impl FileSystemPermissions {
         }
     }
 
-    pub fn explicit_path_entries(
-        &self,
-    ) -> impl Iterator<Item = (&AbsolutePathBuf, FileSystemAccessMode)> {
+    pub fn explicit_path_entries(&self) -> impl Iterator<Item = (&PathType, FileSystemAccessMode)> {
         self.entries.iter().filter_map(|entry| match &entry.path {
             FileSystemPath::Path { path } => Some((path, entry.access)),
             FileSystemPath::GlobPattern { .. } | FileSystemPath::Special { .. } => None,
         })
     }
 
-    pub fn legacy_read_write_roots(&self) -> Option<LegacyReadWriteRoots> {
+    pub fn legacy_read_write_roots(&self) -> Option<LegacyReadWriteRoots<PathType>>
+    where
+        PathType: Clone,
+    {
         self.as_legacy_permissions()
             .map(|legacy| (legacy.read, legacy.write))
     }
 
-    fn as_legacy_permissions(&self) -> Option<LegacyFileSystemPermissions> {
+    fn as_legacy_permissions(&self) -> Option<LegacyFileSystemPermissions<PathType>>
+    where
+        PathType: Clone,
+    {
         if self.glob_scan_max_depth.is_some() {
             return None;
         }
@@ -140,30 +182,35 @@ impl FileSystemPermissions {
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LegacyFileSystemPermissions {
+#[serde(bound(deserialize = "PathType: Deserialize<'de>"))]
+struct LegacyFileSystemPermissions<PathType = AbsolutePathBuf> {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    read: Option<Vec<AbsolutePathBuf>>,
+    read: Option<Vec<PathType>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    write: Option<Vec<AbsolutePathBuf>>,
+    write: Option<Vec<PathType>>,
 }
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CanonicalFileSystemPermissions {
+#[serde(bound(deserialize = "PathType: Deserialize<'de>"))]
+struct CanonicalFileSystemPermissions<PathType = AbsolutePathBuf> {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    entries: Vec<FileSystemSandboxEntry>,
+    entries: Vec<FileSystemSandboxEntry<PathType>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     glob_scan_max_depth: Option<NonZeroUsize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
-enum FileSystemPermissionsDe {
-    Canonical(CanonicalFileSystemPermissions),
-    Legacy(LegacyFileSystemPermissions),
+enum FileSystemPermissionsDe<PathType = AbsolutePathBuf> {
+    Canonical(CanonicalFileSystemPermissions<PathType>),
+    Legacy(LegacyFileSystemPermissions<PathType>),
 }
 
-impl Serialize for FileSystemPermissions {
+impl<PathType> Serialize for FileSystemPermissions<PathType>
+where
+    PathType: Clone + Serialize,
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -180,7 +227,10 @@ impl Serialize for FileSystemPermissions {
     }
 }
 
-impl<'de> Deserialize<'de> for FileSystemPermissions {
+impl<'de, PathType> Deserialize<'de> for FileSystemPermissions<PathType>
+where
+    PathType: Deserialize<'de>,
+{
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -253,18 +303,62 @@ impl SandboxEnforcement {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(tag = "type")]
-pub enum ManagedFileSystemPermissions {
+pub enum ManagedFileSystemPermissions<PathType = AbsolutePathBuf> {
     /// Apply a managed filesystem sandbox from the listed entries.
     #[serde(rename_all = "snake_case")]
     #[ts(rename_all = "snake_case")]
     Restricted {
-        entries: Vec<FileSystemSandboxEntry>,
+        entries: Vec<FileSystemSandboxEntry<PathType>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         glob_scan_max_depth: Option<NonZeroUsize>,
     },
     /// Apply a managed sandbox that allows all filesystem access.
     Unrestricted,
+}
+
+impl From<ManagedFileSystemPermissions<AbsolutePathBuf>> for ManagedFileSystemPermissions<PathUri> {
+    fn from(value: ManagedFileSystemPermissions<AbsolutePathBuf>) -> Self {
+        match value {
+            ManagedFileSystemPermissions::Restricted {
+                entries,
+                glob_scan_max_depth,
+            } => ManagedFileSystemPermissions::Restricted {
+                entries: entries
+                    .into_iter()
+                    .map(FileSystemSandboxEntry::<PathUri>::from)
+                    .collect(),
+                glob_scan_max_depth,
+            },
+            ManagedFileSystemPermissions::Unrestricted => {
+                ManagedFileSystemPermissions::Unrestricted
+            }
+        }
+    }
+}
+
+impl TryFrom<ManagedFileSystemPermissions<PathUri>>
+    for ManagedFileSystemPermissions<AbsolutePathBuf>
+{
+    type Error = io::Error;
+
+    fn try_from(value: ManagedFileSystemPermissions<PathUri>) -> Result<Self, Self::Error> {
+        Ok(match value {
+            ManagedFileSystemPermissions::Restricted {
+                entries,
+                glob_scan_max_depth,
+            } => ManagedFileSystemPermissions::Restricted {
+                entries: entries
+                    .into_iter()
+                    .map(FileSystemSandboxEntry::<AbsolutePathBuf>::try_from)
+                    .collect::<io::Result<_>>()?,
+                glob_scan_max_depth,
+            },
+            ManagedFileSystemPermissions::Unrestricted => {
+                ManagedFileSystemPermissions::Unrestricted
+            }
+        })
+    }
 }
 
 impl ManagedFileSystemPermissions {
@@ -311,12 +405,12 @@ pub const BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS: &str = ":danger-full-a
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(tag = "type")]
-pub enum PermissionProfile {
+pub enum PermissionProfile<PathType = AbsolutePathBuf> {
     /// Codex owns sandbox construction for this profile.
     #[serde(rename_all = "snake_case")]
     #[ts(rename_all = "snake_case")]
     Managed {
-        file_system: ManagedFileSystemPermissions,
+        file_system: ManagedFileSystemPermissions<PathType>,
         network: NetworkSandboxPolicy,
     },
     /// Do not apply an outer sandbox.
@@ -325,6 +419,40 @@ pub enum PermissionProfile {
     #[serde(rename_all = "snake_case")]
     #[ts(rename_all = "snake_case")]
     External { network: NetworkSandboxPolicy },
+}
+
+impl From<PermissionProfile<AbsolutePathBuf>> for PermissionProfile<PathUri> {
+    fn from(value: PermissionProfile<AbsolutePathBuf>) -> Self {
+        match value {
+            PermissionProfile::Managed {
+                file_system,
+                network,
+            } => PermissionProfile::Managed {
+                file_system: file_system.into(),
+                network,
+            },
+            PermissionProfile::Disabled => PermissionProfile::Disabled,
+            PermissionProfile::External { network } => PermissionProfile::External { network },
+        }
+    }
+}
+
+impl TryFrom<PermissionProfile<PathUri>> for PermissionProfile<AbsolutePathBuf> {
+    type Error = io::Error;
+
+    fn try_from(value: PermissionProfile<PathUri>) -> Result<Self, Self::Error> {
+        Ok(match value {
+            PermissionProfile::Managed {
+                file_system,
+                network,
+            } => PermissionProfile::Managed {
+                file_system: file_system.try_into()?,
+                network,
+            },
+            PermissionProfile::Disabled => PermissionProfile::Disabled,
+            PermissionProfile::External { network } => PermissionProfile::External { network },
+        })
+    }
 }
 
 /// Metadata for the named or implicit built-in permissions profile that
@@ -360,7 +488,7 @@ impl ActivePermissionProfile {
     }
 }
 
-impl Default for PermissionProfile {
+impl<PathType> Default for PermissionProfile<PathType> {
     fn default() -> Self {
         Self::Managed {
             file_system: ManagedFileSystemPermissions::Restricted {
@@ -548,10 +676,10 @@ impl PermissionProfile {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum TaggedPermissionProfile {
+enum TaggedPermissionProfile<PathType = AbsolutePathBuf> {
     #[serde(rename_all = "snake_case")]
     Managed {
-        file_system: ManagedFileSystemPermissions,
+        file_system: ManagedFileSystemPermissions<PathType>,
         network: NetworkSandboxPolicy,
     },
     Disabled,
@@ -561,8 +689,8 @@ enum TaggedPermissionProfile {
     },
 }
 
-impl From<TaggedPermissionProfile> for PermissionProfile {
-    fn from(value: TaggedPermissionProfile) -> Self {
+impl<PathType> From<TaggedPermissionProfile<PathType>> for PermissionProfile<PathType> {
+    fn from(value: TaggedPermissionProfile<PathType>) -> Self {
         match value {
             TaggedPermissionProfile::Managed {
                 file_system,
@@ -581,16 +709,22 @@ impl From<TaggedPermissionProfile> for PermissionProfile {
 /// represented enforcement explicitly.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LegacyPermissionProfile {
+struct LegacyPermissionProfile<PathType = AbsolutePathBuf> {
     network: Option<NetworkPermissions>,
-    file_system: Option<FileSystemPermissions>,
+    file_system: Option<FileSystemPermissions<PathType>>,
 }
 
-impl From<LegacyPermissionProfile> for PermissionProfile {
-    fn from(value: LegacyPermissionProfile) -> Self {
-        let file_system_sandbox_policy = value.file_system.as_ref().map_or_else(
-            || FileSystemSandboxPolicy::restricted(Vec::new()),
-            FileSystemSandboxPolicy::from,
+impl<PathType> From<LegacyPermissionProfile<PathType>> for PermissionProfile<PathType> {
+    fn from(value: LegacyPermissionProfile<PathType>) -> Self {
+        let file_system = value.file_system.map_or_else(
+            || ManagedFileSystemPermissions::Restricted {
+                entries: Vec::new(),
+                glob_scan_max_depth: None,
+            },
+            |permissions| ManagedFileSystemPermissions::Restricted {
+                entries: permissions.entries,
+                glob_scan_max_depth: permissions.glob_scan_max_depth,
+            },
         );
         let network_sandbox_policy = if value
             .network
@@ -602,18 +736,24 @@ impl From<LegacyPermissionProfile> for PermissionProfile {
         } else {
             NetworkSandboxPolicy::Restricted
         };
-        Self::from_runtime_permissions(&file_system_sandbox_policy, network_sandbox_policy)
+        Self::Managed {
+            file_system,
+            network: network_sandbox_policy,
+        }
     }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
-enum PermissionProfileDe {
-    Tagged(TaggedPermissionProfile),
-    Legacy(LegacyPermissionProfile),
+enum PermissionProfileDe<PathType = AbsolutePathBuf> {
+    Tagged(TaggedPermissionProfile<PathType>),
+    Legacy(LegacyPermissionProfile<PathType>),
 }
 
-impl<'de> Deserialize<'de> for PermissionProfile {
+impl<'de, PathType> Deserialize<'de> for PermissionProfile<PathType>
+where
+    PathType: Deserialize<'de>,
+{
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -719,6 +859,7 @@ pub enum ContentItem {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentMessageInputContent {
+    InputText { text: String },
     EncryptedContent { encrypted_content: String },
 }
 
@@ -749,6 +890,13 @@ pub enum MessagePhase {
     FinalAnswer,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct ResponseItemMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub turn_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
@@ -764,11 +912,17 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         phase: Option<MessagePhase>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     AgentMessage {
         author: String,
         recipient: String,
         content: Vec<AgentMessageInputContent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     Reasoning {
         #[serde(default, skip_serializing)]
@@ -780,6 +934,9 @@ pub enum ResponseItem {
         #[ts(optional)]
         content: Option<Vec<ReasoningItemContent>>,
         encrypted_content: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     LocalShellCall {
         /// Legacy id field retained for compatibility with older payloads.
@@ -790,6 +947,9 @@ pub enum ResponseItem {
         call_id: Option<String>,
         status: LocalShellStatus,
         action: LocalShellAction,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     FunctionCall {
         #[serde(default, skip_serializing)]
@@ -804,6 +964,9 @@ pub enum ResponseItem {
         // Session::handle_function_call parse it into a Value.
         arguments: String,
         call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     ToolSearchCall {
         #[serde(default, skip_serializing)]
@@ -816,6 +979,9 @@ pub enum ResponseItem {
         execution: String,
         #[ts(type = "unknown")]
         arguments: serde_json::Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     // NOTE: The `output` field for `function_call_output` uses a dedicated payload type with
     // custom serialization. On the wire it is either:
@@ -827,6 +993,9 @@ pub enum ResponseItem {
         #[ts(as = "FunctionCallOutputBody")]
         #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     CustomToolCall {
         #[serde(default, skip_serializing)]
@@ -839,6 +1008,9 @@ pub enum ResponseItem {
         call_id: String,
         name: String,
         input: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     // `custom_tool_call_output.output` uses the same wire encoding as
     // `function_call_output.output` so freeform tools can return either plain
@@ -851,6 +1023,9 @@ pub enum ResponseItem {
         #[ts(as = "FunctionCallOutputBody")]
         #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     ToolSearchOutput {
         call_id: Option<String>,
@@ -858,6 +1033,9 @@ pub enum ResponseItem {
         execution: String,
         #[ts(type = "unknown[]")]
         tools: Vec<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     // Emitted by the Responses API when the agent triggers a web search.
     // Example payload (from SSE `response.output_item.done`):
@@ -877,6 +1055,9 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         action: Option<WebSearchAction>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     // Emitted by the Responses API when the agent triggers image generation.
     // Example payload:
@@ -894,16 +1075,29 @@ pub enum ResponseItem {
         #[ts(optional)]
         revised_prompt: Option<String>,
         result: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     #[serde(alias = "compaction_summary")]
     Compaction {
         encrypted_content: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
-    CompactionTrigger,
+    CompactionTrigger {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
+    },
     ContextCompaction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         encrypted_content: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     #[serde(other)]
     Other,
@@ -913,6 +1107,75 @@ impl ResponseItem {
     /// Returns whether this item is an ordinary user-role message.
     pub fn is_user_message(&self) -> bool {
         matches!(self, Self::Message { role, .. } if role == "user")
+    }
+
+    /// Returns the non-empty turn ID stamped onto this item, if present.
+    pub fn turn_id(&self) -> Option<&str> {
+        self.metadata()
+            .and_then(|metadata| metadata.turn_id.as_deref())
+            .filter(|turn_id| !turn_id.is_empty())
+    }
+
+    /// Stamps the item with `turn_id` unless it already has a non-empty turn ID.
+    pub fn stamp_turn_id_if_missing(&mut self, turn_id: &str) {
+        if turn_id.is_empty() || self.turn_id().is_some() {
+            return;
+        }
+        let Some(metadata) = self.metadata_mut() else {
+            return;
+        };
+        metadata
+            .get_or_insert_with(ResponseItemMetadata::default)
+            .turn_id = Some(turn_id.to_string());
+    }
+
+    /// Removes Responses API item metadata before sending to a provider that does not accept it.
+    pub fn clear_metadata(&mut self) {
+        if let Some(metadata) = self.metadata_mut() {
+            *metadata = None;
+        }
+    }
+
+    fn metadata(&self) -> Option<&ResponseItemMetadata> {
+        match self {
+            Self::Message { metadata, .. }
+            | Self::AgentMessage { metadata, .. }
+            | Self::Reasoning { metadata, .. }
+            | Self::LocalShellCall { metadata, .. }
+            | Self::FunctionCall { metadata, .. }
+            | Self::ToolSearchCall { metadata, .. }
+            | Self::FunctionCallOutput { metadata, .. }
+            | Self::CustomToolCall { metadata, .. }
+            | Self::CustomToolCallOutput { metadata, .. }
+            | Self::ToolSearchOutput { metadata, .. }
+            | Self::WebSearchCall { metadata, .. }
+            | Self::ImageGenerationCall { metadata, .. }
+            | Self::Compaction { metadata, .. }
+            | Self::CompactionTrigger { metadata }
+            | Self::ContextCompaction { metadata, .. } => metadata.as_ref(),
+            Self::Other => None,
+        }
+    }
+
+    fn metadata_mut(&mut self) -> Option<&mut Option<ResponseItemMetadata>> {
+        match self {
+            Self::Message { metadata, .. }
+            | Self::AgentMessage { metadata, .. }
+            | Self::Reasoning { metadata, .. }
+            | Self::LocalShellCall { metadata, .. }
+            | Self::FunctionCall { metadata, .. }
+            | Self::ToolSearchCall { metadata, .. }
+            | Self::FunctionCallOutput { metadata, .. }
+            | Self::CustomToolCall { metadata, .. }
+            | Self::CustomToolCallOutput { metadata, .. }
+            | Self::ToolSearchOutput { metadata, .. }
+            | Self::WebSearchCall { metadata, .. }
+            | Self::ImageGenerationCall { metadata, .. }
+            | Self::Compaction { metadata, .. }
+            | Self::CompactionTrigger { metadata }
+            | Self::ContextCompaction { metadata, .. } => Some(metadata),
+            Self::Other => None,
+        }
     }
 }
 
@@ -1152,13 +1415,20 @@ impl From<ResponseInputItem> for ResponseItem {
                 content,
                 id: None,
                 phase,
+                metadata: None,
             },
-            ResponseInputItem::FunctionCallOutput { call_id, output } => {
-                Self::FunctionCallOutput { call_id, output }
-            }
+            ResponseInputItem::FunctionCallOutput { call_id, output } => Self::FunctionCallOutput {
+                call_id,
+                output,
+                metadata: None,
+            },
             ResponseInputItem::McpToolCallOutput { call_id, output } => {
                 let output = output.into_function_call_output_payload();
-                Self::FunctionCallOutput { call_id, output }
+                Self::FunctionCallOutput {
+                    call_id,
+                    output,
+                    metadata: None,
+                }
             }
             ResponseInputItem::CustomToolCallOutput {
                 call_id,
@@ -1168,6 +1438,7 @@ impl From<ResponseInputItem> for ResponseItem {
                 call_id,
                 name,
                 output,
+                metadata: None,
             },
             ResponseInputItem::ToolSearchOutput {
                 call_id,
@@ -1179,6 +1450,7 @@ impl From<ResponseInputItem> for ResponseItem {
                 status,
                 execution,
                 tools,
+                metadata: None,
             },
         }
     }
@@ -1717,8 +1989,62 @@ mod tests {
                     text: "still working".to_string(),
                 }],
                 phase: Some(MessagePhase::Commentary),
+                metadata: None,
             }
         );
+    }
+
+    #[test]
+    fn response_item_metadata_round_trips_and_stamps_turn_ids() -> Result<()> {
+        let mut item = response_item_with_metadata(Some(response_item_metadata("turn-1")));
+        let round_trip: ResponseItem = serde_json::from_value(serde_json::to_value(&item)?)?;
+        assert_eq!(round_trip, item);
+
+        let unknown_metadata: ResponseItem = serde_json::from_value(serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hello"}],
+            "metadata": {
+                "turn_id": "turn-1",
+                "other": "ignored",
+            },
+        }))?;
+        assert_eq!(unknown_metadata, item);
+
+        item.stamp_turn_id_if_missing("turn-2");
+        assert_eq!(item.turn_id(), Some("turn-1"));
+
+        let mut empty_turn_id = response_item_with_metadata(Some(response_item_metadata("")));
+        empty_turn_id.stamp_turn_id_if_missing("turn-1");
+        assert_eq!(empty_turn_id.turn_id(), Some("turn-1"));
+
+        let mut missing_turn_id = response_item_with_metadata(/*metadata*/ None);
+        missing_turn_id.stamp_turn_id_if_missing("");
+        missing_turn_id.stamp_turn_id_if_missing("turn-1");
+        assert_eq!(missing_turn_id.turn_id(), Some("turn-1"));
+
+        let mut other = ResponseItem::Other;
+        other.stamp_turn_id_if_missing("turn-1");
+        assert_eq!(other.turn_id(), None);
+        Ok(())
+    }
+
+    fn response_item_with_metadata(metadata: Option<ResponseItemMetadata>) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hello".to_string(),
+            }],
+            phase: None,
+            metadata,
+        }
+    }
+
+    fn response_item_metadata(turn_id: &str) -> ResponseItemMetadata {
+        ResponseItemMetadata {
+            turn_id: Some(turn_id.to_string()),
+        }
     }
 
     #[test]
@@ -1822,6 +2148,7 @@ mod tests {
                 status: "completed".to_string(),
                 revised_prompt: Some("A small blue square".to_string()),
                 result: "Zm9v".to_string(),
+                metadata: None,
             }
         );
     }
@@ -1843,6 +2170,7 @@ mod tests {
                 status: "completed".to_string(),
                 revised_prompt: None,
                 result: "Zm9v".to_string(),
+                metadata: None,
             }
         );
     }
@@ -2194,6 +2522,7 @@ mod tests {
                 namespace: Some("mcp__codex_apps__gmail".to_string()),
                 arguments: "{\"top_k\":5}".to_string(),
                 call_id: "call-1".to_string(),
+                metadata: None,
             }
         );
     }
@@ -2540,6 +2869,7 @@ mod tests {
             item,
             ResponseItem::Compaction {
                 encrypted_content: "abc".into(),
+                metadata: None,
             }
         );
         Ok(())
@@ -2555,6 +2885,7 @@ mod tests {
             item,
             ResponseItem::ContextCompaction {
                 encrypted_content: Some("abc".into()),
+                metadata: None,
             }
         );
         Ok(())
@@ -2562,7 +2893,7 @@ mod tests {
 
     #[test]
     fn serializes_compaction_trigger_without_payload() -> Result<()> {
-        let item = ResponseItem::CompactionTrigger;
+        let item = ResponseItem::CompactionTrigger { metadata: None };
 
         assert_eq!(
             serde_json::to_value(item)?,
@@ -2574,12 +2905,29 @@ mod tests {
     }
 
     #[test]
+    fn serializes_stamped_compaction_trigger_metadata() -> Result<()> {
+        let mut item = ResponseItem::CompactionTrigger { metadata: None };
+        item.stamp_turn_id_if_missing("turn-1");
+
+        assert_eq!(
+            serde_json::to_value(item)?,
+            serde_json::json!({
+                "type": "compaction_trigger",
+                "metadata": {
+                    "turn_id": "turn-1",
+                },
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
     fn deserializes_compaction_trigger_without_payload() -> Result<()> {
         let json = r#"{"type":"compaction_trigger"}"#;
 
         let item: ResponseItem = serde_json::from_str(json)?;
 
-        assert_eq!(item, ResponseItem::CompactionTrigger);
+        assert_eq!(item, ResponseItem::CompactionTrigger { metadata: None });
         Ok(())
     }
 
@@ -2676,6 +3024,7 @@ mod tests {
                 id: expected_id.clone(),
                 status: expected_status.clone(),
                 action: expected_action.clone(),
+                metadata: None,
             };
             assert_eq!(parsed, expected);
 
@@ -2763,6 +3112,7 @@ mod tests {
                     "query": "calendar create",
                     "limit": 1,
                 }),
+                metadata: None,
             }
         );
 
@@ -2823,6 +3173,7 @@ mod tests {
                         "additionalProperties": false,
                     }
                 })],
+                metadata: None,
             }
         );
 
@@ -2876,6 +3227,7 @@ mod tests {
                 arguments: serde_json::json!({
                     "paths": ["crm"],
                 }),
+                metadata: None,
             }
         );
 
@@ -2895,6 +3247,7 @@ mod tests {
                 status: "completed".to_string(),
                 execution: "server".to_string(),
                 tools: vec![],
+                metadata: None,
             }
         );
 
