@@ -198,11 +198,7 @@ impl PathUri {
         Some(Self(url))
     }
 
-    /// Lexically joins a relative path onto this URI.
-    ///
-    /// `/` separates components for every base URI. When the base URI is
-    /// inferred to use the Windows path convention, `\` is also treated as a
-    /// separator. A leading separator is rejected as an absolute path.
+    /// Lexically joins a relative URI path onto this URI.
     ///
     /// Empty and `.` segments are ignored, while `..` removes one segment
     /// without escaping the URI root. Literal `%`, `?`, and `#` characters are
@@ -211,18 +207,7 @@ impl PathUri {
     /// Opaque fallback URIs created by [`Self::from_abs_path`] reject non-empty
     /// joins.
     pub fn join(&self, path: &str) -> Result<Self, PathUriParseError> {
-        let uses_windows_path_convention =
-            self.infer_path_convention() == Some(PathConvention::Windows);
-        let starts_with_root_separator = path.chars().next().is_some_and(|character| {
-            if uses_windows_path_convention {
-                matches!(character, '/' | '\\')
-            } else {
-                character == '/'
-            }
-        });
-        let has_windows_drive_prefix = uses_windows_path_convention
-            && matches!(path.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic());
-        if starts_with_root_separator || has_windows_drive_prefix {
+        if path.starts_with('/') {
             return Err(PathUriParseError::JoinPathMustBeRelative(path.to_string()));
         }
         if path.contains('\0') {
@@ -245,14 +230,7 @@ impl PathUri {
                 unreachable!("validated file URLs support hierarchical path segments");
             };
             segments.pop_if_empty();
-            let is_separator = |character| {
-                if uses_windows_path_convention {
-                    matches!(character, '/' | '\\')
-                } else {
-                    character == '/'
-                }
-            };
-            for component in path.split(is_separator) {
+            for component in path.split('/') {
                 match component {
                     "" | "." => {}
                     ".." => {
@@ -397,12 +375,6 @@ impl FromStr for PathUri {
 
     fn from_str(uri: &str) -> Result<Self, Self::Err> {
         Self::parse(uri)
-    }
-}
-
-impl From<AbsolutePathBuf> for PathUri {
-    fn from(path: AbsolutePathBuf) -> Self {
-        Self::from_abs_path(&path)
     }
 }
 

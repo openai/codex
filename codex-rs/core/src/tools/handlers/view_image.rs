@@ -11,7 +11,6 @@ use codex_protocol::openai_models::InputModality;
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::data_url_from_bytes;
 use codex_utils_image::load_for_prompt_bytes;
-use codex_utils_path_uri::ApiPathString;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
@@ -28,6 +27,7 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use codex_utils_path_uri::PathUri;
 
 pub struct ViewImageHandler {
     options: ViewImageToolOptions,
@@ -55,7 +55,7 @@ const VIEW_IMAGE_UNSUPPORTED_MESSAGE: &str =
 
 #[derive(Deserialize)]
 struct ViewImageArgs {
-    path: ApiPathString,
+    path: String,
     #[serde(default)]
     environment_id: Option<String>,
     detail: Option<String>,
@@ -143,40 +143,36 @@ impl ViewImageHandler {
                 "view_image is unavailable in this session".to_string(),
             ));
         };
-        // Image paths may be absolute using the selected environment's native syntax or relative
-        // to its cwd. Resolve either form to a PathUri without parsing it as a Codex-host path.
-        let path_uri = match path.infer_absolute_path_convention() {
-            Some(convention) => path.to_path_uri(convention).map_err(|err| err.to_string()),
-            None => turn_environment
-                .cwd()
-                .join(path.as_str())
-                .map_err(|err| err.to_string()),
-        }
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("invalid image path `{path}`: {err}"))
+        // TODO(anp): Resolve tool paths using the selected environment's native path convention
+        // so view_image can support relative paths in foreign environments.
+        let cwd = turn_environment.cwd().to_abs_path().map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "environment cwd `{}` is not native to the Codex host: {err}",
+                turn_environment.cwd()
+            ))
         })?;
-        // Preserve the existing native error spelling for local paths while still rendering a
-        // meaningful URI when the selected environment path is foreign to the Codex host.
-        let display_path = path_uri
-            .to_abs_path()
-            .map_or_else(|_| path_uri.to_string(), |path| path.display().to_string());
+        let abs_path = cwd.join(path);
         let sandbox = turn.file_system_sandbox_context(
             /*additional_permissions*/ None,
             turn_environment.cwd(),
         );
         let fs = turn_environment.environment.get_filesystem();
+        let path_uri = PathUri::from_abs_path(&abs_path);
+
         let metadata = fs
             .get_metadata(&path_uri, Some(&sandbox))
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(
-                    "unable to locate image at `{display_path}`: {error}"
+                    "unable to locate image at `{}`: {error}",
+                    abs_path.display()
                 ))
             })?;
 
         if !metadata.is_file {
             return Err(FunctionCallError::RespondToModel(format!(
-                "image path `{display_path}` is not a file"
+                "image path `{}` is not a file",
+                abs_path.display()
             )));
         }
         let file_bytes = fs
@@ -184,17 +180,11 @@ impl ViewImageHandler {
             .await
             .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(
-                    "unable to read image at `{display_path}`: {error}"
+                    "unable to read image at `{}`: {error}",
+                    abs_path.display()
                 ))
             })?;
-        // TODO(anp): Migrate image-view events and image decoding hints to PathUri so foreign
-        // environment paths do not require a host-native projection after remote file reads.
-        let native_path = path_uri.to_abs_path().map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "image path `{path_uri}` is not native to the Codex host: {err}"
-            ))
-        })?;
-        let event_path = native_path.clone();
+        let event_path = abs_path.clone();
 
         let can_request_original_detail = can_request_original_image_detail(&turn.model_info);
         let use_original_detail =
@@ -214,11 +204,11 @@ impl ViewImageHandler {
             } else {
                 PromptImageMode::ResizeToFit
             };
-            load_for_prompt_bytes(native_path.as_path(), file_bytes, image_mode)
+            load_for_prompt_bytes(abs_path.as_path(), file_bytes, image_mode)
                 .map_err(|error| {
                     FunctionCallError::RespondToModel(format!(
                         "unable to process image at `{}`: {error}",
-                        native_path.display()
+                        abs_path.display()
                     ))
                 })?
                 .into_data_url()

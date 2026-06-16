@@ -1,6 +1,5 @@
 use super::*;
 use crate::unified_exec::clamp_yield_time;
-use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -73,14 +72,13 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
         .expect("current dir")
         .try_into()
         .expect("absolute path");
-    let command_cwd = PathUri::parse("file://server/share/workspace").expect("valid UNC path URI");
     let file_system_sandbox_policy =
         codex_protocol::permissions::FileSystemSandboxPolicy::unrestricted();
     let network_sandbox_policy = codex_protocol::permissions::NetworkSandboxPolicy::Restricted;
     let permission_profile = codex_protocol::models::PermissionProfile::Disabled;
     let request = ExecRequest {
         command: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
-        cwd: command_cwd.clone(),
+        cwd: cwd.clone(),
         env: HashMap::from([
             ("HOME".to_string(), "/client-home".to_string()),
             ("PATH".to_string(), "/sandbox-path".to_string()),
@@ -118,7 +116,7 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
         exec_server_params_for_request(/*process_id*/ 123, &request, /*tty*/ true);
 
     assert_eq!(params.process_id.as_str(), "123");
-    assert_eq!(params.cwd, command_cwd);
+    assert_eq!(params.cwd, PathUri::from_abs_path(&request.cwd));
     assert!(params.env_policy.is_some());
     assert_eq!(
         params.env,
@@ -202,7 +200,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         yield_time_ms: 1000,
         max_output_tokens: None,
         #[allow(deprecated)]
-        cwd: PathUri::from_abs_path(&turn.cwd),
+        cwd: turn.cwd.clone(),
         #[allow(deprecated)]
         sandbox_cwd: turn.cwd.clone(),
         turn_environment: turn

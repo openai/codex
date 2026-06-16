@@ -10,7 +10,6 @@ use crate::tools::registry::PostToolUsePayload;
 use codex_exec_server::Environment;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_tools::UnifiedExecShellMode;
-use codex_utils_path_uri::ApiPathString;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -55,7 +54,7 @@ struct ExecCommandEnvironmentArgs {
     // Keep this raw until after environment selection; relative paths must be
     // resolved against the selected environment cwd, not the process cwd.
     #[serde(default)]
-    workdir: Option<ApiPathString>,
+    workdir: Option<String>,
 }
 
 fn default_exec_yield_time_ms() -> u64 {

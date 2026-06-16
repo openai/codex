@@ -133,7 +133,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         &'a mut self,
         req: &'a ApplyPatchRequest,
         ctx: ApprovalCtx<'a>,
-    ) -> BoxFuture<'a, Result<ReviewDecision, ToolError>> {
+    ) -> BoxFuture<'a, ReviewDecision> {
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
@@ -144,12 +144,11 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         Box::pin(async move {
             if let Some(review_id) = guardian_review_id {
                 let action = ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id);
-                return Ok(
-                    review_approval_request(session, turn, review_id, action, retry_reason).await,
-                );
+                return review_approval_request(session, turn, review_id, action, retry_reason)
+                    .await;
             }
             if req.permissions_preapproved && retry_reason.is_none() {
-                return Ok(ReviewDecision::Approved);
+                return ReviewDecision::Approved;
             }
             if let Some(reason) = retry_reason {
                 let rx_approve = session
@@ -161,10 +160,10 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                         /*grant_root*/ None,
                     )
                     .await;
-                return Ok(rx_approve.await.unwrap_or_default());
+                return rx_approve.await.unwrap_or_default();
             }
 
-            Ok(with_cached_approval(
+            with_cached_approval(
                 &session.services,
                 "apply_patch",
                 approval_keys,
@@ -177,7 +176,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                     rx_approve.await.unwrap_or_default()
                 },
             )
-            .await)
+            .await
         })
     }
 

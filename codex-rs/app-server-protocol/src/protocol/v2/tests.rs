@@ -3729,7 +3729,7 @@ fn turn_start_params_round_trip_environments() {
     let raw_cwd = "/workspace";
     #[cfg(not(windows))]
     let raw_cwd = r"C:\workspace";
-    let cwd: ApiPathString =
+    let cwd: LegacyAppPathString =
         serde_json::from_value(json!(raw_cwd)).expect("API path should deserialize");
     let params: TurnStartParams = serde_json::from_value(json!({
         "threadId": "thread_123",

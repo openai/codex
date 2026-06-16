@@ -4,18 +4,10 @@ use anyhow::Context;
 use anyhow::Result;
 use app_test_support::PathBufExt;
 use app_test_support::TestAppServer;
-use app_test_support::create_mock_responses_server_sequence;
+use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
-use codex_app_server_protocol::AskForApproval as AppAskForApproval;
-use codex_app_server_protocol::CommandAction;
-use codex_app_server_protocol::CommandExecutionStatus;
-use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::SandboxPolicy;
-use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnEnvironmentParams;
@@ -24,9 +16,6 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
-use codex_exec_server::ExecServerClient;
-use codex_exec_server::FsWriteFileParams;
-use codex_exec_server::RemoteExecServerConnectArgs;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -46,7 +35,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
-use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -185,56 +174,14 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Result<()> {
-    const AGENTS_INSTRUCTIONS: &str = "remote Windows workspace instructions";
-    const CALL_ID: &str = "wine-cmd-smoke";
-    const COMMAND: &str = "Get-Content AGENTS.md -ErrorAction Stop";
-
     WineExecServer
         .scope(|exec_server_url| async move {
-            let exec_server_client = ExecServerClient::connect_websocket(
-                RemoteExecServerConnectArgs {
-                    websocket_url: exec_server_url.clone(),
-                    client_name: "remote-env-windows-test".to_string(),
-                    connect_timeout: APP_SERVER_READ_TIMEOUT,
-                    initialize_timeout: APP_SERVER_READ_TIMEOUT,
-                    resume_session_id: None,
-                },
-            )
-            .await?;
-            exec_server_client
-                .fs_write_file(FsWriteFileParams {
-                    path: PathUri::parse("file:///C:/windows/AGENTS.md")?,
-                    data_base64: STANDARD.encode(AGENTS_INSTRUCTIONS),
-                    sandbox: None,
-                })
-                .await?;
-
             let codex_home = TempDir::new()?;
-            let responses = vec![
-                sse(vec![
-                    ev_response_created("resp-1"),
-                    ev_function_call(
-                        CALL_ID,
-                        "exec_command",
-                        &serde_json::to_string(&json!({
-                            "cmd": COMMAND,
-                            "login": false,
-                            "yield_time_ms": 5_000,
-                        }))?,
-                    ),
-                    ev_completed("resp-1"),
-                ]),
-                sse(vec![
-                    ev_response_created("resp-2"),
-                    ev_assistant_message("msg-1", "done"),
-                    ev_completed("resp-2"),
-                ]),
-            ];
-            let server = create_mock_responses_server_sequence(responses).await;
+            let server = create_mock_responses_server_repeating_assistant("done").await;
             write_mock_responses_config_toml(
                 codex_home.path(),
                 &server.uri(),
-                &BTreeMap::from([(Feature::UnifiedExec, true)]),
+                &BTreeMap::new(),
                 100_000,
                 /*requires_openai_auth*/ None,
                 "mock",
@@ -254,7 +201,7 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
                 .send_thread_start_request(ThreadStartParams {
                     environments: Some(vec![TurnEnvironmentParams {
                         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                        cwd: serde_json::from_value::<ApiPathString>(json!(r"C:\windows"))?,
+                        cwd: serde_json::from_value::<LegacyAppPathString>(json!(r"C:\windows"))?,
                     }]),
                     ..Default::default()
                 })
@@ -281,11 +228,9 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
                     thread_id: response.thread.id,
                     client_user_message_id: None,
                     input: vec![V2UserInput::Text {
-                        text: "run the Windows smoke command".to_string(),
+                        text: "say done".to_string(),
                         text_elements: Vec::new(),
                     }],
-                    approval_policy: Some(AppAskForApproval::Never),
-                    sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
                     ..Default::default()
                 })
                 .await?;
@@ -295,57 +240,11 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
             )
             .await??;
             let _: TurnStartResponse = to_response(turn_response)?;
-
-            let completed = timeout(APP_SERVER_READ_TIMEOUT, async {
-                loop {
-                    let notification = app_server
-                        .read_stream_until_notification_message("item/completed")
-                        .await?;
-                    let completed: ItemCompletedNotification = serde_json::from_value(
-                        notification.params.context("item/completed params")?,
-                    )?;
-                    if matches!(completed.item, ThreadItem::CommandExecution { .. }) {
-                        return Ok::<ThreadItem, anyhow::Error>(completed.item);
-                    }
-                }
-            })
-            .await??;
-            let ThreadItem::CommandExecution {
-                command_actions,
-                cwd,
-                id,
-                status,
-                exit_code,
-                ..
-            } = completed
-            else {
-                unreachable!("loop returns only command execution items");
-            };
-            assert_eq!(id, CALL_ID);
-            // TODO(anp): Make command execution cwd a PathUri so this stays `C:\windows`.
-            assert_eq!(cwd, std::path::PathBuf::from("/C:/windows").abs());
-            // TODO(anp): Parse command actions using the selected environment's path convention so
-            // their paths remain Windows-native instead of degrading the action to Unknown.
-            assert_eq!(command_actions.len(), 1);
-            assert!(matches!(command_actions[0], CommandAction::Unknown { .. }));
-            assert_eq!((status, exit_code), (CommandExecutionStatus::Completed, Some(0)));
             timeout(
                 APP_SERVER_READ_TIMEOUT,
                 app_server.read_stream_until_notification_message("turn/completed"),
             )
             .await??;
-
-            let requests = server
-                .received_requests()
-                .await
-                .context("failed to fetch received requests")?;
-            let initial_request = requests.first().context("missing initial model request")?;
-            let model_request_includes_remote_instructions = initial_request
-                .body_json::<serde_json::Value>()?
-                .to_string()
-                .contains(AGENTS_INSTRUCTIONS);
-            // TODO(anp): Load remote workspace instructions into the model context.
-            assert!(!model_request_includes_remote_instructions);
 
             Ok(())
         })

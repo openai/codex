@@ -57,6 +57,7 @@ use codex_protocol::protocol::ExecCommandSource;
 use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
+use codex_utils_path_uri::PathUri;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
     ("NO_COLOR", "1"),
@@ -156,7 +157,7 @@ fn exec_server_params_for_request(
     codex_exec_server::ExecParams {
         process_id: exec_server_process_id(process_id).into(),
         argv: request.command.clone(),
-        cwd: request.cwd.clone(),
+        cwd: PathUri::from_abs_path(&request.cwd),
         env_policy,
         env,
         tty,
@@ -384,15 +385,10 @@ impl UnifiedExecProcessManager {
         request: ExecCommandRequest,
         context: &UnifiedExecContext,
     ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
-        // TODO(anp): Migrate unified-exec events and retained process metadata to PathUri so
-        // foreign working directories do not need a host-native projection here.
-        let event_cwd = request.cwd.to_abs_path().map_err(|err| {
-            UnifiedExecError::create_process(format!(
-                "command cwd `{}` is not native to the Codex host: {err}",
-                request.cwd
-            ))
-        })?;
-        let process = self.open_session_with_sandbox(&request, context).await;
+        let cwd = request.cwd.clone();
+        let process = self
+            .open_session_with_sandbox(&request, cwd.clone(), context)
+            .await;
 
         let (process, mut deferred_network_approval) = match process {
             Ok((process, deferred_network_approval)) => {
@@ -420,7 +416,7 @@ impl UnifiedExecProcessManager {
         );
         let emitter = ToolEmitter::unified_exec(
             &request.command,
-            event_cwd.clone(),
+            cwd.clone(),
             ExecCommandSource::UnifiedExecStartup,
             Some(request.process_id.to_string()),
         );
@@ -438,7 +434,7 @@ impl UnifiedExecProcessManager {
                 context,
                 &request.command,
                 request.hook_command.clone(),
-                event_cwd.clone(),
+                cwd.clone(),
                 start,
                 request.process_id,
                 request.tty,
@@ -497,7 +493,7 @@ impl UnifiedExecProcessManager {
                 process_started_alive,
                 context,
                 &request,
-                event_cwd.clone(),
+                cwd.clone(),
                 Arc::clone(&transcript),
                 text.clone(),
                 message.clone(),
@@ -517,7 +513,7 @@ impl UnifiedExecProcessManager {
                 process_started_alive,
                 context,
                 &request,
-                event_cwd.clone(),
+                cwd.clone(),
                 Arc::clone(&transcript),
                 text.clone(),
                 message.clone(),
@@ -569,7 +565,7 @@ impl UnifiedExecProcessManager {
                     process_started_alive,
                     context,
                     &request,
-                    event_cwd.clone(),
+                    cwd.clone(),
                     Arc::clone(&transcript),
                     text.clone(),
                     message.clone(),
@@ -586,7 +582,7 @@ impl UnifiedExecProcessManager {
                 Arc::clone(&context.turn),
                 context.call_id.clone(),
                 request.command.clone(),
-                event_cwd.clone(),
+                cwd.clone(),
                 Some(process_id.to_string()),
                 Arc::clone(&transcript),
                 text.clone(),
@@ -903,12 +899,6 @@ impl UnifiedExecProcessManager {
 
         #[cfg(target_os = "windows")]
         if request.sandbox == codex_sandboxing::SandboxType::WindowsRestrictedToken {
-            let native_cwd = request.cwd.to_abs_path().map_err(|err| {
-                UnifiedExecError::create_process(format!(
-                    "failed to convert command cwd `{}` for Windows sandbox execution: {err}",
-                    request.cwd
-                ))
-            })?;
             let codex_home = crate::config::find_codex_home().map_err(|err| {
                 UnifiedExecError::create_process(format!(
                     "windows sandbox: failed to resolve codex_home: {err}"
@@ -943,7 +933,7 @@ impl UnifiedExecProcessManager {
                         request.windows_sandbox_workspace_roots.as_slice(),
                         codex_home.as_ref(),
                         request.command.clone(),
-                        native_cwd.as_path(),
+                        request.cwd.as_path(),
                         request.env.clone(),
                         request.network.is_some(),
                         None,
@@ -965,7 +955,7 @@ impl UnifiedExecProcessManager {
                         request.windows_sandbox_workspace_roots.as_slice(),
                         codex_home.as_ref(),
                         request.command.clone(),
-                        native_cwd.as_path(),
+                        request.cwd.as_path(),
                         request.env.clone(),
                         None,
                         &additional_deny_read_paths,
@@ -1005,17 +995,11 @@ impl UnifiedExecProcessManager {
             .command
             .split_first()
             .ok_or(UnifiedExecError::MissingCommandLine)?;
-        let native_cwd = request.cwd.to_abs_path().map_err(|err| {
-            UnifiedExecError::create_process(format!(
-                "failed to convert command cwd `{}` for local execution: {err}",
-                request.cwd
-            ))
-        })?;
         let spawn_result = if tty {
             codex_utils_pty::pty::spawn_process_with_inherited_fds(
                 program,
                 args,
-                native_cwd.as_path(),
+                request.cwd.as_path(),
                 &request.env,
                 &request.arg0,
                 codex_utils_pty::TerminalSize::default(),
@@ -1026,7 +1010,7 @@ impl UnifiedExecProcessManager {
             codex_utils_pty::pipe::spawn_process_no_stdin_with_inherited_fds(
                 program,
                 args,
-                native_cwd.as_path(),
+                request.cwd.as_path(),
                 &request.env,
                 &request.arg0,
                 &inherited_fds,
@@ -1042,6 +1026,7 @@ impl UnifiedExecProcessManager {
     pub(super) async fn open_session_with_sandbox(
         &self,
         request: &ExecCommandRequest,
+        cwd: AbsolutePathBuf,
         context: &UnifiedExecContext,
     ) -> Result<(UnifiedExecProcess, Option<DeferredNetworkApproval>), UnifiedExecError> {
         let local_policy_env = create_env(
@@ -1082,7 +1067,7 @@ impl UnifiedExecProcessManager {
             shell_type: request.shell_type,
             hook_command: request.hook_command.clone(),
             process_id: request.process_id,
-            cwd: request.cwd.clone(),
+            cwd,
             sandbox_cwd: request.sandbox_cwd.clone(),
             turn_environment: request.turn_environment.clone(),
             env,

@@ -25,7 +25,6 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -43,7 +42,7 @@ pub(crate) struct ExecServerEnvConfig {
 #[derive(Debug)]
 pub struct ExecRequest {
     pub command: Vec<String>,
-    pub cwd: PathUri,
+    pub cwd: AbsolutePathBuf,
     pub env: HashMap<String, String>,
     pub(crate) exec_server_env_config: Option<ExecServerEnvConfig>,
     pub network: Option<NetworkProxy>,
@@ -78,7 +77,6 @@ impl ExecRequest {
         arg0: Option<String>,
     ) -> Self {
         let windows_sandbox_policy_cwd = cwd.clone();
-        let cwd = PathUri::from_abs_path(&cwd);
         let (file_system_sandbox_policy, network_sandbox_policy) =
             permission_profile.to_runtime_permissions();
         Self {
@@ -137,7 +135,7 @@ impl ExecRequest {
         }
         Self {
             command,
-            cwd: PathUri::from_abs_path(&cwd),
+            cwd,
             env,
             exec_server_env_config: None,
             network,

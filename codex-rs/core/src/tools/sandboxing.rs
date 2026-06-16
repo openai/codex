@@ -366,7 +366,7 @@ pub(crate) trait Approvable<Req> {
         &'a mut self,
         req: &'a Req,
         ctx: ApprovalCtx<'a>,
-    ) -> BoxFuture<'a, Result<ReviewDecision, ToolError>>;
+    ) -> BoxFuture<'a, ReviewDecision>;
 }
 
 pub(crate) trait Sandboxable {

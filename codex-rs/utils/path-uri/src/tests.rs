@@ -482,24 +482,9 @@ fn join_normalizes_relative_uri_segments() {
         ("file:///", "../../etc", "file:///etc"),
         ("file:///C:/Users", "../Windows", "file:///C:/Windows"),
         (
-            "file:///C:/Users/Alice",
-            r"..\Bob\source",
-            "file:///C:/Users/Bob/source",
-        ),
-        (
             "file://server/share/src",
             "../tests",
             "file://server/share/tests",
-        ),
-        (
-            "file://server/share/src",
-            r"..\tests",
-            "file://server/share/tests",
-        ),
-        (
-            "file:///workspace",
-            r"src\main.rs",
-            "file:///workspace/src%5Cmain.rs",
         ),
         (
             "file:///workspace",
@@ -517,7 +502,6 @@ fn join_normalizes_relative_uri_segments() {
 #[test]
 fn join_rejects_absolute_and_null_paths() {
     let base = PathUri::parse("file:///workspace").expect("valid base URI");
-    let windows_base = PathUri::parse("file:///C:/workspace").expect("valid base URI");
 
     assert!(matches!(
         base.join("/src"),
@@ -529,16 +513,6 @@ fn join_rejects_absolute_and_null_paths() {
             path: "src\0file".to_string(),
         })
     );
-    assert!(matches!(
-        windows_base.join(r"\src"),
-        Err(PathUriParseError::JoinPathMustBeRelative(path)) if path == r"\src"
-    ));
-    for path in [r"C:\src", "C:src"] {
-        assert!(matches!(
-            windows_base.join(path),
-            Err(PathUriParseError::JoinPathMustBeRelative(rejected)) if rejected == path
-        ));
-    }
 }
 
 #[test]

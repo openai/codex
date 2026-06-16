@@ -461,7 +461,6 @@ pub(crate) async fn execute_exec_request(
         windows_sandbox_filesystem_overrides,
         arg0,
     } = exec_request;
-    let cwd = cwd.to_abs_path()?;
 
     let params = ExecParams {
         command,

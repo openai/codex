@@ -47,7 +47,6 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
@@ -139,7 +138,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         &'a mut self,
         req: &'a ShellRequest,
         ctx: ApprovalCtx<'a>,
-    ) -> BoxFuture<'a, Result<ReviewDecision, ToolError>> {
+    ) -> BoxFuture<'a, ReviewDecision> {
         let keys = self.approval_keys(req);
         let command = req.command.clone();
         let cwd = req.cwd.clone();
@@ -151,7 +150,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let guardian_review_id = ctx.guardian_review_id.clone();
         Box::pin(async move {
             if let Some(review_id) = guardian_review_id {
-                return Ok(review_approval_request(
+                return review_approval_request(
                     session,
                     turn,
                     review_id,
@@ -165,30 +164,28 @@ impl Approvable<ShellRequest> for ShellRuntime {
                     },
                     retry_reason,
                 )
-                .await);
+                .await;
             }
-            Ok(
-                with_cached_approval(&session.services, "shell", keys, move || async move {
-                    let available_decisions = None;
-                    session
-                        .request_command_approval(
-                            turn,
-                            call_id,
-                            /*approval_id*/ None,
-                            command,
-                            cwd,
-                            reason,
-                            ctx.network_approval_context.clone(),
-                            req.exec_approval_requirement
-                                .proposed_execpolicy_amendment()
-                                .cloned(),
-                            req.additional_permissions.clone(),
-                            available_decisions,
-                        )
-                        .await
-                })
-                .await,
-            )
+            with_cached_approval(&session.services, "shell", keys, move || async move {
+                let available_decisions = None;
+                session
+                    .request_command_approval(
+                        turn,
+                        call_id,
+                        /*approval_id*/ None,
+                        command,
+                        cwd,
+                        reason,
+                        ctx.network_approval_context.clone(),
+                        req.exec_approval_requirement
+                            .proposed_execpolicy_amendment()
+                            .cloned(),
+                        req.additional_permissions.clone(),
+                        available_decisions,
+                    )
+                    .await
+            })
+            .await
         })
     }
 
@@ -250,9 +247,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             .shell
             .as_ref()
             .unwrap_or(session_shell.as_ref());
-        let shell_snapshot_location = req
-            .turn_environment
-            .shell_snapshot(&PathUri::from_abs_path(&req.cwd));
+        let shell_snapshot_location = req.turn_environment.shell_snapshot(&req.cwd);
         let (file_system_sandbox_policy, _) = attempt.permissions.to_runtime_permissions();
         let sandbox_permissions = sandbox_permissions_preserving_denied_reads(
             req.sandbox_permissions,
@@ -310,12 +305,8 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             }
         }
 
-        let command = build_sandbox_command(
-            &command,
-            &PathUri::from_abs_path(&req.cwd),
-            &env,
-            req.additional_permissions.clone(),
-        )?;
+        let command =
+            build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())?;
         let mut expiration: crate::exec::ExecExpiration = req.timeout_ms.into();
         expiration = expiration.with_cancellation(req.cancellation_token.clone());
         if let Some(cancellation) = attempt.network_denial_cancellation_token.clone() {

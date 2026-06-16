@@ -60,7 +60,7 @@ async fn spawn_command_under_sandbox(
         child.arg0(arg0);
     }
     child.args(args);
-    child.current_dir(exec_request.cwd.to_abs_path()?.as_path());
+    child.current_dir(exec_request.cwd);
     child.env_clear();
     child.envs(exec_request.env);
 

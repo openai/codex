@@ -144,7 +144,18 @@ pub(crate) async fn execute_user_shell_command(
     // We do not source rc files or otherwise reformat the script.
     let use_login_shell = true;
     let display_command = environment_shell.derive_exec_args(&command, use_login_shell);
-    let shell_snapshot_location = turn_environment.shell_snapshot(turn_environment.cwd());
+    // TODO(anp): Migrate user-shell events and execution plumbing to PathUri so this local-only
+    // feature does not need to project the selected environment cwd onto the Codex host.
+    let Ok(cwd) = turn_environment.cwd().to_abs_path() else {
+        send_user_shell_error(
+            &session,
+            turn_context.as_ref(),
+            "shell working directory is not native to the Codex host",
+        )
+        .await;
+        return;
+    };
+    let shell_snapshot_location = turn_environment.shell_snapshot(&cwd);
     let mut exec_env_map = create_env(
         &turn_context.shell_environment_policy,
         Some(session.thread_id),
@@ -162,17 +173,6 @@ pub(crate) async fn execute_user_shell_command(
 
     let call_id = Uuid::new_v4().to_string();
     let raw_command = command;
-    // TODO(anp): Migrate user-shell events and execution plumbing to PathUri so this local-only
-    // feature does not need to project the selected environment cwd onto the Codex host.
-    let Ok(cwd) = turn_environment.cwd().to_abs_path() else {
-        send_user_shell_error(
-            &session,
-            turn_context.as_ref(),
-            "shell working directory is not native to the Codex host",
-        )
-        .await;
-        return;
-    };
 
     let parsed_cmd = parse_command(&display_command);
     session
@@ -195,7 +195,7 @@ pub(crate) async fn execute_user_shell_command(
     let permission_profile = PermissionProfile::Disabled;
     let exec_env = ExecRequest {
         command: exec_command.clone(),
-        cwd: turn_environment.cwd().clone(),
+        cwd: cwd.clone(),
         env: exec_env_map,
         exec_server_env_config: None,
         // `/shell` is the explicit full-access escape hatch, so it must not
