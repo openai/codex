@@ -84,6 +84,21 @@ impl AccountRequestProcessor {
         }
     }
 
+    async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
+        self.config_manager
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await
+            .map_err(|err| internal_error(format!("failed to reload auth configuration: {err}")))
+    }
+
+    pub(crate) async fn refresh_auth_restrictions(&self, config: &Config) -> std::io::Result<()> {
+        let result = enforce_login_restrictions(&config.auth_config()).await;
+        self.auth_manager
+            .set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
+        self.auth_manager.reload().await;
+        result
+    }
+
     pub(crate) async fn login_account(
         &self,
         request_id: ConnectionRequestId,
@@ -270,14 +285,12 @@ impl AccountRequestProcessor {
         &self,
         params: &LoginApiKeyParams,
     ) -> std::result::Result<(), JSONRPCErrorError> {
+        let config = self.load_latest_config().await?;
         if self.auth_manager.is_external_chatgpt_auth_active() {
             return Err(self.external_auth_active_error());
         }
 
-        if matches!(
-            self.config.forced_login_method,
-            Some(ForcedLoginMethod::Chatgpt)
-        ) {
+        if matches!(config.forced_login_method, Some(ForcedLoginMethod::Chatgpt)) {
             return Err(invalid_request(
                 "API key login is disabled. Use ChatGPT login instead.",
             ));
@@ -292,10 +305,10 @@ impl AccountRequestProcessor {
         }
 
         match login_with_api_key(
-            &self.config.codex_home,
+            &config.codex_home,
             &params.api_key,
-            self.config.cli_auth_credentials_store_mode,
-            self.config.auth_keyring_backend_kind(),
+            config.cli_auth_credentials_store_mode,
+            config.auth_keyring_backend_kind(),
         ) {
             Ok(()) => {
                 self.auth_manager.reload().await;
@@ -323,8 +336,8 @@ impl AccountRequestProcessor {
     async fn login_chatgpt_common(
         &self,
         codex_streamlined_login: bool,
-    ) -> std::result::Result<LoginServerOptions, JSONRPCErrorError> {
-        let config = self.config.as_ref();
+    ) -> std::result::Result<(LoginServerOptions, String), JSONRPCErrorError> {
+        let config = self.load_latest_config().await?;
 
         if self.auth_manager.is_external_chatgpt_auth_active() {
             return Err(self.external_auth_active_error());
@@ -358,7 +371,7 @@ impl AccountRequestProcessor {
             opts
         };
 
-        Ok(opts)
+        Ok((opts, config.chatgpt_base_url.clone()))
     }
 
     fn login_chatgpt_device_code_start_error(err: IoError) -> JSONRPCErrorError {
@@ -383,7 +396,7 @@ impl AccountRequestProcessor {
         &self,
         codex_streamlined_login: bool,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
-        let opts = self.login_chatgpt_common(codex_streamlined_login).await?;
+        let (opts, chatgpt_base_url) = self.login_chatgpt_common(codex_streamlined_login).await?;
         let server = run_login_server(opts)
             .map_err(|err| internal_error(format!("failed to start login server: {err}")))?;
         let login_id = Uuid::new_v4();
@@ -404,7 +417,6 @@ impl AccountRequestProcessor {
         let outgoing_clone = self.outgoing.clone();
         let config_manager = self.config_manager.clone();
         let thread_manager = Arc::clone(&self.thread_manager);
-        let chatgpt_base_url = self.config.chatgpt_base_url.clone();
         let active_login = self.active_login.clone();
         let auth_url = server.auth_url.clone();
         tokio::spawn(async move {
@@ -454,7 +466,7 @@ impl AccountRequestProcessor {
     async fn login_chatgpt_device_code_response(
         &self,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
-        let opts = self
+        let (opts, chatgpt_base_url) = self
             .login_chatgpt_common(/*codex_streamlined_login*/ false)
             .await?;
         let device_code = request_device_code(&opts)
@@ -480,7 +492,6 @@ impl AccountRequestProcessor {
         let outgoing_clone = self.outgoing.clone();
         let config_manager = self.config_manager.clone();
         let thread_manager = Arc::clone(&self.thread_manager);
-        let chatgpt_base_url = self.config.chatgpt_base_url.clone();
         let active_login = self.active_login.clone();
         tokio::spawn(async move {
             let (success, error_msg) = tokio::select! {
@@ -573,10 +584,8 @@ impl AccountRequestProcessor {
         chatgpt_account_id: String,
         chatgpt_plan_type: Option<String>,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
-        if matches!(
-            self.config.forced_login_method,
-            Some(ForcedLoginMethod::Api)
-        ) {
+        let config = self.load_latest_config().await?;
+        if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
             return Err(invalid_request(
                 "External ChatGPT auth is disabled. Use API key login instead.",
             ));
@@ -590,7 +599,7 @@ impl AccountRequestProcessor {
             }
         }
 
-        if let Some(expected_workspaces) = self.config.forced_chatgpt_workspace_id.as_deref()
+        if let Some(expected_workspaces) = config.forced_chatgpt_workspace_id.as_deref()
             && !expected_workspaces.contains(&chatgpt_account_id)
         {
             return Err(invalid_request(format!(
@@ -599,7 +608,7 @@ impl AccountRequestProcessor {
         }
 
         login_with_chatgpt_auth_tokens(
-            &self.config.codex_home,
+            &config.codex_home,
             &access_token,
             &chatgpt_account_id,
             chatgpt_plan_type.as_deref(),
@@ -608,7 +617,7 @@ impl AccountRequestProcessor {
         self.auth_manager.reload().await;
         self.config_manager.replace_cloud_config_bundle_loader(
             self.auth_manager.clone(),
-            self.config.chatgpt_base_url.clone(),
+            config.chatgpt_base_url.clone(),
         );
         self.config_manager
             .sync_default_client_residency_requirement()

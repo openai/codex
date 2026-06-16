@@ -509,6 +509,7 @@ impl MessageProcessor {
             outgoing.clone(),
             config_manager.clone(),
             thread_manager.clone(),
+            account_processor.clone(),
             analytics_events_client,
         );
         let external_agent_config_processor = ExternalAgentConfigRequestProcessor::new(
