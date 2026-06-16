@@ -196,6 +196,7 @@ def codex_rust_crate(
         integration_test_timeout = None,
         test_data_extra = [],
         test_shard_counts = {},
+        test_sizes = {},
         test_tags = [],
         unit_test_timeout = None,
         extra_binaries = [],
@@ -239,6 +240,9 @@ def codex_rust_crate(
             and then assigns each libtest case to a stable bucket by hashing
             the test name. Matching tests are also marked flaky, which gives
             them Bazel's default three attempts.
+        test_sizes: Mapping from generated test target name to Bazel test size.
+            All generated tests default to small. Callers can override slower
+            targets individually, including Windows-cross and Wine tests.
         test_tags: Tags applied to unit + integration test targets.
             Typically used to disable the sandbox, but see https://bazel.build/reference/be/common-definitions#common.tags
         unit_test_timeout: Optional Bazel timeout for the unit-test target
@@ -259,6 +263,7 @@ def codex_rust_crate(
         "INSTA_WORKSPACE_ROOT": ".",
         "INSTA_SNAPSHOT_PATH": "src",
     }
+    generated_test_names = []
 
     native.filegroup(
         name = "package-files",
@@ -319,6 +324,8 @@ def codex_rust_crate(
 
         unit_test_name = name + "-unit-tests"
         unit_test_binary = name + "-unit-tests-bin"
+        windows_cross_unit_test_name = unit_test_name + "-windows-cross"
+        generated_test_names.extend([unit_test_name, windows_cross_unit_test_name])
         unit_test_shard_count = _test_shard_count(test_shard_counts, unit_test_name)
 
         # Shard at the workspace_root_test layer. rules_rust's sharding wrapper
@@ -345,21 +352,30 @@ def codex_rust_crate(
             tags = test_tags + ["manual"],
         )
 
-        unit_test_kwargs = {}
-        if unit_test_timeout:
-            unit_test_kwargs["timeout"] = unit_test_timeout
-        if unit_test_shard_count:
-            unit_test_kwargs["shard_count"] = unit_test_shard_count
-            unit_test_kwargs["flaky"] = True
+        # Keep a distinct Windows-cross label so callers can raise its
+        # nonconfigurable size without slowing the native test everywhere.
+        for unit_test_target_name, target_compatible_with in [
+            (unit_test_name, WINDOWS_GNULLVM_INCOMPATIBLE),
+            (windows_cross_unit_test_name, WINDOWS_GNULLVM_ONLY),
+        ]:
+            unit_test_kwargs = {
+                "size": _test_size(test_sizes, unit_test_target_name),
+            }
+            if unit_test_timeout:
+                unit_test_kwargs["timeout"] = unit_test_timeout
+            if unit_test_shard_count:
+                unit_test_kwargs["shard_count"] = unit_test_shard_count
+                unit_test_kwargs["flaky"] = True
 
-        workspace_root_test(
-            name = unit_test_name,
-            env = test_env,
-            test_bin = ":" + unit_test_binary,
-            workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
-            tags = test_tags,
-            **unit_test_kwargs
-        )
+            workspace_root_test(
+                name = unit_test_target_name,
+                env = test_env,
+                test_bin = ":" + unit_test_binary,
+                workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
+                target_compatible_with = target_compatible_with,
+                tags = test_tags,
+                **unit_test_kwargs
+            )
 
         maybe_deps += [name]
 
@@ -432,9 +448,13 @@ def codex_rust_crate(
         test_name = name + "-" + test_file_stem.replace("/", "-")
         if not test_name.endswith("-test"):
             test_name += "-test"
+        windows_cross_test_name = test_name + "-windows-cross"
         windows_cross_test_binary = test_name + "-windows-cross-bin"
+        generated_test_names.extend([test_name, windows_cross_test_name])
 
-        test_kwargs = {}
+        test_kwargs = {
+            "size": _test_size(test_sizes, test_name),
+        }
         test_kwargs.update(integration_test_kwargs)
         test_shard_count = _test_shard_count(test_shard_counts, test_name)
         if test_shard_count:
@@ -532,6 +552,7 @@ def codex_rust_crate(
 
         if run_tests_with_wine_exec:
             wine_test_name = test_name.removesuffix("-test") + "-wine-exec-test"
+            generated_test_names.append(wine_test_name)
             native_test_binary = ":" + (integration_test_binary if test_shard_count else test_name)
             wine_test_binaries = dict(wine_host_binaries)
 
@@ -556,6 +577,7 @@ def codex_rust_crate(
 
             wine_test_kwargs = {}
             wine_test_kwargs.update(integration_test_kwargs)
+            wine_test_kwargs["size"] = _test_size(test_sizes, wine_test_name)
             if test_shard_count:
                 wine_test_kwargs["shard_count"] = test_shard_count
                 wine_test_kwargs["flaky"] = True
@@ -575,7 +597,9 @@ def codex_rust_crate(
                 **wine_test_kwargs
             )
 
-        windows_cross_test_kwargs = {}
+        windows_cross_test_kwargs = {
+            "size": _test_size(test_sizes, windows_cross_test_name),
+        }
         windows_cross_test_kwargs.update(integration_test_kwargs)
         if test_shard_count:
             windows_cross_test_kwargs["shard_count"] = test_shard_count
@@ -600,7 +624,7 @@ def codex_rust_crate(
         )
 
         workspace_root_test(
-            name = test_name + "-windows-cross",
+            name = windows_cross_test_name,
             chdir_workspace_root = False,
             env = integration_test_cargo_env,
             runfile_env = integration_test_cargo_env_runfiles,
@@ -611,6 +635,14 @@ def codex_rust_crate(
             **windows_cross_test_kwargs
         )
 
+    unknown_test_sizes = sorted([
+        test_name
+        for test_name in test_sizes
+        if test_name not in generated_test_names
+    ])
+    if unknown_test_sizes:
+        fail("test_sizes contains unknown generated test targets: {}".format(", ".join(unknown_test_sizes)))
+
 def _test_shard_count(test_shard_counts, test_name):
     shard_count = test_shard_counts.get(test_name)
     if shard_count == None:
@@ -620,3 +652,10 @@ def _test_shard_count(test_shard_counts, test_name):
         fail("test_shard_counts[{}] must be a positive integer".format(test_name))
 
     return shard_count
+
+def _test_size(test_sizes, test_name):
+    size = test_sizes.get(test_name, "small")
+    if size not in ["small", "medium", "large", "enormous"]:
+        fail("test_sizes[{}] must be a valid Bazel test size".format(test_name))
+
+    return size

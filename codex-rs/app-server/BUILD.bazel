@@ -10,7 +10,6 @@ codex_rust_crate(
         "//codex-rs/cli:codex",
         "//codex-rs/rmcp-client:test_stdio_server",
     ],
-    integration_test_timeout = "long",
     test_shard_counts = {
         # Note app-server-all-test has a large number of integration tests, so
         # even a single shard can be quite slow. When there is a legitimate
@@ -20,6 +19,10 @@ codex_rust_crate(
         # mitigate this risk.
         "app-server-all-test": 16,
         "app-server-unit-tests": 8,
+    },
+    test_sizes = {
+        "app-server-all-test": "medium",
+        "app-server-all-test-windows-cross": "medium",
     },
     test_tags = ["no-sandbox"],
 )

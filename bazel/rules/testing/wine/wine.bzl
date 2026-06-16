@@ -10,6 +10,7 @@ def wine_rust_test(
         windows_binaries,
         host_binaries = {},
         data = [],
+        size = "small",
         target_compatible_with = [],
         **kwargs):
     """Defines an x86-64 Linux Rust test with a pinned Wine runtime.
@@ -36,6 +37,7 @@ def wine_rust_test(
       windows_binaries: Map from `CARGO_BIN_EXE_*` suffixes to Windows targets.
       host_binaries: Map from `CARGO_BIN_EXE_*` suffixes to Linux host targets.
       data: Additional runtime data for the Linux test.
+      size: Bazel test size. Defaults to small.
       target_compatible_with: Additional compatibility constraints.
       **kwargs: Remaining attributes forwarded to `rust_test`.
     """
@@ -64,6 +66,7 @@ def wine_rust_test(
         name = name,
         data = data + runtime.data,
         env = runtime.env,
+        size = size,
         target_compatible_with = target_compatible_with + WINE_TEST_TARGET_COMPATIBLE_WITH,
         **kwargs
     )
