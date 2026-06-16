@@ -5847,6 +5847,14 @@
           },
           {
             "properties": {
+              "credentialSource": {
+                "allOf": [
+                  {
+                    "$ref": "#/definitions/v2/AmazonBedrockCredentialSource"
+                  }
+                ],
+                "default": "awsManaged"
+              },
               "type": {
                 "enum": [
                   "amazonBedrock"
@@ -6164,6 +6172,13 @@
         ]
       },
       "AgentPath": {
+        "type": "string"
+      },
+      "AmazonBedrockCredentialSource": {
+        "enum": [
+          "codexManaged",
+          "awsManaged"
+        ],
         "type": "string"
       },
       "AnalyticsConfig": {
