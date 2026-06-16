@@ -628,7 +628,6 @@ mod tests {
                 .iter()
                 .map(|pattern| EnvironmentVariablePattern::new_case_insensitive(pattern))
                 .collect(),
-            use_profile: false,
         };
 
         let env = shell_environment::create_env_from_vars(

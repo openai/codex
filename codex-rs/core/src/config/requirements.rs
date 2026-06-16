@@ -6,8 +6,9 @@ use codex_config::config_toml::ConfigToml;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::FeedbackConfigToml;
 use codex_config::types::ShellEnvironmentPolicyToml;
+use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::ForcedLoginMethod;
-use codex_protocol::config_types::ShellEnvironmentPolicyRule;
+use codex_protocol::config_types::ShellEnvironmentPolicyFilter;
 use std::collections::BTreeMap;
 
 use super::otel;
@@ -149,8 +150,7 @@ fn apply_shell_environment_policy_requirement(
         inherit,
         ignore_default_excludes,
         r#set: required_set,
-        rules,
-        experimental_use_profile,
+        filters,
     } = value;
     let mut conflict = false;
 
@@ -159,20 +159,40 @@ fn apply_shell_environment_policy_requirement(
         &mut configured.ignore_default_excludes,
         ignore_default_excludes,
     );
-    conflict |= apply_required_pattern_rules(configured, rules);
-    conflict |= replace_required_leaf(
-        &mut configured.experimental_use_profile,
-        experimental_use_profile,
-    );
+    conflict |= apply_required_pattern_filters(configured, filters);
+
+    if let Some(configured_set) = configured.r#set.as_mut() {
+        let mut required_excludes = filters
+            .iter()
+            .flatten()
+            .filter(|(_, action)| **action == ShellEnvironmentPolicyFilter::Exclude)
+            .map(|(pattern, _)| EnvironmentVariablePattern::new_case_insensitive(pattern))
+            .collect::<Vec<_>>();
+        if ignore_default_excludes == &Some(false) {
+            required_excludes.extend(
+                ["*KEY*", "*SECRET*", "*TOKEN*"]
+                    .map(EnvironmentVariablePattern::new_case_insensitive),
+            );
+        }
+        let previous_len = configured_set.len();
+        configured_set
+            .retain(|key, _| !required_excludes.iter().any(|pattern| pattern.matches(key)));
+        conflict |= configured_set.len() != previous_len;
+    }
 
     if let Some(required) = required_set.as_ref() {
         let configured_set = configured.r#set.get_or_insert_default();
         conflict |= required.iter().any(|(key, value)| {
             configured_set
-                .get(key)
+                .iter()
+                .find(|(configured_key, _)| environment_keys_equal(configured_key, key))
+                .map(|(_, current)| current)
                 .is_some_and(|current| current != value)
         });
-        configured_set.extend(required.clone());
+        for (key, value) in required {
+            configured_set.retain(|configured_key, _| !environment_keys_equal(configured_key, key));
+            configured_set.insert(key.clone(), value.clone());
+        }
     }
 
     push_structured_requirement_override_warning(
@@ -183,49 +203,74 @@ fn apply_shell_environment_policy_requirement(
     );
 }
 
-fn apply_required_pattern_rules(
+fn apply_required_pattern_filters(
     configured: &mut ShellEnvironmentPolicyToml,
-    required: &Option<BTreeMap<String, ShellEnvironmentPolicyRule>>,
+    required: &Option<BTreeMap<String, ShellEnvironmentPolicyFilter>>,
 ) -> bool {
     let Some(required) = required else {
         return false;
     };
     let conflict = required.iter().any(|(pattern, required_action)| {
         let configured_action = configured
-            .rules
+            .filters
             .as_ref()
-            .and_then(|rules| rules.get(pattern).copied())
+            .and_then(|filters| {
+                filters
+                    .iter()
+                    .find(|(configured_pattern, _)| {
+                        configured_pattern.eq_ignore_ascii_case(pattern)
+                    })
+                    .map(|(_, action)| *action)
+            })
             .or_else(|| {
                 configured
                     .exclude
                     .as_ref()
-                    .is_some_and(|patterns| patterns.contains(pattern))
-                    .then_some(ShellEnvironmentPolicyRule::Exclude)
+                    .is_some_and(|patterns| {
+                        patterns
+                            .iter()
+                            .any(|candidate| candidate.eq_ignore_ascii_case(pattern))
+                    })
+                    .then_some(ShellEnvironmentPolicyFilter::Exclude)
             })
             .or_else(|| {
                 configured
                     .include_only
                     .as_ref()
-                    .is_some_and(|patterns| patterns.contains(pattern))
-                    .then_some(ShellEnvironmentPolicyRule::Include)
+                    .is_some_and(|patterns| {
+                        patterns
+                            .iter()
+                            .any(|candidate| candidate.eq_ignore_ascii_case(pattern))
+                    })
+                    .then_some(ShellEnvironmentPolicyFilter::Include)
             });
         configured_action.is_some_and(|action| action != *required_action)
     });
 
     for pattern in required.keys() {
         if let Some(exclude) = configured.exclude.as_mut() {
-            exclude.retain(|candidate| candidate != pattern);
+            exclude.retain(|candidate| !candidate.eq_ignore_ascii_case(pattern));
         }
         if let Some(include_only) = configured.include_only.as_mut() {
-            include_only.retain(|candidate| candidate != pattern);
+            include_only.retain(|candidate| !candidate.eq_ignore_ascii_case(pattern));
         }
     }
-    configured
-        .rules
-        .get_or_insert_default()
-        .extend(required.clone());
+    let configured_filters = configured.filters.get_or_insert_default();
+    for (pattern, action) in required {
+        configured_filters
+            .retain(|configured_pattern, _| !configured_pattern.eq_ignore_ascii_case(pattern));
+        configured_filters.insert(pattern.clone(), *action);
+    }
 
     conflict
+}
+
+fn environment_keys_equal(left: &str, right: &str) -> bool {
+    if cfg!(target_os = "windows") {
+        left.eq_ignore_ascii_case(right)
+    } else {
+        left == right
+    }
 }
 
 fn apply_feedback_requirement(

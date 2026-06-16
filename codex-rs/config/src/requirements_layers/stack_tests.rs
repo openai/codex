@@ -8,7 +8,7 @@ use crate::ConfigRequirementsWithSources;
 use crate::RequirementSource;
 use crate::ShellEnvironmentPolicyRequirementsToml;
 use crate::Sourced;
-use codex_protocol::config_types::ShellEnvironmentPolicyRule;
+use codex_protocol::config_types::ShellEnvironmentPolicyFilter;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -1078,7 +1078,7 @@ shared = "high"
 }
 
 #[test]
-fn shell_environment_rules_compose_by_pattern() {
+fn shell_environment_filters_compose_by_pattern() {
     let high_source = RequirementSource::EnterpriseManaged {
         id: "req_high".to_string(),
         name: "High".to_string(),
@@ -1092,7 +1092,7 @@ fn shell_environment_rules_compose_by_pattern() {
             RequirementsLayerEntry::from_toml(
                 low_source.clone(),
                 r#"
-[shell_environment_policy.rules]
+[shell_environment_policy.filters]
 "FLIP_*" = "exclude"
 "KEEP_*" = "include"
 "#,
@@ -1100,7 +1100,7 @@ fn shell_environment_rules_compose_by_pattern() {
             RequirementsLayerEntry::from_toml(
                 high_source.clone(),
                 r#"
-[shell_environment_policy.rules]
+[shell_environment_policy.filters]
 "ADD_*" = "exclude"
 "FLIP_*" = "include"
 "#,
@@ -1115,10 +1115,10 @@ fn shell_environment_rules_compose_by_pattern() {
         composed.shell_environment_policy,
         Some(Sourced::new(
             ShellEnvironmentPolicyRequirementsToml {
-                rules: Some(BTreeMap::from([
-                    ("ADD_*".to_string(), ShellEnvironmentPolicyRule::Exclude,),
-                    ("FLIP_*".to_string(), ShellEnvironmentPolicyRule::Include,),
-                    ("KEEP_*".to_string(), ShellEnvironmentPolicyRule::Include,),
+                filters: Some(BTreeMap::from([
+                    ("add_*".to_string(), ShellEnvironmentPolicyFilter::Exclude,),
+                    ("flip_*".to_string(), ShellEnvironmentPolicyFilter::Include,),
+                    ("keep_*".to_string(), ShellEnvironmentPolicyFilter::Include,),
                 ])),
                 ..Default::default()
             },

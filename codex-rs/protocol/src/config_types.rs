@@ -252,9 +252,6 @@ pub struct ShellEnvironmentPolicy {
 
     /// Environment variable names to retain in the environment.
     pub include_only: Vec<EnvironmentVariablePattern>,
-
-    /// If true, the shell profile will be used to run the command.
-    pub use_profile: bool,
 }
 
 impl Default for ShellEnvironmentPolicy {
@@ -265,7 +262,6 @@ impl Default for ShellEnvironmentPolicy {
             exclude: Vec::new(),
             r#set: HashMap::new(),
             include_only: Vec::new(),
-            use_profile: false,
         }
     }
 }

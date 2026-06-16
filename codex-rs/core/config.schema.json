@@ -2639,9 +2639,6 @@
           },
           "type": "array"
         },
-        "experimental_use_profile": {
-          "type": "boolean"
-        },
         "filters": {
           "additionalProperties": {
             "$ref": "#/definitions/ShellEnvironmentPolicyFilter"
@@ -5213,7 +5210,6 @@
       ],
       "default": {
         "exclude": null,
-        "experimental_use_profile": null,
         "filters": null,
         "ignore_default_excludes": null,
         "include_only": null,

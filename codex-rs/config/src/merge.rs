@@ -21,7 +21,9 @@ fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &m
             normalize_network_domain_keys(base_table);
             normalize_network_domain_keys(&mut overlay_table);
         }
-        if is_shell_environment_filters_path(path) {
+        if is_shell_environment_filters_path(path)
+            || cfg!(target_os = "windows") && is_shell_environment_set_path(path)
+        {
             normalize_case_insensitive_keys(base_table);
             normalize_case_insensitive_keys(&mut overlay_table);
         }
@@ -31,12 +33,12 @@ fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &m
             if let Some(existing) = base_table.get_mut(&key) {
                 merge_toml_values_at_path(existing, &value, path);
             } else {
-                base_table.insert(key, normalized_with_key_aliases(&value, path));
+                base_table.insert(key, normalized_for_merge(&value, path));
             }
             path.pop();
         }
     } else {
-        *base = normalized_with_key_aliases(overlay, path);
+        *base = normalized_for_merge(overlay, path);
     }
 }
 
@@ -176,6 +178,13 @@ fn is_shell_environment_filters_path(path: &[String]) -> bool {
     )
 }
 
+fn is_shell_environment_set_path(path: &[String]) -> bool {
+    matches!(
+        path,
+        [policy, set] if policy == "shell_environment_policy" && set == "set"
+    )
+}
+
 fn is_permission_network_domains_path(path: &[String]) -> bool {
     matches!(
         path,
@@ -195,6 +204,35 @@ fn normalize_case_insensitive_keys(table: &mut toml::map::Map<String, TomlValue>
     let entries = std::mem::take(table);
     for (key, value) in entries {
         table.insert(key.to_ascii_lowercase(), value);
+    }
+}
+
+fn normalized_for_merge(value: &TomlValue, path: &[String]) -> TomlValue {
+    let mut normalized = normalized_with_key_aliases(value, path);
+    normalize_nested_case_insensitive_keys(&mut normalized, &mut path.to_vec());
+    normalized
+}
+
+fn normalize_nested_case_insensitive_keys(value: &mut TomlValue, path: &mut Vec<String>) {
+    match value {
+        TomlValue::Table(table) => {
+            if is_shell_environment_filters_path(path)
+                || cfg!(target_os = "windows") && is_shell_environment_set_path(path)
+            {
+                normalize_case_insensitive_keys(table);
+            }
+            for (key, value) in table {
+                path.push(key.clone());
+                normalize_nested_case_insensitive_keys(value, path);
+                path.pop();
+            }
+        }
+        TomlValue::Array(items) => {
+            for item in items {
+                normalize_nested_case_insensitive_keys(item, path);
+            }
+        }
+        _ => {}
     }
 }
 

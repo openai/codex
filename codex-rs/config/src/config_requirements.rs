@@ -1,7 +1,7 @@
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::ShellEnvironmentPolicyFilter;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
-use codex_protocol::config_types::ShellEnvironmentPolicyRule;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -895,7 +895,7 @@ pub struct ConfigRequirementsToml {
 /// Managed shell environment policy fields accepted by `requirements.toml`.
 ///
 /// Unlike ordinary `config.toml`, requirements intentionally accept only the
-/// keyed `rules` form. This makes include/exclude actions compose by pattern,
+/// keyed `filters` form. This makes include/exclude actions compose by pattern,
 /// while config arrays remain a migration-only compatibility path that can be
 /// deprecated independently later.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -904,8 +904,7 @@ pub struct ShellEnvironmentPolicyRequirementsToml {
     pub inherit: Option<ShellEnvironmentPolicyInherit>,
     pub ignore_default_excludes: Option<bool>,
     pub r#set: Option<HashMap<String, String>>,
-    pub rules: Option<BTreeMap<String, ShellEnvironmentPolicyRule>>,
-    pub experimental_use_profile: Option<bool>,
+    pub filters: Option<BTreeMap<String, ShellEnvironmentPolicyFilter>>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -3817,10 +3816,10 @@ command = "python3 /enterprise/hooks/pre.py"
     }
 
     #[test]
-    fn shell_environment_policy_requires_rules_for_list_fields() -> Result<()> {
+    fn shell_environment_policy_requires_filters_for_list_fields() -> Result<()> {
         let requirements: ConfigRequirementsToml = from_str(
             r#"
-[shell_environment_policy.rules]
+[shell_environment_policy.filters]
 "HOME" = "include"
 "SECRET_*" = "exclude"
 "#,
@@ -3829,9 +3828,12 @@ command = "python3 /enterprise/hooks/pre.py"
         assert_eq!(
             requirements.shell_environment_policy,
             Some(ShellEnvironmentPolicyRequirementsToml {
-                rules: Some(BTreeMap::from([
-                    ("HOME".to_string(), ShellEnvironmentPolicyRule::Include,),
-                    ("SECRET_*".to_string(), ShellEnvironmentPolicyRule::Exclude,),
+                filters: Some(BTreeMap::from([
+                    ("HOME".to_string(), ShellEnvironmentPolicyFilter::Include,),
+                    (
+                        "SECRET_*".to_string(),
+                        ShellEnvironmentPolicyFilter::Exclude,
+                    ),
                 ])),
                 ..Default::default()
             })
@@ -3845,7 +3847,7 @@ command = "python3 /enterprise/hooks/pre.py"
             assert!(error.to_string().contains(field));
         }
         let error = from_str::<ConfigRequirementsToml>(
-            "[shell_environment_policy.rules]\n\"PATH\" = \"keep\"\n",
+            "[shell_environment_policy.filters]\n\"PATH\" = \"keep\"\n",
         )
         .expect_err("unknown rule actions should be rejected");
         assert!(error.to_string().contains("keep"));

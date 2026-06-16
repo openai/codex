@@ -463,7 +463,6 @@ fn shell_environment_policy(env_policy: &ExecEnvPolicy) -> ShellEnvironmentPolic
             .iter()
             .map(|pattern| EnvironmentVariablePattern::new_case_insensitive(pattern))
             .collect(),
-        use_profile: false,
     }
 }
 

@@ -179,6 +179,58 @@ fn shell_environment_policy_filters_overlay_merges_by_key_case_insensitively() {
 }
 
 #[test]
+fn shell_environment_policy_filters_are_normalized_in_the_first_layer() {
+    let mut base = parse_toml("");
+    let overlay = parse_toml(
+        r#"
+[shell_environment_policy.filters]
+"UPPER_*" = "exclude"
+"#,
+    );
+
+    merge_toml_values(&mut base, &overlay);
+
+    assert_eq!(
+        base,
+        parse_toml(
+            r#"
+[shell_environment_policy.filters]
+"upper_*" = "exclude"
+"#,
+        )
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn shell_environment_policy_set_keys_merge_case_insensitively_on_windows() {
+    let mut base = parse_toml(
+        r#"
+[shell_environment_policy.set]
+Path = "low"
+"#,
+    );
+    let overlay = parse_toml(
+        r#"
+[shell_environment_policy.set]
+PATH = "high"
+"#,
+    );
+
+    merge_toml_values(&mut base, &overlay);
+
+    assert_eq!(
+        base,
+        parse_toml(
+            r#"
+[shell_environment_policy.set]
+path = "high"
+"#,
+        )
+    );
+}
+
+#[test]
 fn shell_environment_policy_filters_override_lower_legacy_arrays_by_pattern() {
     let mut base = parse_toml(
         r#"

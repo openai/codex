@@ -11185,7 +11185,9 @@ include_only = ["HOME", "FLIP_TO_EXCLUDE"]
 
 [shell_environment_policy.set]
 CONFIGURED = "kept"
+CONFIGURED_SECRET = "removed"
 MANAGED = "old"
+MANAGED_BLOCKED = "removed"
 "#,
     )?;
     let config = load_with_enterprise_requirement(
@@ -11193,15 +11195,15 @@ MANAGED = "old"
         r#"
 [shell_environment_policy]
 ignore_default_excludes = false
-experimental_use_profile = true
 
-[shell_environment_policy.rules]
+[shell_environment_policy.filters]
 "FLIP_TO_EXCLUDE" = "exclude"
 "FLIP_TO_INCLUDE" = "include"
 "MANAGED_*" = "exclude"
 
 [shell_environment_policy.set]
 MANAGED = "required"
+MANAGED_SECRET_ALLOWED = "required"
 "#,
     )
     .await?;
@@ -11211,14 +11213,14 @@ MANAGED = "required"
             ignore_default_excludes: Some(false),
             exclude: Some(vec![
                 "USER_*".to_string(),
-                "FLIP_TO_EXCLUDE".to_string(),
-                "MANAGED_*".to_string(),
+                "flip_to_exclude".to_string(),
+                "managed_*".to_string(),
             ]),
-            include_only: Some(vec!["HOME".to_string(), "FLIP_TO_INCLUDE".to_string()]),
-            experimental_use_profile: Some(true),
+            include_only: Some(vec!["HOME".to_string(), "flip_to_include".to_string()]),
             r#set: Some(HashMap::from([
                 ("CONFIGURED".to_string(), "kept".to_string()),
                 ("MANAGED".to_string(), "required".to_string()),
+                ("MANAGED_SECRET_ALLOWED".to_string(), "required".to_string()),
             ])),
             ..Default::default()
         }

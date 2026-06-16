@@ -4465,7 +4465,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     turn.developer_instructions = Some("dev".to_string());
     turn.compact_prompt = Some("compact".to_string());
     turn.shell_environment_policy = ShellEnvironmentPolicy {
-        use_profile: true,
+        ignore_default_excludes: false,
         ..ShellEnvironmentPolicy::default()
     };
     let temp_dir = tempfile::tempdir().expect("temp dir");

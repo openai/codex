@@ -936,8 +936,6 @@ pub struct ShellEnvironmentPolicyToml {
     /// migration. Requirements accept only this keyed form, keeping array
     /// compatibility isolated so the legacy fields can be deprecated later.
     pub filters: Option<BTreeMap<String, ShellEnvironmentPolicyFilter>>,
-
-    pub experimental_use_profile: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -949,7 +947,6 @@ struct ShellEnvironmentPolicyTomlRaw {
     r#set: Option<HashMap<String, String>>,
     include_only: Option<Vec<String>>,
     filters: Option<BTreeMap<String, ShellEnvironmentPolicyFilter>>,
-    experimental_use_profile: Option<bool>,
 }
 
 impl<'de> Deserialize<'de> for ShellEnvironmentPolicyToml {
@@ -970,7 +967,6 @@ impl<'de> Deserialize<'de> for ShellEnvironmentPolicyToml {
             r#set: raw.r#set,
             include_only: raw.include_only,
             filters: raw.filters,
-            experimental_use_profile: raw.experimental_use_profile,
         })
     }
 }
@@ -999,15 +995,12 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
             .into_iter()
             .map(|s| EnvironmentVariablePattern::new_case_insensitive(&s))
             .collect();
-        let use_profile = toml.experimental_use_profile.unwrap_or(false);
-
         Self {
             inherit,
             ignore_default_excludes,
             exclude,
             r#set,
             include_only,
-            use_profile,
         }
     }
 }
