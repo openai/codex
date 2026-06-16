@@ -3,6 +3,7 @@ use std::os::unix::process::ExitStatusExt;
 
 use std::collections::HashMap;
 use std::io;
+#[cfg(target_os = "windows")]
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitStatus;
