@@ -6,6 +6,7 @@ use codex_api::LocationType;
 use codex_api::SearchContextSize;
 use codex_api::SearchFilters;
 use codex_api::SearchSettings;
+use codex_core::WebSearchRuntimePolicy;
 use codex_core::config::Config;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
@@ -81,6 +82,20 @@ fn search_settings(config: &Config, web_search_mode: WebSearchMode) -> SearchSet
     }
 }
 
+fn settings_for_tool(
+    config: &WebSearchExtensionConfig,
+    thread_store: &ExtensionData,
+) -> SearchSettings {
+    let mut settings = config.settings.clone();
+    if thread_store
+        .get::<WebSearchRuntimePolicy>()
+        .is_some_and(|policy| policy.force_cached_after_connector_use)
+    {
+        settings.external_web_access = Some(false);
+    }
+    settings
+}
+
 impl ThreadLifecycleContributor<Config> for WebSearchExtension {
     fn on_thread_start<'a>(
         &'a self,
@@ -118,6 +133,7 @@ impl ToolContributor for WebSearchExtension {
         if !config.available {
             return Vec::new();
         }
+        let settings = settings_for_tool(&config, thread_store);
 
         vec![Arc::new(WebSearchTool {
             session_id: session_store.level_id().to_string(),
@@ -125,7 +141,7 @@ impl ToolContributor for WebSearchExtension {
                 config.provider.clone(),
                 Some(self.auth_manager.clone()),
             ),
-            settings: config.settings.clone(),
+            settings,
         })]
     }
 }
@@ -139,6 +155,8 @@ pub fn install(registry: &mut ExtensionRegistryBuilder<Config>, auth_manager: Ar
 
 #[cfg(test)]
 mod tests {
+    use codex_api::SearchSettings;
+    use codex_core::WebSearchRuntimePolicy;
     use codex_extension_api::ExtensionData;
     use codex_extension_api::ExtensionRegistryBuilder;
     use codex_extension_api::ToolName;
@@ -150,6 +168,7 @@ mod tests {
     use super::Config;
     use super::WebSearchExtensionConfig;
     use super::install;
+    use super::settings_for_tool;
     use crate::tool::RUN_TOOL_NAME;
     use crate::tool::WEB_NAMESPACE;
 
@@ -179,6 +198,30 @@ mod tests {
         assert_eq!(
             tool_names,
             vec![(ToolName::namespaced(WEB_NAMESPACE, RUN_TOOL_NAME), true)]
+        );
+    }
+
+    #[test]
+    fn runtime_policy_forces_cached_search() {
+        let thread_store = ExtensionData::new("11111111-1111-4111-8111-111111111111");
+        thread_store.insert(WebSearchRuntimePolicy {
+            force_cached_after_connector_use: true,
+        });
+        let config = WebSearchExtensionConfig {
+            available: true,
+            provider: ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            settings: SearchSettings {
+                external_web_access: Some(true),
+                ..Default::default()
+            },
+        };
+
+        assert_eq!(
+            settings_for_tool(&config, &thread_store),
+            SearchSettings {
+                external_web_access: Some(false),
+                ..Default::default()
+            }
         );
     }
 }

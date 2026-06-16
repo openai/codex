@@ -185,6 +185,7 @@ impl Session {
                         active_segment.previous_turn_settings = Some(PreviousTurnSettings {
                             model: ctx.model.clone(),
                             realtime_active: ctx.realtime_active,
+                            connector_used: false,
                         });
                         if matches!(
                             active_segment.reference_context_item,

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use crate::SkillInjections;
+use crate::WebSearchRuntimePolicy;
 use crate::build_skill_injections;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
@@ -157,6 +158,23 @@ pub(crate) async fn run_turn(
     sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
 
+    let mut force_cached_after_connector_use = sess
+        .services
+        .thread_extension_data
+        .get::<WebSearchRuntimePolicy>()
+        .is_some_and(|policy| policy.force_cached_after_connector_use);
+    if !force_cached_after_connector_use {
+        force_cached_after_connector_use = sess
+            .previous_turn_settings()
+            .await
+            .is_some_and(|settings| settings.connector_used);
+    }
+    sess.services
+        .thread_extension_data
+        .insert(WebSearchRuntimePolicy {
+            force_cached_after_connector_use,
+        });
+
     let (injection_items, explicitly_enabled_connectors) =
         build_skills_and_plugins(&sess, turn_context.as_ref(), &input, &cancellation_token).await?;
 
@@ -173,6 +191,9 @@ pub(crate) async fn run_turn(
     sess.set_previous_turn_settings(Some(PreviousTurnSettings {
         model: turn_context.model_info.slug.clone(),
         realtime_active: Some(turn_context.realtime_active),
+        // Carry the flag forward so later standalone web searches stay cached
+        // after any connector-backed MCP use in the thread.
+        connector_used: force_cached_after_connector_use,
     }))
     .await;
     for response_item in injection_items {

@@ -139,6 +139,12 @@ pub(crate) async fn handle_mcp_tool_call(
 
     let metadata =
         lookup_mcp_tool_metadata(sess.as_ref(), turn_context.as_ref(), &server, &tool_name).await;
+    if metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.connector_id.is_some())
+    {
+        sess.mark_previous_turn_used_connector().await;
+    }
     let item_metadata = McpToolCallItemMetadata {
         mcp_app_resource_uri: metadata
             .as_ref()

@@ -1,5 +1,11 @@
 use codex_protocol::models::WebSearchAction;
 
+/// Per-turn runtime policy for standalone web search.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WebSearchRuntimePolicy {
+    pub force_cached_after_connector_use: bool,
+}
+
 fn search_action_detail(query: &Option<String>, queries: &Option<Vec<String>>) -> String {
     query.clone().filter(|q| !q.is_empty()).unwrap_or_else(|| {
         let items = queries.as_ref();

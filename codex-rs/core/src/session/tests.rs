@@ -2612,6 +2612,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         Some(PreviousTurnSettings {
             model: previous_model.to_string(),
             realtime_active: Some(turn_context.realtime_active),
+            connector_used: false,
         })
     );
     assert_eq!(history.raw_items(), &[]);
@@ -2654,6 +2655,7 @@ async fn thread_rollback_drops_last_turn_from_history() {
     sess.set_previous_turn_settings(Some(PreviousTurnSettings {
         model: "stale-model".to_string(),
         realtime_active: Some(tc.realtime_active),
+        connector_used: false,
     }))
     .await;
     {
@@ -2836,6 +2838,7 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
     sess.set_previous_turn_settings(Some(PreviousTurnSettings {
         model: "stale-model".to_string(),
         realtime_active: None,
+        connector_used: false,
     }))
     .await;
 
@@ -2852,6 +2855,7 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
         Some(PreviousTurnSettings {
             model: tc.model_info.slug.clone(),
             realtime_active: Some(tc.realtime_active),
+            connector_used: false,
         })
     );
     assert_eq!(
@@ -7348,6 +7352,7 @@ async fn build_settings_update_items_uses_previous_turn_settings_for_realtime_en
     let previous_turn_settings = PreviousTurnSettings {
         model: previous_context.model_info.slug.clone(),
         realtime_active: Some(true),
+        connector_used: false,
     };
     let mut current_context = previous_context
         .with_model(
@@ -7941,6 +7946,7 @@ async fn build_initial_context_uses_previous_turn_settings_for_realtime_end() {
     let previous_turn_settings = PreviousTurnSettings {
         model: turn_context.model_info.slug.clone(),
         realtime_active: Some(true),
+        connector_used: false,
     };
 
     session
@@ -7963,6 +7969,7 @@ async fn build_initial_context_restates_realtime_start_when_reference_context_is
     let previous_turn_settings = PreviousTurnSettings {
         model: turn_context.model_info.slug.clone(),
         realtime_active: Some(true),
+        connector_used: false,
     };
 
     session
@@ -8187,6 +8194,7 @@ async fn build_initial_context_prepends_model_switch_message() {
     let previous_turn_settings = PreviousTurnSettings {
         model: "previous-regular-model".to_string(),
         realtime_active: None,
+        connector_used: false,
     };
 
     session
@@ -8239,6 +8247,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
         .set_previous_turn_settings(Some(PreviousTurnSettings {
             model: previous_context.model_info.slug.clone(),
             realtime_active: Some(previous_context.realtime_active),
+            connector_used: false,
         }))
         .await;
     session

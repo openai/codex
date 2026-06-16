@@ -278,6 +278,7 @@ impl SteerInputError {
 pub(crate) struct PreviousTurnSettings {
     pub(crate) model: String,
     pub(crate) realtime_active: Option<bool>,
+    pub(crate) connector_used: bool,
 }
 
 #[cfg(test)]
@@ -1364,6 +1365,14 @@ impl Session {
     ) {
         let mut state = self.state.lock().await;
         state.set_previous_turn_settings(previous_turn_settings);
+    }
+
+    pub(crate) async fn mark_previous_turn_used_connector(&self) {
+        let mut state = self.state.lock().await;
+        if let Some(mut previous_turn_settings) = state.previous_turn_settings() {
+            previous_turn_settings.connector_used = true;
+            state.set_previous_turn_settings(Some(previous_turn_settings));
+        }
     }
 
     fn maybe_refresh_shell_snapshot_for_cwd(
