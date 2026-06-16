@@ -312,6 +312,7 @@ async fn responses_client_stream_request_preserves_exact_json_body() -> Result<(
             role: "user".into(),
             content: vec![ContentItem::InputText { text: "hi".into() }],
             phase: None,
+            metadata: None,
         }],
         tools: Vec::new(),
         tool_choice: "auto".into(),
