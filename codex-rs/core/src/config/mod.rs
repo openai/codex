@@ -1355,6 +1355,13 @@ impl ConfigBuilder {
     }
 }
 
+/// Validate an in-memory layer stack after callers have edited it but before
+/// they persist the edited layer.
+///
+/// `ConfigLayerStack::effective_config()` materializes the merged TOML. The
+/// final `Config` also applies feature and requirement constraints, permission
+/// profile resolution, and network proxy construction. The normal builders load
+/// layers from disk, so config writes use this to validate the pending stack.
 pub async fn validate_materialized_config_from_layer_stack(
     codex_home: PathBuf,
     config_layer_stack: ConfigLayerStack,
