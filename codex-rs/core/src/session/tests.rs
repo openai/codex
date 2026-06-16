@@ -979,8 +979,11 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
             &'a mut self,
             _req: &'a (),
             _ctx: crate::tools::sandboxing::ApprovalCtx<'a>,
-        ) -> futures::future::BoxFuture<'a, ReviewDecision> {
-            Box::pin(async { ReviewDecision::Approved })
+        ) -> futures::future::BoxFuture<
+            'a,
+            Result<ReviewDecision, crate::tools::sandboxing::ToolError>,
+        > {
+            Box::pin(async { Ok(ReviewDecision::Approved) })
         }
     }
 
@@ -5697,10 +5700,9 @@ async fn request_permissions_tool_resolves_relative_paths_against_selected_envir
     turn_context_mut.environments.turn_environments[0] = TurnEnvironment::new(
         "remote".to_string(),
         current_environment.environment,
-        codex_utils_path_uri::PathUri::from_abs_path(&environment_cwd),
+        PathUri::from_abs_path(&environment_cwd),
         current_environment.shell,
-    )
-    .expect("remote turn environment");
+    );
 
     let call_id = "call-1".to_string();
     let handler = RequestPermissionsHandler;
@@ -6317,15 +6319,16 @@ async fn primary_environment_uses_first_turn_environment() {
     let first_environment = turn_context.environments.turn_environments[0].clone();
     #[allow(deprecated)]
     let second_cwd = turn_context.cwd.join("second");
-    turn_context.environments.turn_environments.push(
-        TurnEnvironment::new(
+    let second_cwd_uri = codex_utils_path_uri::PathUri::from_abs_path(&second_cwd);
+    turn_context
+        .environments
+        .turn_environments
+        .push(TurnEnvironment::new(
             "second".to_string(),
             Arc::clone(&first_environment.environment),
-            codex_utils_path_uri::PathUri::from_abs_path(&second_cwd),
+            second_cwd_uri.clone(),
             /*shell*/ None,
-        )
-        .expect("second turn environment"),
-    );
+        ));
 
     assert_eq!(
         turn_context
@@ -6343,12 +6346,12 @@ async fn primary_environment_uses_first_turn_environment() {
             .find(|environment| environment.environment_id == "second")
             .expect("second environment")
             .cwd(),
-        &second_cwd
+        &second_cwd_uri
     );
     assert_eq!(turn_context.environments.turn_environments.len(), 2);
     assert_eq!(
         turn_context.environments.turn_environments[1].cwd(),
-        &second_cwd
+        &second_cwd_uri
     );
 }
 

@@ -91,7 +91,7 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
     let command = vec!["/bin/echo".to_string(), "ok".to_string()];
     let command = build_sandbox_command(
         &command,
-        &command_cwd,
+        &PathUri::from_abs_path(&command_cwd),
         &exec_env_for_sandbox_permissions(&env, SandboxPermissions::RequireEscalated),
         /*additional_permissions*/ None,
     )
@@ -129,7 +129,7 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
         )
         .expect("prepare exec request");
 
-    assert_eq!(exec_request.cwd, command_cwd);
+    assert_eq!(exec_request.cwd, PathUri::from_abs_path(&command_cwd));
     assert_eq!(
         exec_request.windows_sandbox_policy_cwd,
         native_sandbox_policy_cwd

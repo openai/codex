@@ -32,6 +32,7 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_tools::UnifiedExecShellMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_path_uri::PathUri;
 use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
@@ -96,7 +97,7 @@ pub(crate) struct ExecCommandRequest {
     pub process_id: i32,
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
     pub sandbox_cwd: AbsolutePathBuf,
     pub turn_environment: TurnEnvironment,
     pub shell_mode: UnifiedExecShellMode,

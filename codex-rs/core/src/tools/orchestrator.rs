@@ -537,7 +537,7 @@ impl ToolOrchestrator {
         } else {
             ToolDecisionSource::User
         };
-        let decision = tool.start_approval_async(req, approval_ctx).await;
+        let decision = tool.start_approval_async(req, approval_ctx).await?;
         let tool_name = flat_tool_name(&tool_ctx.tool_name);
         otel.tool_decision(
             tool_name.as_ref(),

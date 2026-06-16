@@ -11,7 +11,6 @@ use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::handlers::rewrite_function_string_argument;
 use crate::tools::handlers::updated_hook_command;
@@ -131,21 +130,26 @@ impl ExecCommandHandler {
         };
         let cwd = environment_args
             .workdir
-            .as_deref()
+            .as_ref()
             .filter(|workdir| !workdir.is_empty())
-            .map_or_else(
-                || turn_environment.cwd().clone(),
-                |workdir| turn_environment.cwd().join(workdir),
-            );
+            .and_then(|workdir| turn_environment.cwd().join(workdir.as_str()).ok())
+            .unwrap_or_else(|| turn_environment.cwd().clone());
+        // TODO(anp): Migrate command approvals, granted permissions, and tool hooks to PathUri so
+        // foreign command working directories do not require a host-native projection here.
+        let native_cwd = cwd.to_abs_path().map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "command workdir `{cwd}` is not native to the Codex host: {err}"
+            ))
+        })?;
         let environment = Arc::clone(&turn_environment.environment);
         let fs = environment.get_filesystem();
-        let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
+        let args: ExecCommandArgs = parse_arguments(&arguments)?;
         let hook_command = args.cmd.clone();
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
             context.turn.as_ref(),
             &hook_command,
-            &cwd,
+            &native_cwd,
         )
         .await;
         let process_id = manager.allocate_process_id().await;
@@ -186,7 +190,7 @@ impl ExecCommandHandler {
         let effective_additional_permissions = apply_granted_turn_permissions(
             context.session.as_ref(),
             &turn_environment.environment_id,
-            cwd.as_path(),
+            native_cwd.as_path(),
             sandbox_permissions,
             additional_permissions,
         )
@@ -226,7 +230,7 @@ impl ExecCommandHandler {
                     effective_additional_permissions.sandbox_permissions,
                     effective_additional_permissions.additional_permissions,
                     effective_additional_permissions.permissions_preapproved,
-                    &cwd,
+                    native_cwd.as_path(),
                 )
             },
             |permissions| Ok(Some(permissions)),
@@ -240,7 +244,7 @@ impl ExecCommandHandler {
 
         if let Some(output) = intercept_apply_patch(
             &command,
-            &cwd,
+            &native_cwd,
             fs.as_ref(),
             turn_environment.clone(),
             context.session.clone(),
@@ -277,7 +281,14 @@ impl ExecCommandHandler {
                     yield_time_ms,
                     max_output_tokens,
                     cwd,
-                    sandbox_cwd: turn_environment.cwd().clone(),
+                    // TODO(anp): Migrate the sandbox orchestration traits to PathUri so the
+                    // selected environment root can remain foreign until sandbox enforcement.
+                    sandbox_cwd: turn_environment.cwd().to_abs_path().map_err(|err| {
+                        FunctionCallError::RespondToModel(format!(
+                            "environment cwd `{}` is not native to the Codex host: {err}",
+                            turn_environment.cwd()
+                        ))
+                    })?,
                     turn_environment: turn_environment.clone(),
                     shell_mode,
                     network: context.turn.network.clone(),

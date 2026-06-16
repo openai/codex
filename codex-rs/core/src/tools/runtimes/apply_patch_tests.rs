@@ -22,7 +22,6 @@ fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::
         PathUri::from_abs_path(&std::env::temp_dir().abs()),
         /*shell*/ None,
     )
-    .expect("turn environment")
 }
 
 #[test]

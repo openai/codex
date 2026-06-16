@@ -548,14 +548,32 @@ async fn resolve_turn_environment_selections(
     let Some(environments) = environments else {
         return Ok(None);
     };
+    let mut selections = Vec::with_capacity(environments.len());
+    for environment in environments {
+        let environment_id = environment.environment_id;
+        let convention = environment
+            .cwd
+            .infer_absolute_path_convention()
+            .ok_or_else(|| {
+                invalid_request(format!(
+                    "invalid cwd for environment `{environment_id}`: path `{}` does not use absolute POSIX or Windows path syntax",
+                    environment.cwd
+                ))
+            })?;
+        let cwd = environment.cwd.to_path_uri(convention).map_err(|err| {
+            invalid_request(format!(
+                "invalid cwd for environment `{environment_id}`: {err}"
+            ))
+        })?;
+        selections.push(TurnEnvironmentSelection {
+            environment_id,
+            cwd,
+        });
+    }
     thread_manager
-        .resolve_native_environment_selections(
-            environments
-                .into_iter()
-                .map(|environment| (environment.environment_id, environment.cwd)),
-        )
-        .map(Some)
-        .map_err(environment_selection_error)
+        .validate_environment_selections(&selections)
+        .map_err(environment_selection_error)?;
+    Ok(Some(selections))
 }
 
 fn resolve_runtime_workspace_roots(workspace_roots: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {

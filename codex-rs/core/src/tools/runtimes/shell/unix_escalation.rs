@@ -132,8 +132,12 @@ pub(super) async fn try_run_zsh_fork(
     };
     let mut env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
     prepend_zsh_fork_bin_to_path(&mut env, shell_zsh_path);
-    let command =
-        build_sandbox_command(command, &req.cwd, &env, req.additional_permissions.clone())?;
+    let command = build_sandbox_command(
+        command,
+        &PathUri::from_abs_path(&req.cwd),
+        &env,
+        req.additional_permissions.clone(),
+    )?;
     let options = ExecOptions {
         expiration: req.timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
@@ -172,6 +176,11 @@ pub(super) async fn try_run_zsh_fork(
     let exec_policy = Arc::new(RwLock::new(
         ctx.session.services.exec_policy.current().as_ref().clone(),
     ));
+    let sandbox_cwd = sandbox_cwd.to_abs_path().map_err(|err| {
+        ToolError::Rejected(format!(
+            "sandbox cwd `{sandbox_cwd}` is not native to the Codex host: {err}"
+        ))
+    })?;
     let command_executor = CoreShellCommandExecutor {
         command,
         cwd: sandbox_cwd,
@@ -273,9 +282,15 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
     let exec_policy = Arc::new(RwLock::new(
         ctx.session.services.exec_policy.current().as_ref().clone(),
     ));
+    let native_cwd = exec_request.cwd.to_abs_path().map_err(|err| {
+        ToolError::Rejected(format!(
+            "zsh-fork cwd `{}` is not native to the Codex host: {err}",
+            exec_request.cwd
+        ))
+    })?;
     let command_executor = CoreShellCommandExecutor {
         command: exec_request.command.clone(),
-        cwd: exec_request.cwd.clone(),
+        cwd: native_cwd,
         permission_profile: exec_request.permission_profile.clone(),
         file_system_sandbox_policy: exec_request.file_system_sandbox_policy.clone(),
         network_sandbox_policy: exec_request.network_sandbox_policy,
@@ -852,7 +867,7 @@ impl CoreShellCommandExecutor {
         let result = crate::sandboxing::execute_exec_request_with_after_spawn(
             crate::sandboxing::ExecRequest {
                 command: self.command.clone(),
-                cwd: self.cwd.clone(),
+                cwd: PathUri::from_abs_path(&self.cwd),
                 env: exec_env,
                 exec_server_env_config: None,
                 network: self.network.clone(),
@@ -1003,9 +1018,15 @@ impl CoreShellCommandExecutor {
             network.apply_to_env(&mut exec_request.env);
         }
 
+        let cwd = exec_request.cwd.to_abs_path().map_err(|err| {
+            anyhow::anyhow!(
+                "escalated cwd `{}` is not native to the Codex host: {err}",
+                exec_request.cwd
+            )
+        })?;
         Ok(PreparedExec {
             command: exec_request.command,
-            cwd: exec_request.cwd.to_path_buf(),
+            cwd: cwd.to_path_buf(),
             env: exec_request.env,
             arg0: exec_request.arg0,
         })
