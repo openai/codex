@@ -957,6 +957,8 @@ pub(crate) fn build_guardian_review_session_config(
     guardian_config.model_provider.request_max_retries = Some(1);
     guardian_config.model_provider.stream_max_retries = Some(1);
     guardian_config.include_skill_instructions = false;
+    guardian_config.memories.use_memories = false;
+    guardian_config.memories.dedicated_tools = false;
     guardian_config.base_instructions = Some(
         parent_config
             .guardian_policy_config

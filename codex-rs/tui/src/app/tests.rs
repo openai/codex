@@ -2433,7 +2433,7 @@ async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> 
     app.side_threads.remove(&side_thread_id);
     app.active_thread_id = Some(main_thread_id);
     app.surface_pending_inactive_thread_interactive_requests()
-        .await;
+        .await?;
 
     assert_eq!(app.chat_widget.has_active_view(), true);
 
@@ -2462,8 +2462,8 @@ async fn inactive_thread_exec_approval_preserves_context() {
             enabled: Some(true),
         }),
         file_system: Some(AdditionalFileSystemPermissions {
-            read: Some(vec![test_absolute_path("/tmp/read-only")]),
-            write: Some(vec![test_absolute_path("/tmp/write")]),
+            read: Some(vec![test_absolute_path("/tmp/read-only").into()]),
+            write: Some(vec![test_absolute_path("/tmp/write").into()]),
             glob_scan_max_depth: None,
             entries: None,
         }),
@@ -2481,6 +2481,7 @@ async fn inactive_thread_exec_approval_preserves_context() {
     })) = app
         .interactive_request_for_thread_request(thread_id, &request)
         .await
+        .expect("valid localized paths")
     else {
         panic!("expected exec approval request");
     };
@@ -2499,8 +2500,8 @@ async fn inactive_thread_exec_approval_preserves_context() {
                 enabled: Some(true),
             }),
             file_system: Some(AdditionalFileSystemPermissions {
-                read: Some(vec![test_absolute_path("/tmp/read-only")]),
-                write: Some(vec![test_absolute_path("/tmp/write")]),
+                read: Some(vec![test_absolute_path("/tmp/read-only").into()]),
+                write: Some(vec![test_absolute_path("/tmp/write").into()]),
                 glob_scan_max_depth: None,
                 entries: None,
             }),
@@ -2542,6 +2543,7 @@ async fn inactive_thread_exec_approval_splits_shell_wrapped_command() {
     let Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec { command, .. })) = app
         .interactive_request_for_thread_request(thread_id, &request)
         .await
+        .expect("valid localized paths")
     else {
         panic!("expected exec approval request");
     };
@@ -2595,6 +2597,7 @@ async fn inactive_thread_file_change_approval_recovers_buffered_changes() {
     let request = app
         .interactive_request_for_thread_request(thread_id, &request)
         .await
+        .expect("valid localized paths")
         .expect("expected file change approval request");
 
     let ThreadInteractiveRequest::Approval(ApprovalRequest::ApplyPatch {
@@ -2646,8 +2649,8 @@ async fn inactive_thread_permissions_approval_preserves_file_system_permissions(
                     enabled: Some(true),
                 }),
                 file_system: Some(AdditionalFileSystemPermissions {
-                    read: Some(vec![test_absolute_path("/tmp/read-only")]),
-                    write: Some(vec![test_absolute_path("/tmp/write")]),
+                    read: Some(vec![test_absolute_path("/tmp/read-only").into()]),
+                    write: Some(vec![test_absolute_path("/tmp/write").into()]),
                     glob_scan_max_depth: None,
                     entries: None,
                 }),
@@ -2662,6 +2665,7 @@ async fn inactive_thread_permissions_approval_preserves_file_system_permissions(
     })) = app
         .interactive_request_for_thread_request(thread_id, &request)
         .await
+        .expect("valid localized paths")
     else {
         panic!("expected permissions approval request");
     };
@@ -2703,6 +2707,7 @@ async fn inactive_thread_url_elicitation_routes_to_app_link() {
     let Some(ThreadInteractiveRequest::AppLink(params)) = app
         .interactive_request_for_thread_request(thread_id, &request)
         .await
+        .expect("valid localized paths")
     else {
         panic!("expected app link request");
     };
@@ -2742,6 +2747,7 @@ async fn inactive_thread_invalid_url_elicitation_is_declined() {
     assert!(
         app.interactive_request_for_thread_request(thread_id, &request)
             .await
+            .expect("valid localized paths")
             .is_none()
     );
     assert_matches!(

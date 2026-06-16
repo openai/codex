@@ -34,8 +34,11 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
+use codex_login::CLIENT_ID_OVERRIDE_ENV_VAR;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::login_with_api_key;
+use codex_login::login_with_bedrock_api_key;
+use codex_protocol::account::AmazonBedrockCredentialSource;
 use codex_protocol::account::PlanType as AccountPlanType;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
@@ -1384,6 +1387,58 @@ async fn login_account_chatgpt_start_can_be_cancelled() -> Result<()> {
 #[tokio::test]
 // Serialize tests that launch the login server since it binds to a fixed port.
 #[serial(login_port)]
+async fn login_account_chatgpt_uses_debug_oauth_overrides() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.path(),
+        &[
+            (CLIENT_ID_OVERRIDE_ENV_VAR, Some("staging-client")),
+            (LOGIN_ISSUER_ENV_VAR, Some("https://auth.example.com")),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_login_account_chatgpt_request().await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    let login: LoginAccountResponse = to_response(resp)?;
+    let LoginAccountResponse::Chatgpt { login_id, auth_url } = login else {
+        bail!("unexpected login response: {login:?}");
+    };
+    let auth_url = Url::parse(&auth_url)?;
+    assert_eq!(
+        auth_url.origin().ascii_serialization(),
+        "https://auth.example.com"
+    );
+    assert_eq!(
+        auth_url
+            .query_pairs()
+            .find_map(|(key, value)| (key == "client_id").then_some(value.into_owned())),
+        Some("staging-client".to_string())
+    );
+
+    let cancel_id = mcp
+        .send_cancel_login_account_request(CancelLoginAccountParams { login_id })
+        .await?;
+    let cancel_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(cancel_id)),
+    )
+    .await??;
+    let _: CancelLoginAccountResponse = to_response(cancel_resp)?;
+    Ok(())
+}
+
+#[tokio::test]
+// Serialize tests that launch the login server since it binds to a fixed port.
+#[serial(login_port)]
 async fn set_auth_token_cancels_active_chatgpt_login() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
@@ -1672,10 +1727,57 @@ region = "us-west-2"
     let received: GetAccountResponse = to_response(resp)?;
 
     let expected = GetAccountResponse {
-        account: Some(Account::AmazonBedrock {}),
+        account: Some(Account::AmazonBedrock {
+            credential_source: AmazonBedrockCredentialSource::AwsManaged,
+        }),
         requires_openai_auth: false,
     };
     assert_eq!(received, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_account_with_managed_bedrock_provider() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            model_provider_id: Some("amazon-bedrock".to_string()),
+            ..Default::default()
+        },
+    )?;
+    login_with_bedrock_api_key(
+        codex_home.path(),
+        "managed-bedrock-api-key",
+        "us-west-2",
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: GetAccountResponse = to_response(resp)?;
+
+    assert_eq!(
+        received,
+        GetAccountResponse {
+            account: Some(Account::AmazonBedrock {
+                credential_source: AmazonBedrockCredentialSource::CodexManaged,
+            }),
+            requires_openai_auth: false,
+        }
+    );
     Ok(())
 }
 

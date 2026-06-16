@@ -411,7 +411,6 @@ async fn setup_turn_one_with_custom_spawned_child(
     )
     .await;
 
-    #[allow(clippy::expect_used)]
     let mut builder = configure_test(test_codex().with_config(|config| {
         config
             .features
@@ -529,11 +528,8 @@ async fn subagent_start_replaces_session_start_and_injects_context() -> Result<(
 
     let test = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) =
-                write_subagent_lifecycle_hooks(home, /*stop_prompts*/ &[], "worker")
-            {
-                panic!("failed to write subagent hook fixture: {error}");
-            }
+            write_subagent_lifecycle_hooks(home, /*stop_prompts*/ &[], "worker")
+                .expect("failed to write subagent hook fixture");
         })
         .with_config(|config| {
             trust_discovered_hooks(config);
@@ -676,13 +672,12 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
 
     let test = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_subagent_lifecycle_hooks(
+            write_subagent_lifecycle_hooks(
                 home,
                 /*stop_prompts*/ &[SUBAGENT_STOP_CONTINUATION],
                 "",
-            ) {
-                panic!("failed to write subagent hook fixture: {error}");
-            }
+            )
+            .expect("failed to write subagent hook fixture");
         })
         .with_config(|config| {
             trust_discovered_hooks(config);
@@ -1093,10 +1088,16 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
             "type": "agent_message",
             "author": "/root",
             "recipient": "/root/worker",
-            "content": [{
-                "type": "encrypted_content",
-                "encrypted_content": encrypted_message,
-            }],
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n",
+                },
+                {
+                    "type": "encrypted_content",
+                    "encrypted_content": encrypted_message,
+                },
+            ],
         })]
     );
 
@@ -1147,7 +1148,7 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
     mount_sse_once_match(
         &server,
         |req: &wiremock::Request| {
-            body_contains(req, SPAWN_CALL_ID) && !body_contains(req, "<subagent_notification>")
+            body_contains(req, SPAWN_CALL_ID) && !body_contains(req, "Message Type: FINAL_ANSWER")
         },
         sse(vec![
             ev_response_created("resp-parent-2"),
@@ -1157,32 +1158,25 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
     )
     .await;
     let error = "stream disconnected before completion: stream closed before response.completed";
-    let (status, next_action, expected_text) = match scenario {
-        CompletionScenario::Completed => (json!({"completed": "child done"}), None, "child done"),
+    let (payload, expected_text) = match scenario {
+        CompletionScenario::Completed => ("child done".to_string(), "child done"),
         CompletionScenario::TerminalError => (
-            json!({"errored": error}),
-            Some(
-                "This agent's turn failed. If you still need this agent, use the available collaboration tools to give it another task.",
+            format!(
+                "Agent errored: {error}\n\nThis agent's turn failed. If you still need this agent, use the available collaboration tools to give it another task."
             ),
             error,
         ),
     };
-    let mut notification_body = json!({
-        "agent_path": "/root/worker",
-        "status": status,
-    });
-    if let Some(next_action) = next_action {
-        notification_body["next_action"] = json!(next_action);
-    }
-    let notification =
-        format!("<subagent_notification>\n{notification_body}\n</subagent_notification>");
+    let notification = format!(
+        "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\n{payload}"
+    );
     // If the child is still running when the parent turn starts, wait_agent blocks
     // until mailbox delivery. The follow-up request must then contain that delivery.
     mount_sse_once_match(
         &server,
         |req: &wiremock::Request| {
             body_contains(req, TURN_2_NO_WAIT_PROMPT)
-                && !body_contains(req, "<subagent_notification>")
+                && !body_contains(req, "Message Type: FINAL_ANSWER")
         },
         sse(vec![
             ev_response_created("resp-parent-3"),
@@ -1194,7 +1188,9 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
     let agent_request = mount_sse_once_match(
         &server,
         |req: &wiremock::Request| {
-            body_contains(req, TURN_2_NO_WAIT_PROMPT) && body_contains(req, expected_text)
+            body_contains(req, TURN_2_NO_WAIT_PROMPT)
+                && body_contains(req, "Message Type: FINAL_ANSWER")
+                && body_contains(req, expected_text)
         },
         sse(vec![
             ev_response_created("resp-parent-4"),
@@ -1295,9 +1291,7 @@ async fn skills_toggle_skips_instructions_for_parent_and_spawned_child() -> Resu
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(err) = write_home_skill(home, "demo", "demo-skill", "demo skill") {
-                panic!("write home skill: {err}");
-            }
+            write_home_skill(home, "demo", "demo-skill", "demo skill").expect("write home skill");
         })
         .with_config(|config| {
             config
@@ -1429,9 +1423,7 @@ async fn spawn_agent_tool_description_mentions_role_locked_settings() -> Result<
     assert_eq!(requests.len(), 2);
     let output = requests[1].tool_search_output(call_id);
     let spawn_agent = namespace_child_tool(&output, "multi_agent_v1", "spawn_agent")
-        .unwrap_or_else(|| {
-            panic!("expected tool_search to return multi_agent_v1.spawn_agent: {output:?}")
-        });
+        .expect("tool_search should return multi_agent_v1.spawn_agent");
     let agent_type_description = tool_parameter_description(spawn_agent, "agent_type")
         .expect("spawn_agent agent_type description");
     let custom_role_description =

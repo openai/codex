@@ -29,6 +29,7 @@ use crate::turn_timing::now_unix_timestamp_ms;
 use crate::user_shell_command::user_shell_command_record_item;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
+use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
@@ -124,17 +125,26 @@ pub(crate) async fn execute_user_shell_command(
         session.send_event(turn_context.as_ref(), event).await;
     }
 
-    // Execute the user's script under their default shell when known; this
+    let Some((turn_environment, environment_shell)) = turn_context
+        .environments
+        .local()
+        .and_then(|environment| environment.shell.as_ref().map(|shell| (environment, shell)))
+    else {
+        send_user_shell_error(
+            &session,
+            turn_context.as_ref(),
+            "shell is unavailable in this session",
+        )
+        .await;
+        return;
+    };
+
+    // Execute the user's script under the environment's shell; this
     // allows commands that use shell features (pipes, &&, redirects, etc.).
     // We do not source rc files or otherwise reformat the script.
     let use_login_shell = true;
-    let session_shell = session.user_shell();
-    let shell_snapshot = session.services.shell_snapshot.load_full();
-    #[allow(deprecated)]
-    let shell_snapshot_location = shell_snapshot
-        .as_ref()
-        .and_then(|snapshot| snapshot.location(&turn_context.cwd));
-    let display_command = session_shell.derive_exec_args(&command, use_login_shell);
+    let display_command = environment_shell.derive_exec_args(&command, use_login_shell);
+    let shell_snapshot_location = turn_environment.shell_snapshot(turn_environment.cwd());
     let mut exec_env_map = create_env(
         &turn_context.shell_environment_policy,
         Some(session.thread_id),
@@ -144,7 +154,7 @@ pub(crate) async fn execute_user_shell_command(
     }
     let exec_command = prepare_user_shell_exec_command(
         &display_command,
-        session_shell.as_ref(),
+        environment_shell,
         shell_snapshot_location.as_ref(),
         &turn_context.shell_environment_policy.r#set,
         &mut exec_env_map,
@@ -152,8 +162,7 @@ pub(crate) async fn execute_user_shell_command(
 
     let call_id = Uuid::new_v4().to_string();
     let raw_command = command;
-    #[allow(deprecated)]
-    let cwd = turn_context.cwd.clone();
+    let cwd = turn_environment.cwd().clone();
 
     let parsed_cmd = parse_command(&display_command);
     session
@@ -338,9 +347,21 @@ pub(crate) async fn execute_user_shell_command(
     }
 }
 
+async fn send_user_shell_error(session: &Session, turn_context: &TurnContext, message: &str) {
+    session
+        .send_event(
+            turn_context,
+            EventMsg::Error(ErrorEvent {
+                message: message.to_string(),
+                codex_error_info: None,
+            }),
+        )
+        .await;
+}
+
 fn prepare_user_shell_exec_command(
     display_command: &[String],
-    session_shell: &Shell,
+    shell: &Shell,
     shell_snapshot: Option<&AbsolutePathBuf>,
     shell_environment_set: &HashMap<String, String>,
     exec_env_map: &mut HashMap<String, String>,
@@ -349,7 +370,7 @@ fn prepare_user_shell_exec_command(
     {
         prepare_user_shell_exec_command_with_path_prepend(
             display_command,
-            session_shell,
+            shell,
             shell_snapshot,
             shell_environment_set,
             exec_env_map,
@@ -361,7 +382,7 @@ fn prepare_user_shell_exec_command(
     {
         maybe_wrap_shell_lc_with_snapshot(
             display_command,
-            session_shell,
+            shell,
             shell_snapshot,
             shell_environment_set,
             exec_env_map,
@@ -381,7 +402,7 @@ fn prepare_user_shell_exec_command(
 #[cfg(unix)]
 fn prepare_user_shell_exec_command_with_path_prepend(
     display_command: &[String],
-    session_shell: &Shell,
+    shell: &Shell,
     shell_snapshot: Option<&AbsolutePathBuf>,
     shell_environment_set: &HashMap<String, String>,
     exec_env_map: &mut HashMap<String, String>,
@@ -392,7 +413,7 @@ fn prepare_user_shell_exec_command_with_path_prepend(
     prepend_runtime_path(exec_env_map, &mut runtime_path_prepends);
     maybe_wrap_shell_lc_with_snapshot(
         display_command,
-        session_shell,
+        shell,
         shell_snapshot,
         &explicit_env_overrides,
         exec_env_map,

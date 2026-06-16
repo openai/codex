@@ -10,6 +10,7 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RateLimitReachedType;
+use codex_app_server_protocol::RateLimitResetCreditsSummary;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RateLimitWindow;
 use codex_app_server_protocol::RequestId;
@@ -157,7 +158,8 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                     }
                 }
             }
-        ]
+        ],
+        "rate_limit_reset_credits": { "available_count": 3 }
     });
 
     Mock::given(method("GET"))
@@ -165,6 +167,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(ResponseTemplate::new(200).set_body_json(response_body))
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -257,6 +260,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
             .into_iter()
             .collect(),
         ),
+        rate_limit_reset_credits: Some(RateLimitResetCreditsSummary { available_count: 3 }),
     };
     assert_eq!(received, expected);
 

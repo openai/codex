@@ -147,12 +147,11 @@ fn assert_codex_client_metadata(
     );
     assert_eq!(client_metadata["session_id"].as_str(), Some(session_id));
     assert_eq!(client_metadata["thread_id"].as_str(), Some(thread_id));
-    let Some(turn_metadata_str) = client_metadata["x-codex-turn-metadata"].as_str() else {
-        panic!("missing x-codex-turn-metadata client metadata");
-    };
-    let Ok(turn_metadata) = serde_json::from_str::<serde_json::Value>(turn_metadata_str) else {
-        panic!("invalid x-codex-turn-metadata json");
-    };
+    let turn_metadata_str = client_metadata["x-codex-turn-metadata"]
+        .as_str()
+        .expect("missing x-codex-turn-metadata client metadata");
+    let turn_metadata = serde_json::from_str::<serde_json::Value>(turn_metadata_str)
+        .expect("invalid x-codex-turn-metadata json");
     assert_eq!(
         turn_metadata["installation_id"].as_str(),
         Some(installation_id)
@@ -167,6 +166,57 @@ fn assert_codex_client_metadata(
         client_metadata["x-codex-window-id"].as_str(),
         turn_metadata["window_id"].as_str()
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_openai_responses_requests_omit_item_turn_metadata() {
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let mut provider =
+        built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone();
+    provider.name = "Test Responses".to_string();
+    provider.base_url = Some(format!("{}/v1", server.uri()));
+    provider.supports_websockets = false;
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider_id = provider.name.clone();
+            config.model_provider = provider;
+        })
+        .build(&server)
+        .await
+        .unwrap()
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let body = response_mock.single_request().body_json();
+    let input = body["input"]
+        .as_array()
+        .expect("request should include input items");
+    assert!(!input.is_empty(), "request should include input items");
+    for item in input {
+        assert!(
+            item.get("metadata").is_none(),
+            "input item should omit metadata: {item}"
+        );
+    }
 }
 
 /// Writes an `auth.json` into the provided `codex_home` with the specified parameters.
@@ -301,19 +351,14 @@ move /y tokens.next tokens.txt >nul
             // Match the model-provider default to avoid brittle shell-startup timing in CI.
             timeout_ms: non_zero_u64(/*value*/ 5_000),
             refresh_interval_ms: 60_000,
-            cwd: match codex_utils_absolute_path::AbsolutePathBuf::try_from(self.tempdir.path()) {
-                Ok(cwd) => cwd,
-                Err(err) => panic!("tempdir should be absolute: {err}"),
-            },
+            cwd: codex_utils_absolute_path::AbsolutePathBuf::try_from(self.tempdir.path())
+                .expect("tempdir should be absolute"),
         }
     }
 }
 
 fn non_zero_u64(value: u64) -> NonZeroU64 {
-    match NonZeroU64::new(value) {
-        Some(value) => value,
-        None => panic!("expected non-zero value: {value}"),
-    }
+    NonZeroU64::new(value).expect("expected non-zero value")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -352,6 +397,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
             text: "resumed user message".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     let prior_user_json = serde_json::to_value(&prior_user).unwrap();
     writeln!(
@@ -373,6 +419,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
             text: "resumed system instruction".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     let prior_system_json = serde_json::to_value(&prior_system).unwrap();
     writeln!(
@@ -394,6 +441,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
             text: "resumed assistant message".to_string(),
         }],
         phase: Some(MessagePhase::Commentary),
+        metadata: None,
     };
     let prior_item_json = serde_json::to_value(&prior_item).unwrap();
     writeln!(
@@ -536,6 +584,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
         call_id: "legacy-js-call".to_string(),
         name: "js_repl".to_string(),
         input: "console.log('legacy image flow')".to_string(),
+        metadata: None,
     };
     let legacy_image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
     let rollout = vec![
@@ -565,6 +614,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
                 call_id: "legacy-js-call".to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_text("legacy js_repl stdout".to_string()),
+                metadata: None,
             }),
         },
         RolloutLine {
@@ -577,6 +627,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 }],
                 phase: None,
+                metadata: None,
             }),
         },
     ];
@@ -694,6 +745,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
                 namespace: None,
                 arguments: "{\"path\":\"/tmp/example.webp\"}".to_string(),
                 call_id: function_call_id.to_string(),
+                metadata: None,
             }),
         },
         RolloutLine {
@@ -706,6 +758,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
                         detail: Some(ImageDetail::Original),
                     },
                 ]),
+                metadata: None,
             }),
         },
         RolloutLine {
@@ -716,6 +769,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
                 call_id: custom_call_id.to_string(),
                 name: "js_repl".to_string(),
                 input: "console.log('image flow')".to_string(),
+                metadata: None,
             }),
         },
         RolloutLine {
@@ -729,6 +783,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
                         detail: Some(ImageDetail::Original),
                     },
                 ]),
+                metadata: None,
             }),
         },
     ];
@@ -907,7 +962,7 @@ async fn provider_auth_command_refreshes_after_401() {
 ///
 /// The caller owns the server-side assertions, so this helper only validates that the request
 /// reaches `Completed` without surfacing an auth or transport error to the client.
-#[expect(clippy::expect_used, clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuthInfo) {
     let provider = ModelProviderInfo {
         name: "corp".into(),
@@ -976,6 +1031,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
             text: "hello".to_string(),
         }],
         phase: None,
+        metadata: None,
     });
 
     let mut stream = client_session
@@ -1175,18 +1231,16 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
 
-    let auth_manager = match CodexAuth::from_auth_storage(
+    let auth = CodexAuth::from_auth_storage(
         codex_home.path(),
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::default(),
     )
     .await
-    {
-        Ok(Some(auth)) => codex_core::test_support::auth_manager_from_auth(auth),
-        Ok(None) => panic!("No CodexAuth found in codex_home"),
-        Err(e) => panic!("Failed to load CodexAuth: {e}"),
-    };
+    .expect("Failed to load CodexAuth")
+    .expect("No CodexAuth found in codex_home");
+    let auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
     let installation_id = resolve_installation_id(&config.codex_home)
         .await
         .expect("resolve installation id");
@@ -1988,8 +2042,7 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
     )
     .await;
 
-    let mut model_catalog = bundled_models_response()
-        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    let mut model_catalog = bundled_models_response().expect("bundled models.json should parse");
     let model = model_catalog
         .models
         .iter_mut()
@@ -2111,8 +2164,7 @@ async fn reasoning_summary_none_overrides_model_catalog_default() -> anyhow::Res
     )
     .await;
 
-    let mut model_catalog = bundled_models_response()
-        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    let mut model_catalog = bundled_models_response().expect("bundled models.json should parse");
     let model = model_catalog
         .models
         .iter_mut()
@@ -2474,6 +2526,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             text: "content".into(),
         }]),
         encrypted_content: None,
+        metadata: None,
     });
     prompt.input.push(ResponseItem::Message {
         id: Some("message-id".into()),
@@ -2482,6 +2535,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             text: "message".into(),
         }],
         phase: None,
+        metadata: None,
     });
     prompt.input.push(ResponseItem::WebSearchCall {
         id: Some("web-search-id".into()),
@@ -2490,6 +2544,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             query: Some("weather".into()),
             queries: None,
         }),
+        metadata: None,
     });
     prompt.input.push(ResponseItem::FunctionCall {
         id: Some("function-id".into()),
@@ -2497,10 +2552,12 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         namespace: None,
         arguments: "{}".into(),
         call_id: "function-call-id".into(),
+        metadata: None,
     });
     prompt.input.push(ResponseItem::FunctionCallOutput {
         call_id: "function-call-id".into(),
         output: FunctionCallOutputPayload::from_text("ok".into()),
+        metadata: None,
     });
     prompt.input.push(ResponseItem::LocalShellCall {
         id: Some("local-shell-id".into()),
@@ -2513,6 +2570,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             env: None,
             user: None,
         }),
+        metadata: None,
     });
     prompt.input.push(ResponseItem::CustomToolCall {
         id: Some("custom-tool-id".into()),
@@ -2520,11 +2578,13 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         call_id: "custom-tool-call-id".into(),
         name: "custom_tool".into(),
         input: "{}".into(),
+        metadata: None,
     });
     prompt.input.push(ResponseItem::CustomToolCallOutput {
         call_id: "custom-tool-call-id".into(),
         name: None,
         output: FunctionCallOutputPayload::from_text("ok".into()),
+        metadata: None,
     });
 
     let mut stream = client_session

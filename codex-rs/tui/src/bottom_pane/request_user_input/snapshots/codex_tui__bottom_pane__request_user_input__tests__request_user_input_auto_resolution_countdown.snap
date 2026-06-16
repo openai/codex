@@ -1,0 +1,14 @@
+---
+source: tui/src/bottom_pane/request_user_input/mod.rs
+assertion_line: 1854
+expression: "render_snapshot_at(&overlay, Rect::new(0, 0, 120, 16), now)"
+---
+                                                                                                                        
+  Question 1/3 (3 unanswered) · auto-resolves in 1m 00s                                                                 
+  Choose an option.                                                                                                     
+                                                                                                                        
+  › 1. Option 1  First choice.                                                                                          
+    2. Option 2  Second choice.                                                                                         
+    3. Option 3  Third choice.                                                                                          
+                                                                                                                        
+  tab to add notes | enter to submit answer | ←/→ to navigate questions | esc to interrupt

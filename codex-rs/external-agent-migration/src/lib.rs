@@ -155,13 +155,13 @@ pub fn missing_subagent_names(
     Ok(names)
 }
 
-pub fn import_subagents(source_agents: &Path, target_agents: &Path) -> io::Result<usize> {
+pub fn import_subagents(source_agents: &Path, target_agents: &Path) -> io::Result<Vec<String>> {
     if !source_agents.is_dir() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
 
     fs::create_dir_all(target_agents)?;
-    let mut imported = 0usize;
+    let mut imported = Vec::new();
     for source_file in agent_source_files(source_agents)? {
         let Some(target) = subagent_target_file(&source_file, target_agents) else {
             continue;
@@ -174,7 +174,7 @@ pub fn import_subagents(source_agents: &Path, target_agents: &Path) -> io::Resul
             continue;
         };
         fs::write(&target, render_agent_toml(&document.body, &metadata)?)?;
-        imported += 1;
+        imported.push(metadata.name);
     }
 
     Ok(imported)
@@ -195,13 +195,13 @@ pub fn missing_command_names(
         .collect())
 }
 
-pub fn import_commands(source_commands: &Path, target_skills: &Path) -> io::Result<usize> {
+pub fn import_commands(source_commands: &Path, target_skills: &Path) -> io::Result<Vec<String>> {
     if !source_commands.is_dir() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
 
     fs::create_dir_all(target_skills)?;
-    let mut imported = 0usize;
+    let mut imported = Vec::new();
     for (source_file, name) in unique_supported_command_sources(source_commands)? {
         let document = parse_document(&source_file)?;
         let target_dir = target_skills.join(&name);
@@ -217,7 +217,7 @@ pub fn import_commands(source_commands: &Path, target_skills: &Path) -> io::Resu
             target_dir.join("SKILL.md"),
             render_command_skill(&document.body, &name, &description, &source_name),
         )?;
-        imported += 1;
+        imported.push(name);
     }
 
     Ok(imported)

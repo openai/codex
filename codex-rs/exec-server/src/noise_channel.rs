@@ -1,0 +1,317 @@
+//! Noise channel used by the remote exec-server relay.
+//!
+//! The harness initiates hybrid IK and pins the exec-server static key returned
+//! by the registry. The first handshake message lets the exec-server authenticate
+//! the harness static key; the exec-server then asks the registry whether that
+//! key is authorized before completing the handshake.
+//!
+//! "Hybrid" means the session keys include both X25519 and ML-KEM-768 key
+//! agreement. Once the two-message handshake finishes, AES-GCM protects the
+//! ordered transport records carrying JSON-RPC.
+
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+use clatter::HybridHandshake;
+use clatter::HybridHandshakeParams;
+use clatter::KeyPair;
+use clatter::bytearray::ByteArray;
+use clatter::constants::MAX_MESSAGE_LEN;
+use clatter::crypto::cipher::AesGcm;
+use clatter::crypto::dh::X25519;
+use clatter::crypto::hash::Sha256;
+use clatter::crypto::kem::rust_crypto_ml_kem::MlKem768;
+use clatter::handshakepattern::noise_hybrid_ik;
+use clatter::traits::Cipher;
+use clatter::traits::Dh;
+use clatter::traits::Handshaker;
+use clatter::traits::Kem;
+use clatter::transportstate::TransportState;
+use serde::Deserialize;
+use serde::Serialize;
+
+/// Identifies the handshake pattern and algorithms used by this channel.
+pub(crate) const NOISE_CHANNEL_SUITE: &str = "Noise_hybridIK_X25519+MLKEM768_AESGCM_SHA256";
+
+const PROLOGUE_DOMAIN: &[u8] = b"codex-exec-server-relay-noise/v1";
+
+type Handshake = HybridHandshake<X25519, MlKem768, MlKem768, AesGcm, Sha256>;
+type Transport = TransportState<AesGcm, Sha256>;
+type DhKeyPair = KeyPair<<X25519 as Dh>::PubKey, <X25519 as Dh>::PrivateKey>;
+type MlKem768PublicKey = <MlKem768 as Kem>::PubKey;
+type KemKeyPair = KeyPair<<MlKem768 as Kem>::PubKey, <MlKem768 as Kem>::SecretKey>;
+
+/// Public key material for the exec-server Noise suite.
+/// The suite tag prevents keys for another protocol from being accepted just
+/// because their components have the expected lengths.
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NoiseChannelPublicKey {
+    suite: String,
+    x25519_public_key: String,
+    mlkem768_public_key: String,
+}
+
+impl std::fmt::Debug for NoiseChannelPublicKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NoiseChannelPublicKey")
+            .field("suite", &self.suite)
+            .field("x25519_public_key", &"<redacted>")
+            .field("mlkem768_public_key", &"<redacted>")
+            .finish()
+    }
+}
+
+impl NoiseChannelPublicKey {
+    /// Decode registry-provided key material before passing it to Clatter.
+    fn decode(&self) -> Result<(<X25519 as Dh>::PubKey, MlKem768PublicKey), NoiseChannelError> {
+        if self.suite != NOISE_CHANNEL_SUITE {
+            return Err(NoiseChannelError::InvalidPublicKey(
+                "unsupported Noise channel suite",
+            ));
+        }
+        let dh = STANDARD
+            .decode(&self.x25519_public_key)
+            .map_err(|_| NoiseChannelError::InvalidPublicKey("invalid X25519 public key"))?;
+        let dh: <X25519 as Dh>::PubKey = dh
+            .try_into()
+            .map_err(|_| NoiseChannelError::InvalidPublicKey("invalid X25519 public key length"))?;
+        let kem = STANDARD
+            .decode(&self.mlkem768_public_key)
+            .map_err(|_| NoiseChannelError::InvalidPublicKey("invalid ML-KEM-768 public key"))?;
+        if kem.len() != MlKem768PublicKey::LENGTH {
+            return Err(NoiseChannelError::InvalidPublicKey(
+                "invalid ML-KEM-768 public key length",
+            ));
+        }
+
+        Ok((dh, MlKem768PublicKey::from_slice(kem.as_slice())))
+    }
+}
+
+/// Static Noise identity kept for the lifetime of an executor or harness process.
+#[derive(Clone)]
+pub struct NoiseChannelIdentity {
+    dh: DhKeyPair,
+    kem: KemKeyPair,
+}
+
+impl NoiseChannelIdentity {
+    pub fn generate() -> Result<Self, NoiseChannelError> {
+        let dh = X25519::genkey()
+            .map_err(|error| NoiseChannelError::KeyGeneration(error.to_string()))?;
+        let kem = MlKem768::genkey()
+            .map_err(|error| NoiseChannelError::KeyGeneration(error.to_string()))?;
+        Ok(Self { dh, kem })
+    }
+
+    pub fn public_key(&self) -> NoiseChannelPublicKey {
+        NoiseChannelPublicKey {
+            suite: NOISE_CHANNEL_SUITE.to_string(),
+            x25519_public_key: STANDARD.encode(self.dh.public),
+            mlkem768_public_key: STANDARD.encode(self.kem.public.as_slice()),
+        }
+    }
+}
+
+/// Harness-side state between the two hybrid-IK messages.
+/// Consuming it in [`Self::finish`] keeps a handshake tied to one relay stream.
+pub(crate) struct InitiatorHandshake {
+    handshake: Handshake,
+}
+
+impl InitiatorHandshake {
+    /// Start hybrid IK and pin the expected executor key.
+    /// `payload` carries the short-lived registry authorization inside the first
+    /// encrypted handshake message.
+    pub(crate) fn start(
+        identity: &NoiseChannelIdentity,
+        responder_public_key: &NoiseChannelPublicKey,
+        prologue: &[u8],
+        payload: &[u8],
+    ) -> Result<(Self, Vec<u8>), NoiseChannelError> {
+        let (responder_dh, responder_kem) = responder_public_key.decode()?;
+
+        // Both executor key components are pinned before any JSON-RPC is sent.
+        let params = HybridHandshakeParams::new(noise_hybrid_ik(), true)
+            .with_prologue(prologue)
+            .with_s(identity.dh.clone())
+            .with_s_kem(identity.kem.clone())
+            .with_rs(responder_dh)
+            .with_rs_kem(responder_kem);
+        let mut handshake = Handshake::new(params)?;
+        let overhead = handshake.get_next_message_overhead()?;
+        if payload.len() > MAX_MESSAGE_LEN - overhead {
+            return Err(NoiseChannelError::InvalidMessage(
+                "handshake payload is too large",
+            ));
+        }
+        let mut output = [0u8; MAX_MESSAGE_LEN];
+        let output_len = handshake.write_message(payload, &mut output)?;
+        Ok((Self { handshake }, output[..output_len].to_vec()))
+    }
+
+    /// Consume the executor response and enter transport mode.
+    /// The v1 response does not carry an application payload.
+    pub(crate) fn finish(mut self, response: &[u8]) -> Result<NoiseTransport, NoiseChannelError> {
+        ensure_noise_frame_len(response.len(), "handshake response is too large")?;
+        let mut payload = [0u8; MAX_MESSAGE_LEN];
+        let payload_len = self.handshake.read_message(response, &mut payload)?;
+        if payload_len != 0 {
+            return Err(NoiseChannelError::InvalidMessage(
+                "handshake response payload must be empty",
+            ));
+        }
+        Ok(NoiseTransport {
+            transport: self.handshake.finalize()?,
+        })
+    }
+}
+
+/// Executor-side handshake state while harness authorization is pending.
+/// This is not a usable transport until the registry accepts the authenticated
+/// harness key.
+pub(crate) struct PendingResponderHandshake {
+    handshake: Handshake,
+    pub(crate) initiator_public_key: NoiseChannelPublicKey,
+    pub(crate) payload: Vec<u8>,
+}
+
+impl PendingResponderHandshake {
+    /// Parse the first IK message and recover the authenticated harness key.
+    /// Callers must authorize that key before calling [`Self::complete`].
+    pub(crate) fn read_request(
+        identity: &NoiseChannelIdentity,
+        prologue: &[u8],
+        request: &[u8],
+    ) -> Result<Self, NoiseChannelError> {
+        ensure_noise_frame_len(request.len(), "handshake request is too large")?;
+        let params = HybridHandshakeParams::new(noise_hybrid_ik(), false)
+            .with_prologue(prologue)
+            .with_s(identity.dh.clone())
+            .with_s_kem(identity.kem.clone());
+        let mut handshake = Handshake::new(params)?;
+        let mut payload = [0u8; MAX_MESSAGE_LEN];
+        let payload_len = handshake.read_message(request, &mut payload)?;
+        // Clatter exposes this key only after the first IK message authenticates.
+        let remote = handshake
+            .get_remote_static()
+            .ok_or(NoiseChannelError::InvalidMessage(
+                "handshake request is missing initiator static key",
+            ))?;
+        let initiator_public_key = NoiseChannelPublicKey {
+            suite: NOISE_CHANNEL_SUITE.to_string(),
+            x25519_public_key: STANDARD.encode(remote.dh()),
+            mlkem768_public_key: STANDARD.encode(remote.kem().as_slice()),
+        };
+        Ok(Self {
+            handshake,
+            initiator_public_key,
+            payload: payload[..payload_len].to_vec(),
+        })
+    }
+
+    /// Finish the handshake after the registry authorizes the harness key.
+    pub(crate) fn complete(mut self) -> Result<(NoiseTransport, Vec<u8>), NoiseChannelError> {
+        let mut response = [0u8; MAX_MESSAGE_LEN];
+        let response_len = self.handshake.write_message(&[], &mut response)?;
+        Ok((
+            NoiseTransport {
+                transport: self.handshake.finalize()?,
+            },
+            response[..response_len].to_vec(),
+        ))
+    }
+}
+
+/// Established channel with independent implicit send and receive nonces.
+/// Relay records must be ordered before decryption, and a logical record must
+/// not be encrypted again for retry.
+pub(crate) struct NoiseTransport {
+    transport: Transport,
+}
+
+impl NoiseTransport {
+    /// Encrypt the next transport record.
+    pub(crate) fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, NoiseChannelError> {
+        let frame_len = plaintext.len().checked_add(AesGcm::tag_len()).ok_or(
+            NoiseChannelError::InvalidMessage("transport plaintext is too large"),
+        )?;
+        ensure_noise_frame_len(frame_len, "transport plaintext is too large")?;
+        Ok(self.transport.send_vec(plaintext)?)
+    }
+
+    /// Decrypt the next ordered transport record.
+    pub(crate) fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, NoiseChannelError> {
+        if ciphertext.len() < AesGcm::tag_len() {
+            return Err(NoiseChannelError::InvalidMessage(
+                "transport ciphertext is too short",
+            ));
+        }
+        ensure_noise_frame_len(ciphertext.len(), "transport ciphertext is too large")?;
+        Ok(self.transport.receive_vec(ciphertext)?)
+    }
+}
+
+/// Bind the handshake to one environment registration and relay stream.
+/// Both peers include these values in the Noise transcript before processing
+/// the first handshake message.
+pub(crate) fn noise_channel_prologue(
+    environment_id: &str,
+    executor_registration_id: &str,
+    stream_id: &str,
+) -> Vec<u8> {
+    let mut prologue = Vec::new();
+    append_prologue_part(&mut prologue, PROLOGUE_DOMAIN);
+    append_prologue_part(&mut prologue, environment_id.as_bytes());
+    append_prologue_part(&mut prologue, executor_registration_id.as_bytes());
+    append_prologue_part(&mut prologue, stream_id.as_bytes());
+    prologue
+}
+
+fn append_prologue_part(prologue: &mut Vec<u8>, part: &[u8]) {
+    // Length prefixes make component boundaries unambiguous. Raw concatenation
+    // would allow different identifier tuples to produce the same prologue.
+    let len = part.len() as u64;
+    prologue.extend_from_slice(&len.to_be_bytes());
+    prologue.extend_from_slice(part);
+}
+
+fn ensure_noise_frame_len(
+    frame_len: usize,
+    message: &'static str,
+) -> Result<(), NoiseChannelError> {
+    if frame_len > MAX_MESSAGE_LEN {
+        return Err(NoiseChannelError::InvalidMessage(message));
+    }
+    Ok(())
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum NoiseChannelError {
+    #[error("Noise channel key generation failed: {0}")]
+    KeyGeneration(String),
+    #[error("invalid Noise channel public key: {0}")]
+    InvalidPublicKey(&'static str),
+    #[error("invalid Noise channel message: {0}")]
+    InvalidMessage(&'static str),
+    #[error("Noise channel handshake failed: {0}")]
+    Handshake(String),
+    #[error("Noise channel transport failed: {0}")]
+    Transport(String),
+}
+
+impl From<clatter::error::HandshakeError> for NoiseChannelError {
+    fn from(error: clatter::error::HandshakeError) -> Self {
+        Self::Handshake(error.to_string())
+    }
+}
+
+impl From<clatter::error::TransportError> for NoiseChannelError {
+    fn from(error: clatter::error::TransportError) -> Self {
+        Self::Transport(error.to_string())
+    }
+}
+
+#[cfg(test)]
+#[path = "noise_channel_tests.rs"]
+mod tests;

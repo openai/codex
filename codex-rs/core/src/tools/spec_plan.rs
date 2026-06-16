@@ -22,8 +22,9 @@ use crate::tools::handlers::RequestPluginInstallHandler;
 use crate::tools::handlers::RequestUserInputHandler;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
+use crate::tools::handlers::SleepHandler;
 use crate::tools::handlers::TestSyncHandler;
-use crate::tools::handlers::ToolSearchHandler;
+use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WriteStdinHandler;
 use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
@@ -147,6 +148,7 @@ struct CoreToolPlanContext<'a> {
     discoverable_tools: Option<&'a [DiscoverableTool]>,
     extension_tool_executors: &'a [Arc<dyn ToolExecutor<ExtensionToolCall>>],
     dynamic_tools: &'a [DynamicToolSpec],
+    tool_search_handler_cache: &'a ToolSearchHandlerCache,
     default_agent_type_description: &'a str,
     wait_agent_timeouts: WaitAgentTimeoutOptions,
 }
@@ -155,8 +157,10 @@ struct CoreToolPlanContext<'a> {
 pub(crate) fn build_tool_router(
     turn_context: &TurnContext,
     params: ToolRouterParams<'_>,
+    tool_search_handler_cache: &ToolSearchHandlerCache,
 ) -> ToolRouter {
-    let (model_visible_specs, registry) = build_tool_specs_and_registry(turn_context, params);
+    let (model_visible_specs, registry) =
+        build_tool_specs_and_registry(turn_context, params, tool_search_handler_cache);
     ToolRouter::from_parts(registry, model_visible_specs)
 }
 
@@ -164,6 +168,7 @@ pub(crate) fn build_tool_router(
 fn build_tool_specs_and_registry(
     turn_context: &TurnContext,
     params: ToolRouterParams<'_>,
+    tool_search_handler_cache: &ToolSearchHandlerCache,
 ) -> (Vec<ToolSpec>, ToolRegistry) {
     let ToolRouterParams {
         mcp_tools,
@@ -181,6 +186,7 @@ fn build_tool_specs_and_registry(
         discoverable_tools: discoverable_tools.as_deref(),
         extension_tool_executors: &extension_tool_executors,
         dynamic_tools,
+        tool_search_handler_cache,
         default_agent_type_description: &default_agent_type_description,
         wait_agent_timeouts: wait_agent_timeout_options(turn_context),
     };
@@ -661,6 +667,10 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
         planned_tools.add(GetContextRemainingHandler);
     }
 
+    if features.enabled(Feature::SleepTool) {
+        planned_tools.add(SleepHandler);
+    }
+
     if tool_suggest_enabled(turn_context)
         && let Some(discoverable_tools) =
             context.discoverable_tools.filter(|tools| !tools.is_empty())
@@ -875,7 +885,8 @@ fn append_tool_search_executor(
         return;
     }
 
-    planned_tools.add(ToolSearchHandler::new(search_infos));
+    let handler: PlannedRuntime = context.tool_search_handler_cache.get_or_build(search_infos);
+    planned_tools.add_arc(handler);
 }
 
 fn prepend_code_mode_executors(

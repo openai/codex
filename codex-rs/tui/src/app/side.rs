@@ -453,6 +453,7 @@ impl App {
                 text: SIDE_BOUNDARY_PROMPT.to_string(),
             }],
             phase: None,
+            metadata: None,
         }
     }
 
@@ -528,7 +529,7 @@ impl App {
         {
             if self.discard_side_thread(app_server, side_thread_id).await {
                 self.surface_pending_inactive_thread_interactive_requests()
-                    .await;
+                    .await?;
             } else if active_thread_id_before_switch == Some(side_thread_id) {
                 self.keep_side_thread_visible_after_cleanup_failure(
                     tui,

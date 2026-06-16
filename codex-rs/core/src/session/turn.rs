@@ -462,6 +462,12 @@ async fn build_skills_and_plugins(
     input: &[TurnInput],
     cancellation_token: &CancellationToken,
 ) -> Option<(Vec<ResponseItem>, HashSet<String>)> {
+    // Guardian input embeds the parent transcript as untrusted evidence. Do not interpret skill or
+    // plugin mentions from that generated prompt as requests to inject additional instructions.
+    if crate::guardian::is_guardian_reviewer_source(&turn_context.session_source) {
+        return Some((Vec::new(), HashSet::new()));
+    }
+
     let user_input = input
         .iter()
         .filter_map(|item| match item {
@@ -1228,6 +1234,7 @@ pub(crate) async fn built_tools(
             extension_tool_executors: extension_tool_executors(sess),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
+        &sess.services.tool_search_handler_cache,
     )))
 }
 
@@ -1971,7 +1978,7 @@ async fn try_run_sampling_request(
                     | ResponseItem::WebSearchCall { .. }
                     | ResponseItem::ImageGenerationCall { .. }
                     | ResponseItem::Compaction { .. }
-                    | ResponseItem::CompactionTrigger
+                    | ResponseItem::CompactionTrigger { .. }
                     | ResponseItem::ContextCompaction { .. }
                     | ResponseItem::Other => false,
                 };

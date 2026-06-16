@@ -1,5 +1,7 @@
 use super::*;
 use crate::LoadedPlugin;
+use crate::OPENAI_API_CURATED_MARKETPLACE_NAME;
+use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::PluginLoadOutcome;
 use crate::installed_marketplaces::marketplace_install_root;
 use crate::loader::load_plugins_from_layer_stack;
@@ -16,6 +18,7 @@ use crate::test_support::TEST_CURATED_PLUGIN_SHA;
 use crate::test_support::load_plugins_config as load_plugins_config_input;
 use crate::test_support::write_curated_plugin_sha_with as write_curated_plugin_sha;
 use crate::test_support::write_file;
+use crate::test_support::write_openai_api_curated_marketplace;
 use crate::test_support::write_openai_curated_marketplace;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -778,11 +781,15 @@ remote_plugin = true
 [plugins."linear@openai-curated"]
 enabled = true
 
+[plugins."linear@openai-api-curated"]
+enabled = true
+
 [plugins."calendar@openai-curated"]
 enabled = true
 "#,
     );
     write_cached_plugin(codex_home.path(), "openai-curated", "linear");
+    write_cached_plugin(codex_home.path(), "openai-api-curated", "linear");
     write_cached_plugin(codex_home.path(), "openai-curated", "calendar");
     write_cached_plugin(codex_home.path(), "openai-curated-remote", "linear");
     write_cached_plugin(codex_home.path(), "openai-curated-remote", "remote-only");
@@ -2486,6 +2493,10 @@ plugins = true
         chatgpt_outcome.plugin.mcp_server_names,
         vec!["other-mcp".to_string()]
     );
+    assert_eq!(
+        chatgpt_outcome.plugin.apps,
+        vec![AppConnectorId("connector_sample".to_string())]
+    );
 
     let api_key_outcome = PluginsManager::new_with_options(
         tmp.path().to_path_buf(),
@@ -2499,6 +2510,7 @@ plugins = true
         api_key_outcome.plugin.mcp_server_names,
         vec!["other-mcp".to_string(), "sample-mcp".to_string()]
     );
+    assert!(api_key_outcome.plugin.apps.is_empty());
 }
 
 #[tokio::test]
@@ -3033,6 +3045,130 @@ plugins = true
             .marketplaces
             .iter()
             .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME),
+        false
+    );
+}
+
+#[tokio::test]
+async fn list_marketplaces_uses_api_curated_manifest_when_selected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let curated_root = curated_plugins_repo_path(tmp.path());
+
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
+    write_file(
+        &curated_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "openai-curated",
+  "plugins": [
+    {
+      "name": "siwc-plugin",
+      "source": {
+        "source": "local",
+        "path": "./plugins/siwc-plugin"
+      }
+    }
+  ]
+}"#,
+    );
+    write_file(
+        &curated_root.join(".agents/plugins/api_marketplace.json"),
+        r#"{
+  "name": "openai-api-curated",
+  "interface": {
+    "displayName": "OpenAI Curated"
+  },
+  "plugins": [
+    {
+      "name": "api-plugin",
+      "source": {
+        "source": "local",
+        "path": "./plugins/api-plugin"
+      }
+    }
+  ]
+}"#,
+    );
+
+    let config = load_config(tmp.path(), tmp.path()).await;
+    let manager = PluginsManager::new(tmp.path().to_path_buf());
+    manager.set_auth_mode(Some(AuthMode::ApiKey));
+    let marketplaces = manager
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
+        .unwrap()
+        .marketplaces;
+    let curated_marketplace = marketplaces
+        .into_iter()
+        .find(|marketplace| marketplace.name == OPENAI_API_CURATED_MARKETPLACE_NAME)
+        .expect("API curated marketplace should be listed");
+
+    assert_eq!(
+        curated_marketplace,
+        ConfiguredMarketplace {
+            name: "openai-api-curated".to_string(),
+            path: AbsolutePathBuf::try_from(
+                curated_root.join(".agents/plugins/api_marketplace.json")
+            )
+            .unwrap(),
+            interface: Some(MarketplaceInterface {
+                display_name: Some("OpenAI Curated".to_string()),
+            }),
+            plugins: vec![ConfiguredMarketplacePlugin {
+                id: "api-plugin@openai-api-curated".to_string(),
+                name: "api-plugin".to_string(),
+                local_version: None,
+                installed_version: None,
+                source: MarketplacePluginSource::Local {
+                    path: AbsolutePathBuf::try_from(curated_root.join("plugins/api-plugin"))
+                        .unwrap(),
+                },
+                policy: MarketplacePluginPolicy {
+                    installation: MarketplacePluginInstallPolicy::Available,
+                    authentication: MarketplacePluginAuthPolicy::OnInstall,
+                    products: None,
+                },
+                interface: None,
+                keywords: Vec::new(),
+                installed: false,
+                enabled: false,
+            }],
+        }
+    );
+}
+
+#[tokio::test]
+async fn list_marketplaces_skips_missing_api_curated_manifest() {
+    let tmp = tempfile::tempdir().unwrap();
+    let curated_root = curated_plugins_repo_path(tmp.path());
+
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
+    write_file(
+        &curated_root.join(".agents/plugins/marketplace.json"),
+        "{not valid json",
+    );
+
+    let config = load_config(tmp.path(), tmp.path()).await;
+    let manager = PluginsManager::new(tmp.path().to_path_buf());
+    manager.set_auth_mode(Some(AuthMode::BedrockApiKey));
+    let outcome = manager
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
+        .unwrap();
+
+    assert_eq!(outcome.errors, Vec::new());
+    assert_eq!(
+        outcome
+            .marketplaces
+            .iter()
+            .any(|marketplace| marketplace.name == OPENAI_API_CURATED_MARKETPLACE_NAME),
         false
     );
 }
@@ -3592,6 +3728,56 @@ fn refresh_curated_plugin_cache_reinstalls_missing_configured_plugin_with_curren
 }
 
 #[test]
+fn refresh_curated_plugin_cache_reinstalls_missing_api_curated_plugin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let curated_root = curated_plugins_repo_path(tmp.path());
+    write_openai_curated_marketplace(&curated_root, &[]);
+    write_openai_api_curated_marketplace(&curated_root, &["api-only"]);
+    write_curated_plugin_sha(tmp.path(), TEST_CURATED_PLUGIN_SHA);
+    let plugin_id = PluginId::new(
+        "api-only".to_string(),
+        OPENAI_API_CURATED_MARKETPLACE_NAME.to_string(),
+    )
+    .unwrap();
+
+    assert!(
+        refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
+            .expect("cache refresh should recreate missing configured API curated plugin")
+    );
+
+    assert!(
+        tmp.path()
+            .join(format!(
+                "plugins/cache/openai-api-curated/api-only/{TEST_CURATED_PLUGIN_CACHE_VERSION}"
+            ))
+            .is_dir()
+    );
+}
+
+#[test]
+fn refresh_curated_plugin_cache_leaves_api_curated_plugin_when_api_manifest_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let curated_root = curated_plugins_repo_path(tmp.path());
+    write_openai_curated_marketplace(&curated_root, &[]);
+    write_cached_plugin(tmp.path(), OPENAI_API_CURATED_MARKETPLACE_NAME, "api-only");
+    let plugin_id = PluginId::new(
+        "api-only".to_string(),
+        OPENAI_API_CURATED_MARKETPLACE_NAME.to_string(),
+    )
+    .unwrap();
+
+    assert!(
+        !refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
+            .expect("cache refresh should skip missing API curated manifest")
+    );
+    assert!(
+        tmp.path()
+            .join("plugins/cache/openai-api-curated/api-only/local")
+            .is_dir()
+    );
+}
+
+#[test]
 fn refresh_curated_plugin_cache_removes_cache_for_plugin_removed_from_marketplace() {
     let tmp = tempfile::tempdir().unwrap();
     let curated_root = curated_plugins_repo_path(tmp.path());
@@ -3629,6 +3815,9 @@ plugins = true
 [plugins."slack@openai-curated"]
 enabled = true
 
+[plugins."api-only@openai-api-curated"]
+enabled = true
+
 [plugins."sample@debug"]
 enabled = true
 "#,
@@ -3639,7 +3828,10 @@ enabled = true
             .into_iter()
             .map(|plugin_id| plugin_id.as_key())
             .collect::<Vec<_>>(),
-        vec!["slack@openai-curated".to_string()]
+        vec![
+            "api-only@openai-api-curated".to_string(),
+            "slack@openai-curated".to_string(),
+        ]
     );
 
     write_file(

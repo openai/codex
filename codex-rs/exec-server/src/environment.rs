@@ -9,6 +9,8 @@ use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::HttpClient;
+use crate::NoiseChannelIdentity;
+use crate::NoiseRendezvousConnectProvider;
 use crate::client::LazyRemoteExecServerClient;
 use crate::client::http_client::ReqwestHttpClient;
 use crate::client_api::ExecServerTransportParams;
@@ -282,6 +284,37 @@ impl EnvironmentManager {
             .insert(environment_id, Arc::new(environment));
         Ok(())
     }
+
+    /// Adds or replaces a named remote environment that connects through an
+    /// authenticated, end-to-end encrypted rendezvous stream.
+    ///
+    /// The provider is retained so every reconnect obtains fresh authorization.
+    /// This transport never falls back to the URL-only remote environment path.
+    pub fn upsert_noise_environment(
+        &self,
+        environment_id: String,
+        provider: Arc<dyn NoiseRendezvousConnectProvider>,
+    ) -> Result<(), ExecServerError> {
+        if environment_id.is_empty() {
+            return Err(ExecServerError::Protocol(
+                "environment id cannot be empty".to_string(),
+            ));
+        }
+        let identity = NoiseChannelIdentity::generate().map_err(|error| {
+            ExecServerError::Protocol(format!(
+                "failed to generate Noise harness identity: {error}"
+            ))
+        })?;
+        let environment = Environment::remote_with_transport(
+            ExecServerTransportParams::NoiseRendezvous { provider, identity },
+            self.local_runtime_paths.clone(),
+        );
+        self.environments
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(environment_id, Arc::new(environment));
+        Ok(())
+    }
 }
 
 /// Concrete execution/filesystem environment selected for a session.
@@ -420,6 +453,7 @@ impl Environment {
                 websocket_url: exec_server_url,
                 ..
             } => Some(exec_server_url.clone()),
+            ExecServerTransportParams::NoiseRendezvous { .. } => None,
             ExecServerTransportParams::StdioCommand { .. } => None,
         };
         let client = LazyRemoteExecServerClient::new(remote_transport.clone());

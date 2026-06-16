@@ -24,7 +24,6 @@ fn skip_test() -> bool {
     false
 }
 
-#[expect(clippy::expect_used)]
 async fn run_test_cmd<I, S>(tmp: TempDir, command: I) -> Result<ExecToolCallOutput>
 where
     I: IntoIterator<Item = S>,

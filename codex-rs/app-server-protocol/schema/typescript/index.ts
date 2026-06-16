@@ -3,6 +3,8 @@
 export type { AbsolutePathBuf } from "./AbsolutePathBuf";
 export type { AgentMessageInputContent } from "./AgentMessageInputContent";
 export type { AgentPath } from "./AgentPath";
+export type { AmazonBedrockCredentialSource } from "./AmazonBedrockCredentialSource";
+export type { ApiPathString } from "./ApiPathString";
 export type { ApplyPatchApprovalParams } from "./ApplyPatchApprovalParams";
 export type { ApplyPatchApprovalResponse } from "./ApplyPatchApprovalResponse";
 export type { AuthMode } from "./AuthMode";
@@ -66,6 +68,7 @@ export type { Resource } from "./Resource";
 export type { ResourceContent } from "./ResourceContent";
 export type { ResourceTemplate } from "./ResourceTemplate";
 export type { ResponseItem } from "./ResponseItem";
+export type { ResponseItemMetadata } from "./ResponseItemMetadata";
 export type { ReviewDecision } from "./ReviewDecision";
 export type { ServerNotification } from "./ServerNotification";
 export type { ServerRequest } from "./ServerRequest";
