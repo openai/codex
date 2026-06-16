@@ -411,6 +411,110 @@ exclude = ["LEGACY_*"]
 }
 
 #[tokio::test]
+async fn shell_environment_policy_unknown_fields_follow_strict_config() {
+    let tmp = tempdir().expect("tempdir");
+    let contents = r#"
+[shell_environment_policy]
+future_field = true
+"#;
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&config_path, contents).expect("write config");
+
+    ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .strict_config(/*strict_config*/ false)
+        .build()
+        .await
+        .expect("non-strict config should ignore unknown fields");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .strict_config(/*strict_config*/ true)
+        .build()
+        .await
+        .expect_err("strict config should reject unknown fields");
+
+    assert_eq!(
+        config_error_from_io(&err).message,
+        "unknown configuration field `shell_environment_policy.future_field`"
+    );
+}
+
+#[tokio::test]
+async fn non_strict_config_rejects_duplicate_shell_environment_policy_filters_before_merging() {
+    let tmp = tempdir().expect("tempdir");
+    let contents = r#"
+[shell_environment_policy.filters]
+"SECRET_TOKEN" = "exclude"
+"secret_token" = "include"
+"#;
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), contents).expect("write config");
+
+    let err = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .cli_overrides(vec![(
+            "shell_environment_policy.filters.PATH".to_string(),
+            TomlValue::String("include".to_string()),
+        )])
+        .strict_config(/*strict_config*/ false)
+        .build()
+        .await
+        .expect_err("case-insensitive duplicate filters should be rejected per layer");
+
+    assert!(
+        err.to_string()
+            .contains("duplicate shell environment filter")
+    );
+}
+
+#[tokio::test]
+async fn non_strict_config_rejects_malformed_shell_policy_before_representation_conversion() {
+    let cases = [
+        (
+            r#"
+[shell_environment_policy]
+exclude = ["SECRET_*", 17]
+"#,
+            vec![(
+                "shell_environment_policy.filters.PATH".to_string(),
+                TomlValue::String("include".to_string()),
+            )],
+        ),
+        (
+            r#"
+[shell_environment_policy.filters]
+"SECRET_*" = "exlude"
+"#,
+            vec![(
+                "shell_environment_policy.exclude".to_string(),
+                TomlValue::Array(vec![TomlValue::String("PATH".to_string())]),
+            )],
+        ),
+    ];
+
+    for (contents, cli_overrides) in cases {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), contents).expect("write config");
+
+        ConfigBuilder::default()
+            .codex_home(tmp.path().to_path_buf())
+            .fallback_cwd(Some(tmp.path().to_path_buf()))
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+            .cli_overrides(cli_overrides)
+            .strict_config(/*strict_config*/ false)
+            .build()
+            .await
+            .expect_err("malformed shell policy should be rejected before conversion");
+    }
+}
+
+#[tokio::test]
 async fn strict_config_rejects_unknown_cli_override_key() {
     let tmp = tempdir().expect("tempdir");
 

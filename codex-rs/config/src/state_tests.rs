@@ -40,6 +40,34 @@ no_memories_if_mcp_or_web_search = true
 }
 
 #[test]
+fn disabled_layers_do_not_validate_shell_environment_policy() {
+    let layer = ConfigLayerEntry::new_disabled(
+        ConfigLayerSource::Project {
+            dot_codex_folder: AbsolutePathBuf::from_absolute_path("/untrusted/.codex")
+                .expect("project path should be absolute"),
+        },
+        toml::from_str(
+            r#"
+[shell_environment_policy]
+exclude = ["LEGACY_*"]
+
+[shell_environment_policy.filters]
+"CANONICAL_*" = "include"
+"#,
+        )
+        .expect("project config"),
+        "project is untrusted",
+    );
+
+    ConfigLayerStack::new(
+        vec![layer],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("disabled layers should not be validated");
+}
+
+#[test]
 fn active_user_layer_is_highest_precedence_user_layer() {
     let temp_dir = TempDir::new().expect("tempdir");
     let base_file = test_user_config_path(&temp_dir, "config.toml");

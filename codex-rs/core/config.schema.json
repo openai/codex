@@ -2630,6 +2630,24 @@
     },
     "ShellEnvironmentPolicyToml": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "exclude",
+              "filters"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "filters",
+              "include_only"
+            ]
+          }
+        }
+      ],
       "description": "Policy for building the `env` when spawning a process via shell-like tools.",
       "properties": {
         "exclude": {

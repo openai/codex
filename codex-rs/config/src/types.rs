@@ -955,7 +955,6 @@ pub struct ShellEnvironmentPolicyToml {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ShellEnvironmentPolicyTomlRaw {
     inherit: Option<ShellEnvironmentPolicyInherit>,
     ignore_default_excludes: Option<bool>,
@@ -976,6 +975,16 @@ impl<'de> Deserialize<'de> for ShellEnvironmentPolicyToml {
             return Err(serde::de::Error::custom(
                 "cannot mix `filters` with legacy `exclude` or `include_only`",
             ));
+        }
+        if let Some(filters) = raw.filters.as_ref() {
+            let mut patterns = std::collections::HashSet::new();
+            for pattern in filters.keys() {
+                if !patterns.insert(pattern.to_ascii_lowercase()) {
+                    return Err(serde::de::Error::custom(format!(
+                        "duplicate shell environment filter `{pattern}` ignoring ASCII case"
+                    )));
+                }
+            }
         }
         Ok(Self {
             inherit: raw.inherit,
