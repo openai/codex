@@ -98,6 +98,8 @@ pub(crate) struct AgentControl {
     manager: Weak<ThreadManagerState>,
     state: Arc<AgentRegistry>,
     v2_residency: Arc<V2Residency>,
+    v2_resume_configs: Arc<std::sync::Mutex<HashMap<ThreadId, Arc<Config>>>>,
+    v2_load_locks: Arc<std::sync::Mutex<HashMap<ThreadId, Arc<tokio::sync::Semaphore>>>>,
     agent_execution_limiter: Arc<AgentExecutionLimiter>,
 }
 
@@ -118,6 +120,42 @@ impl AgentControl {
 
     pub(crate) fn session_id(&self) -> SessionId {
         self.session_id
+    }
+
+    fn remember_v2_resume_config(&self, thread_id: ThreadId, config: Arc<Config>) {
+        self.v2_resume_configs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(thread_id, config);
+    }
+
+    fn v2_resume_config(&self, thread_id: ThreadId) -> Option<Config> {
+        self.v2_resume_configs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&thread_id)
+            .map(|config| config.as_ref().clone())
+    }
+
+    fn v2_load_lock(&self, thread_id: ThreadId) -> Arc<tokio::sync::Semaphore> {
+        Arc::clone(
+            self.v2_load_locks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .entry(thread_id)
+                .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(1))),
+        )
+    }
+
+    fn forget_v2_reload_state(&self, thread_id: ThreadId) {
+        self.v2_resume_configs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&thread_id);
+        self.v2_load_locks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&thread_id);
     }
 
     /// Send rich user input items to an existing agent thread.
@@ -206,6 +244,7 @@ impl AgentControl {
         if matches!(result, Err(CodexErr::InternalAgentDied)) {
             let _ = state.remove_thread(&agent_id).await;
             self.forget_v2_residency(agent_id);
+            self.forget_v2_reload_state(agent_id);
             self.state.release_spawned_thread(agent_id);
         }
         result

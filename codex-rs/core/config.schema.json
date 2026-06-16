@@ -1622,6 +1622,14 @@
         "root_agent_usage_hint_text": {
           "type": "string"
         },
+        "spawn_agent_model_overrides": {
+          "description": "Models that the parent model may explicitly select for a spawned agent.\n\nWhen set, the spawn tool exposes only the `model` metadata override and constrains it to this list.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
         "subagent_usage_hint_text": {
           "type": "string"
         },

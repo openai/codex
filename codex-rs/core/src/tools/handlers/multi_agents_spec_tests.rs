@@ -45,6 +45,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         ],
         agent_type_description: "role help".to_string(),
         hide_agent_type_model_reasoning: false,
+        model_overrides: None,
         include_usage_hint: true,
         usage_hint_text: None,
     });
@@ -121,6 +122,7 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
         available_models: Vec::new(),
         agent_type_description: "role help".to_string(),
         hide_agent_type_model_reasoning: false,
+        model_overrides: None,
         include_usage_hint: true,
         usage_hint_text: None,
     });
@@ -178,6 +180,7 @@ fn spawn_agent_tool_caps_visible_model_summaries() {
         ],
         agent_type_description: "role help".to_string(),
         hide_agent_type_model_reasoning: false,
+        model_overrides: None,
         include_usage_hint: true,
         usage_hint_text: None,
     });
@@ -222,6 +225,7 @@ fn spawn_agent_tool_hides_service_tier_with_spawn_metadata() {
         available_models: vec![model_preset("visible", /*show_in_picker*/ true)],
         agent_type_description: "role help".to_string(),
         hide_agent_type_model_reasoning: true,
+        model_overrides: None,
         include_usage_hint: true,
         usage_hint_text: None,
     });
@@ -245,6 +249,44 @@ fn spawn_agent_tool_hides_service_tier_with_spawn_metadata() {
     assert!(!properties.contains_key("service_tier"));
     assert!(!description.contains(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE));
     assert!(!description.contains("Available model overrides"));
+}
+
+#[test]
+fn spawn_agent_tool_exposes_only_configured_model_overrides() {
+    let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
+        available_models: vec![model_preset("catalog", /*show_in_picker*/ true)],
+        agent_type_description: "role help".to_string(),
+        hide_agent_type_model_reasoning: true,
+        model_overrides: Some(vec!["gpt-5.4".to_string(), "gpt-5.3-codex".to_string()]),
+        include_usage_hint: true,
+        usage_hint_text: None,
+    });
+
+    let ToolSpec::Function(ResponsesApiTool {
+        description,
+        parameters,
+        ..
+    }) = tool
+    else {
+        panic!("spawn_agent should be a function tool");
+    };
+    let properties = parameters
+        .properties
+        .as_ref()
+        .expect("spawn_agent should use object params");
+
+    assert!(!properties.contains_key("agent_type"));
+    assert_eq!(
+        properties
+            .get("model")
+            .and_then(|schema| schema.enum_values.as_ref()),
+        Some(&vec![json!("gpt-5.4"), json!("gpt-5.3-codex")])
+    );
+    assert!(!properties.contains_key("reasoning_effort"));
+    assert!(!properties.contains_key("service_tier"));
+    assert!(description.contains("Available model overrides: `gpt-5.4`, `gpt-5.3-codex`."));
+    assert!(!description.contains("catalog-model"));
+    assert!(description.contains(SPAWN_AGENT_MODEL_ALLOWLIST_GUIDANCE));
 }
 
 #[test]

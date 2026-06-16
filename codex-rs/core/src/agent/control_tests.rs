@@ -17,6 +17,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
@@ -545,13 +546,22 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
     let (home, mut config) = test_config().await;
     let _ = config.features.enable(Feature::MultiAgentV2);
     let _ = config.features.enable(Feature::Sqlite);
+    config.model = Some("policy".to_string());
+    config.model_reasoning_effort = Some(ReasoningEffort::High);
+    config.service_tier = Some("default".to_string());
+    config.developer_instructions = Some("parent instructions".to_string());
     let harness = AgentControlHarness::new_with_config(home, config).await;
     let (parent_thread_id, _parent_thread) = harness.start_thread().await;
     let agent_path = AgentPath::try_from("/root/worker").expect("agent path");
+    let mut child_config = harness.config.clone();
+    child_config.model = Some("mini".to_string());
+    child_config.model_reasoning_effort = Some(ReasoningEffort::Low);
+    child_config.service_tier = Some("priority".to_string());
+    child_config.developer_instructions = Some("child instructions".to_string());
     let spawned_agent = harness
         .control
         .spawn_agent_with_metadata(
-            harness.config.clone(),
+            child_config,
             text_input("hello child"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -567,6 +577,15 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
         )
         .await
         .expect("spawn_agent should succeed");
+    let remembered_config = harness
+        .control
+        .v2_resume_config(spawned_agent.thread_id)
+        .expect("v2 child config should be retained for eviction reloads");
+    assert_eq!(
+        remembered_config.developer_instructions.as_deref(),
+        Some("child instructions")
+    );
+    assert_eq!(remembered_config.service_tier.as_deref(), Some("priority"));
     let child_thread = harness
         .manager
         .get_thread(spawned_agent.thread_id)
@@ -596,17 +615,34 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
         Err(err) => panic!("expected ThreadNotFound, got {err:?}"),
         Ok(_) => panic!("expected thread to be removed"),
     }
-
-    harness
+    let first_reload = harness
         .control
-        .ensure_v2_agent_loaded(harness.config.clone(), spawned_agent.thread_id)
-        .await
-        .expect("known v2 agent should reload");
-    let _ = harness
+        .ensure_v2_agent_loaded(harness.config.clone(), spawned_agent.thread_id);
+    let second_reload = harness
+        .control
+        .ensure_v2_agent_loaded(harness.config.clone(), spawned_agent.thread_id);
+    let (first_result, second_result) = tokio::join!(first_reload, second_reload);
+    first_result.expect("first concurrent reload should succeed");
+    second_result.expect("second concurrent reload should coalesce");
+    let reloaded_thread = harness
         .manager
         .get_thread(spawned_agent.thread_id)
         .await
         .expect("reloaded child thread should exist");
+    assert_eq!(reloaded_thread.session_configured().model, "mini");
+    assert_eq!(
+        reloaded_thread.session_configured().reasoning_effort,
+        Some(ReasoningEffort::Low)
+    );
+    let reloaded_config = harness
+        .control
+        .v2_resume_config(spawned_agent.thread_id)
+        .expect("v2 child config should remain available after reload");
+    assert_eq!(reloaded_config.service_tier.as_deref(), Some("priority"));
+    assert_eq!(
+        reloaded_config.developer_instructions.as_deref(),
+        Some("child instructions")
+    );
 
     let communication = InterAgentCommunication::new(
         AgentPath::root(),

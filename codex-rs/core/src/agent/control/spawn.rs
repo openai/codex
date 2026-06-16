@@ -1,5 +1,6 @@
 use super::residency::is_v2_resident_session_source;
 use super::*;
+use crate::agent::role::apply_role_to_config;
 
 const AGENT_NAMES: &str = include_str!("../agent_names.txt");
 
@@ -14,6 +15,72 @@ fn default_agent_nickname_list() -> Vec<&'static str> {
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .collect()
+}
+
+async fn rebuild_v2_resume_config(
+    mut config: Config,
+    thread_id: ThreadId,
+    agent_role: Option<&str>,
+    stored_model_provider: &str,
+    history: &[RolloutItem],
+) -> CodexResult<Config> {
+    apply_role_to_config(&mut config, agent_role)
+        .await
+        .map_err(|err| {
+            CodexErr::Fatal(format!(
+                "failed to restore agent role for thread {thread_id}: {err}"
+            ))
+        })?;
+
+    let mut model_provider_id = stored_model_provider.to_string();
+    if let Some(session_configured) = history.iter().find_map(|item| match item {
+        RolloutItem::EventMsg(codex_protocol::protocol::EventMsg::SessionConfigured(event))
+            if event.thread_id == thread_id =>
+        {
+            Some(event)
+        }
+        _ => None,
+    }) {
+        config.model = Some(session_configured.model.clone());
+        config.model_reasoning_effort = session_configured.reasoning_effort.clone();
+        config.service_tier = session_configured.service_tier.clone();
+        model_provider_id = session_configured.model_provider_id.clone();
+    } else {
+        let own_session_start = history
+            .iter()
+            .rposition(|item| {
+                matches!(
+                    item,
+                    RolloutItem::SessionMeta(meta) if meta.meta.id == thread_id
+                )
+            })
+            .map_or(0, |index| index + 1);
+        if let Some(turn_context) =
+            history[own_session_start..]
+                .iter()
+                .find_map(|item| match item {
+                    RolloutItem::TurnContext(turn_context) => Some(turn_context),
+                    _ => None,
+                })
+        {
+            config.model = Some(turn_context.model.clone());
+            config.model_reasoning_effort = turn_context.effort.clone();
+        }
+    }
+
+    if model_provider_id != config.model_provider_id {
+        config.model_provider = config
+            .model_providers
+            .get(&model_provider_id)
+            .cloned()
+            .ok_or_else(|| {
+                CodexErr::Fatal(format!(
+                    "model provider `{model_provider_id}` recorded for thread {thread_id} was not found"
+                ))
+            })?;
+        config.model_provider_id = model_provider_id;
+    }
+    Ok(config)
 }
 
 pub(super) fn agent_nickname_candidates(config: &Config, role_name: Option<&str>) -> Vec<String> {
@@ -116,14 +183,20 @@ impl AgentControl {
         config: Config,
         thread_id: ThreadId,
     ) -> CodexResult<()> {
+        let load_lock = self.v2_load_lock(thread_id);
+        let _load_permit = load_lock.acquire().await.map_err(|err| {
+            CodexErr::Fatal(format!(
+                "failed to acquire reload permit for thread {thread_id}: {err}"
+            ))
+        })?;
         let state = self.upgrade()?;
         if state.get_thread(thread_id).await.is_ok() {
             self.touch_loaded_v2_residency(&state, thread_id).await;
             return Ok(());
         }
-        if self.state.agent_metadata_for_thread(thread_id).is_none() {
+        let Some(agent_metadata) = self.state.agent_metadata_for_thread(thread_id) else {
             return Err(CodexErr::ThreadNotFound(thread_id));
-        }
+        };
 
         let stored_thread = state
             .read_stored_thread(ReadThreadParams {
@@ -134,10 +207,25 @@ impl AgentControl {
             .await?;
         let stored_source = stored_thread.source.clone();
         let stored_parent_thread_id = stored_thread.parent_thread_id;
+        let stored_model_provider = stored_thread.model_provider.clone();
         let history = stored_thread
             .history
             .ok_or(CodexErr::ThreadNotFound(thread_id))?
             .items;
+        let config = if let Some(config) = self.v2_resume_config(thread_id) {
+            config
+        } else {
+            let config = rebuild_v2_resume_config(
+                config,
+                thread_id,
+                agent_metadata.agent_role.as_deref(),
+                &stored_model_provider,
+                &history,
+            )
+            .await?;
+            self.remember_v2_resume_config(thread_id, Arc::new(config.clone()));
+            config
+        };
         let initial_history = InitialHistory::Resumed(ResumedHistory {
             conversation_id: thread_id,
             history,
@@ -260,6 +348,7 @@ impl AgentControl {
             other => (other, AgentMetadata::default()),
         };
         let notification_source = session_source.clone();
+        let v2_resume_config = spawn_uses_v2_residency.then(|| Arc::new(config.clone()));
 
         // The same `AgentControl` is sent to spawn the thread.
         let new_thread = match (session_source, options.fork_mode.as_ref(), inheritance) {
@@ -293,6 +382,9 @@ impl AgentControl {
         };
         agent_metadata.agent_id = Some(new_thread.thread_id);
         reservation.commit(agent_metadata.clone());
+        if let Some(v2_resume_config) = v2_resume_config {
+            self.remember_v2_resume_config(new_thread.thread_id, v2_resume_config);
+        }
         if let Some(residency_slot) = residency_slot {
             residency_slot.commit(new_thread.thread_id);
         }
@@ -614,16 +706,46 @@ impl AgentControl {
                 include_history: true,
             })
             .await?;
+        let stored_agent_role = stored_thread.agent_role.clone();
+        let stored_model_provider = stored_thread.model_provider.clone();
+        let rollout_path = stored_thread.rollout_path.clone();
+        let parent_thread_id = stored_thread.parent_thread_id;
         let history = stored_thread
             .history
             .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))?
             .items;
+        let stored_multi_agent_version = history
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                RolloutItem::SessionMeta(meta) if meta.meta.id == thread_id => {
+                    meta.meta.multi_agent_version
+                }
+                _ => None,
+            })
+            .or_else(|| {
+                history.iter().rev().find_map(|item| match item {
+                    RolloutItem::TurnContext(turn_context) => turn_context.multi_agent_version,
+                    _ => None,
+                })
+            });
+        let config = if stored_multi_agent_version == Some(MultiAgentVersion::V2) {
+            rebuild_v2_resume_config(
+                config,
+                thread_id,
+                stored_agent_role.as_deref(),
+                &stored_model_provider,
+                &history,
+            )
+            .await?
+        } else {
+            config
+        };
         let initial_history = InitialHistory::Resumed(ResumedHistory {
             conversation_id: thread_id,
             history,
-            rollout_path: stored_thread.rollout_path,
+            rollout_path,
         });
-        let parent_thread_id = stored_thread.parent_thread_id;
         let multi_agent_version = state
             .effective_multi_agent_version_for_spawn(
                 &initial_history,
@@ -686,6 +808,9 @@ impl AgentControl {
         let mut agent_metadata = agent_metadata;
         agent_metadata.agent_id = Some(resumed_thread.thread_id);
         reservation.commit(agent_metadata.clone());
+        if multi_agent_version == MultiAgentVersion::V2 {
+            self.remember_v2_resume_config(thread_id, Arc::new(config));
+        }
         // Resumed threads are re-registered in-memory and need the same listener
         // attachment path as freshly spawned threads.
         state.notify_thread_created(resumed_thread.thread_id);

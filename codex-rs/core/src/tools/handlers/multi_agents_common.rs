@@ -282,6 +282,7 @@ pub(crate) async fn apply_requested_spawn_agent_model_overrides(
     turn: &TurnContext,
     config: &mut Config,
     requested_model: Option<&str>,
+    configured_model_overrides: Option<&[String]>,
     requested_reasoning_effort: Option<ReasoningEffort>,
 ) -> Result<(), FunctionCallError> {
     if requested_model.is_none() && requested_reasoning_effort.is_none() {
@@ -289,12 +290,17 @@ pub(crate) async fn apply_requested_spawn_agent_model_overrides(
     }
 
     if let Some(requested_model) = requested_model {
-        let available_models = session
-            .services
-            .models_manager
-            .list_models(RefreshStrategy::Offline)
-            .await;
-        let selected_model_name = find_spawn_agent_model_name(&available_models, requested_model)?;
+        let selected_model_name =
+            if let Some(configured_model_overrides) = configured_model_overrides {
+                find_configured_spawn_agent_model_name(configured_model_overrides, requested_model)?
+            } else {
+                let available_models = session
+                    .services
+                    .models_manager
+                    .list_models(RefreshStrategy::Offline)
+                    .await;
+                find_spawn_agent_model_name(&available_models, requested_model)?
+            };
         let selected_model_info = session
             .services
             .models_manager
@@ -326,6 +332,22 @@ pub(crate) async fn apply_requested_spawn_agent_model_overrides(
     }
 
     Ok(())
+}
+
+fn find_configured_spawn_agent_model_name(
+    configured_models: &[String],
+    requested_model: &str,
+) -> Result<String, FunctionCallError> {
+    configured_models
+        .iter()
+        .find(|model| model.as_str() == requested_model)
+        .cloned()
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(format!(
+                "Model `{requested_model}` is not allowed for spawn_agent. Configured models: {}",
+                configured_models.join(", ")
+            ))
+        })
 }
 
 pub(crate) async fn apply_spawn_agent_service_tier(

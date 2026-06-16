@@ -9758,6 +9758,7 @@ root_agent_usage_hint_text = "Root guidance."
 subagent_usage_hint_text = "Subagent guidance."
 tool_namespace = "agents"
 hide_spawn_agent_metadata = true
+spawn_agent_model_overrides = ["gpt-5.4", "gpt-5.3-codex"]
 non_code_mode_only = true
 "#,
     )?;
@@ -9798,6 +9799,10 @@ non_code_mode_only = true
         Some("agents")
     );
     assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
+    assert_eq!(
+        config.multi_agent_v2.spawn_agent_model_overrides,
+        Some(vec!["gpt-5.4".to_string(), "gpt-5.3-codex".to_string()])
+    );
     assert!(config.multi_agent_v2.non_code_mode_only);
 
     Ok(())
@@ -10171,6 +10176,42 @@ tool_namespace = "{namespace}"
             .build()
             .await
             .expect_err("invalid multi_agent_v2 tool namespace should fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(err.to_string(), expected_message);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_v2_rejects_invalid_spawn_agent_model_overrides() -> std::io::Result<()> {
+    for (models, expected_message) in [
+        (
+            "[]",
+            "features.multi_agent_v2.spawn_agent_model_overrides must contain at least one model",
+        ),
+        (
+            r#"["gpt-5.4", "gpt-5.4"]"#,
+            "features.multi_agent_v2.spawn_agent_model_overrides contains duplicate model `gpt-5.4`",
+        ),
+    ] {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            format!(
+                r#"[features.multi_agent_v2]
+enabled = true
+spawn_agent_model_overrides = {models}
+"#
+            ),
+        )?;
+
+        let err = ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .build()
+            .await
+            .expect_err("invalid model override list should fail");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         assert_eq!(err.to_string(), expected_message);
     }
