@@ -348,6 +348,64 @@ ON CONFLICT(child_thread_id) DO NOTHING
             .map(PathBuf::from))
     }
 
+    /// Find a rollout path and creation timestamp by thread id using the underlying database.
+    pub async fn find_rollout_path_and_created_at_by_id(
+        &self,
+        id: ThreadId,
+        archived_only: Option<bool>,
+    ) -> anyhow::Result<Option<(PathBuf, DateTime<Utc>)>> {
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            "SELECT rollout_path, created_at_ms AS created_at FROM threads WHERE id = ",
+        );
+        builder.push_bind(id.to_string());
+        match archived_only {
+            Some(true) => {
+                builder.push(" AND archived = 1");
+            }
+            Some(false) => {
+                builder.push(" AND archived = 0");
+            }
+            None => {}
+        }
+        let row = builder.build().fetch_optional(self.pool.as_ref()).await?;
+        row.map(|row| {
+            let rollout_path: String = row.try_get("rollout_path")?;
+            let created_at: i64 = row.try_get("created_at")?;
+            Ok((
+                PathBuf::from(rollout_path),
+                epoch_millis_to_datetime(created_at)?,
+            ))
+        })
+        .transpose()
+    }
+
+    /// Repair a stale rollout path in place when the row still points at the expected path.
+    pub async fn update_thread_rollout_path_if_current(
+        &self,
+        id: ThreadId,
+        expected_rollout_path: &Path,
+        repaired_rollout_path: &Path,
+        archived_only: Option<bool>,
+    ) -> anyhow::Result<bool> {
+        let mut builder = QueryBuilder::<Sqlite>::new("UPDATE threads SET rollout_path = ");
+        builder.push_bind(repaired_rollout_path.display().to_string());
+        builder.push(" WHERE id = ");
+        builder.push_bind(id.to_string());
+        builder.push(" AND rollout_path = ");
+        builder.push_bind(expected_rollout_path.display().to_string());
+        match archived_only {
+            Some(true) => {
+                builder.push(" AND archived = 1");
+            }
+            Some(false) => {
+                builder.push(" AND archived = 0");
+            }
+            None => {}
+        }
+        let result = builder.build().execute(self.pool.as_ref()).await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Find the newest thread whose user-facing title exactly matches `title`.
     #[allow(clippy::too_many_arguments)]
     pub async fn find_thread_by_exact_title(

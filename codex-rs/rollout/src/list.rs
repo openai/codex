@@ -1766,9 +1766,9 @@ async fn find_thread_path_by_id_str_in_subdir(
     state_db_ctx: Option<&codex_state::StateRuntime>,
 ) -> io::Result<Option<PathBuf>> {
     // Validate UUID format early.
-    if Uuid::parse_str(id_str).is_err() {
+    let Ok(target_uuid) = Uuid::parse_str(id_str) else {
         return Ok(None);
-    }
+    };
 
     // Prefer DB lookup, then fall back to rollout file search.
     // TODO(jif): sqlite migration phase 1
@@ -1778,19 +1778,23 @@ async fn find_thread_path_by_id_str_in_subdir(
         _ => None,
     };
     let thread_id = ThreadId::from_string(id_str).ok();
+    let mut state_metadata_path = None;
     let mut unverified_db_path = None;
     let mut fallback_reason = state_db_ctx.is_none().then_some("db_unavailable");
     if let Some(state_db_ctx) = state_db_ctx
         && let Some(thread_id) = thread_id
     {
         match state_db_ctx
-            .find_rollout_path_by_id(thread_id, archived_only)
+            .find_rollout_path_and_created_at_by_id(thread_id, archived_only)
             .await
         {
-            Ok(Some(db_path)) => {
+            Ok(Some((db_path, created_at))) => {
                 if let Some(existing_db_path) =
-                    compression::existing_rollout_path(db_path.as_path()).await
+                    compression::existing_rollout_path_blocking(db_path.as_path())
                 {
+                    if rollout_file_name_matches_uuid(existing_db_path.as_path(), target_uuid) {
+                        return Ok(Some(existing_db_path));
+                    }
                     match read_session_meta_line(&existing_db_path).await {
                         Ok(meta_line) if meta_line.meta.id == thread_id => {
                             return Ok(Some(existing_db_path));
@@ -1809,6 +1813,17 @@ async fn find_thread_path_by_id_str_in_subdir(
                                 "mismatch",
                                 /*telemetry_override*/ None,
                             );
+                            state_metadata_path = find_rollout_path_by_id_from_state_created_at(
+                                codex_home,
+                                subdir,
+                                target_uuid,
+                                thread_id,
+                                archived_only,
+                                state_db_ctx,
+                                db_path.as_path(),
+                                created_at,
+                            )
+                            .await;
                         }
                         Err(err) => {
                             tracing::debug!(
@@ -1816,6 +1831,7 @@ async fn find_thread_path_by_id_str_in_subdir(
                                 existing_db_path.display()
                             );
                             unverified_db_path = Some(existing_db_path);
+                            fallback_reason = Some("unverified_path");
                         }
                     }
                 } else {
@@ -1831,6 +1847,17 @@ async fn find_thread_path_by_id_str_in_subdir(
                         "stale_path",
                         /*telemetry_override*/ None,
                     );
+                    state_metadata_path = find_rollout_path_by_id_from_state_created_at(
+                        codex_home,
+                        subdir,
+                        target_uuid,
+                        thread_id,
+                        archived_only,
+                        state_db_ctx,
+                        db_path.as_path(),
+                        created_at,
+                    )
+                    .await;
                 }
             }
             Ok(None) => fallback_reason = Some("missing_row"),
@@ -1843,61 +1870,13 @@ async fn find_thread_path_by_id_str_in_subdir(
         }
     }
 
-    let mut root = codex_home.to_path_buf();
-    root.push(subdir);
-    if !root.exists() {
-        return Ok(unverified_db_path);
-    }
-    let (filename_match, filename_scan_error) = match find_rollout_path_by_id_from_filenames(
-        root.as_path(),
-        id_str,
-    )
-    .await
-    {
-        Ok(path) => (path, None),
-        Err(err) => {
-            tracing::warn!(
-                "rollout filename lookup failed during find_thread_path_by_id_str_in_subdir: {err}"
-            );
-            (None, Some(err))
+    let mut found_path_repaired = false;
+    let found = match state_metadata_path {
+        Some((path, repaired)) => {
+            found_path_repaired = repaired;
+            Some(path)
         }
-    };
-
-    let found = match filename_match {
-        Some(path) => Some(path),
-        None => {
-            // This is safe because we know the values are valid.
-            #[allow(clippy::unwrap_used)]
-            let limit = NonZero::new(1).unwrap();
-            let options = file_search::FileSearchOptions {
-                limit,
-                compute_indices: false,
-                respect_gitignore: false,
-                ..Default::default()
-            };
-
-            let results = file_search::run(
-                id_str,
-                vec![root.clone()],
-                options,
-                /*cancel_flag*/ None,
-            )
-            .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
-
-            let found = results
-                .matches
-                .into_iter()
-                .map(|m| m.full_path())
-                .find_map(compression::RolloutFile::from_path)
-                .map(compression::RolloutFile::into_path);
-
-            if found.is_none()
-                && let Some(err) = filename_scan_error
-            {
-                return Err(err);
-            }
-            found
-        }
+        None => find_thread_path_by_id_str_in_subdir_without_db(codex_home, subdir, id_str).await?,
     };
     if let Some(found_path) = found.as_ref() {
         tracing::debug!("state db missing rollout path for thread {id_str}");
@@ -1911,16 +1890,292 @@ async fn find_thread_path_by_id_str_in_subdir(
                 /*telemetry_override*/ None,
             );
         }
-        state_db::read_repair_rollout_path(
-            state_db_ctx,
-            thread_id,
-            archived_only,
-            found_path.as_path(),
-        )
-        .await;
+        if !found_path_repaired {
+            state_db::read_repair_rollout_path(
+                state_db_ctx,
+                thread_id,
+                archived_only,
+                found_path.as_path(),
+            )
+            .await;
+        }
     }
 
     Ok(found.or(unverified_db_path))
+}
+
+async fn find_thread_path_by_id_str_in_any_subdir(
+    codex_home: &Path,
+    id_str: &str,
+    state_db_ctx: Option<&codex_state::StateRuntime>,
+) -> io::Result<Option<PathBuf>> {
+    let Ok(target_uuid) = Uuid::parse_str(id_str) else {
+        return Ok(None);
+    };
+    let thread_id = ThreadId::from_string(id_str).ok();
+    let mut preferred_subdir = None;
+    let mut unverified_db_path = None;
+    let mut fallback_reason = state_db_ctx.is_none().then_some("db_unavailable");
+    if let Some(state_db_ctx) = state_db_ctx
+        && let Some(thread_id) = thread_id
+    {
+        match state_db_ctx
+            .find_rollout_path_and_created_at_by_id(thread_id, /*archived_only*/ None)
+            .await
+        {
+            Ok(Some((db_path, created_at))) => {
+                preferred_subdir = rollout_subdir_hint(codex_home, db_path.as_path());
+                if let Some(existing_db_path) =
+                    compression::existing_rollout_path_blocking(db_path.as_path())
+                {
+                    if rollout_file_name_matches_uuid(existing_db_path.as_path(), target_uuid) {
+                        return Ok(Some(existing_db_path));
+                    }
+                    match read_session_meta_line(&existing_db_path).await {
+                        Ok(meta_line) if meta_line.meta.id == thread_id => {
+                            return Ok(Some(existing_db_path));
+                        }
+                        Ok(meta_line) => {
+                            tracing::error!(
+                                "state db returned rollout path for thread {id_str} but file belongs to thread {}: {}",
+                                meta_line.meta.id,
+                                existing_db_path.display()
+                            );
+                            tracing::warn!(
+                                "state db discrepancy during find_thread_path_by_id_str_in_any_subdir: mismatched_db_path"
+                            );
+                            codex_state::record_fallback(
+                                "find_thread_path",
+                                "mismatch",
+                                /*telemetry_override*/ None,
+                            );
+                            fallback_reason = Some("mismatch");
+                        }
+                        Err(err) => {
+                            tracing::debug!(
+                                "state db returned rollout path for thread {id_str} that could not be verified: {}: {err}",
+                                existing_db_path.display()
+                            );
+                            unverified_db_path = Some(existing_db_path);
+                            fallback_reason = Some("unverified_path");
+                        }
+                    }
+                } else {
+                    tracing::error!(
+                        "state db returned stale rollout path for thread {id_str}: {}",
+                        db_path.display()
+                    );
+                    tracing::warn!(
+                        "state db discrepancy during find_thread_path_by_id_str_in_any_subdir: stale_db_path"
+                    );
+                    codex_state::record_fallback(
+                        "find_thread_path",
+                        "stale_path",
+                        /*telemetry_override*/ None,
+                    );
+                    fallback_reason = Some("stale_path");
+                }
+                if let Some(subdir) = preferred_subdir
+                    && let Some((path, _repaired)) = find_rollout_path_by_id_from_state_created_at(
+                        codex_home,
+                        subdir,
+                        target_uuid,
+                        thread_id,
+                        archived_only_for_subdir(subdir),
+                        state_db_ctx,
+                        db_path.as_path(),
+                        created_at,
+                    )
+                    .await
+                {
+                    return Ok(Some(path));
+                }
+            }
+            Ok(None) => fallback_reason = Some("missing_row"),
+            Err(err) => {
+                tracing::warn!(
+                    "state db find_rollout_path_by_id failed during find_any_path_query: {err}"
+                );
+                fallback_reason = Some("db_error");
+            }
+        }
+    }
+
+    for (subdir, archived_only) in ordered_session_subdirs(preferred_subdir) {
+        if let Some(path) =
+            find_thread_path_by_id_str_in_subdir_without_db(codex_home, subdir, id_str).await?
+        {
+            tracing::debug!("state db missing rollout path for thread {id_str}");
+            tracing::warn!(
+                "state db discrepancy during find_thread_path_by_id_str_in_any_subdir: falling_back"
+            );
+            if let Some(reason) = fallback_reason {
+                codex_state::record_fallback(
+                    "find_thread_path",
+                    reason,
+                    /*telemetry_override*/ None,
+                );
+            }
+            state_db::read_repair_rollout_path(
+                state_db_ctx,
+                thread_id,
+                archived_only,
+                path.as_path(),
+            )
+            .await;
+            return Ok(Some(path));
+        }
+    }
+
+    Ok(unverified_db_path)
+}
+
+pub(crate) async fn find_thread_path_by_id_str_in_subdir_without_db(
+    codex_home: &Path,
+    subdir: &str,
+    id_str: &str,
+) -> io::Result<Option<PathBuf>> {
+    let mut root = codex_home.to_path_buf();
+    root.push(subdir);
+    if !root.exists() {
+        return Ok(None);
+    }
+    let (filename_match, filename_scan_error) = match find_rollout_path_by_id_from_filenames(
+        root.as_path(),
+        id_str,
+    )
+    .await
+    {
+        Ok(path) => (path, None),
+        Err(err) => {
+            tracing::warn!(
+                "rollout filename lookup failed during find_thread_path_by_id_str fallback scan: {err}"
+            );
+            (None, Some(err))
+        }
+    };
+
+    match filename_match {
+        Some(path) => Ok(Some(path)),
+        None => {
+            #[allow(clippy::unwrap_used)]
+            let limit = NonZero::new(1).unwrap();
+            let options = file_search::FileSearchOptions {
+                limit,
+                compute_indices: false,
+                respect_gitignore: false,
+                ..Default::default()
+            };
+
+            let results = file_search::run(id_str, vec![root], options, /*cancel_flag*/ None)
+                .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+
+            let found = results
+                .matches
+                .into_iter()
+                .map(|m| m.full_path())
+                .find_map(compression::RolloutFile::from_path)
+                .map(compression::RolloutFile::into_path);
+
+            if found.is_none()
+                && let Some(err) = filename_scan_error
+            {
+                return Err(err);
+            }
+            Ok(found)
+        }
+    }
+}
+
+fn archived_only_for_subdir(subdir: &str) -> Option<bool> {
+    match subdir {
+        SESSIONS_SUBDIR => Some(false),
+        ARCHIVED_SESSIONS_SUBDIR => Some(true),
+        _ => None,
+    }
+}
+
+fn rollout_subdir_hint(codex_home: &Path, path: &Path) -> Option<&'static str> {
+    if path.starts_with(codex_home.join(ARCHIVED_SESSIONS_SUBDIR)) {
+        return Some(ARCHIVED_SESSIONS_SUBDIR);
+    }
+    if path.starts_with(codex_home.join(SESSIONS_SUBDIR)) {
+        return Some(SESSIONS_SUBDIR);
+    }
+    None
+}
+
+fn ordered_session_subdirs(
+    preferred_subdir: Option<&'static str>,
+) -> [(&'static str, Option<bool>); 2] {
+    match preferred_subdir {
+        Some(ARCHIVED_SESSIONS_SUBDIR) => [
+            (ARCHIVED_SESSIONS_SUBDIR, Some(true)),
+            (SESSIONS_SUBDIR, Some(false)),
+        ],
+        _ => [
+            (SESSIONS_SUBDIR, Some(false)),
+            (ARCHIVED_SESSIONS_SUBDIR, Some(true)),
+        ],
+    }
+}
+
+async fn find_rollout_path_by_id_from_state_created_at(
+    codex_home: &Path,
+    subdir: &str,
+    target_uuid: Uuid,
+    thread_id: ThreadId,
+    archived_only: Option<bool>,
+    state_db_ctx: &codex_state::StateRuntime,
+    stale_path: &Path,
+    created_at: DateTime<Utc>,
+) -> Option<(PathBuf, bool)> {
+    let created_at = created_at.with_timezone(&chrono::Local);
+    let file_name = format!(
+        "rollout-{:04}-{:02}-{:02}T{:02}-{:02}-{:02}-{target_uuid}.jsonl",
+        created_at.year(),
+        created_at.month(),
+        created_at.day(),
+        created_at.hour(),
+        created_at.minute(),
+        created_at.second(),
+    );
+    let candidate = if subdir == ARCHIVED_SESSIONS_SUBDIR {
+        codex_home.join(subdir).join(file_name)
+    } else {
+        codex_home
+            .join(subdir)
+            .join(format!("{:04}", created_at.year()))
+            .join(format!("{:02}", created_at.month()))
+            .join(format!("{:02}", created_at.day()))
+            .join(file_name)
+    };
+    let existing_path = compression::existing_rollout_path_blocking(candidate.as_path())?;
+    if !rollout_file_name_matches_uuid(existing_path.as_path(), target_uuid) {
+        return None;
+    }
+    let repaired = state_db_ctx
+        .update_thread_rollout_path_if_current(
+            thread_id,
+            stale_path,
+            existing_path.as_path(),
+            archived_only,
+        )
+        .await
+        .unwrap_or_else(|err| {
+            tracing::warn!(
+                "state db stale path direct repair failed for thread {thread_id}: {err}"
+            );
+            false
+        });
+    Some((existing_path, repaired))
+}
+
+fn rollout_file_name_matches_uuid(path: &Path, target: Uuid) -> bool {
+    path.file_name()
+        .and_then(OsStr::to_str)
+        .and_then(parse_timestamp_uuid_from_filename)
+        .is_some_and(|(_ts, id)| id == target)
 }
 
 async fn find_rollout_path_by_id_from_filenames(
@@ -1930,33 +2185,41 @@ async fn find_rollout_path_by_id_from_filenames(
     let Ok(target) = Uuid::parse_str(id_str) else {
         return Ok(None);
     };
+    let root = root.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        find_rollout_path_by_id_from_filenames_blocking(root.as_path(), target)
+    })
+    .await
+    .map_err(io::Error::other)?
+}
+
+fn find_rollout_path_by_id_from_filenames_blocking(
+    root: &Path,
+    target: Uuid,
+) -> io::Result<Option<PathBuf>> {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let mut read_dir = match tokio::fs::read_dir(dir.as_path()).await {
+        let read_dir = match std::fs::read_dir(dir.as_path()) {
             Ok(read_dir) => read_dir,
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
             Err(err) => return Err(err),
         };
-        while let Some(entry) = read_dir.next_entry().await? {
-            let path = entry.path();
-            let file_type = entry.file_type().await?;
+        for entry in read_dir {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
             if file_type.is_dir() {
+                let path = entry.path();
                 stack.push(path);
                 continue;
             }
             if !file_type.is_file() {
                 continue;
             }
-            let Some(rollout_file) = compression::RolloutFile::from_path(path) else {
-                continue;
-            };
-            let Some((_ts, id)) =
-                parse_timestamp_uuid_from_filename(rollout_file.plain_file_name())
-            else {
+            let Some((_ts, id, path)) = rollout_parts_from_blocking_dir_entry(&entry) else {
                 continue;
             };
             if id == target {
-                return Ok(Some(rollout_file.into_path()));
+                return Ok(Some(path));
             }
         }
     }
@@ -1982,6 +2245,15 @@ pub async fn find_archived_thread_path_by_id_str(
 ) -> io::Result<Option<PathBuf>> {
     find_thread_path_by_id_str_in_subdir(codex_home, ARCHIVED_SESSIONS_SUBDIR, id_str, state_db_ctx)
         .await
+}
+
+/// Locate a recorded thread rollout file by UUID across active and archived session roots.
+pub async fn find_any_thread_path_by_id_str(
+    codex_home: &Path,
+    id_str: &str,
+    state_db_ctx: Option<&codex_state::StateRuntime>,
+) -> io::Result<Option<PathBuf>> {
+    find_thread_path_by_id_str_in_any_subdir(codex_home, id_str, state_db_ctx).await
 }
 
 /// Extract the `YYYY/MM/DD` directory components from a rollout filename.

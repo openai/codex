@@ -707,6 +707,73 @@ async fn list_threads_db_enabled_repairs_stale_rollout_paths() -> std::io::Resul
 }
 
 #[tokio::test]
+async fn state_db_only_list_repairs_stale_rollout_path() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+
+    let uuid = Uuid::from_u128(9016);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+    let real_path = write_session_file(home.path(), "2025-01-03T17-00-00", uuid)?;
+    let stale_path = home.path().join(format!(
+        "sessions/2099/01/01/rollout-2099-01-01T00-00-00-{uuid}.jsonl"
+    ));
+
+    let runtime = codex_state::StateRuntime::init(
+        home.path().to_path_buf(),
+        config.model_provider_id.clone(),
+    )
+    .await
+    .expect("state db should initialize");
+    runtime
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await
+        .expect("backfill should be complete");
+    let created_at = chrono::Utc
+        .with_ymd_and_hms(2025, 1, 3, 17, 0, 0)
+        .single()
+        .expect("valid datetime");
+    let mut builder = codex_state::ThreadMetadataBuilder::new(
+        thread_id,
+        stale_path,
+        created_at,
+        SessionSource::Cli,
+    );
+    builder.model_provider = Some(config.model_provider_id.clone());
+    builder.cwd = home.path().to_path_buf();
+    let mut metadata = builder.build(config.model_provider_id.as_str());
+    metadata.first_user_message = Some("Hello from user".to_string());
+    metadata.preview = metadata.first_user_message.clone();
+    runtime
+        .upsert_thread(&metadata)
+        .await
+        .expect("state db upsert should succeed");
+
+    let page = RolloutRecorder::list_threads_from_state_db(
+        Some(runtime.clone()),
+        &config,
+        /*page_size*/ 1,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
+        &[],
+        /*model_providers*/ None,
+        /*cwd_filters*/ None,
+        config.model_provider_id.as_str(),
+        /*search_term*/ None,
+    )
+    .await?;
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].path, real_path);
+
+    let repaired_path = runtime
+        .find_rollout_path_by_id(thread_id, Some(false))
+        .await
+        .expect("state db lookup should succeed");
+    assert_eq!(repaired_path, Some(real_path));
+    Ok(())
+}
+
+#[tokio::test]
 async fn list_threads_state_db_only_skips_jsonl_repair_scan() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());

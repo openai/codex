@@ -438,6 +438,10 @@ pub async fn list_threads_db(
                     let mut item = item;
                     item.rollout_path = existing_path;
                     valid_items.push(item);
+                } else if let Some(repaired_item) =
+                    repair_stale_rollout_path_from_metadata(ctx, codex_home, &item, archived).await
+                {
+                    valid_items.push(repaired_item);
                 } else {
                     warn!(
                         "state db list_threads returned stale rollout path for thread {}: {}",
@@ -456,6 +460,44 @@ pub async fn list_threads_db(
             None
         }
     }
+}
+
+async fn repair_stale_rollout_path_from_metadata(
+    ctx: &codex_state::StateRuntime,
+    codex_home: &Path,
+    item: &codex_state::ThreadMetadata,
+    archived: bool,
+) -> Option<codex_state::ThreadMetadata> {
+    let subdir = if archived {
+        crate::ARCHIVED_SESSIONS_SUBDIR
+    } else {
+        crate::SESSIONS_SUBDIR
+    };
+    let candidate = crate::list::find_thread_path_by_id_str_in_subdir_without_db(
+        codex_home,
+        subdir,
+        &item.id.to_string(),
+    )
+    .await
+    .ok()
+    .flatten()?;
+    let existing_path = crate::compression::existing_rollout_path_blocking(candidate.as_path())?;
+
+    warn!(
+        "state db list_threads repaired stale rollout path for thread {}: {} -> {}",
+        item.id,
+        item.rollout_path.display(),
+        existing_path.display()
+    );
+    let mut item = item.clone();
+    item.rollout_path = existing_path;
+    if let Err(err) = ctx.upsert_thread(&item).await {
+        warn!(
+            "state db list_threads stale path repair upsert failed for thread {}: {err}",
+            item.id
+        );
+    }
+    Some(item)
 }
 
 /// Look up the rollout path for a thread id using SQLite.
@@ -581,28 +623,9 @@ pub async fn read_repair_rollout_path(
         && let Ok(Some(metadata)) = ctx.get_thread(thread_id).await
     {
         saw_existing_metadata = true;
-        let mut repaired = metadata.clone();
-        repaired.rollout_path = rollout_path.to_path_buf();
-        repaired.cwd = normalize_cwd_for_state_db(&repaired.cwd);
-        match archived_only {
-            Some(true) if repaired.archived_at.is_none() => {
-                repaired.archived_at = Some(repaired.updated_at);
-            }
-            Some(false) => {
-                repaired.archived_at = None;
-            }
-            Some(true) | None => {}
-        }
-        if repaired == metadata {
-            return;
-        }
-        warn!("state db discrepancy during read_repair_rollout_path: upsert_needed (fast path)");
-        if let Err(err) = ctx.upsert_thread(&repaired).await {
-            warn!(
-                "state db read-repair upsert failed for {}: {err}",
-                rollout_path.display()
-            );
-        } else {
+        if read_repair_rollout_path_from_metadata(Some(ctx), metadata, archived_only, rollout_path)
+            .await
+        {
             return;
         }
     }
@@ -627,6 +650,44 @@ pub async fn read_repair_rollout_path(
         /*new_thread_memory_mode*/ None,
     )
     .await;
+}
+
+/// Repair a rollout path when the caller already has the metadata row.
+pub async fn read_repair_rollout_path_from_metadata(
+    context: Option<&codex_state::StateRuntime>,
+    mut metadata: codex_state::ThreadMetadata,
+    archived_only: Option<bool>,
+    rollout_path: &Path,
+) -> bool {
+    let Some(ctx) = context else {
+        return true;
+    };
+
+    let original = metadata.clone();
+    metadata.rollout_path = rollout_path.to_path_buf();
+    metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
+    match archived_only {
+        Some(true) if metadata.archived_at.is_none() => {
+            metadata.archived_at = Some(metadata.updated_at);
+        }
+        Some(false) => {
+            metadata.archived_at = None;
+        }
+        Some(true) | None => {}
+    }
+    if metadata == original {
+        return true;
+    }
+
+    warn!("state db discrepancy during read_repair_rollout_path: upsert_needed (fast path)");
+    if let Err(err) = ctx.upsert_thread(&metadata).await {
+        warn!(
+            "state db read-repair upsert failed for {}: {err}",
+            rollout_path.display()
+        );
+        return false;
+    }
+    true
 }
 
 /// Apply rollout items incrementally to SQLite.

@@ -7,6 +7,7 @@ use std::fs::File;
 use std::fs::FileTimes;
 use std::io::Write;
 use std::path::Path;
+use std::path::PathBuf;
 
 use chrono::TimeZone;
 use pretty_assertions::assert_eq;
@@ -19,6 +20,7 @@ use time::macros::format_description;
 use uuid::Uuid;
 
 use crate::INTERACTIVE_SESSION_SOURCES;
+use crate::find_any_thread_path_by_id_str;
 use crate::find_thread_path_by_id_str;
 use crate::list::Cursor;
 use crate::list::ThreadItem;
@@ -230,6 +232,85 @@ async fn find_thread_path_accepts_existing_state_db_path_without_canonical_filen
     assert_eq!(found, Some(db_rollout_path));
 }
 
+#[tokio::test]
+async fn find_any_thread_path_prefers_archived_state_db_path() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let uuid = Uuid::from_u128(306);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+    let active_ts = "2025-01-03T13-00-00";
+    write_session_file(
+        home,
+        active_ts,
+        uuid,
+        /*num_records*/ 1,
+        Some(SessionSource::Cli),
+    )
+    .unwrap();
+
+    let archived_ts = "2025-01-04T13-00-00";
+    let archived_rollout_path = write_archived_session_file(
+        home,
+        archived_ts,
+        uuid,
+        /*num_records*/ 1,
+        Some(SessionSource::Cli),
+    )
+    .unwrap();
+    let runtime = insert_state_db_thread(
+        home,
+        thread_id,
+        archived_rollout_path.as_path(),
+        /*archived*/ true,
+    )
+    .await;
+
+    let found = find_any_thread_path_by_id_str(home, &uuid.to_string(), Some(runtime.as_ref()))
+        .await
+        .expect("lookup should succeed");
+    assert_eq!(found, Some(archived_rollout_path));
+}
+
+#[tokio::test]
+async fn find_any_thread_path_repairs_stale_archived_db_path() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let uuid = Uuid::from_u128(307);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+    let ts = "2025-01-03T12-00-00";
+    let archived_rollout_path = write_archived_session_file(
+        home,
+        ts,
+        uuid,
+        /*num_records*/ 1,
+        Some(SessionSource::Cli),
+    )
+    .unwrap();
+
+    let stale_db_path = home.join(format!(
+        "archived_sessions/rollout-2099-01-01T00-00-00-{uuid}.jsonl"
+    ));
+    let runtime = insert_state_db_thread(
+        home,
+        thread_id,
+        stale_db_path.as_path(),
+        /*archived*/ true,
+    )
+    .await;
+
+    let found = find_any_thread_path_by_id_str(home, &uuid.to_string(), Some(runtime.as_ref()))
+        .await
+        .expect("lookup should succeed");
+    assert_eq!(found, Some(archived_rollout_path.clone()));
+    assert_state_db_rollout_path_with_archive(
+        home,
+        thread_id,
+        Some(true),
+        Some(archived_rollout_path.as_path()),
+    )
+    .await;
+}
+
 #[test]
 fn rollout_date_parts_extracts_directory_components() {
     let file_name = OsStr::new("rollout-2025-03-01T09-00-00-123.jsonl");
@@ -245,11 +326,20 @@ async fn assert_state_db_rollout_path(
     thread_id: ThreadId,
     expected_path: Option<&Path>,
 ) {
+    assert_state_db_rollout_path_with_archive(home, thread_id, Some(false), expected_path).await;
+}
+
+async fn assert_state_db_rollout_path_with_archive(
+    home: &Path,
+    thread_id: ThreadId,
+    archived_only: Option<bool>,
+    expected_path: Option<&Path>,
+) {
     let runtime = codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string())
         .await
         .expect("state db should initialize");
     let path = runtime
-        .find_rollout_path_by_id(thread_id, Some(false))
+        .find_rollout_path_by_id(thread_id, archived_only)
         .await
         .expect("state db lookup should succeed");
     assert_eq!(path.as_deref(), expected_path);
@@ -341,6 +431,58 @@ fn write_session_file_with_provider(
     let times = FileTimes::new().set_modified(dt.into());
     file.set_times(times)?;
     Ok((dt, uuid))
+}
+
+fn write_archived_session_file(
+    root: &Path,
+    ts_str: &str,
+    uuid: Uuid,
+    num_records: usize,
+    source: Option<SessionSource>,
+) -> std::io::Result<PathBuf> {
+    let format: &[FormatItem] =
+        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+    let dt = PrimitiveDateTime::parse(ts_str, format)
+        .unwrap()
+        .assume_utc();
+    let dir = root.join("archived_sessions");
+    fs::create_dir_all(&dir)?;
+
+    let filename = format!("rollout-{ts_str}-{uuid}.jsonl");
+    let file_path = dir.join(filename);
+    let mut file = File::create(&file_path)?;
+
+    let mut payload = serde_json::json!({
+        "id": uuid,
+        "timestamp": ts_str,
+        "cwd": ".",
+        "originator": "test_originator",
+        "cli_version": "test_version",
+        "base_instructions": null,
+    });
+
+    if let Some(source) = source {
+        payload["source"] = serde_json::to_value(source).unwrap();
+    }
+    payload["model_provider"] = serde_json::Value::String(TEST_PROVIDER.to_string());
+
+    let meta = serde_json::json!({
+        "timestamp": ts_str,
+        "type": "session_meta",
+        "payload": payload,
+    });
+    writeln!(file, "{meta}")?;
+
+    for i in 0..num_records {
+        let rec = serde_json::json!({
+            "record_type": "response",
+            "index": i
+        });
+        writeln!(file, "{rec}")?;
+    }
+    let times = FileTimes::new().set_modified(dt.into());
+    file.set_times(times)?;
+    Ok(file_path)
 }
 
 fn write_goal_started_session_file(
