@@ -8,6 +8,7 @@ Usage: build-codex-package-archive.sh \
   --bundle <primary|app-server> \
   --entrypoint-dir <dir> \
   --archive-dir <dir> \
+  [--code-mode-host-bin <path>] \
   [--bwrap-bin <path>] \
   [--codex-command-runner-bin <path>] \
   [--codex-windows-sandbox-setup-bin <path>] \
@@ -19,6 +20,7 @@ target=""
 bundle=""
 entrypoint_dir=""
 archive_dir=""
+code_mode_host_bin=""
 target_suffixed_entrypoint="false"
 resource_args=()
 bwrap_bin_provided="false"
@@ -41,6 +43,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --archive-dir)
       archive_dir="${2:?--archive-dir requires a value}"
+      shift 2
+      ;;
+    --code-mode-host-bin)
+      code_mode_host_bin="${2:?--code-mode-host-bin requires a value}"
       shift 2
       ;;
     --bwrap-bin)
@@ -110,8 +116,18 @@ case "$target" in
 esac
 
 entrypoint_name="$entrypoint"
+code_mode_host_name="codex-code-mode-host"
 if [[ "$target_suffixed_entrypoint" == "true" ]]; then
   entrypoint_name="${entrypoint_name}-${target}"
+  code_mode_host_name="${code_mode_host_name}-${target}"
+fi
+
+if [[ -z "$code_mode_host_bin" ]]; then
+  code_mode_host_bin="${entrypoint_dir%/}/${code_mode_host_name}${exe_suffix}"
+fi
+if [[ ! -f "$code_mode_host_bin" ]]; then
+  echo "Code-mode host binary ${code_mode_host_bin} not found" >&2
+  exit 1
 fi
 
 case "$target" in
@@ -159,6 +175,7 @@ python_args=(
   --target "$target"
   --variant "$variant"
   --entrypoint-bin "${entrypoint_dir%/}/${entrypoint_name}${exe_suffix}"
+  --code-mode-host-bin "$code_mode_host_bin"
   --cargo-profile release
   --package-dir "$package_dir"
   --archive-output "$gzip_archive_path"

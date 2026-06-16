@@ -2531,6 +2531,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-util",
+ "v8",
 ]
 
 [[package]]

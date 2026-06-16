@@ -71,6 +71,8 @@ alias(
 
 exports_files([
     "AGENTS.md",
+    "runfile_env_binary_launcher.bat.tpl",
+    "runfile_env_binary_launcher.sh.tpl",
     "workspace_root_test_launcher.bat.tpl",
     "workspace_root_test_launcher.sh.tpl",
 ])

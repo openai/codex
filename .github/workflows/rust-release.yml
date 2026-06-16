@@ -80,50 +80,50 @@ jobs:
             target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-responses-api-proxy codex-code-mode-host"
             build_dmg: "true"
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-responses-api-proxy codex-code-mode-host"
             build_dmg: "true"
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
           # Release artifacts intentionally ship MUSL-linked Linux binaries.
           - runner: ${{ github.event.repository.name }}-linux-x64-xl
             target: x86_64-unknown-linux-musl
             bundle: primary
             artifact_name: x86_64-unknown-linux-musl
-            binaries: "codex codex-responses-api-proxy bwrap"
+            binaries: "codex codex-responses-api-proxy codex-code-mode-host bwrap"
             build_dmg: "false"
           - runner: ${{ github.event.repository.name }}-linux-x64-xl
             target: x86_64-unknown-linux-musl
             bundle: app-server
             artifact_name: x86_64-unknown-linux-musl-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
           - runner: ${{ github.event.repository.name }}-linux-arm64
             target: aarch64-unknown-linux-musl
             bundle: primary
             artifact_name: aarch64-unknown-linux-musl
-            binaries: "codex codex-responses-api-proxy bwrap"
+            binaries: "codex codex-responses-api-proxy codex-code-mode-host bwrap"
             build_dmg: "false"
           - runner: ${{ github.event.repository.name }}-linux-arm64
             target: aarch64-unknown-linux-musl
             bundle: app-server
             artifact_name: aarch64-unknown-linux-musl-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
 
     steps:
@@ -208,6 +208,7 @@ jobs:
       - name: Configure rusty_v8 artifact overrides and verify checksums
         uses: ./.github/actions/setup-rusty-v8
         with:
+          sandbox: "true"
           target: ${{ matrix.target }}
 
       - if: ${{ contains(matrix.target, 'linux') }}
@@ -344,9 +345,15 @@ jobs:
             rm -rf "$bundle_root"
             mkdir -p "$bundle_root/codex-resources"
             cp "$dest/codex-${{ matrix.target }}" "$bundle_root/codex"
+            cp "$dest/codex-code-mode-host-${{ matrix.target }}" \
+              "$bundle_root/codex-code-mode-host"
             cp "$dest/bwrap-${{ matrix.target }}" "$bundle_root/codex-resources/bwrap"
-            chmod 0755 "$bundle_root/codex" "$bundle_root/codex-resources/bwrap"
-            tar -C "$bundle_root" -cf - codex codex-resources/bwrap |
+            chmod 0755 \
+              "$bundle_root/codex" \
+              "$bundle_root/codex-code-mode-host" \
+              "$bundle_root/codex-resources/bwrap"
+            tar -C "$bundle_root" -cf - \
+              codex codex-code-mode-host codex-resources/bwrap |
               zstd -T0 -19 -o "$dest/codex-${{ matrix.target }}-bundle.tar.zst"
           fi
 
@@ -484,19 +491,19 @@ jobs:
           - target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-responses-api-proxy codex-code-mode-host"
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
           - target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-responses-api-proxy codex-code-mode-host"
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -602,22 +609,22 @@ jobs:
           - target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-responses-api-proxy codex-code-mode-host"
             build_dmg: "true"
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
           - target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-responses-api-proxy codex-code-mode-host"
             build_dmg: "true"
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
 
     steps:
@@ -889,22 +896,22 @@ jobs:
           - target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-responses-api-proxy codex-code-mode-host"
             verify_dmg: "true"
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             verify_dmg: "false"
           - target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "codex codex-responses-api-proxy codex-code-mode-host"
             verify_dmg: "true"
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server"
+            binaries: "codex-app-server codex-code-mode-host"
             verify_dmg: "false"
 
     steps:
@@ -992,6 +999,7 @@ jobs:
           mkdir -p "$package_dir"
           tar -xzf "${packaged_dir}/${package_stem}-${target}.tar.gz" -C "$package_dir"
           verify_signed_binary "${package_dir}/bin/${package_entrypoint}"
+          verify_signed_binary "${package_dir}/bin/codex-code-mode-host"
 
           if [[ "${{ matrix.verify_dmg }}" != "true" ]]; then
             exit 0

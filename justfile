@@ -75,11 +75,11 @@ install:
 # there should be no need to add `--all-features`.
 [unix]
 test *args:
-    RUST_MIN_STACK={{ rust_min_stack }} NEXTEST_PROFILE=local cargo nextest run --no-fail-fast "$@"
+    RUST_MIN_STACK={{ rust_min_stack }} NEXTEST_PROFILE=local {{ python }} ../scripts/run-nextest.py "$@"
 
 [windows]
 test *args:
-    $env:RUST_MIN_STACK = "{{ rust_min_stack }}"; $env:NEXTEST_PROFILE = "local"; cargo nextest run --no-fail-fast @($args | Select-Object -Skip 1)
+    $env:RUST_MIN_STACK = "{{ rust_min_stack }}"; $env:NEXTEST_PROFILE = "local"; {{ python }} ../scripts/run-nextest.py @($args | Select-Object -Skip 1)
 
 # Run from the repository root so scripts that resolve paths from `cwd` see
 # the same layout they use in GitHub Actions.
@@ -96,16 +96,18 @@ bench-smoke:
     just bench -- --test
 
 # Build and run Codex from source using Bazel.
+# The launcher target also builds the code-mode host and injects its runfile
+# path, so Bazel can rebuild either binary incrementally.
 # On Unix, use `[no-cd]` and `--run_under="cd $PWD &&"` to ensure Bazel runs
 # the command in the current working directory.
 [no-cd]
 [unix]
 bazel-codex *args:
-    bazel run //codex-rs/cli:codex --run_under="cd $PWD &&" -- "$@"
+    bazel run //codex-rs/cli:codex-with-code-mode --run_under="cd $PWD &&" -- "$@"
 
 [windows]
 bazel-codex *args:
-    bazel run //codex-rs/cli:codex --run_under='cd /d "{{ invocation_directory_native() }}" &&' -- @($args | Select-Object -Skip 1)
+    bazel run //codex-rs/cli:codex-with-code-mode --run_under='cd /d "{{ invocation_directory_native() }}" &&' -- @($args | Select-Object -Skip 1)
 
 [no-cd]
 bazel-lock-update:
