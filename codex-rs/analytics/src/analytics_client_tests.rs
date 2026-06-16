@@ -3957,6 +3957,7 @@ async fn turn_event_counts_completed_tool_items() {
         ThreadItem::ImageGeneration {
             id: "image-1".to_string(),
             status: "completed".to_string(),
+            title: None,
             revised_prompt: None,
             result: "ok".to_string(),
             saved_path: None,

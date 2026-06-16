@@ -358,6 +358,8 @@ pub enum ThreadItem {
     ImageGeneration {
         id: String,
         status: String,
+        /// Short display title for the generated image, when available.
+        title: Option<String>,
         revised_prompt: Option<String>,
         result: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -837,6 +839,7 @@ impl From<CoreTurnItem> for ThreadItem {
             CoreTurnItem::ImageGeneration(image) => ThreadItem::ImageGeneration {
                 id: image.id,
                 status: image.status,
+                title: None,
                 revised_prompt: image.revised_prompt,
                 result: image.result,
                 saved_path: image.saved_path,

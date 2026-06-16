@@ -17686,6 +17686,13 @@
               "status": {
                 "type": "string"
               },
+              "title": {
+                "description": "Short display title for the generated image, when available.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "type": {
                 "enum": [
                   "imageGeneration"

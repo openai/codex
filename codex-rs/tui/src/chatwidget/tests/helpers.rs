@@ -710,6 +710,7 @@ pub(super) fn handle_image_generation_end(
             item: AppServerThreadItem::ImageGeneration {
                 id: call_id.into(),
                 status: status.into(),
+                title: None,
                 revised_prompt,
                 result: String::new(),
                 saved_path,

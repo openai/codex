@@ -602,6 +602,7 @@ impl ThreadHistoryBuilder {
         let item = ThreadItem::ImageGeneration {
             id: payload.call_id.clone(),
             status: String::new(),
+            title: None,
             revised_prompt: None,
             result: String::new(),
             saved_path: None,
@@ -613,6 +614,7 @@ impl ThreadHistoryBuilder {
         let item = ThreadItem::ImageGeneration {
             id: payload.call_id.clone(),
             status: payload.status.clone(),
+            title: None,
             revised_prompt: payload.revised_prompt.clone(),
             result: payload.result.clone(),
             saved_path: payload.saved_path.clone(),
@@ -1622,6 +1624,7 @@ mod tests {
                     ThreadItem::ImageGeneration {
                         id: "ig_123".into(),
                         status: "completed".into(),
+                        title: None,
                         revised_prompt: Some("final prompt".into()),
                         result: "Zm9v".into(),
                         saved_path: Some(test_path_buf("/tmp/ig_123.png").abs()),

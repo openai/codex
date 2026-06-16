@@ -200,6 +200,7 @@ async fn standalone_image_generation_failure_emits_terminal_item() -> Result<()>
         ThreadItem::ImageGeneration {
             id: call_id.to_string(),
             status: "failed".to_string(),
+            title: None,
             revised_prompt: Some("paint a blue whale".to_string()),
             result: String::new(),
             saved_path: None,
