@@ -76,7 +76,7 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::test_support::PathExt;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -2673,7 +2673,7 @@ async fn run_environment_selection_case(
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
-            environments: environment_params(case.sticky, workspace)?,
+            environments: environment_params(case.sticky, workspace),
             ..Default::default()
         })
         .await?;
@@ -2692,7 +2692,7 @@ async fn run_environment_selection_case(
                 text: format!("run {}", case.name),
                 text_elements: Vec::new(),
             }],
-            environments: environment_params(case.turn, workspace)?,
+            environments: environment_params(case.turn, workspace),
             cwd: Some(workspace.to_path_buf()),
             model: Some("mock-model".to_string()),
             ..Default::default()
@@ -2739,21 +2739,15 @@ async fn run_environment_selection_case(
     Ok(())
 }
 
-fn environment_params(
-    ids: Option<&[&str]>,
-    cwd: &Path,
-) -> Result<Option<Vec<TurnEnvironmentParams>>> {
+fn environment_params(ids: Option<&[&str]>, cwd: &Path) -> Option<Vec<TurnEnvironmentParams>> {
     ids.map(|ids| {
         ids.iter()
-            .map(|id| {
-                Ok(TurnEnvironmentParams {
-                    environment_id: (*id).to_string(),
-                    cwd: AbsolutePathBuf::try_from(cwd.to_path_buf())?.into(),
-                })
+            .map(|id| TurnEnvironmentParams {
+                environment_id: (*id).to_string(),
+                cwd: cwd.abs().into(),
             })
             .collect()
     })
-    .transpose()
 }
 
 #[tokio::test]
