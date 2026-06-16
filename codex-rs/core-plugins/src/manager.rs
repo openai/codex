@@ -1316,7 +1316,7 @@ impl PluginsManager {
         let mut app_declarations = load_plugin_apps(source_path.as_path()).await;
         let mut mcp_servers = load_plugin_mcp_servers(source_path.as_path(), auth_mode).await;
         if auth_mode.is_some() {
-            resolve_app_and_mcp_capabilities(
+            apply_app_mcp_routing_policy(
                 &mut app_declarations,
                 &mut mcp_servers,
                 auth_mode,

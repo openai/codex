@@ -1,4 +1,4 @@
-use crate::capabilities::resolve_app_and_mcp_capabilities;
+use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::loader::plugin_app_declarations_from_value;
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
@@ -1082,7 +1082,7 @@ async fn build_remote_plugin_detail(
         .iter()
         .map(|server| (server.key.clone(), ()))
         .collect::<HashMap<_, _>>();
-    resolve_app_and_mcp_capabilities(
+    apply_app_mcp_routing_policy(
         &mut app_declarations,
         &mut mcp_servers,
         Some(auth.api_auth_mode()),
