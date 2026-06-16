@@ -93,7 +93,7 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     turn_context_raw
         .approval_policy
-        .set(AskForApproval::OnRequest)
+        .set(AskForApproval::Never)
         .expect("test setup should allow updating approval policy");
     let mut config = (*turn_context_raw.config).clone();
     config
@@ -407,7 +407,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
 
     turn_context_raw
         .approval_policy
-        .set(AskForApproval::OnFailure)
+        .set(AskForApproval::OnRequest)
         .expect("test setup should allow updating approval policy");
     turn_context_raw.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
     let mut config = (*turn_context_raw.config).clone();

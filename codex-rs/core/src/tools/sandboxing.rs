@@ -196,7 +196,7 @@ impl ExecApprovalRequirement {
     }
 }
 
-/// - Never, OnFailure: do not ask
+/// - Never: do not ask
 /// - OnRequest: ask unless filesystem access is unrestricted
 /// - Granular: ask unless filesystem access is unrestricted, but auto-reject
 ///   when granular sandbox approval is disabled.
@@ -206,7 +206,7 @@ pub(crate) fn default_exec_approval_requirement(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
 ) -> ExecApprovalRequirement {
     let needs_approval = match policy {
-        AskForApproval::Never | AskForApproval::OnFailure => false,
+        AskForApproval::Never => false,
         AskForApproval::OnRequest | AskForApproval::Granular(_) => {
             matches!(
                 file_system_sandbox_policy.kind,
@@ -356,7 +356,6 @@ pub(crate) trait Approvable<Req> {
     /// Decide we can request an approval for no-sandbox execution.
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
         match policy {
-            AskForApproval::OnFailure => true,
             AskForApproval::UnlessTrusted => true,
             AskForApproval::Never => false,
             AskForApproval::OnRequest => false,
