@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use codex_config::AppToolApproval;
 use codex_config::McpServerConfig;
@@ -10,17 +11,38 @@ pub(crate) enum McpServerLaunch {
     Configured(Box<McpServerConfig>),
 }
 
+/// Controls whether tool discovery waits for an MCP server to finish starting.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum McpStartupPolicy {
+    #[default]
+    Blocking,
+    CachedOrEmpty {
+        startup_grace_period: Duration,
+    },
+}
+
 /// MCP server after runtime additions have been applied.
 #[derive(Debug, Clone)]
 pub struct EffectiveMcpServer {
     launch: McpServerLaunch,
+    startup_policy: McpStartupPolicy,
 }
 
 impl EffectiveMcpServer {
     pub fn configured(config: McpServerConfig) -> Self {
         Self {
             launch: McpServerLaunch::Configured(Box::new(config)),
+            startup_policy: McpStartupPolicy::Blocking,
         }
+    }
+
+    pub(crate) fn with_startup_policy(mut self, startup_policy: McpStartupPolicy) -> Self {
+        self.startup_policy = startup_policy;
+        self
+    }
+
+    pub(crate) fn startup_policy(&self) -> McpStartupPolicy {
+        self.startup_policy
     }
 
     pub(crate) fn launch(&self) -> &McpServerLaunch {

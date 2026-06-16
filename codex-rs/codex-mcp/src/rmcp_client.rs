@@ -33,6 +33,7 @@ use crate::runtime::McpRuntimeContext;
 use crate::runtime::emit_duration;
 use crate::server::EffectiveMcpServer;
 use crate::server::McpServerLaunch;
+use crate::server::McpStartupPolicy;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
@@ -130,6 +131,7 @@ pub(crate) struct AsyncManagedClient {
     pub(crate) cached_tool_info_snapshot: Option<Vec<ToolInfo>>,
     pub(crate) cached_server_info: Option<McpServerInfo>,
     pub(crate) startup_complete: Arc<AtomicBool>,
+    pub(crate) startup_policy: McpStartupPolicy,
     pub(crate) tool_plugin_provenance: Arc<ToolPluginProvenance>,
     pub(crate) cancel_token: CancellationToken,
 }
@@ -166,6 +168,7 @@ impl AsyncManagedClient {
             &server_name,
             codex_apps_tools_cache_context.as_ref(),
         );
+        let startup_policy = server.startup_policy();
         let startup_tool_filter = tool_filter;
         let startup_complete = Arc::new(AtomicBool::new(false));
         let startup_complete_for_fut = Arc::clone(&startup_complete);
@@ -231,6 +234,7 @@ impl AsyncManagedClient {
             cached_tool_info_snapshot,
             cached_server_info,
             startup_complete,
+            startup_policy,
             tool_plugin_provenance,
             cancel_token,
         }
@@ -315,9 +319,18 @@ impl AsyncManagedClient {
         {
             Some(startup_tools)
         } else {
-            match self.client().await {
-                Ok(client) => Some(client.listed_tools()),
-                Err(_) => self.cached_tool_info_snapshot.clone(),
+            let client = match self.startup_policy {
+                McpStartupPolicy::Blocking => Some(self.client().await),
+                McpStartupPolicy::CachedOrEmpty {
+                    startup_grace_period,
+                } => tokio::time::timeout(startup_grace_period, self.client())
+                    .await
+                    .ok(),
+            };
+            match client {
+                Some(Ok(client)) => Some(client.listed_tools()),
+                Some(Err(_)) => self.cached_tool_info_snapshot.clone(),
+                None => Some(Vec::new()),
             }
         };
         tools.map(annotate_tools)

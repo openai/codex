@@ -44,9 +44,11 @@ use crate::codex_apps::codex_apps_tools_cache_key;
 use crate::connection_manager::McpConnectionManager;
 use crate::runtime::McpRuntimeContext;
 use crate::server::EffectiveMcpServer;
+use crate::server::McpStartupPolicy;
 
 pub const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
+const CODEX_APPS_STARTUP_GRACE_PERIOD: Duration = Duration::from_secs(1);
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
 
@@ -259,7 +261,16 @@ pub fn effective_mcp_servers_from_configured(
         .into_iter()
         .map(|(name, server)| (name, EffectiveMcpServer::configured(server)))
         .collect::<HashMap<_, _>>();
-    if !host_owned_codex_apps_enabled(config, auth) {
+    if host_owned_codex_apps_enabled(config, auth) {
+        if let Some(server) = servers.remove(CODEX_APPS_MCP_SERVER_NAME) {
+            servers.insert(
+                CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                server.with_startup_policy(McpStartupPolicy::CachedOrEmpty {
+                    startup_grace_period: CODEX_APPS_STARTUP_GRACE_PERIOD,
+                }),
+            );
+        }
+    } else {
         servers.remove(CODEX_APPS_MCP_SERVER_NAME);
     }
     servers
