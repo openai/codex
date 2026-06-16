@@ -2684,7 +2684,6 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
         comp_hash: None,
-        recommended_plugins_context_present: false,
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         multi_agent_version: None,
@@ -5075,7 +5074,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         "turn_id".to_string(),
         skills_outcome,
         /*recommended_plugin_candidates*/ None,
-        /*recommended_plugins_context_present*/ false,
     );
 
     let session = Session {
@@ -7122,7 +7120,6 @@ where
         "turn_id".to_string(),
         skills_outcome,
         /*recommended_plugin_candidates*/ None,
-        /*recommended_plugins_context_present*/ false,
     ));
 
     let session = Arc::new(Session {
@@ -8187,23 +8184,6 @@ async fn record_context_updates_and_set_reference_context_item_injects_full_cont
         serde_json::to_value(Some(turn_context.to_turn_context_item()))
             .expect("serialize expected context item")
     );
-}
-
-#[tokio::test]
-async fn full_context_reinjection_clears_stale_recommended_plugins_marker() {
-    let (session, mut turn_context) = make_session_and_context().await;
-    turn_context.recommended_plugins_context_present = true;
-    turn_context.recommended_plugin_candidates = None;
-
-    session
-        .record_context_updates_and_set_reference_context_item(&turn_context)
-        .await;
-
-    let context_item = session
-        .reference_context_item()
-        .await
-        .expect("reference context item");
-    assert!(!context_item.recommended_plugins_context_present);
 }
 
 #[tokio::test]

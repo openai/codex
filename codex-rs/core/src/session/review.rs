@@ -131,8 +131,6 @@ pub(super) async fn spawn_review_thread(
         timezone: parent_turn_context.timezone.clone(),
         app_server_client_name: parent_turn_context.app_server_client_name.clone(),
         recommended_plugin_candidates: parent_turn_context.recommended_plugin_candidates.clone(),
-        recommended_plugins_context_present: parent_turn_context
-            .recommended_plugins_context_present,
         developer_instructions: None,
         user_instructions: None,
         compact_prompt: parent_turn_context.compact_prompt.clone(),

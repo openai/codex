@@ -310,9 +310,7 @@ async fn run_compact_task_inner_impl(
     }
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
-        InitialContextInjection::BeforeLastUserMessage => {
-            Some(turn_context.to_turn_context_item_after_full_context_injection())
-        }
+        InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
     };
     let compacted_item = CompactedItem {
         message: summary_text.clone(),

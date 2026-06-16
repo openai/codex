@@ -3125,7 +3125,7 @@ impl Session {
         };
         let window_id = window_id?;
         let context_items = self.build_initial_context(turn_context).await;
-        let turn_context_item = turn_context.to_turn_context_item_after_full_context_injection();
+        let turn_context_item = turn_context.to_turn_context_item();
         let replacement_history = context_items;
         {
             let mut state = self.state.lock().await;
@@ -3183,11 +3183,7 @@ impl Session {
             self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
                 .await
         };
-        let turn_context_item = if should_inject_full_context {
-            turn_context.to_turn_context_item_after_full_context_injection()
-        } else {
-            turn_context.to_turn_context_item()
-        };
+        let turn_context_item = turn_context.to_turn_context_item();
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
                 .await;
