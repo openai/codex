@@ -2,10 +2,12 @@
 
 use std::future::Future;
 use std::io;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use chrono::NaiveDateTime;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
@@ -17,6 +19,7 @@ use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::SessionSource;
 use tokio::sync::mpsc;
 use tokio::task::JoinError;
 use tokio::task::JoinSet;
@@ -29,12 +32,13 @@ use super::PickerState;
 use super::ProviderFilter;
 use super::RawReasoningVisibility;
 use super::Row;
+use super::SessionTarget;
 use super::SessionTranscriptState;
 use super::TranscriptCells;
 use super::TranscriptPreviewLine;
 use super::TranscriptPreviewState;
-#[cfg(test)]
 use super::parse_timestamp_str;
+use super::paths_match;
 use super::transcript_preview_lines;
 use crate::thread_transcript::thread_to_transcript_cells;
 
@@ -131,6 +135,18 @@ impl InitialPageLoad {
 enum ThreadListLookupMode {
     StateDbOnly,
     ScanAndRepair,
+}
+
+pub(super) struct SelectionValidation {
+    pub(super) path: PathBuf,
+    pub(super) thread_id: ThreadId,
+    pub(super) thread_name: Option<String>,
+    pub(super) git_branch: Option<String>,
+    pub(super) codex_home: PathBuf,
+    pub(super) cwd_filter: Option<PathBuf>,
+    pub(super) provider_filter: ProviderFilter,
+    pub(super) include_non_interactive: bool,
+    pub(super) query: String,
 }
 
 pub(super) fn spawn_app_server_page_loader(
@@ -474,6 +490,168 @@ fn thread_list_params(
         use_state_db_only: lookup_mode == ThreadListLookupMode::StateDbOnly,
         search_term: None,
     }
+}
+
+/// Validates a selected provisional row against the same rollout summary used
+/// by scan-and-repair before allowing a resume or fork.
+pub(super) async fn validate_provisional_session_target(
+    input: SelectionValidation,
+) -> io::Result<SessionTarget> {
+    let rollout_path = codex_rollout::existing_rollout_path(input.path.as_path())
+        .await
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "selected session rollout no longer exists",
+            )
+        })?;
+    if !is_discoverable_active_rollout_path(&input.codex_home, &rollout_path) {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "selected session is not an active rollout",
+        ));
+    }
+    let item = codex_rollout::read_thread_item_from_rollout(rollout_path.clone())
+        .await
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "selected session rollout is not eligible for the picker",
+            )
+        })?;
+    let provider_matches = match &input.provider_filter {
+        ProviderFilter::Any => true,
+        ProviderFilter::MatchDefault(default_provider) => item
+            .model_provider
+            .as_deref()
+            .is_none_or(|provider| provider == default_provider),
+    };
+    let source_matches = match item.source.as_ref() {
+        Some(SessionSource::Cli | SessionSource::VSCode) => true,
+        Some(SessionSource::Exec | SessionSource::Mcp) => input.include_non_interactive,
+        Some(
+            SessionSource::Custom(_)
+            | SessionSource::Internal(_)
+            | SessionSource::SubAgent(_)
+            | SessionSource::Unknown,
+        )
+        | None => false,
+    };
+    let cwd_matches = input.cwd_filter.as_ref().is_none_or(|filter| {
+        item.cwd
+            .as_ref()
+            .is_some_and(|cwd| paths_match(cwd, filter))
+    });
+    let row = row_from_rollout_item(
+        item,
+        rollout_path.clone(),
+        input.thread_name,
+        input.git_branch,
+    )
+    .ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "selected session rollout is not eligible for the picker",
+        )
+    })?;
+    let query = input.query.to_lowercase();
+    if row.thread_id != Some(input.thread_id)
+        || !provider_matches
+        || !source_matches
+        || !cwd_matches
+        || (!query.is_empty() && !row.matches_query(&query))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "selected session no longer matches the picker",
+        ));
+    }
+
+    Ok(SessionTarget {
+        path: Some(rollout_path),
+        thread_id: input.thread_id,
+    })
+}
+
+fn is_discoverable_active_rollout_path(codex_home: &Path, path: &Path) -> bool {
+    let Ok(relative_path) = path.strip_prefix(codex_home.join(codex_rollout::SESSIONS_SUBDIR))
+    else {
+        return false;
+    };
+    let mut components = relative_path.components();
+    let (
+        Some(Component::Normal(year)),
+        Some(Component::Normal(month)),
+        Some(Component::Normal(day)),
+        Some(Component::Normal(file_name)),
+        None,
+    ) = (
+        components.next(),
+        components.next(),
+        components.next(),
+        components.next(),
+        components.next(),
+    )
+    else {
+        return false;
+    };
+    year.to_str()
+        .and_then(|year| year.parse::<u16>().ok())
+        .is_some()
+        && month
+            .to_str()
+            .and_then(|month| month.parse::<u8>().ok())
+            .is_some()
+        && day
+            .to_str()
+            .and_then(|day| day.parse::<u8>().ok())
+            .is_some()
+        && file_name.to_str().is_some_and(is_rollout_file_name)
+}
+
+fn is_rollout_file_name(file_name: &str) -> bool {
+    let file_name = file_name.strip_suffix(".zst").unwrap_or(file_name);
+    let Some(core) = file_name
+        .strip_prefix("rollout-")
+        .and_then(|name| name.strip_suffix(".jsonl"))
+    else {
+        return false;
+    };
+    let Some(separator_index) = core.len().checked_sub(37) else {
+        return false;
+    };
+    if core.as_bytes().get(separator_index) != Some(&b'-') {
+        return false;
+    }
+    let timestamp = &core[..separator_index];
+    let thread_id = &core[separator_index + 1..];
+    NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%dT%H-%M-%S").is_ok()
+        && ThreadId::from_string(thread_id).is_ok()
+}
+
+fn row_from_rollout_item(
+    item: codex_rollout::ThreadItem,
+    path: PathBuf,
+    thread_name: Option<String>,
+    git_branch: Option<String>,
+) -> Option<Row> {
+    let thread_id = item.thread_id?;
+    let preview = item.preview.or(item.first_user_message)?;
+    let preview = preview.trim();
+    Some(Row {
+        path: Some(path),
+        preview: if preview.is_empty() {
+            String::from("(no message yet)")
+        } else {
+            preview.to_string()
+        },
+        thread_id: Some(thread_id),
+        thread_name,
+        created_at: parse_timestamp_str(item.created_at.as_deref().unwrap_or_default()),
+        updated_at: parse_timestamp_str(item.updated_at.as_deref().unwrap_or_default()),
+        cwd: item.cwd,
+        git_branch: git_branch.or(item.git_branch),
+    })
 }
 
 impl PickerState {

@@ -16,12 +16,18 @@ use codex_app_server_protocol::ThreadSourceKind;
 use codex_protocol::ThreadId;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
+use tempfile::TempDir;
+use tempfile::tempdir;
 
 use super::*;
 use crate::resume_picker::FrameRequester;
 use crate::resume_picker::LoadTrigger;
 use crate::resume_picker::SessionPickerAction;
+use crate::resume_picker::SessionPickerViewPersistence;
 
 fn page(
     rows: Vec<Row>,
@@ -111,6 +117,68 @@ fn make_thread(thread_id: ThreadId) -> Thread {
         git_info: None,
         name: None,
         turns: Vec::new(),
+    }
+}
+
+struct RolloutFixture {
+    _temp_dir: TempDir,
+    codex_home: PathBuf,
+    path: PathBuf,
+    thread_id: ThreadId,
+}
+
+fn write_rollout(cwd: &Path, model_provider: &str, source: &str, preview: &str) -> RolloutFixture {
+    let temp_dir = tempdir().expect("tmpdir");
+    let codex_home = temp_dir.path().to_path_buf();
+    let day_dir = codex_home.join("sessions/2025/01/01");
+    std::fs::create_dir_all(&day_dir).expect("sessions dir");
+    let thread_id = ThreadId::new();
+    let path = day_dir.join(format!("rollout-2025-01-01T00-00-00-{thread_id}.jsonl"));
+    let session_meta = serde_json::json!({
+        "timestamp": "2025-01-01T00:00:00Z",
+        "type": "session_meta",
+        "payload": {
+            "id": thread_id,
+            "timestamp": "2025-01-01T00:00:00Z",
+            "cwd": cwd,
+            "originator": "test",
+            "cli_version": "test",
+            "source": source,
+            "model_provider": model_provider,
+            "git": {
+                "branch": "main"
+            }
+        }
+    });
+    let user_event = serde_json::json!({
+        "timestamp": "2025-01-01T00:00:01Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "user_message",
+            "message": preview,
+            "kind": "plain"
+        }
+    });
+    std::fs::write(&path, format!("{session_meta}\n{user_event}\n")).expect("write rollout");
+    RolloutFixture {
+        _temp_dir: temp_dir,
+        codex_home,
+        path,
+        thread_id,
+    }
+}
+
+fn validation(fixture: &RolloutFixture) -> SelectionValidation {
+    SelectionValidation {
+        path: fixture.path.clone(),
+        thread_id: fixture.thread_id,
+        thread_name: None,
+        git_branch: None,
+        codex_home: fixture.codex_home.clone(),
+        cwd_filter: Some(PathBuf::from("/tmp/current")),
+        provider_filter: ProviderFilter::MatchDefault(String::from("openai")),
+        include_non_interactive: false,
+        query: String::new(),
     }
 }
 
@@ -316,6 +384,16 @@ async fn loader_bounds_concurrent_preview_reads() {
         .await
         .expect("loader should stop")
         .expect("loader should not panic");
+}
+
+#[test]
+fn rollout_file_name_requires_timestamp_and_thread_id() {
+    let thread_id = ThreadId::new();
+    let file_name = format!("rollout-2025-01-01T00-00-00-{thread_id}.jsonl");
+
+    assert!(is_rollout_file_name(&file_name));
+    assert!(is_rollout_file_name(&format!("{file_name}.zst")));
+    assert!(!is_rollout_file_name(&format!("rollout-{thread_id}.jsonl")));
 }
 
 #[test]
@@ -630,4 +708,189 @@ async fn reconciliation_restarts_search_when_provisional_match_disappears() {
 #[tokio::test]
 async fn reconciliation_restarts_search_when_authoritative_page_adds_cursor() {
     assert_reconciliation_restarts_search("other").await;
+}
+
+#[tokio::test]
+async fn provisional_accept_rechecks_stale_cwd_from_rollout() {
+    let fixture = write_rollout(Path::new("/tmp/on-disk"), "openai", "cli", "target preview");
+    let loader = page_only_loader(|_| {});
+    let mut state = PickerState::new(
+        FrameRequester::test_dummy(),
+        loader,
+        ProviderFilter::MatchDefault(String::from("openai")),
+        /*show_all*/ false,
+        Some(PathBuf::from("/tmp/current")),
+        SessionPickerAction::Resume,
+    );
+    state.view_persistence = Some(SessionPickerViewPersistence {
+        codex_home: fixture.codex_home.clone(),
+    });
+    state.initial_page_load = InitialPageLoad::Provisional;
+    let row = Row {
+        path: Some(fixture.path),
+        preview: String::from("target preview"),
+        thread_id: Some(fixture.thread_id),
+        thread_name: None,
+        created_at: None,
+        updated_at: None,
+        cwd: Some(PathBuf::from("/tmp/current")),
+        git_branch: None,
+    };
+    state.all_rows = vec![row.clone()];
+    state.filtered_rows = vec![row];
+
+    let selection = state
+        .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .await
+        .expect("validation failure should not abort the picker");
+
+    assert!(selection.is_none());
+    assert_eq!(
+        state.inline_error,
+        Some(String::from("Selected session is no longer available"))
+    );
+}
+
+#[tokio::test]
+async fn provisional_selection_validates_authoritative_filters() {
+    let fixture = write_rollout(Path::new("/tmp/current"), "openai", "cli", "target preview");
+
+    let target = validate_provisional_session_target(validation(&fixture))
+        .await
+        .expect("matching rollout should validate");
+    assert_eq!(target.thread_id, fixture.thread_id);
+    assert_eq!(target.path, Some(fixture.path.clone()));
+
+    let mut stale_cwd = validation(&fixture);
+    stale_cwd.cwd_filter = Some(PathBuf::from("/tmp/other"));
+    assert_eq!(
+        validate_provisional_session_target(stale_cwd)
+            .await
+            .expect_err("stale cwd should fail")
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+
+    let mut stale_provider = validation(&fixture);
+    stale_provider.provider_filter = ProviderFilter::MatchDefault(String::from("other"));
+    assert_eq!(
+        validate_provisional_session_target(stale_provider)
+            .await
+            .expect_err("stale provider should fail")
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+
+    let mut stale_query = validation(&fixture);
+    stale_query.query = String::from("missing");
+    assert_eq!(
+        validate_provisional_session_target(stale_query)
+            .await
+            .expect_err("stale query should fail")
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+
+    let mut named_query = validation(&fixture);
+    named_query.thread_name = Some(String::from("saved title"));
+    named_query.query = String::from("saved title");
+    validate_provisional_session_target(named_query)
+        .await
+        .expect("authoritative list reattaches the selected thread name");
+
+    let mut stale_head_branch = validation(&fixture);
+    stale_head_branch.git_branch = Some(String::from("db-branch"));
+    stale_head_branch.query = String::from("main");
+    assert_eq!(
+        validate_provisional_session_target(stale_head_branch)
+            .await
+            .expect_err("DB branch should replace the rollout-head branch")
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+
+    let mut db_branch = validation(&fixture);
+    db_branch.git_branch = Some(String::from("db-branch"));
+    db_branch.query = String::from("db-branch");
+    validate_provisional_session_target(db_branch)
+        .await
+        .expect("query should match the branch retained by reconciliation");
+}
+
+#[tokio::test]
+async fn provisional_selection_rechecks_source_and_thread_id() {
+    let exec_fixture = write_rollout(
+        Path::new("/tmp/current"),
+        "openai",
+        "exec",
+        "target preview",
+    );
+    assert_eq!(
+        validate_provisional_session_target(validation(&exec_fixture))
+            .await
+            .expect_err("interactive-only picker should reject exec sessions")
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+
+    let mut include_non_interactive = validation(&exec_fixture);
+    include_non_interactive.include_non_interactive = true;
+    validate_provisional_session_target(include_non_interactive)
+        .await
+        .expect("all-source picker should accept exec sessions");
+
+    let cli_fixture = write_rollout(Path::new("/tmp/current"), "openai", "cli", "target preview");
+    let mut stale_id = validation(&cli_fixture);
+    stale_id.thread_id = ThreadId::new();
+    assert_eq!(
+        validate_provisional_session_target(stale_id)
+            .await
+            .expect_err("stale thread id should fail")
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+}
+
+#[tokio::test]
+async fn provisional_selection_rejects_non_discoverable_rollout_path() {
+    let fixture = write_rollout(Path::new("/tmp/current"), "openai", "cli", "target preview");
+    let outside_path = fixture.codex_home.join("rollout.jsonl");
+    std::fs::copy(&fixture.path, &outside_path).expect("copy rollout");
+    let mut outside = validation(&fixture);
+    outside.path = outside_path;
+
+    assert_eq!(
+        validate_provisional_session_target(outside)
+            .await
+            .expect_err("rollout outside active sessions should fail")
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+
+    let invalid_layout = fixture.codex_home.join("sessions/orphan.jsonl");
+    std::fs::copy(&fixture.path, &invalid_layout).expect("copy rollout");
+    let mut undiscoverable = validation(&fixture);
+    undiscoverable.path = invalid_layout;
+    assert_eq!(
+        validate_provisional_session_target(undiscoverable)
+            .await
+            .expect_err("filesystem scan should not discover invalid layout")
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+
+    let invalid_file_name = fixture.codex_home.join(format!(
+        "sessions/2025/01/01/rollout-{}.jsonl",
+        fixture.thread_id
+    ));
+    std::fs::copy(&fixture.path, &invalid_file_name).expect("copy rollout");
+    let mut undiscoverable = validation(&fixture);
+    undiscoverable.path = invalid_file_name;
+    assert_eq!(
+        validate_provisional_session_target(undiscoverable)
+            .await
+            .expect_err("filesystem scan should skip invalid rollout filename")
+            .kind(),
+        io::ErrorKind::NotFound
+    );
 }
