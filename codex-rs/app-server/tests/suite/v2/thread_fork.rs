@@ -4,6 +4,7 @@ use app_test_support::TestAppServer;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_fake_rollout_with_token_usage;
 use app_test_support::create_mock_responses_server_repeating_assistant;
+use app_test_support::rollout_path;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::JSONRPCError;
@@ -246,6 +247,57 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     let mut expected_started_thread = thread;
     expected_started_thread.turns.clear();
     assert_eq!(started.thread, expected_started_thread);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_rejects_malformed_rollout_without_partial_fork() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let original_path = rollout_path(codex_home.path(), "2025-01-05T12-00-00", &conversation_id);
+    let original_contents = std::fs::read_to_string(&original_path)?;
+    std::fs::write(
+        &original_path,
+        format!(
+            "{original_contents}{{\"timestamp\":\"2025-01-05T12:00:01Z\",\"type\":\"event_msg\",\"payload\":\""
+        ),
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: conversation_id.clone(),
+            thread_source: Some(ThreadSource::User),
+            ..Default::default()
+        })
+        .await?;
+    let fork_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    assert!(
+        fork_err.error.message.contains("malformed record"),
+        "unexpected fork error: {}",
+        fork_err.error.message
+    );
+
+    let ThreadListResponse { data, .. } = list_threads(&mut mcp).await?;
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].id, conversation_id);
 
     Ok(())
 }

@@ -3302,6 +3302,18 @@ impl ThreadRequestProcessor {
                     "thread {source_thread_id} did not include persisted history"
                 ))
             })?;
+        if let Some(rollout_path) = source_thread.rollout_path.as_deref() {
+            let (_, _, parse_errors) = RolloutRecorder::load_rollout_items(rollout_path)
+                .await
+                .map_err(|err| {
+                    invalid_request(format!("failed to load thread {source_thread_id}: {err}"))
+                })?;
+            if parse_errors > 0 {
+                return Err(invalid_request(format!(
+                    "failed to load thread {source_thread_id}: source rollout contains {parse_errors} malformed record(s)"
+                )));
+            }
+        }
         let history_cwd = Some(source_thread.cwd.clone());
 
         // Persist Windows sandbox mode.
