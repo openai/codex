@@ -7,6 +7,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use tracing::warn;
 
 use crate::marketplace::find_marketplace_manifest_path;
+use crate::marketplace_upgrade::installed_marketplace_revision;
+use crate::plugin_catalog_revision::PluginCatalogRevision;
 
 pub const INSTALLED_MARKETPLACES_DIR: &str = ".tmp/marketplaces";
 
@@ -18,6 +20,16 @@ pub fn installed_marketplace_roots_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
     codex_home: &Path,
 ) -> Vec<AbsolutePathBuf> {
+    installed_marketplace_roots_with_revisions_from_layer_stack(config_layer_stack, codex_home)
+        .into_iter()
+        .map(|(root, _revision)| root)
+        .collect()
+}
+
+pub(crate) fn installed_marketplace_roots_with_revisions_from_layer_stack(
+    config_layer_stack: &ConfigLayerStack,
+    codex_home: &Path,
+) -> Vec<(AbsolutePathBuf, Option<PluginCatalogRevision>)> {
     let Some(user_config) = config_layer_stack.effective_user_config() else {
         return Vec::new();
     };
@@ -52,11 +64,31 @@ pub fn installed_marketplace_roots_from_layer_stack(
                 marketplace,
                 &default_install_root,
             )?;
-            find_marketplace_manifest_path(&path).map(|_| path)
+            find_marketplace_manifest_path(&path)?;
+            let root = AbsolutePathBuf::try_from(path).ok()?;
+            let revision = if marketplace.get("source_type").and_then(toml::Value::as_str)
+                == Some("git")
+            {
+                (|| {
+                    let source = marketplace.get("source").and_then(toml::Value::as_str)?;
+                    let ref_name = marketplace.get("ref").and_then(toml::Value::as_str);
+                    let sparse_paths = match marketplace.get("sparse_paths") {
+                        Some(paths) => paths
+                            .as_array()?
+                            .iter()
+                            .map(|path| path.as_str().map(ToString::to_string))
+                            .collect::<Option<Vec<_>>>()?,
+                        None => Vec::new(),
+                    };
+                    installed_marketplace_revision(root.as_path(), source, ref_name, &sparse_paths)
+                })()
+            } else {
+                None
+            };
+            Some((root, revision))
         })
-        .filter_map(|path| AbsolutePathBuf::try_from(path).ok())
         .collect::<Vec<_>>();
-    roots.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
+    roots.sort_unstable_by(|(left, _), (right, _)| left.as_path().cmp(right.as_path()));
     roots
 }
 

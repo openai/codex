@@ -1,5 +1,7 @@
 use super::ConfiguredGitMarketplace;
+use crate::plugin_catalog_revision::PluginCatalogRevision;
 use codex_config::types::MarketplaceSourceType;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;
@@ -40,6 +42,22 @@ pub(super) fn installed_marketplace_metadata_matches(
         }
     };
     metadata == installed_marketplace_metadata(marketplace, revision)
+}
+
+pub(crate) fn installed_marketplace_revision(
+    root: &Path,
+    source: &str,
+    ref_name: Option<&str>,
+    sparse_paths: &[String],
+) -> Option<PluginCatalogRevision> {
+    let marker_path = AbsolutePathBuf::try_from(installed_marketplace_metadata_path(root)).ok()?;
+    let contents = std::fs::read_to_string(marker_path.as_path()).ok()?;
+    let metadata = serde_json::from_str::<InstalledMarketplaceMetadata>(&contents).ok()?;
+    (metadata.source_type == MarketplaceSourceType::Git
+        && metadata.source == source
+        && metadata.ref_name.as_deref() == ref_name
+        && metadata.sparse_paths == sparse_paths)
+        .then(|| PluginCatalogRevision::new(marker_path, contents))
 }
 
 pub(super) fn write_installed_marketplace_metadata(
