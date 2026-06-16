@@ -189,6 +189,7 @@ impl AutomationExtensionHarness {
                     config: &config,
                     session_source: &session_source,
                     persistent_thread_state_available,
+                    environments: &[],
                     session_store: &session_store,
                     thread_store: &thread_store,
                 })
@@ -240,6 +241,7 @@ fn tool_call(tool_name: &str, call_id: &str, arguments: serde_json::Value) -> To
         truncation_policy: TruncationPolicy::Bytes(1024),
         conversation_history: ConversationHistory::default(),
         turn_item_emitter: Arc::new(NoopTurnItemEmitter),
+        environments: Vec::new(),
         payload: ToolPayload::Function {
             arguments: arguments.to_string(),
         },
