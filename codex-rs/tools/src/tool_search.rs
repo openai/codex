@@ -2,18 +2,17 @@ use crate::JsonSchema;
 use crate::LoadableToolSpec;
 use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
-use crate::ToolName;
 use crate::ToolSearchSourceInfo;
 use crate::ToolSpec;
 use crate::default_namespace_description;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct ToolSearchEntry {
     pub search_text: String,
     pub output: LoadableToolSpec,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct ToolSearchInfo {
     pub entry: ToolSearchEntry,
     pub source_info: Option<ToolSearchSourceInfo>,
@@ -21,11 +20,10 @@ pub struct ToolSearchInfo {
 
 impl ToolSearchInfo {
     pub fn from_tool_spec(
-        tool_name: &ToolName,
         spec: ToolSpec,
         source_info: Option<ToolSearchSourceInfo>,
     ) -> Option<Self> {
-        let search_text = default_tool_search_text(tool_name, &spec);
+        let search_text = default_tool_search_text(&spec);
         Self::from_spec(search_text, spec, source_info)
     }
 
@@ -67,13 +65,8 @@ impl ToolSearchInfo {
     }
 }
 
-pub fn default_tool_search_text(tool_name: &ToolName, spec: &ToolSpec) -> String {
+fn default_tool_search_text(spec: &ToolSpec) -> String {
     let mut parts = Vec::new();
-    push_search_part(&mut parts, tool_name.to_string());
-    push_search_part(&mut parts, tool_name.name.replace('_', " "));
-    if let Some(namespace) = &tool_name.namespace {
-        push_search_part(&mut parts, namespace.clone());
-    }
 
     match spec {
         ToolSpec::Function(tool) => append_function_search_text(tool, &mut parts),
@@ -137,3 +130,7 @@ fn push_search_part(parts: &mut Vec<String>, part: String) {
         parts.push(part.to_string());
     }
 }
+
+#[cfg(test)]
+#[path = "tool_search_tests.rs"]
+mod tests;

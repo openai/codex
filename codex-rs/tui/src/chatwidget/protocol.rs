@@ -6,12 +6,15 @@ impl ChatWidget {
         notification: ServerNotification,
         replay_kind: Option<ReplayKind>,
     ) {
-        if self.active_side_conversation
-            && replay_kind.is_none()
-            && matches!(notification, ServerNotification::McpServerStatusUpdated(_))
+        // Reject misrouted child updates before shared notification handling mutates parent state.
+        if let ServerNotification::McpServerStatusUpdated(notification) = &notification
+            && let (Some(notification_thread_id), Some(thread_id)) =
+                (notification.thread_id.as_deref(), self.thread_id())
+            && notification_thread_id != thread_id.to_string()
         {
             return;
         }
+
         let from_replay = replay_kind.is_some();
         let is_resume_initial_replay =
             matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages));
@@ -185,42 +188,13 @@ impl ChatWidget {
                     self.on_shutdown_complete();
                 }
             }
-            ServerNotification::ThreadRealtimeStarted(notification) => {
-                if !from_replay {
-                    self.on_realtime_conversation_started(notification);
-                }
-            }
-            ServerNotification::ThreadRealtimeItemAdded(notification) => {
-                if !from_replay {
-                    self.on_realtime_item_added(notification);
-                }
-            }
-            ServerNotification::ThreadRealtimeOutputAudioDelta(notification) => {
-                if !from_replay {
-                    self.on_realtime_output_audio_delta(notification);
-                }
-            }
-            ServerNotification::ThreadRealtimeError(notification) => {
-                if !from_replay {
-                    self.on_realtime_error(notification);
-                }
-            }
-            ServerNotification::ThreadRealtimeClosed(notification) => {
-                if !from_replay {
-                    self.on_realtime_conversation_closed(notification);
-                }
-            }
-            ServerNotification::ThreadRealtimeSdp(notification) => {
-                if !from_replay {
-                    self.on_realtime_conversation_sdp(notification.sdp);
-                }
-            }
             ServerNotification::ServerRequestResolved(_)
             | ServerNotification::AccountUpdated(_)
             | ServerNotification::AccountRateLimitsUpdated(_)
             | ServerNotification::ThreadStarted(_)
             | ServerNotification::ThreadStatusChanged(_)
             | ServerNotification::ThreadArchived(_)
+            | ServerNotification::ThreadDeleted(_)
             | ServerNotification::ThreadUnarchived(_)
             | ServerNotification::RawResponseItemCompleted(_)
             | ServerNotification::CommandExecOutputDelta(_)
@@ -231,10 +205,18 @@ impl ChatWidget {
             | ServerNotification::McpServerOauthLoginCompleted(_)
             | ServerNotification::AppListUpdated(_)
             | ServerNotification::RemoteControlStatusChanged(_)
+            | ServerNotification::ExternalAgentConfigImportProgress(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
             | ServerNotification::FsChanged(_)
+            | ServerNotification::TurnModerationMetadata(_)
             | ServerNotification::FuzzyFileSearchSessionUpdated(_)
             | ServerNotification::FuzzyFileSearchSessionCompleted(_)
+            | ServerNotification::ThreadRealtimeStarted(_)
+            | ServerNotification::ThreadRealtimeItemAdded(_)
+            | ServerNotification::ThreadRealtimeOutputAudioDelta(_)
+            | ServerNotification::ThreadRealtimeError(_)
+            | ServerNotification::ThreadRealtimeClosed(_)
+            | ServerNotification::ThreadRealtimeSdp(_)
             | ServerNotification::ThreadRealtimeTranscriptDelta(_)
             | ServerNotification::ThreadRealtimeTranscriptDone(_)
             | ServerNotification::WindowsWorldWritableWarning(_)
@@ -332,6 +314,7 @@ impl ChatWidget {
                 reasoning_effort,
                 agents_states,
             }),
+            item @ ThreadItem::SubAgentActivity { .. } => self.on_sub_agent_activity(item),
             ThreadItem::EnteredReviewMode { review, .. } if !from_replay => {
                 self.enter_review_mode_with_hint(review, /*from_replay*/ false);
             }

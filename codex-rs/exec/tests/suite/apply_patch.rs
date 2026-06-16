@@ -1,4 +1,4 @@
-#![allow(clippy::expect_used, clippy::unwrap_used, unused_imports)]
+#![allow(clippy::unwrap_used, unused_imports)]
 
 use anyhow::Context;
 use assert_cmd::prelude::*;
@@ -87,8 +87,7 @@ async fn test_apply_patch_tool() -> anyhow::Result<()> {
         .success();
 
     let final_path = tmp_path.join("test.md");
-    let contents = std::fs::read_to_string(&final_path)
-        .unwrap_or_else(|e| panic!("failed reading {}: {e}", final_path.display()));
+    let contents = std::fs::read_to_string(&final_path).expect("final file should be readable");
     assert_eq!(contents, "Final text\n");
     Ok(())
 }
@@ -139,8 +138,7 @@ async fn test_apply_patch_freeform_tool() -> anyhow::Result<()> {
 
     // Verify final file contents
     let final_path = test.cwd_path().join("app.py");
-    let contents = std::fs::read_to_string(&final_path)
-        .unwrap_or_else(|e| panic!("failed reading {}: {e}", final_path.display()));
+    let contents = std::fs::read_to_string(&final_path).expect("final file should be readable");
     assert_eq!(
         contents,
         include_str!("../fixtures/apply_patch_freeform_final.txt")

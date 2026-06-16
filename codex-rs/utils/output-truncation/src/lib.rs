@@ -14,9 +14,12 @@ pub fn formatted_truncate_text(content: &str, policy: TruncationPolicy) -> Strin
         return content.to_string();
     }
 
+    let original_token_count = approx_token_count(content);
     let total_lines = content.lines().count();
     let result = truncate_text(content, policy);
-    format!("Total output lines: {total_lines}\n\n{result}")
+    format!(
+        "Warning: truncated output (original token count: {original_token_count})\nTotal output lines: {total_lines}\n\n{result}"
+    )
 }
 
 pub fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
@@ -55,6 +58,7 @@ pub fn formatted_truncate_text_content_items_with_policy(
         return (items.to_vec(), None);
     }
 
+    let original_token_count = approx_token_count(&combined);
     let mut out = vec![FunctionCallOutputContentItem::InputText {
         text: formatted_truncate_text(&combined, policy),
     }];
@@ -73,7 +77,7 @@ pub fn formatted_truncate_text_content_items_with_policy(
         FunctionCallOutputContentItem::InputText { .. } => None,
     }));
 
-    (out, Some(approx_token_count(&combined)))
+    (out, Some(original_token_count))
 }
 
 pub fn truncate_function_output_items_with_policy(

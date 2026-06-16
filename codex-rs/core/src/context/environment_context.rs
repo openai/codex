@@ -46,10 +46,11 @@ impl EnvironmentContextEnvironment {
             .iter()
             .map(|environment| Self {
                 id: environment.environment_id.clone(),
-                cwd: environment.cwd.clone(),
+                cwd: environment.cwd().clone(),
                 shell: environment
                     .shell
-                    .clone()
+                    .as_ref()
+                    .map(|shell| shell.name().to_string())
                     .unwrap_or_else(|| shell.name().to_string()),
             })
             .collect()
@@ -523,7 +524,7 @@ fn workspace_roots_from_turn_context_item(
 }
 
 impl ContextualUserFragment for EnvironmentContext {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "user"
     }
 

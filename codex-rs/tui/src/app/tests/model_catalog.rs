@@ -6,7 +6,7 @@ use pretty_assertions::assert_eq;
 use tokio::sync::mpsc::unbounded_channel;
 
 fn all_model_presets() -> Vec<ModelPreset> {
-    crate::legacy_core::test_support::all_model_presets().clone()
+    crate::test_support::TEST_MODEL_PRESETS.clone()
 }
 
 fn model_availability_nux_config(shown_count: &[(&str, u32)]) -> ModelAvailabilityNuxConfig {
@@ -297,7 +297,6 @@ async fn model_migration_prompt_skips_when_target_missing_or_hidden() {
         .expect("preset present");
     current.upgrade = Some(ModelUpgrade {
         id: "missing-target".to_string(),
-        reasoning_effort_mapping: None,
         migration_config_key: HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG.to_string(),
         model_link: None,
         upgrade_copy: None,

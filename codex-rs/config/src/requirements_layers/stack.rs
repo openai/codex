@@ -18,6 +18,7 @@ use crate::ConfigRequirementsWithSources;
 use crate::RequirementSource;
 use crate::Sourced;
 use crate::merge::merge_toml_values;
+use std::cell::OnceCell;
 use std::io;
 use thiserror::Error;
 use toml::Value as TomlValue;
@@ -57,29 +58,59 @@ impl From<RequirementsCompositionError> for io::Error {
 pub fn compose_requirements(
     layers: impl IntoIterator<Item = RequirementsLayerEntry>,
 ) -> Result<Option<ConfigRequirementsWithSources>, RequirementsCompositionError> {
-    let hostname = crate::host_name();
-    compose_requirements_for_hostname(layers, hostname.as_deref())
+    compose_requirements_with_hostname_resolver(layers, crate::host_name)
 }
 
+#[cfg(test)]
 pub(super) fn compose_requirements_for_hostname(
     layers: impl IntoIterator<Item = RequirementsLayerEntry>,
     hostname: Option<&str>,
 ) -> Result<Option<ConfigRequirementsWithSources>, RequirementsCompositionError> {
-    compose_requirements_for_hostname_and_hook_directory(
+    let hostname = hostname.map(str::to_string);
+    compose_requirements_with_hostname_resolver_and_hook_directory(
         layers,
-        hostname,
+        move || hostname.clone(),
         HookDirectoryField::current_platform(),
     )
 }
 
+#[cfg(test)]
 pub(super) fn compose_requirements_for_hostname_and_hook_directory(
     layers: impl IntoIterator<Item = RequirementsLayerEntry>,
     hostname: Option<&str>,
     hook_directory_field: HookDirectoryField,
 ) -> Result<Option<ConfigRequirementsWithSources>, RequirementsCompositionError> {
+    let hostname = hostname.map(str::to_string);
+    compose_requirements_with_hostname_resolver_and_hook_directory(
+        layers,
+        move || hostname.clone(),
+        hook_directory_field,
+    )
+}
+
+fn compose_requirements_with_hostname_resolver(
+    layers: impl IntoIterator<Item = RequirementsLayerEntry>,
+    hostname_resolver: impl Fn() -> Option<String>,
+) -> Result<Option<ConfigRequirementsWithSources>, RequirementsCompositionError> {
+    compose_requirements_with_hostname_resolver_and_hook_directory(
+        layers,
+        hostname_resolver,
+        HookDirectoryField::current_platform(),
+    )
+}
+
+fn compose_requirements_with_hostname_resolver_and_hook_directory(
+    layers: impl IntoIterator<Item = RequirementsLayerEntry>,
+    hostname_resolver: impl Fn() -> Option<String>,
+    hook_directory_field: HookDirectoryField,
+) -> Result<Option<ConfigRequirementsWithSources>, RequirementsCompositionError> {
+    // Evaluate every layer in this composition against the same hostname while
+    // keeping resolution lazy when no layer needs remote sandbox matching.
+    let hostname = OnceCell::new();
+    let cached_hostname_resolver = || hostname.get_or_init(&hostname_resolver).clone();
     let mut stack = RequirementsLayerStack::new(hook_directory_field);
     for layer in layers {
-        stack.add_layer(layer, hostname)?;
+        stack.add_layer(layer, &cached_hostname_resolver)?;
     }
     stack.compose()
 }
@@ -100,10 +131,12 @@ impl RequirementsLayerStack {
     fn add_layer(
         &mut self,
         layer: RequirementsLayerEntry,
-        hostname: Option<&str>,
+        hostname_resolver: &dyn Fn() -> Option<String>,
     ) -> Result<(), RequirementsCompositionError> {
-        self.layers
-            .push(ComposableRequirementsLayer::from_entry(layer, hostname)?);
+        self.layers.push(ComposableRequirementsLayer::from_entry(
+            layer,
+            hostname_resolver,
+        )?);
         Ok(())
     }
 
@@ -176,11 +209,13 @@ fn populate_merged_regular_fields_with_sources(
         allowed_approval_policies,
         allowed_approvals_reviewers,
         allowed_sandbox_modes,
-        allowed_permissions,
+        allowed_permission_profiles,
+        default_permissions,
         remote_sandbox_config: _,
         allowed_web_search_modes,
         allow_managed_hooks_only,
         allow_appshots,
+        allow_remote_control,
         computer_use,
         windows,
         feature_requirements,
@@ -201,10 +236,15 @@ fn populate_merged_regular_fields_with_sources(
         &["allowed_approvals_reviewers"]
     );
     set_sourced!(allowed_sandbox_modes, &["allowed_sandbox_modes"]);
-    set_sourced!(allowed_permissions, &["allowed_permissions"]);
+    set_sourced!(
+        allowed_permission_profiles,
+        &["allowed_permission_profiles"]
+    );
+    set_sourced!(default_permissions, &["default_permissions"]);
     set_sourced!(allowed_web_search_modes, &["allowed_web_search_modes"]);
     set_sourced!(allow_managed_hooks_only, &["allow_managed_hooks_only"]);
     set_sourced!(allow_appshots, &["allow_appshots"]);
+    set_sourced!(allow_remote_control, &["allow_remote_control"]);
     set_sourced!(computer_use, &["computer_use"]);
     set_sourced!(windows, &["windows"]);
     set_sourced!(feature_requirements, &["features", "feature_requirements"]);
