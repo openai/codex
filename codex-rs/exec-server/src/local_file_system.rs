@@ -7,6 +7,7 @@ use std::sync::LazyLock;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::io;
+use tokio::io::AsyncReadExt;
 use tokio_util::io::ReaderStream;
 
 use crate::CopyOptions;
@@ -21,9 +22,17 @@ use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
+use crate::regular_file;
 use crate::sandboxed_file_system::SandboxedFileSystem;
 
 const MAX_READ_FILE_BYTES: u64 = 512 * 1024 * 1024;
+
+fn file_too_large_error() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("file is too large to read: limit is {MAX_READ_FILE_BYTES} bytes"),
+    )
+}
 
 pub static LOCAL_FS: LazyLock<Arc<dyn ExecutorFileSystem>> =
     LazyLock::new(|| -> Arc<dyn ExecutorFileSystem> { Arc::new(LocalFileSystem::unsandboxed()) });
@@ -485,13 +494,7 @@ impl DirectFileSystem {
     ) -> FileSystemResult<tokio::fs::File> {
         reject_sandbox_context(sandbox)?;
         let path = path.to_abs_path()?;
-        if !tokio::fs::metadata(path.as_path()).await?.is_file() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("path `{}` is not a file", path.display()),
-            ));
-        }
-        tokio::fs::File::open(path.as_path()).await
+        regular_file::open(path.as_path()).await
     }
 
     async fn canonicalize(
@@ -511,16 +514,19 @@ impl DirectFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
-        reject_sandbox_context(sandbox)?;
-        let path = path.to_abs_path()?;
-        let metadata = tokio::fs::metadata(path.as_path()).await?;
+        let file = self.open_file_for_read(path, sandbox).await?;
+        let metadata = file.metadata().await?;
         if metadata.len() > MAX_READ_FILE_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("file is too large to read: limit is {MAX_READ_FILE_BYTES} bytes"),
-            ));
+            return Err(file_too_large_error());
         }
-        tokio::fs::read(path.as_path()).await
+        let mut bytes = Vec::with_capacity(metadata.len() as usize);
+        file.take(MAX_READ_FILE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .await?;
+        if bytes.len() as u64 > MAX_READ_FILE_BYTES {
+            return Err(file_too_large_error());
+        }
+        Ok(bytes)
     }
 
     async fn read_file_stream(

@@ -22,10 +22,12 @@ use codex_utils_path_uri::PathUri;
 use futures::TryStreamExt;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::time::Duration;
 use tempfile::TempDir;
-#[cfg(unix)]
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::ServerOptions;
+#[cfg(any(unix, windows))]
 use tokio::time::timeout;
 use uuid::Uuid;
 
@@ -104,7 +106,7 @@ async fn stream_rejects_platform_sandbox() -> Result<()> {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn stream_rejects_fifo_without_waiting_for_a_writer() -> Result<()> {
+async fn file_reads_reject_fifo_without_waiting_for_a_writer() -> Result<()> {
     let server = exec_server().await?;
     let file_system = connect_file_system(server.websocket_url())?;
     let tmp = TempDir::new()?;
@@ -118,18 +120,75 @@ async fn stream_rejects_fifo_without_waiting_for_a_writer() -> Result<()> {
         );
     }
 
-    let result = timeout(
+    let path_uri = PathUri::from_path(&path)?;
+    let read_error = timeout(
         Duration::from_secs(1),
-        file_system.read_file_stream(&PathUri::from_path(&path)?, /*sandbox*/ None),
+        file_system.read_file(&path_uri, /*sandbox*/ None),
     )
     .await
-    .expect("opening a FIFO should not wait for a writer");
-    let Err(error) = result else {
+    .expect("reading a FIFO should not wait for a writer")
+    .expect_err("reading a FIFO should be rejected");
+    let stream_result = timeout(
+        Duration::from_secs(1),
+        file_system.read_file_stream(&path_uri, /*sandbox*/ None),
+    )
+    .await
+    .expect("streaming a FIFO should not wait for a writer");
+    let Err(stream_error) = stream_result else {
         panic!("streaming a FIFO should be rejected");
     };
+    let expected = format!("path `{}` is not a file", path.display());
     assert_eq!(
-        error.to_string(),
-        format!("path `{}` is not a file", path.display())
+        (read_error.to_string(), stream_error.to_string()),
+        (expected.clone(), expected)
+    );
+    Ok(())
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn file_reads_reject_named_pipes() -> Result<()> {
+    let server = exec_server().await?;
+    let file_system = connect_file_system(server.websocket_url())?;
+
+    let read_path = format!(r"\\.\pipe\codex-fs-read-{}", Uuid::new_v4());
+    let _read_pipe = ServerOptions::new()
+        .first_pipe_instance(true)
+        .create(&read_path)?;
+    let read_error = timeout(
+        Duration::from_secs(1),
+        file_system.read_file(
+            &PathUri::from_path(std::path::Path::new(&read_path))?,
+            /*sandbox*/ None,
+        ),
+    )
+    .await
+    .expect("reading a named pipe should not hang")
+    .expect_err("reading a named pipe should be rejected");
+
+    let stream_path = format!(r"\\.\pipe\codex-fs-stream-{}", Uuid::new_v4());
+    let _stream_pipe = ServerOptions::new()
+        .first_pipe_instance(true)
+        .create(&stream_path)?;
+    let stream_result = timeout(
+        Duration::from_secs(1),
+        file_system.read_file_stream(
+            &PathUri::from_path(std::path::Path::new(&stream_path))?,
+            /*sandbox*/ None,
+        ),
+    )
+    .await
+    .expect("streaming a named pipe should not hang");
+    let Err(stream_error) = stream_result else {
+        panic!("streaming a named pipe should be rejected");
+    };
+
+    assert_eq!(
+        (read_error.kind(), stream_error.kind()),
+        (
+            std::io::ErrorKind::InvalidInput,
+            std::io::ErrorKind::InvalidInput,
+        )
     );
     Ok(())
 }

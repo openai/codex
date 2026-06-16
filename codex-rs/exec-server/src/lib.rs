@@ -14,6 +14,7 @@ mod local_process;
 mod process;
 mod process_id;
 mod protocol;
+mod regular_file;
 mod relay;
 mod relay_proto;
 mod remote;
