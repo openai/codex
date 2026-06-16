@@ -32,25 +32,13 @@ pub(crate) async fn verified_rollout_path_for_thread(
     thread_id: ThreadId,
 ) -> Option<PathBuf> {
     let existing_path = codex_rollout::existing_rollout_path(path).await?;
-    if rollout_file_name_matches_thread_id(existing_path.as_path(), thread_id)
-        || codex_rollout::read_session_meta_line(existing_path.as_path())
-            .await
-            .is_ok_and(|session_meta| session_meta.meta.id == thread_id)
+    if codex_rollout::read_session_meta_line(existing_path.as_path())
+        .await
+        .is_ok_and(|session_meta| session_meta.meta.id == thread_id)
     {
         return Some(codex_rollout::plain_rollout_path(existing_path.as_path()));
     }
     None
-}
-
-fn rollout_file_name_matches_thread_id(path: &Path, thread_id: ThreadId) -> bool {
-    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    let plain_suffix = format!("{thread_id}.jsonl");
-    let compressed_suffix = format!("{plain_suffix}.zst");
-    file_name.starts_with("rollout-")
-        && (file_name.ends_with(plain_suffix.as_str())
-            || file_name.ends_with(compressed_suffix.as_str()))
 }
 
 #[derive(Default)]
