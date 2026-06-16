@@ -2,6 +2,7 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::FILE_READ_CHUNK_SIZE;
 use codex_exec_server::FileMetadata;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
@@ -11,6 +12,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
 use codex_utils_path_uri::PathUri;
+use futures::TryStreamExt;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -190,6 +192,45 @@ async fn file_system_read_file_returns_bytes(
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(contents, b"hello from trait");
+
+    Ok(())
+}
+
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_read_file_stream_returns_bounded_chunks(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let file_path = tmp.path().join("blocks.bin");
+    let contents = (0..FILE_READ_CHUNK_SIZE * 2 + 17)
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<_>>();
+    std::fs::write(&file_path, &contents)?;
+
+    let chunks = file_system
+        .read_file_stream(&PathUri::from_path(file_path)?, /*sandbox*/ None)
+        .await
+        .with_context(|| format!("mode={implementation}"))?
+        .try_collect::<Vec<_>>()
+        .await?;
+
+    assert!(
+        chunks
+            .iter()
+            .all(|chunk| !chunk.is_empty() && chunk.len() <= FILE_READ_CHUNK_SIZE)
+    );
+    assert_eq!(
+        chunks
+            .iter()
+            .flat_map(|chunk| chunk.iter().copied())
+            .collect::<Vec<_>>(),
+        contents
+    );
 
     Ok(())
 }

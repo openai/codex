@@ -3,6 +3,7 @@ use codex_file_system::CopyOptions;
 use codex_file_system::CreateDirectoryOptions;
 use codex_file_system::ExecutorFileSystemFuture;
 use codex_file_system::FileMetadata;
+use codex_file_system::FileSystemReadStream;
 use codex_file_system::FileSystemSandboxContext;
 use codex_file_system::ReadDirectoryEntry;
 use codex_file_system::RemoveOptions;
@@ -33,6 +34,19 @@ impl ExecutorFileSystem for TestFileSystem {
         Box::pin(async move {
             let path = path.to_abs_path()?;
             tokio::fs::read(path.as_path()).await
+        })
+    }
+
+    fn read_file_stream<'a>(
+        &'a self,
+        _path: &'a PathUri,
+        _sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
+        Box::pin(async {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "test filesystem does not support streaming reads",
+            ))
         })
     }
 

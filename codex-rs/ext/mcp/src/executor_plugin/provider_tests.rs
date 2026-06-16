@@ -8,6 +8,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::ExecutorFileSystemFuture;
 use codex_exec_server::FileMetadata;
+use codex_exec_server::FileSystemReadStream;
 use codex_exec_server::FileSystemResult;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::ReadDirectoryEntry;
@@ -71,6 +72,14 @@ impl ExecutorFileSystem for SyntheticExecutorFileSystem {
                 .map(|contents| contents.as_bytes().to_vec())
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "not found"))
         })
+    }
+
+    fn read_file_stream<'a>(
+        &'a self,
+        _path: &'a PathUri,
+        _sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
+        Box::pin(async { Self::unsupported() })
     }
 
     fn write_file<'a>(
