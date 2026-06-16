@@ -618,8 +618,11 @@ impl ExecServerClient {
             remote_connect_args,
         });
         let client = Self { inner };
-        client.initialize_rpc(&rpc_client, options).await?;
+        // An explicit resume can redirect notifications from running processes
+        // before initialize returns. Drain them immediately so a burst cannot
+        // fill the bounded event channel and block the initialize response.
         client.spawn_rpc_reader(&rpc_client, events_rx);
+        client.initialize_rpc(&rpc_client, options).await?;
         Ok(client)
     }
 
@@ -1071,6 +1074,7 @@ mod tests {
     #[cfg(not(windows))]
     use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
     use crate::client_api::ExecServerTransportParams;
+    use crate::client_api::RemoteExecServerConnectArgs;
     use crate::client_api::StdioExecServerCommand;
     use crate::client_api::StdioExecServerConnectArgs;
     use crate::connection::JsonRpcConnection;
@@ -1649,6 +1653,87 @@ mod tests {
         let reused_client = client.get().await.expect("client should stay connected");
         assert_eq!(stable_client.session_id().as_deref(), Some("session-1"));
         assert!(Arc::ptr_eq(&stable_client.inner, &reused_client.inner));
+        finish_tx.send(()).expect("test should finish");
+        server.await.expect("server task should finish");
+    }
+
+    #[tokio::test]
+    async fn explicit_resume_drains_notifications_before_initialize_response() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let websocket_url = format!(
+            "ws://{}",
+            listener.local_addr().expect("listener should have address")
+        );
+        let (finish_tx, finish_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut websocket = accept_websocket(&listener).await;
+            let initialize = read_jsonrpc_websocket(&mut websocket).await;
+            let request = match initialize {
+                JSONRPCMessage::Request(request) if request.method == INITIALIZE_METHOD => request,
+                other => panic!("expected initialize request, got {other:?}"),
+            };
+            let params: crate::protocol::InitializeParams =
+                serde_json::from_value(request.params.expect("initialize params should exist"))
+                    .expect("initialize params should deserialize");
+            assert_eq!(params.resume_session_id.as_deref(), Some("session-1"));
+
+            for seq in 1..=256 {
+                write_jsonrpc_websocket(
+                    &mut websocket,
+                    JSONRPCMessage::Notification(JSONRPCNotification {
+                        method: EXEC_OUTPUT_DELTA_METHOD.to_string(),
+                        params: Some(
+                            serde_json::to_value(ExecOutputDeltaNotification {
+                                process_id: ProcessId::from("busy-process"),
+                                seq,
+                                stream: ExecOutputStream::Stdout,
+                                chunk: b"output".to_vec().into(),
+                            })
+                            .expect("output notification should serialize"),
+                        ),
+                    }),
+                )
+                .await;
+            }
+            write_jsonrpc_websocket(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(InitializeResponse {
+                        session_id: "session-1".to_string(),
+                    })
+                    .expect("initialize response should serialize"),
+                }),
+            )
+            .await;
+
+            let initialized = read_jsonrpc_websocket(&mut websocket).await;
+            match initialized {
+                JSONRPCMessage::Notification(notification)
+                    if notification.method == INITIALIZED_METHOD => {}
+                other => panic!("expected initialized notification, got {other:?}"),
+            }
+            finish_rx.await.expect("test should finish");
+        });
+
+        let client = timeout(
+            Duration::from_secs(1),
+            ExecServerClient::connect_websocket(RemoteExecServerConnectArgs {
+                websocket_url,
+                client_name: "test-client".to_string(),
+                connect_timeout: Duration::from_secs(1),
+                initialize_timeout: Duration::from_secs(1),
+                resume_session_id: Some("session-1".to_string()),
+            }),
+        )
+        .await
+        .expect("explicit resume should not time out")
+        .expect("explicit resume should connect");
+        assert_eq!(client.session_id().as_deref(), Some("session-1"));
+
+        drop(client);
         finish_tx.send(()).expect("test should finish");
         server.await.expect("server task should finish");
     }
