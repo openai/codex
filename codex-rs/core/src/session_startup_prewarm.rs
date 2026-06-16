@@ -243,10 +243,10 @@ async fn schedule_startup_prewarm_inner(
         prewarm_started_at.elapsed(),
         /*status*/ None,
     );
-    let guardian_initialization = routes_approval_to_guardian(&startup_turn_context).then(|| {
+    if routes_approval_to_guardian(&startup_turn_context) {
         let guardian_session = Arc::clone(&session);
         let guardian_parent_turn = Arc::clone(&startup_turn_context);
-        AbortOnDropHandle::new(tokio::spawn(async move {
+        drop(tokio::spawn(async move {
             if let Err(err) = guardian_session
                 .guardian_review_session
                 .initialize(Arc::clone(&guardian_session), guardian_parent_turn)
@@ -254,8 +254,8 @@ async fn schedule_startup_prewarm_inner(
             {
                 warn!("failed to initialize guardian review session: {err:#}");
             }
-        }))
-    });
+        }));
+    }
     let startup_cancellation_token = CancellationToken::new();
     let built_tools_started_at = Instant::now();
     let startup_router = built_tools(
@@ -309,9 +309,5 @@ async fn schedule_startup_prewarm_inner(
         websocket_warmup_started_at.elapsed(),
         /*status*/ None,
     );
-    if let Some(guardian_initialization) = guardian_initialization {
-        let _ = guardian_initialization.await;
-    }
-
     Ok(client_session)
 }

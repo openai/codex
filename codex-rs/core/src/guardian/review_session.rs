@@ -94,6 +94,7 @@ pub(crate) struct GuardianReviewSessionParams {
 #[derive(Default)]
 pub(crate) struct GuardianReviewSessionManager {
     state: Arc<Mutex<GuardianReviewSessionState>>,
+    cancellation_token: CancellationToken,
 }
 
 #[derive(Default)]
@@ -305,19 +306,24 @@ impl GuardianReviewSessionManager {
                 &spawn_config,
                 parent_session.user_instructions().await,
             );
-            let spawn_cancel_token = CancellationToken::new();
+            let spawn_cancel_token = self.cancellation_token.child_token();
             let spawn_cancel_guard = spawn_cancel_token.clone().drop_guard();
             let review_session = spawn_guardian_review_session(
                 &parent_session,
                 &parent_turn,
                 spawn_config,
                 reuse_key,
-                spawn_cancel_token,
+                spawn_cancel_token.clone(),
                 /*fork_snapshot*/ None,
             )
             .await?;
-            self.state.lock().await.trunk = Some(Arc::new(review_session));
-            drop(spawn_cancel_guard.disarm());
+            // A first review or shutdown may win while eager initialization is in flight;
+            // install only if neither has happened.
+            let mut state = self.state.lock().await;
+            if !spawn_cancel_token.is_cancelled() && state.trunk.is_none() {
+                state.trunk = Some(Arc::new(review_session));
+                drop(spawn_cancel_guard.disarm());
+            }
             Ok(())
         })
     }
@@ -335,6 +341,7 @@ impl GuardianReviewSessionManager {
     }
 
     pub(crate) async fn shutdown(&self) {
+        self.cancellation_token.cancel();
         let (review_session, ephemeral_reviews) = {
             let mut state = self.state.lock().await;
             (
@@ -381,7 +388,7 @@ impl GuardianReviewSessionManager {
                 }
 
                 if state.trunk.is_none() {
-                    let spawn_cancel_token = CancellationToken::new();
+                    let spawn_cancel_token = self.cancellation_token.child_token();
                     let review_session = match run_before_review_deadline_with_cancel(
                         deadline,
                         params.external_cancel.as_ref(),
@@ -590,7 +597,7 @@ impl GuardianReviewSessionManager {
         deadline: tokio::time::Instant,
         fork_snapshot: Option<GuardianReviewForkSnapshot>,
     ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult) {
-        let spawn_cancel_token = CancellationToken::new();
+        let spawn_cancel_token = self.cancellation_token.child_token();
         let mut fork_config = params.spawn_config.clone();
         fork_config.ephemeral = true;
         let review_session = match run_before_review_deadline_with_cancel(
@@ -1578,6 +1585,7 @@ mod tests {
                 trunk: Some(Arc::new(review_session)),
                 ephemeral_reviews: Vec::new(),
             })),
+            ..Default::default()
         };
         drop(tx_event);
 
