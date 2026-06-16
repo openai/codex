@@ -37,14 +37,22 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::request_plugin_install_spec::create_request_plugin_install_tool;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use crate::tools::router::ToolSuggestPresentation;
 
 pub struct RequestPluginInstallHandler {
     discoverable_tools: Vec<DiscoverableTool>,
+    presentation: ToolSuggestPresentation,
 }
 
 impl RequestPluginInstallHandler {
-    pub(crate) fn new(discoverable_tools: Vec<DiscoverableTool>) -> Self {
-        Self { discoverable_tools }
+    pub(crate) fn new(
+        discoverable_tools: Vec<DiscoverableTool>,
+        presentation: ToolSuggestPresentation,
+    ) -> Self {
+        Self {
+            discoverable_tools,
+            presentation,
+        }
     }
 }
 
@@ -54,7 +62,7 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
     }
 
     fn spec(&self) -> ToolSpec {
-        create_request_plugin_install_tool()
+        create_request_plugin_install_tool(self.presentation)
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
@@ -118,8 +126,16 @@ impl RequestPluginInstallHandler {
             .into_iter()
             .find(|tool| tool.tool_type() == args.tool_type && tool.id() == args.tool_id)
             .ok_or_else(|| {
+                let source = match self.presentation {
+                    ToolSuggestPresentation::ListTool => format!(
+                        "the discoverable tools returned by {LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}"
+                    ),
+                    ToolSuggestPresentation::DeveloperContext => {
+                        "the developer recommendations".to_string()
+                    }
+                };
                 FunctionCallError::RespondToModel(format!(
-                    "tool_id must match one of the discoverable tools returned by {LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}"
+                    "tool_id must match one of {source}"
                 ))
             })?;
 

@@ -58,6 +58,8 @@ use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolRouterParams;
+use crate::tools::router::ToolSuggestCandidates;
+use crate::tools::router::ToolSuggestPresentation;
 use crate::tools::router::extension_tool_executors;
 use crate::tools::spec_plan::search_tool_enabled;
 use crate::tools::spec_plan::tool_suggest_enabled;
@@ -1190,7 +1192,7 @@ pub(crate) async fn built_tools(
         .into_iter()
         .map(|connector_id| connector_id.0)
         .collect::<Vec<_>>();
-    let discoverable_tools = async {
+    let tool_suggest_candidates = async {
         if apps_enabled && tool_suggest_enabled(turn_context) {
             if let Some(accessible_connectors) = accessible_connectors_with_enabled_state.as_ref() {
                 match connectors::list_tool_suggest_discoverable_tools_with_auth(
@@ -1208,7 +1210,10 @@ pub(crate) async fn built_tools(
                     )
                 }) {
                     Ok(discoverable_tools) if discoverable_tools.is_empty() => None,
-                    Ok(discoverable_tools) => Some(discoverable_tools),
+                    Ok(discoverable_tools) => Some(ToolSuggestCandidates {
+                        tools: discoverable_tools,
+                        presentation: ToolSuggestPresentation::ListTool,
+                    }),
                     Err(err) => {
                         warn!("failed to load discoverable tool suggestions: {err:#}");
                         None
@@ -1237,7 +1242,7 @@ pub(crate) async fn built_tools(
         ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,
-            discoverable_tools,
+            tool_suggest_candidates,
             extension_tool_executors: extension_tool_executors(sess),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },

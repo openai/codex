@@ -68,7 +68,6 @@ use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_tools::DiscoverableTool;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
@@ -145,7 +144,7 @@ struct CoreToolPlanContext<'a> {
     turn_context: &'a TurnContext,
     mcp_tools: Option<&'a [ToolInfo]>,
     deferred_mcp_tools: Option<&'a [ToolInfo]>,
-    discoverable_tools: Option<&'a [DiscoverableTool]>,
+    tool_suggest_candidates: Option<&'a crate::tools::router::ToolSuggestCandidates>,
     extension_tool_executors: &'a [Arc<dyn ToolExecutor<ExtensionToolCall>>],
     dynamic_tools: &'a [DynamicToolSpec],
     tool_search_handler_cache: &'a ToolSearchHandlerCache,
@@ -173,7 +172,7 @@ fn build_tool_specs_and_registry(
     let ToolRouterParams {
         mcp_tools,
         deferred_mcp_tools,
-        discoverable_tools,
+        tool_suggest_candidates,
         extension_tool_executors,
         dynamic_tools,
     } = params;
@@ -183,7 +182,7 @@ fn build_tool_specs_and_registry(
         turn_context,
         mcp_tools: mcp_tools.as_deref(),
         deferred_mcp_tools: deferred_mcp_tools.as_deref(),
-        discoverable_tools: discoverable_tools.as_deref(),
+        tool_suggest_candidates: tool_suggest_candidates.as_ref(),
         extension_tool_executors: &extension_tool_executors,
         dynamic_tools,
         tool_search_handler_cache,
@@ -672,14 +671,18 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     }
 
     if tool_suggest_enabled(turn_context)
-        && let Some(discoverable_tools) =
-            context.discoverable_tools.filter(|tools| !tools.is_empty())
+        && let Some(candidates) = context
+            .tool_suggest_candidates
+            .filter(|candidates| !candidates.tools.is_empty())
     {
-        planned_tools.add(ListAvailablePluginsToInstallHandler::new(
-            collect_request_plugin_install_entries(discoverable_tools),
-        ));
+        if candidates.presentation == crate::tools::router::ToolSuggestPresentation::ListTool {
+            planned_tools.add(ListAvailablePluginsToInstallHandler::new(
+                collect_request_plugin_install_entries(&candidates.tools),
+            ));
+        }
         planned_tools.add(RequestPluginInstallHandler::new(
-            discoverable_tools.to_vec(),
+            candidates.tools.clone(),
+            candidates.presentation,
         ));
     }
 
