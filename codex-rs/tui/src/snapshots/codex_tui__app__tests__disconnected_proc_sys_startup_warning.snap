@@ -1,0 +1,8 @@
+---
+source: tui/src/app/tests.rs
+assertion_line: 207
+expression: rendered
+---
+⚠ Codex's Linux sandbox cannot access /proc/sys because the mount is
+  disconnected. Restart the environment or container before running sandboxed
+  commands.

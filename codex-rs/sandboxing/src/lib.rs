@@ -26,6 +26,7 @@ use codex_protocol::error::CodexErr;
 #[cfg(not(target_os = "linux"))]
 pub fn system_bwrap_warning(
     _permission_profile: &codex_protocol::models::PermissionProfile,
+    _has_managed_network_requirements: bool,
 ) -> Option<String> {
     None
 }

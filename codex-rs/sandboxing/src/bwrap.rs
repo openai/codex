@@ -52,12 +52,15 @@ enum SystemBwrapProbeResult {
     Failed,
 }
 
-pub fn system_bwrap_warning(permission_profile: &PermissionProfile) -> Option<String> {
+pub fn system_bwrap_warning(
+    permission_profile: &PermissionProfile,
+    has_managed_network_requirements: bool,
+) -> Option<String> {
     let (file_system_policy, network_policy) = permission_profile.to_runtime_permissions();
     if !should_require_platform_sandbox(
         &file_system_policy,
         network_policy,
-        /*has_managed_network_requirements*/ false,
+        has_managed_network_requirements,
     ) {
         return None;
     }
@@ -65,7 +68,7 @@ pub fn system_bwrap_warning(permission_profile: &PermissionProfile) -> Option<St
     let system_bwrap_path = find_system_bwrap_in_path();
     system_bwrap_warning_for_path(
         system_bwrap_path.as_deref(),
-        /*unshare_network*/ !network_policy.is_enabled(),
+        /*unshare_network*/ !network_policy.is_enabled() || has_managed_network_requirements,
     )
 }
 

@@ -193,6 +193,20 @@ fn bypass_hook_trust_startup_warning_snapshot() {
 
     assert_app_snapshot!("bypass_hook_trust_startup_warning", rendered);
 }
+
+#[test]
+fn disconnected_proc_sys_startup_warning_snapshot() {
+    let rendered = lines_to_single_string(
+        &history_cell::new_warning_event(
+            "Codex's Linux sandbox cannot access /proc/sys because the mount is disconnected. Restart the environment or container before running sandboxed commands."
+                .to_string(),
+        )
+        .display_lines(/*width*/ 80),
+    );
+
+    assert_app_snapshot!("disconnected_proc_sys_startup_warning", rendered);
+}
+
 #[tokio::test]
 async fn enqueue_primary_thread_session_replays_buffered_approval_after_attach() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;

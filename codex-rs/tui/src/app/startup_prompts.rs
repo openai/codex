@@ -105,9 +105,10 @@ pub(super) fn emit_project_config_warnings(app_event_tx: &AppEventSender, config
 }
 
 pub(super) fn emit_system_bwrap_warning(app_event_tx: &AppEventSender, config: &Config) {
-    let Some(message) =
-        codex_sandboxing::system_bwrap_warning(config.permissions.permission_profile())
-    else {
+    let Some(message) = codex_sandboxing::system_bwrap_warning(
+        config.permissions.permission_profile(),
+        config.managed_network_requirements_enabled(),
+    ) else {
         return;
     };
 
