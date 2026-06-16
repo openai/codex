@@ -2516,10 +2516,7 @@ mod tests {
                 model: "gpt-5".to_string(),
                 model_provider: "openai".to_string(),
                 service_tier: None,
-                cwd: codex_utils_path_uri::ApiPathString::from_abs_path(
-                    &cwd,
-                    codex_utils_path_uri::PathConvention::native(),
-                )?,
+                cwd: codex_utils_path_uri::ApiPathString::from_abs_path(&cwd),
                 runtime_workspace_roots: Vec::new(),
                 instruction_sources: vec![absolute_path("/tmp/AGENTS.md")],
                 approval_policy: v2::AskForApproval::OnFailure,

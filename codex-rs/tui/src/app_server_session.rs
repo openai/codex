@@ -1812,12 +1812,12 @@ mod tests {
 
     #[test]
     fn foreign_runtime_workspace_root_is_rejected_instead_of_projected_onto_the_tui_host() {
-        let (path, convention) = match PathConvention::native() {
-            PathConvention::Posix => (r"C:\workspace", PathConvention::Windows),
-            PathConvention::Windows => ("/workspace", PathConvention::Posix),
+        let path = match PathConvention::native() {
+            PathConvention::Posix => r"C:\workspace",
+            PathConvention::Windows => "/workspace",
         };
-        let root = ApiPathString::from_native_absolute_path(path, convention)
-            .expect("foreign path should be valid");
+        let root: ApiPathString =
+            serde_json::from_value(serde_json::json!(path)).expect("API path should deserialize");
 
         assert_eq!(
             api_path_to_native_runtime_workspace_root(&root),

@@ -8146,8 +8146,7 @@ async fn turn_context_item_separates_host_and_model_workspace_roots() {
         current_environment.environment,
         windows_cwd.clone(),
         current_environment.shell,
-    )
-    .expect("remote turn environment");
+    );
 
     let host_workspace_roots = turn_context.config.effective_workspace_roots();
     let implicit_item = turn_context.to_turn_context_item();

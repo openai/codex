@@ -3,6 +3,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use app_test_support::TestAppServer;
+use app_test_support::PathBufExt;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
@@ -390,7 +391,7 @@ async fn app_server_starts_thread_with_windows_environment_native_cwd() -> Resul
                 Some(r"<cwd>C:\windows</cwd>"),
             );
             assert!(environment_context.contains(
-                r"<workspace_roots><root>C:\codex runtime</root></workspace_roots>"
+                r"<workspace_roots><root>C:\windows</root></workspace_roots>"
             ));
 
             Ok(())

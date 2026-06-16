@@ -433,7 +433,7 @@ impl TurnContext {
             && let Some(primary_environment) = self.environments.primary()
             && let Some(implicit_workspace_root) = workspace_roots.first_mut()
         {
-            *implicit_workspace_root = primary_environment.cwd_uri().clone();
+            *implicit_workspace_root = primary_environment.cwd().clone();
         }
 
         let mut seen = HashSet::new();

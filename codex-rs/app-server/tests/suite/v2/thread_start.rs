@@ -33,6 +33,7 @@ use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_utils_path_uri::ApiPathString;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -235,10 +236,7 @@ async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
     assert_eq!(response_cwd.as_str(), cwd.to_string_lossy());
     assert_eq!(
         runtime_workspace_roots,
-        vec![ApiPathString::from_abs_path(
-            &extra_root.abs(),
-            PathConvention::native(),
-        )?]
+        vec![ApiPathString::from_abs_path(&extra_root.abs())]
     );
 
     Ok(())
@@ -263,10 +261,7 @@ async fn thread_start_preserves_explicit_root_equal_to_host_fallback_with_select
             runtime_workspace_roots: Some(vec![explicit_root.clone()]),
             environments: Some(vec![TurnEnvironmentParams {
                 environment_id: "local".to_string(),
-                cwd: ApiPathString::from_abs_path(
-                    &environment_cwd.path().to_path_buf().abs(),
-                    PathConvention::native(),
-                )?,
+                cwd: ApiPathString::from_abs_path(&environment_cwd.path().to_path_buf().abs()),
             }]),
             ..Default::default()
         })
@@ -280,10 +275,7 @@ async fn thread_start_preserves_explicit_root_equal_to_host_fallback_with_select
 
     assert_eq!(
         response.runtime_workspace_roots,
-        vec![ApiPathString::from_abs_path(
-            &explicit_root,
-            PathConvention::native(),
-        )?]
+        vec![ApiPathString::from_abs_path(&explicit_root)]
     );
 
     Ok(())
@@ -325,9 +317,8 @@ async fn thread_start_excludes_profile_workspace_roots_from_runtime_workspace_ro
     assert_eq!(
         runtime_workspace_roots,
         vec![ApiPathString::from_abs_path(
-            &cwd.path().to_path_buf().abs(),
-            PathConvention::native(),
-        )?]
+            &cwd.path().to_path_buf().abs()
+        )]
     );
 
     Ok(())
