@@ -5,6 +5,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::test_codex;
 
 const HIERARCHICAL_AGENTS_SNIPPET: &str =
@@ -12,6 +13,8 @@ const HIERARCHICAL_AGENTS_SNIPPET: &str =
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hierarchical_agents_appends_to_project_doc_in_user_instructions() {
+    // TODO(anp): Remove after instruction-source helpers use target-native paths.
+    skip_if_wine_exec!("requires native cross-OS instruction-source paths");
     let server = start_mock_server().await;
     let resp_mock = mount_sse_once(
         &server,

@@ -2,15 +2,8 @@
 
 load("@rules_rust//rust:defs.bzl", "rust_test")
 load("//:defs.bzl", "WINDOWS_GNULLVM_RUSTC_LINK_FLAGS")
-load(":foreign_platform_binary.bzl", "foreign_platform_binary")
-
-_WINE_RUNTIME_BINARIES = {
-    "pwsh": "@powershell_windows_x86_64//:pwsh",
-    "pwsh-runtime-marker": "@powershell_windows_x86_64//:runtime_marker",
-    "wine": "@wine_linux_x86_64//:wine",
-    "wine-runtime-marker": "@wine_linux_x86_64//:runtime_marker",
-    "wineserver": "@wine_linux_x86_64//:wineserver",
-}
+load("//bazel/rules/testing:foreign_platform_binary.bzl", "foreign_platform_binary")
+load(":wine_runtime.bzl", "WINE_TEST_TARGET_COMPATIBLE_WITH", "wine_test_runtime")
 
 def wine_rust_test(
         name,
@@ -46,20 +39,10 @@ def wine_rust_test(
       target_compatible_with: Additional compatibility constraints.
       **kwargs: Remaining attributes forwarded to `rust_test`.
     """
-    binaries = dict(_WINE_RUNTIME_BINARIES)
-    runtime_data = [
-        "@powershell_windows_x86_64//:runtime",
-        "@wine_linux_x86_64//:runtime",
-    ]
-
-    for binary_name in sorted(host_binaries.keys()):
-        if binary_name in binaries:
-            fail("host test binary name collides with test runtime: {}".format(binary_name))
-        binaries[binary_name] = host_binaries[binary_name]
-
+    binaries = dict(host_binaries)
     for index, binary_name in enumerate(sorted(windows_binaries.keys())):
         if binary_name in binaries:
-            fail("Windows test binary name collides with existing binary: {}".format(binary_name))
+            fail("Windows test binary name collides with host binary: {}".format(binary_name))
         transitioned_binary = name + "-windows-binary-" + str(index)
         foreign_platform_binary(
             name = transitioned_binary,
@@ -76,17 +59,11 @@ def wine_rust_test(
         )
         binaries[binary_name] = ":" + transitioned_binary
 
+    runtime = wine_test_runtime(binaries)
     rust_test(
         name = name,
-        data = data + runtime_data + [binary for binary in binaries.values()],
-        env = {
-            "CARGO_BIN_EXE_{}".format(binary_name): "$(rlocationpath {})".format(binary)
-            for binary_name, binary in binaries.items()
-        },
-        target_compatible_with = target_compatible_with + [
-            "@llvm//constraints/libc:gnu.2.28",
-            "@platforms//cpu:x86_64",
-            "@platforms//os:linux",
-        ],
+        data = data + runtime.data,
+        env = runtime.env,
+        target_compatible_with = target_compatible_with + WINE_TEST_TARGET_COMPATIBLE_WITH,
         **kwargs
     )
