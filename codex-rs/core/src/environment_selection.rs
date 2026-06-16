@@ -98,8 +98,6 @@ impl ThreadEnvironments {
             let turn_environment = match current.turn_environments.iter().find(|environment| {
                 environment.environment_id == selected_environment.environment_id
                     && environment.cwd_uri() == &selected_environment.cwd
-                    && (environment.environment.is_remote()
-                        || environment.shell.as_ref() == Some(&local_shell))
             }) {
                 Some(environment) => environment.clone(),
                 None => match Self::resolve_selection(
