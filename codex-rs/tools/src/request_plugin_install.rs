@@ -57,7 +57,6 @@ pub fn build_request_plugin_install_elicitation_request(
     server_name: &str,
     thread_id: String,
     turn_id: String,
-    args: &RequestPluginInstallArgs,
     suggest_reason: &str,
     tool: &DiscoverableTool,
 ) -> McpServerElicitationRequestParams {
@@ -69,8 +68,6 @@ pub fn build_request_plugin_install_elicitation_request(
         server_name: server_name.to_string(),
         request: McpServerElicitationRequest::Form {
             meta: Some(json!(build_request_plugin_install_meta(
-                args.tool_type,
-                args.action_type,
                 suggest_reason,
                 tool,
             ))),
@@ -105,14 +102,13 @@ pub fn verified_connector_install_completed(
 }
 
 fn build_request_plugin_install_meta<'a>(
-    tool_type: DiscoverableToolType,
-    action_type: DiscoverableToolAction,
     suggest_reason: &'a str,
     tool: &'a DiscoverableTool,
 ) -> RequestPluginInstallMeta<'a> {
-    let (remote_plugin_id, app_connector_ids) = match tool {
-        DiscoverableTool::Connector(_) => (None, None),
+    let (tool_type, remote_plugin_id, app_connector_ids) = match tool {
+        DiscoverableTool::Connector(_) => (DiscoverableToolType::Connector, None, None),
         DiscoverableTool::Plugin(plugin) => (
+            DiscoverableToolType::Plugin,
             plugin.remote_plugin_id.as_deref(),
             Some(plugin.app_connector_ids.as_slice()),
         ),
@@ -121,7 +117,7 @@ fn build_request_plugin_install_meta<'a>(
         codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
         persist: REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE,
         tool_type,
-        suggest_type: action_type,
+        suggest_type: DiscoverableToolAction::Install,
         suggest_reason,
         tool_id: tool.id(),
         tool_name: tool.name(),

@@ -230,9 +230,7 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
                     call_id,
                     REQUEST_PLUGIN_INSTALL_TOOL_NAME,
                     &serde_json::to_string(&json!({
-                        "tool_type": "plugin",
-                        "action_type": "install",
-                        "tool_id": "invented@openai-curated-remote",
+                        "plugin_id": "invented@openai-curated-remote",
                         "suggest_reason": "Try this"
                     }))?,
                 ),
@@ -312,9 +310,7 @@ async fn endpoint_recommendation_adds_install_identity_only_to_elicitation_metad
                     call_id,
                     REQUEST_PLUGIN_INSTALL_TOOL_NAME,
                     &serde_json::to_string(&json!({
-                        "tool_type": "plugin",
-                        "action_type": "install",
-                        "tool_id": "github@openai-curated-remote",
+                        "plugin_id": "github@openai-curated-remote",
                         "suggest_reason": "Use GitHub for this request"
                     }))?,
                 ),
