@@ -1,5 +1,6 @@
 use super::PluginLoadOutcome;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
+use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
 use crate::loader::PluginHookLoadOutcome;
 use crate::loader::configured_curated_plugin_ids_from_codex_home;
@@ -210,23 +211,15 @@ fn project_plugin_load_outcome_for_auth(
     outcome: PluginLoadOutcome,
     auth_mode: Option<AuthMode>,
 ) -> PluginLoadOutcome {
-    let apps_route_available = auth_mode.is_some_and(AuthMode::uses_codex_backend);
     let mut plugins = outcome.plugins().to_vec();
     for plugin in &mut plugins {
-        if apps_route_available {
-            if plugin.is_active() && !plugin.apps.is_empty() {
-                let app_declaration_names = plugin
-                    .apps
-                    .iter()
-                    .map(|app| app.name.as_str())
-                    .collect::<HashSet<_>>();
-                plugin
-                    .mcp_servers
-                    .retain(|name, _| !app_declaration_names.contains(name.as_str()));
-            }
-        } else {
-            plugin.apps.clear();
-        }
+        let plugin_active = plugin.is_active();
+        apply_app_mcp_routing_policy(
+            &mut plugin.apps,
+            &mut plugin.mcp_servers,
+            auth_mode,
+            plugin_active,
+        );
     }
     PluginLoadOutcome::from_plugins(plugins)
 }

@@ -1,4 +1,6 @@
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
+use crate::app_mcp_routing::apply_app_mcp_routing_policy;
+use crate::app_mcp_routing::apps_route_available;
 use crate::manifest::PluginManifestHooks;
 use crate::manifest::PluginManifestPaths;
 use crate::manifest::load_plugin_manifest;
@@ -1085,20 +1087,17 @@ pub async fn load_plugin_mcp_servers(
     auth_mode: Option<AuthMode>,
 ) -> HashMap<String, McpServerConfig> {
     let mut mcp_servers = load_declared_plugin_mcp_servers(plugin_root).await;
-    if !auth_mode.is_some_and(AuthMode::uses_codex_backend) || mcp_servers.is_empty() {
+    if !apps_route_available(auth_mode) || mcp_servers.is_empty() {
         return mcp_servers;
     }
 
-    let app_declarations = load_plugin_apps(plugin_root).await;
-    if app_declarations.is_empty() {
-        return mcp_servers;
-    }
-
-    let app_declaration_names = app_declarations
-        .iter()
-        .map(|app| app.name.as_str())
-        .collect::<HashSet<_>>();
-    mcp_servers.retain(|name, _| !app_declaration_names.contains(name.as_str()));
+    let mut app_declarations = load_plugin_apps(plugin_root).await;
+    apply_app_mcp_routing_policy(
+        &mut app_declarations,
+        &mut mcp_servers,
+        auth_mode,
+        /*plugin_active*/ true,
+    );
     mcp_servers
 }
 
