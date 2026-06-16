@@ -336,7 +336,7 @@ impl RealtimeE2eHarness {
         codex_responses_as_items: Option<bool>,
     ) -> Result<StartedWebrtcRealtime> {
         // Starts realtime through the public JSON-RPC method, then waits for the same client-visible
-        // notifications a desktop app needs: started first, SDP answer second.
+        // notifications a desktop app needs: the SDP answer, then the upstream session id.
         let start_request_id = self
             .mcp
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
@@ -366,11 +366,11 @@ impl RealtimeE2eHarness {
         .await??;
         let _: ThreadRealtimeStartResponse = to_response(start_response)?;
 
-        let started = self
-            .read_notification::<ThreadRealtimeStartedNotification>("thread/realtime/started")
-            .await?;
         let sdp = self
             .read_notification::<ThreadRealtimeSdpNotification>("thread/realtime/sdp")
+            .await?;
+        let started = self
+            .read_notification::<ThreadRealtimeStartedNotification>("thread/realtime/started")
             .await?;
 
         Ok(StartedWebrtcRealtime { started, sdp })
@@ -502,6 +502,91 @@ fn session_updated(realtime_session_id: &str) -> Value {
     })
 }
 
+fn session_created(realtime_session_id: &str) -> Value {
+    json!({
+        "type": "session.created",
+        "session": { "id": realtime_session_id, "instructions": "backend prompt" }
+    })
+}
+
+#[tokio::test]
+async fn realtime_v1_websocket_started_uses_upstream_session_id() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let responses_server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let realtime_server = start_websocket_server(vec![vec![
+        vec![session_created("sess_frontend_test")],
+        vec![],
+    ]])
+    .await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_realtime_version(
+        codex_home.path(),
+        &responses_server.uri(),
+        realtime_server.uri(),
+        /*realtime_enabled*/ true,
+        StartupContextConfig::Override("startup context"),
+        RealtimeTestVersion::V1,
+        RealtimeTestSandbox::ReadOnly,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    login_with_api_key(&mut mcp, "sk-test-key").await?;
+
+    let thread_start_request_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_start_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
+    )
+    .await??;
+    let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
+
+    let start_request_id = mcp
+        .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
+            codex_responses_as_items: None,
+            codex_response_item_prefix: None,
+            thread_id: thread_start.thread.id.clone(),
+            model: None,
+            output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: None,
+            prompt: None,
+            realtime_session_id: Some("client-correlation-id".to_string()),
+            transport: None,
+            version: Some(RealtimeConversationVersion::V1),
+            voice: None,
+        })
+        .await?;
+    let start_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_request_id)),
+    )
+    .await??;
+    let _: ThreadRealtimeStartResponse = to_response(start_response)?;
+
+    let started =
+        read_notification::<ThreadRealtimeStartedNotification>(&mut mcp, "thread/realtime/started")
+            .await?;
+    assert_eq!(
+        started,
+        ThreadRealtimeStartedNotification {
+            thread_id: thread_start.thread.id.clone(),
+            realtime_session_id: Some("sess_frontend_test".to_string()),
+            version: RealtimeConversationVersion::V1,
+        }
+    );
+    assert_ne!(
+        started.realtime_session_id.as_deref(),
+        Some(thread_start.thread.id.as_str())
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
 fn v2_background_agent_tool_call(call_id: &str, prompt: &str) -> Value {
     json!({
         "type": "conversation.item.done",
@@ -524,10 +609,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     ])
     .await;
     let realtime_server = start_websocket_server(vec![vec![
-        vec![json!({
-            "type": "session.updated",
-            "session": { "id": "sess_backend", "instructions": "backend prompt" }
-        })],
+        vec![session_created("sess_frontend_test")],
         vec![],
         vec![
             json!({
@@ -634,9 +716,18 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     let started =
         read_notification::<ThreadRealtimeStartedNotification>(&mut mcp, "thread/realtime/started")
             .await?;
-    assert_eq!(started.thread_id, thread_start.thread.id);
-    assert!(started.realtime_session_id.is_some());
-    assert_eq!(started.version, RealtimeConversationVersion::V2);
+    assert_eq!(
+        started,
+        ThreadRealtimeStartedNotification {
+            thread_id: thread_start.thread.id.clone(),
+            realtime_session_id: Some("sess_frontend_test".to_string()),
+            version: RealtimeConversationVersion::V2,
+        }
+    );
+    assert_ne!(
+        started.realtime_session_id.as_deref(),
+        Some(started.thread_id.as_str())
+    );
 
     let startup_context_request = realtime_server
         .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
@@ -1385,7 +1476,7 @@ async fn webrtc_v1_start_posts_offer_returns_sdp_and_joins_sideband() -> Result<
         StartedWebrtcRealtime {
             started: ThreadRealtimeStartedNotification {
                 thread_id: harness.thread_id.clone(),
-                realtime_session_id: Some(harness.thread_id.clone()),
+                realtime_session_id: Some("sess_v1_webrtc".to_string()),
                 version: RealtimeConversationVersion::V1,
             },
             sdp: ThreadRealtimeSdpNotification {
@@ -1393,6 +1484,10 @@ async fn webrtc_v1_start_posts_offer_returns_sdp_and_joins_sideband() -> Result<
                 sdp: "v=answer\r\n".to_string(),
             },
         }
+    );
+    assert_ne!(
+        started.started.realtime_session_id.as_deref(),
+        Some(harness.thread_id.as_str())
     );
 
     // Phase 3: verify the HTTP call-create leg, the direct sideband join, and the normal v1

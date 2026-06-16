@@ -24,7 +24,7 @@ pub(super) fn parse_realtime_payload(payload: &str, parser_name: &str) -> Option
     Some((parsed, message_type))
 }
 
-pub(super) fn parse_session_updated_event(parsed: &Value) -> Option<RealtimeEvent> {
+pub(super) fn parse_session_event(parsed: &Value) -> Option<RealtimeEvent> {
     let session_id = parsed
         .get("session")
         .and_then(Value::as_object)

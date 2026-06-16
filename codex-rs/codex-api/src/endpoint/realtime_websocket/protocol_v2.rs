@@ -1,6 +1,6 @@
 use crate::endpoint::realtime_websocket::protocol_common::parse_error_event;
 use crate::endpoint::realtime_websocket::protocol_common::parse_realtime_payload;
-use crate::endpoint::realtime_websocket::protocol_common::parse_session_updated_event;
+use crate::endpoint::realtime_websocket::protocol_common::parse_session_event;
 use crate::endpoint::realtime_websocket::protocol_common::parse_transcript_delta_event;
 use crate::endpoint::realtime_websocket::protocol_common::parse_transcript_done_event;
 use codex_protocol::protocol::RealtimeAudioFrame;
@@ -25,7 +25,7 @@ pub(super) fn parse_realtime_event_v2(payload: &str) -> Option<RealtimeEvent> {
     let (parsed, message_type) = parse_realtime_payload(payload, "realtime v2")?;
 
     match message_type.as_str() {
-        "session.updated" => parse_session_updated_event(&parsed),
+        "session.created" | "session.updated" => parse_session_event(&parsed),
         "response.output_audio.delta" | "response.audio.delta" => {
             parse_output_audio_delta_event(&parsed)
         }

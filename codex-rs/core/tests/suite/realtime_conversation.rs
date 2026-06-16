@@ -304,7 +304,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     })
     .await
     .expect("conversation start failed");
-    assert!(started.realtime_session_id.is_some());
+    assert_eq!(started.realtime_session_id.as_deref(), Some("sess_1"));
     assert_eq!(started.version, RealtimeConversationVersion::V1);
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
@@ -362,7 +362,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     let initial_instructions = websocket_request_instructions(&connection[0])
         .expect("initial session update instructions");
     assert!(initial_instructions.starts_with("backend prompt"));
-    assert_eq!(
+    assert_ne!(
         server.handshakes()[1]
             .header("x-session-id")
             .expect("session.update x-session-id header"),
@@ -962,7 +962,7 @@ async fn conversation_webrtc_close_while_sideband_connecting_drops_pending_join(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conversation_webrtc_sideband_connect_failure_closes_with_error() -> Result<()> {
+async fn conversation_webrtc_sideband_connect_failure_errors_without_started_event() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1005,13 +1005,6 @@ async fn conversation_webrtc_sideband_connect_failure_closes_with_error() -> Res
         }))
         .await?;
 
-    let started = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversationStarted(started) => Some(started.clone()),
-        _ => None,
-    })
-    .await;
-    assert!(started.realtime_session_id.is_some());
-
     let sdp = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationSdp(created) => Some(created.sdp.clone()),
         _ => None,
@@ -1019,21 +1012,17 @@ async fn conversation_webrtc_sideband_connect_failure_closes_with_error() -> Res
     .await;
     assert_eq!(sdp, "v=answer\r\n");
 
-    let err = wait_for_event_match(&test.codex, |msg| match msg {
+    let startup_result = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationStarted(started) => Some(Err(started.clone())),
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
             payload: RealtimeEvent::Error(message),
-        }) => Some(message.clone()),
+        }) => Some(Ok(message.clone())),
         _ => None,
     })
     .await;
+    let err = startup_result
+        .unwrap_or_else(|started| panic!("unexpected realtime started event: {started:?}"));
     assert!(!err.is_empty());
-
-    let closed = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
-        _ => None,
-    })
-    .await;
-    assert_eq!(closed.reason.as_deref(), Some("error"));
 
     test.codex
         .submit(Op::RealtimeConversationText(ConversationTextParams {
@@ -1102,7 +1091,7 @@ async fn conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth() -> 
     })
     .await
     .expect("conversation start failed");
-    assert!(started.realtime_session_id.is_some());
+    assert_eq!(started.realtime_session_id.as_deref(), Some("sess_env"));
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {

@@ -873,20 +873,22 @@ mod tests {
     use tokio_tungstenite::tungstenite::Message;
 
     #[test]
-    fn parse_session_updated_event() {
-        let payload = json!({
-            "type": "session.updated",
-            "session": {"id": "sess_123", "instructions": "backend prompt"}
-        })
-        .to_string();
-
-        assert_eq!(
-            parse_realtime_event(payload.as_str(), RealtimeEventParser::V1),
-            Some(RealtimeEvent::SessionUpdated {
-                realtime_session_id: "sess_123".to_string(),
-                instructions: Some("backend prompt".to_string()),
+    fn parse_session_created_and_updated_events() {
+        for event_type in ["session.created", "session.updated"] {
+            let payload = json!({
+                "type": event_type,
+                "session": {"id": "sess_123", "instructions": "backend prompt"}
             })
-        );
+            .to_string();
+
+            assert_eq!(
+                parse_realtime_event(payload.as_str(), RealtimeEventParser::V1),
+                Some(RealtimeEvent::SessionUpdated {
+                    realtime_session_id: "sess_123".to_string(),
+                    instructions: Some("backend prompt".to_string()),
+                })
+            );
+        }
     }
 
     #[test]
