@@ -23,6 +23,7 @@ use codex_exec_server::CreateDirectoryOptions;
 #[cfg(target_os = "linux")]
 use codex_exec_server::Environment;
 use codex_exec_server::FileMetadata;
+use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
@@ -77,6 +78,51 @@ fn assert_normalized_path_rejected(error: &std::io::Error) {
         }
         other => panic!("unexpected normalized-path error kind: {other:?}: {error:?}"),
     }
+}
+
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_read_directory_reports_symlink_target_kind(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let source_dir = tmp.path().join("source");
+    let target_dir = tmp.path().join("target-dir");
+    let target_file = tmp.path().join("target.txt");
+    std::fs::create_dir_all(&source_dir)?;
+    std::fs::create_dir_all(&target_dir)?;
+    std::fs::write(&target_file, "hello")?;
+    symlink(&target_dir, source_dir.join("directory-link"))?;
+    symlink(&target_file, source_dir.join("file-link"))?;
+
+    let mut entries = file_system
+        .read_directory(&PathUri::from_path(&source_dir)?, /*sandbox*/ None)
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+    entries.sort_by(|left, right| left.file_name.cmp(&right.file_name));
+    assert_eq!(
+        entries,
+        vec![
+            ReadDirectoryEntry {
+                file_name: "directory-link".to_string(),
+                is_directory: true,
+                is_file: false,
+                is_symlink: true,
+            },
+            ReadDirectoryEntry {
+                file_name: "file-link".to_string(),
+                is_directory: false,
+                is_file: true,
+                is_symlink: true,
+            },
+        ]
+    );
+
+    Ok(())
 }
 
 fn alias_root_candidate() -> Result<Option<PathBuf>> {

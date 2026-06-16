@@ -343,11 +343,13 @@ async fn file_system_read_directory_lists_entries(
                 file_name: "nested".to_string(),
                 is_directory: true,
                 is_file: false,
+                is_symlink: false,
             },
             ReadDirectoryEntry {
                 file_name: "root.txt".to_string(),
                 is_directory: false,
                 is_file: true,
+                is_symlink: false,
             },
         ]
     );

@@ -558,46 +558,21 @@ async fn discover_skills_under_root(
             }
 
             let path = dir.join(&file_name);
-            let path_uri = PathUri::from_abs_path(&path);
-            let metadata = match fs.get_metadata(&path_uri, /*sandbox*/ None).await {
-                Ok(metadata) => metadata,
-                Err(e) => {
-                    error!("failed to stat skills path {}: {e:#}", path.display());
-                    continue;
-                }
-            };
-
-            if metadata.is_symlink {
-                if !follow_symlinks {
-                    continue;
-                }
-                match fs.read_directory(&path_uri, /*sandbox*/ None).await {
-                    Ok(_) => {
-                        let resolved_dir = canonicalize_for_skill_identity(fs, &path).await;
-                        enqueue_dir(
-                            &mut queue,
-                            &mut visited_dirs,
-                            &mut truncated_by_dir_limit,
-                            resolved_dir,
-                            depth + 1,
-                        );
-                    }
-                    Err(err)
-                        if matches!(
-                            err.kind(),
-                            io::ErrorKind::NotADirectory | io::ErrorKind::NotFound
-                        ) => {}
-                    Err(err) => {
-                        error!(
-                            "failed to read skills symlink dir {}: {err:#}",
-                            path.display()
-                        );
-                    }
+            if entry.is_symlink {
+                if follow_symlinks && entry.is_directory {
+                    let resolved_dir = canonicalize_for_skill_identity(fs, &path).await;
+                    enqueue_dir(
+                        &mut queue,
+                        &mut visited_dirs,
+                        &mut truncated_by_dir_limit,
+                        resolved_dir,
+                        depth + 1,
+                    );
                 }
                 continue;
             }
 
-            if metadata.is_directory {
+            if entry.is_directory {
                 let resolved_dir = canonicalize_for_skill_identity(fs, &path).await;
                 enqueue_dir(
                     &mut queue,
@@ -609,7 +584,7 @@ async fn discover_skills_under_root(
                 continue;
             }
 
-            if metadata.is_file && file_name == SKILLS_FILENAME {
+            if entry.is_file && file_name == SKILLS_FILENAME {
                 match parse_skill_file(fs, &path, scope, plugin_id, plugin_root.as_ref()).await {
                     Ok(skill) => {
                         outcome.skills.push(skill);

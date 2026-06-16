@@ -60,12 +60,14 @@ impl SyntheticFileSystem {
                 file_name: "skill".to_string(),
                 is_directory: true,
                 is_file: false,
+                is_symlink: false,
             }])
         } else if path == self.canonical_root.join("skill") {
             Ok(vec![ReadDirectoryEntry {
                 file_name: "SKILL.md".to_string(),
                 is_directory: false,
                 is_file: true,
+                is_symlink: false,
             }])
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "not found"))
@@ -146,7 +148,17 @@ impl ExecutorFileSystem for SyntheticFileSystem {
         path: &'a PathUri,
         _sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
-        Box::pin(async move { self.metadata(&path.to_abs_path()?) })
+        Box::pin(async move {
+            let path = path.to_abs_path()?;
+            if path == self.canonical_root {
+                self.metadata(&path)
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "synthetic filesystem exposes child entry types through read_directory",
+                ))
+            }
+        })
     }
 
     fn read_directory<'a>(
