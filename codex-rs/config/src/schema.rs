@@ -117,43 +117,12 @@ pub fn mcp_servers_schema(schema_gen: &mut SchemaGenerator) -> Schema {
 
 /// Build the config schema for `config.toml`.
 pub fn config_schema() -> RootSchema {
-    let mut schema = SchemaSettings::draft07()
+    SchemaSettings::draft07()
         .with(|settings| {
             settings.option_add_null_type = false;
         })
         .into_generator()
-        .into_root_schema_for::<ConfigToml>();
-    add_shell_environment_policy_constraints(&mut schema);
-    schema
-}
-
-// Mirror the custom deserializer's mixed-form rejection in the generated schema.
-fn add_shell_environment_policy_constraints(schema: &mut RootSchema) {
-    let Some(Schema::Object(policy)) = schema.definitions.get_mut("ShellEnvironmentPolicyToml")
-    else {
-        return;
-    };
-    let all_of = policy
-        .subschemas
-        .get_or_insert_default()
-        .all_of
-        .get_or_insert_default();
-    for fields in [["exclude", "filters"], ["filters", "include_only"]] {
-        let forbidden_fields = Schema::Object(SchemaObject {
-            object: Some(Box::new(ObjectValidation {
-                required: fields.into_iter().map(str::to_string).collect(),
-                ..Default::default()
-            })),
-            ..Default::default()
-        });
-        all_of.push(Schema::Object(SchemaObject {
-            subschemas: Some(Box::new(SubschemaValidation {
-                not: Some(Box::new(forbidden_fields)),
-                ..Default::default()
-            })),
-            ..Default::default()
-        }));
-    }
+        .into_root_schema_for::<ConfigToml>()
 }
 
 /// Canonicalize a JSON value by sorting its keys.

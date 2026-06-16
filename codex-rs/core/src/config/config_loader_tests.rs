@@ -489,7 +489,7 @@ exclude = ["SECRET_*", 17]
         (
             r#"
 [shell_environment_policy.filters]
-"SECRET_*" = "exlude"
+"SECRET_*" = "keep"
 "#,
             vec![(
                 "shell_environment_policy.exclude".to_string(),
