@@ -21,6 +21,14 @@ fn write_file(path: &Path, contents: &str) {
     std::fs::write(path, contents).unwrap();
 }
 
+fn assert_curated_catalog_revision(repo_path: &Path, expected_revision: &str) {
+    assert_eq!(
+        std::fs::read_to_string(curated_plugins_catalog_revision_path(repo_path))
+            .expect("read catalog revision"),
+        format!("{expected_revision}\n")
+    );
+}
+
 fn write_curated_plugin(root: &Path, plugin_name: &str) {
     let plugin_root = root.join("plugins").join(plugin_name);
     write_file(
@@ -343,6 +351,7 @@ exit 1
     let repo_path = curated_plugins_repo_path(tmp.path());
     assert!(repo_path.join(".git").is_dir());
     assert_curated_gmail_repo(&repo_path);
+    assert_curated_catalog_revision(&repo_path, sha);
     assert_eq!(read_curated_plugins_sha(tmp.path()).as_deref(), Some(sha));
     let invocations = std::fs::read_to_string(invocation_log).expect("read invocation log");
     assert_eq!(
@@ -451,7 +460,9 @@ fn sync_openai_plugins_repo_via_git_succeeds_with_local_rewritten_remote() {
             .expect("git sync should succeed");
 
     assert_eq!(synced_sha, sha);
-    assert_curated_gmail_repo(&curated_plugins_repo_path(tmp.path()));
+    let curated_repo_path = curated_plugins_repo_path(tmp.path());
+    assert_curated_gmail_repo(&curated_repo_path);
+    assert_curated_catalog_revision(&curated_repo_path, &sha);
     assert_eq!(
         read_curated_plugins_sha(tmp.path()).as_deref(),
         Some(sha.as_str())
@@ -505,6 +516,7 @@ fn sync_openai_plugins_repo_via_git_succeeds_with_local_rewritten_remote() {
             .expect("incremental git sync should succeed");
 
     assert_eq!(synced_sha, updated_sha);
+    assert_curated_catalog_revision(&curated_plugins_repo_path(tmp.path()), &updated_sha);
     assert!(
         curated_plugins_repo_path(tmp.path())
             .join("plugins/linear/.codex-plugin/plugin.json")
@@ -556,11 +568,16 @@ fn sync_openai_plugins_repo_via_git_succeeds_with_local_rewritten_remote() {
     assert!(!has_plugins_clone_dirs(tmp.path()));
 
     let unchanged_sync_invocation_count = invocation_log_contents.lines().count();
+    std::fs::remove_file(curated_plugins_catalog_revision_path(
+        &curated_plugins_repo_path(tmp.path()),
+    ))
+    .expect("remove catalog revision before unchanged sync");
     let synced_sha =
         sync_openai_plugins_repo_via_git(tmp.path(), git_wrapper.to_str().expect("utf8 path"))
             .expect("unchanged git sync should succeed");
 
     assert_eq!(synced_sha, updated_sha);
+    assert_curated_catalog_revision(&curated_plugins_repo_path(tmp.path()), &updated_sha);
     let invocation_log = std::fs::read_to_string(&invocation_log).expect("read sync invocations");
     let unchanged_sync_invocations = invocation_log
         .lines()
@@ -599,6 +616,7 @@ async fn sync_openai_plugins_repo_falls_back_to_http_when_git_is_unavailable() {
     let repo_path = curated_plugins_repo_path(tmp.path());
     assert_eq!(synced_sha, sha);
     assert_curated_gmail_repo(&repo_path);
+    assert_curated_catalog_revision(&repo_path, sha);
     assert_eq!(read_curated_plugins_sha(tmp.path()).as_deref(), Some(sha));
 }
 
@@ -796,6 +814,7 @@ async fn sync_openai_plugins_repo_skips_archive_download_when_sha_matches() {
 
     assert_eq!(read_curated_plugins_sha(tmp.path()).as_deref(), Some(sha));
     assert!(repo_path.join(".agents/plugins/marketplace.json").is_file());
+    assert_curated_catalog_revision(&repo_path, sha);
 }
 
 #[tokio::test]
@@ -824,6 +843,7 @@ async fn sync_openai_plugins_repo_falls_back_to_export_archive_when_no_snapshot_
     let repo_path = curated_plugins_repo_path(tmp.path());
     assert_eq!(synced_sha, export_sha);
     assert_curated_gmail_repo(&repo_path);
+    assert_curated_catalog_revision(&repo_path, export_sha);
     assert_eq!(
         read_curated_plugins_sha(tmp.path()).as_deref(),
         Some(export_sha)
