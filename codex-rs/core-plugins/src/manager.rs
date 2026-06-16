@@ -38,6 +38,7 @@ use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
 use crate::marketplace_upgrade::configured_git_marketplace_names;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
+use crate::remote::RecommendedPlugin;
 use crate::remote::RecommendedPluginsMode;
 use crate::remote::RemoteInstalledPlugin;
 use crate::remote::RemotePluginCatalogError;
@@ -995,6 +996,45 @@ impl PluginsManager {
         }
 
         mode
+    }
+
+    /// Returns endpoint recommendations that are not already installed or disabled.
+    /// `None` selects the legacy discovery workflow.
+    pub async fn recommended_plugin_candidates_for_config(
+        &self,
+        config: &PluginsConfigInput,
+        auth: Option<&CodexAuth>,
+        disabled_plugin_ids: &[String],
+    ) -> Option<Vec<RecommendedPlugin>> {
+        let RecommendedPluginsMode::Endpoint { plugins } =
+            self.recommended_plugins_mode_for_config(config, auth).await
+        else {
+            return None;
+        };
+        if plugins.is_empty() {
+            return Some(Vec::new());
+        }
+
+        let plugin_outcome = self.plugins_for_config(config).await;
+        let installed_plugin_ids = plugin_outcome
+            .plugins()
+            .iter()
+            .map(|plugin| plugin.config_name.as_str())
+            .collect::<HashSet<_>>();
+        let disabled_plugin_ids = disabled_plugin_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+
+        Some(
+            plugins
+                .into_iter()
+                .filter(|plugin| {
+                    !installed_plugin_ids.contains(plugin.config_id.as_str())
+                        && !disabled_plugin_ids.contains(plugin.config_id.as_str())
+                })
+                .collect(),
+        )
     }
 
     fn cached_recommended_plugins_mode(

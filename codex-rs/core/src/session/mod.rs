@@ -54,6 +54,7 @@ use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_config::types::ToolSuggestDiscoverableType;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionDataInit;
@@ -375,8 +376,11 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnModerationMetadataEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_tools::DiscoverablePluginInfo;
+use codex_tools::DiscoverableTool;
 use codex_tools::ToolEnvironmentMode;
 use codex_tools::UnifiedExecShellMode;
+use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
 use codex_utils_absolute_path::AbsolutePathBuf;
 #[cfg(test)]
 use codex_utils_stream_parser::ProposedPlanSegment;
@@ -2841,6 +2845,53 @@ impl Session {
         }
     }
 
+    async fn recommended_plugin_candidates(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Option<Vec<DiscoverableTool>> {
+        if !crate::tools::spec_plan::tool_suggest_enabled(turn_context) {
+            return None;
+        }
+
+        let disabled_plugin_ids = turn_context
+            .config
+            .tool_suggest
+            .disabled_tools
+            .iter()
+            .filter(|tool| tool.kind == ToolSuggestDiscoverableType::Plugin)
+            .map(|tool| tool.id.clone())
+            .collect::<Vec<_>>();
+        let auth = self.services.auth_manager.auth().await;
+        self.services
+            .plugins_manager
+            .recommended_plugin_candidates_for_config(
+                &turn_context.config.plugins_config_input(),
+                auth.as_ref(),
+                &disabled_plugin_ids,
+            )
+            .await
+            .map(|plugins| {
+                let candidates = plugins
+                    .into_iter()
+                    .map(|plugin| {
+                        DiscoverableTool::from(DiscoverablePluginInfo {
+                            id: plugin.config_id,
+                            remote_plugin_id: Some(plugin.remote_plugin_id),
+                            name: plugin.display_name,
+                            description: None,
+                            has_skills: false,
+                            mcp_server_names: Vec::new(),
+                            app_connector_ids: plugin.app_connector_ids,
+                        })
+                    })
+                    .collect();
+                filter_request_plugin_install_discoverable_tools_for_client(
+                    candidates,
+                    turn_context.app_server_client_name.as_deref(),
+                )
+            })
+    }
+
     pub(crate) async fn build_initial_context(
         &self,
         turn_context: &TurnContext,
@@ -2976,11 +3027,10 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&turn_context.config.plugins_config_input())
             .await;
-        if crate::tools::spec_plan::tool_suggest_enabled(turn_context)
-            && let Some(recommended_plugins) = turn_context
-                .recommended_plugin_candidates
-                .as_deref()
-                .and_then(RecommendedPluginsInstructions::from_plugins)
+        let recommended_plugin_candidates = self.recommended_plugin_candidates(turn_context).await;
+        if let Some(recommended_plugins) = recommended_plugin_candidates
+            .as_deref()
+            .and_then(RecommendedPluginsInstructions::from_plugins)
         {
             contextual_user_sections.push(recommended_plugins.render());
         }

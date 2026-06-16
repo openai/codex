@@ -1187,10 +1187,10 @@ pub(crate) async fn built_tools(
         None
     };
     let tool_suggest_candidates = if let Some(recommended_plugin_candidates) =
-        turn_context.recommended_plugin_candidates.as_ref()
+        sess.recommended_plugin_candidates(turn_context).await
     {
         Some(ToolSuggestCandidates {
-            tools: recommended_plugin_candidates.clone(),
+            tools: recommended_plugin_candidates,
             presentation: ToolSuggestPresentation::RecommendationContext,
         })
     } else {
