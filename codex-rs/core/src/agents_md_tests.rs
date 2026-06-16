@@ -549,14 +549,9 @@ async fn read_agents_md_propagates_metadata_errors() {
     };
 
     let cwd = config.cwd.clone();
-    let err = read_agents_md(
-        &config.config,
-        &fs,
-        "local",
-        &PathUri::from_abs_path(&cwd),
-    )
-    .await
-    .expect_err("metadata error");
+    let err = read_agents_md(&config.config, &fs, "local", &PathUri::from_abs_path(&cwd))
+        .await
+        .expect_err("metadata error");
 
     assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
 }
@@ -572,14 +567,9 @@ async fn read_agents_md_propagates_read_errors() {
     };
 
     let cwd = config.cwd.clone();
-    let err = read_agents_md(
-        &config.config,
-        &fs,
-        "local",
-        &PathUri::from_abs_path(&cwd),
-    )
-    .await
-    .expect_err("read error");
+    let err = read_agents_md(&config.config, &fs, "local", &PathUri::from_abs_path(&cwd))
+        .await
+        .expect_err("read error");
 
     assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
 }
@@ -595,14 +585,9 @@ async fn read_agents_md_ignores_files_removed_after_discovery() {
     };
 
     let cwd = config.cwd.clone();
-    let loaded = read_agents_md(
-        &config.config,
-        &fs,
-        "local",
-        &PathUri::from_abs_path(&cwd),
-    )
-    .await
-    .expect("removed file is recoverable");
+    let loaded = read_agents_md(&config.config, &fs, "local", &PathUri::from_abs_path(&cwd))
+        .await
+        .expect("removed file is recoverable");
 
     assert_eq!(loaded, None);
 }
