@@ -11,6 +11,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
+use crate::session_runtime::OutputItem;
 
 struct TestHost;
 
@@ -114,7 +115,7 @@ async fn yield_timer_preempts_buffered_runtime_output() {
     assert_eq!(
         termination.await,
         Ok(CellEvent::Terminated {
-            content_items: vec![CellOutputItem::Text {
+            content_items: vec![OutputItem::Text {
                 text: "queued output".to_string(),
             }],
         })
