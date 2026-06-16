@@ -71,6 +71,7 @@ pub(super) async fn resume_thread(
                             | RolloutItem::ResponseItem(_)
                             | RolloutItem::Compacted(_)
                             | RolloutItem::TurnContext(_)
+                            | RolloutItem::InterAgentCommunication(_)
                             | RolloutItem::EventMsg(_) => None,
                         })
                     })
@@ -85,7 +86,7 @@ pub(super) async fn resume_thread(
                     session_meta.forked_from_id,
                     session_meta.parent_thread_id,
                     session_meta.source.clone(),
-                    session_meta.thread_source,
+                    session_meta.thread_source.clone(),
                     session_meta.base_instructions.clone().unwrap_or_default(),
                     session_meta.dynamic_tools.clone().unwrap_or_default(),
                 )
