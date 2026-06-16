@@ -91,7 +91,7 @@ async fn build_codex(server: &StreamingSseServer) -> Arc<CodexThread> {
         .with_model("gpt-5.4")
         .build_with_streaming_server(server)
         .await
-        .unwrap_or_else(|err| panic!("build streaming Codex test session: {err}"))
+        .expect("build streaming Codex test session")
         .codex
 }
 
@@ -108,7 +108,7 @@ async fn submit_user_input(codex: &CodexThread, text: &str) {
             thread_settings: Default::default(),
         })
         .await
-        .unwrap_or_else(|err| panic!("submit user input: {err}"));
+        .expect("submit user input");
 }
 
 async fn submit_danger_full_access_user_turn(test: &TestCodex, text: &str) {
@@ -140,7 +140,7 @@ async fn submit_danger_full_access_user_turn(test: &TestCodex, text: &str) {
             },
         })
         .await
-        .unwrap_or_else(|err| panic!("submit user turn: {err}"));
+        .expect("submit user turn");
 }
 
 async fn steer_user_input(codex: &CodexThread, text: &str) {
@@ -156,15 +156,14 @@ async fn steer_user_input(codex: &CodexThread, text: &str) {
             /*responsesapi_client_metadata*/ None,
         )
         .await
-        .unwrap_or_else(|err| panic!("steer user input: {err:?}"));
+        .expect("steer user input");
 }
 
 async fn submit_queue_only_agent_mail(codex: &CodexThread, text: &str) {
     codex
         .submit(Op::InterAgentCommunication {
             communication: InterAgentCommunication::new(
-                AgentPath::try_from("/root/worker")
-                    .unwrap_or_else(|err| panic!("worker path should parse: {err}")),
+                AgentPath::try_from("/root/worker").expect("worker path should parse"),
                 AgentPath::root(),
                 Vec::new(),
                 text.to_string(),
@@ -172,11 +171,11 @@ async fn submit_queue_only_agent_mail(codex: &CodexThread, text: &str) {
             ),
         })
         .await
-        .unwrap_or_else(|err| panic!("submit queue-only agent mail: {err}"));
+        .expect("submit queue-only agent mail");
     codex
         .submit(Op::RealtimeConversationListVoices)
         .await
-        .unwrap_or_else(|err| panic!("submit list-voices barrier: {err}"));
+        .expect("submit list-voices barrier");
     wait_for_event(codex, |event| {
         matches!(event, EventMsg::RealtimeConversationListVoicesResponse(_))
     })
@@ -282,17 +281,15 @@ async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
 fn assert_two_responses_input_snapshot(snapshot_name: &str, requests: &[Vec<u8>]) {
     assert_eq!(requests.len(), 2);
     let options = ContextSnapshotOptions::default().strip_capability_instructions();
-    let first: Value =
-        from_slice(&requests[0]).unwrap_or_else(|err| panic!("parse first request: {err}"));
-    let second: Value =
-        from_slice(&requests[1]).unwrap_or_else(|err| panic!("parse second request: {err}"));
+    let first: Value = from_slice(&requests[0]).expect("parse first request");
+    let second: Value = from_slice(&requests[1]).expect("parse second request");
     let first_items = first["input"]
         .as_array()
-        .unwrap_or_else(|| panic!("first request input"))
+        .expect("first request input")
         .clone();
     let second_items = second["input"]
         .as_array()
-        .unwrap_or_else(|| panic!("second request input"))
+        .expect("second request input")
         .clone();
     let snapshot = context_snapshot::format_labeled_items_snapshot(
         "/responses POST bodies (input only, redacted like other suite snapshots)",
@@ -630,7 +627,7 @@ async fn steered_user_input_waits_for_model_continuation_after_mid_turn_compact(
         })
         .build_with_streaming_server(&server)
         .await
-        .unwrap_or_else(|err| panic!("build streaming Codex test session: {err}"))
+        .expect("build streaming Codex test session")
         .codex;
 
     submit_user_input(&codex, "first prompt").await;
@@ -642,10 +639,8 @@ async fn steered_user_input_waits_for_model_continuation_after_mid_turn_compact(
     let requests = server.requests().await;
     assert_eq!(requests.len(), 4);
 
-    let post_compact_body: Value =
-        from_slice(&requests[2]).unwrap_or_else(|err| panic!("parse post-compact request: {err}"));
-    let steered_body: Value =
-        from_slice(&requests[3]).unwrap_or_else(|err| panic!("parse steered request: {err}"));
+    let post_compact_body: Value = from_slice(&requests[2]).expect("parse post-compact request");
+    let steered_body: Value = from_slice(&requests[3]).expect("parse steered request");
 
     let post_compact_user_texts = message_input_texts(&post_compact_body, "user");
     assert!(
@@ -717,7 +712,7 @@ async fn steered_user_input_follows_compact_when_only_the_steer_needs_follow_up(
         })
         .build_with_streaming_server(&server)
         .await
-        .unwrap_or_else(|err| panic!("build streaming Codex test session: {err}"))
+        .expect("build streaming Codex test session")
         .codex;
 
     submit_user_input(&codex, "first prompt").await;
@@ -731,10 +726,8 @@ async fn steered_user_input_follows_compact_when_only_the_steer_needs_follow_up(
     let requests = server.requests().await;
     assert_eq!(requests.len(), 3);
 
-    let compact_body: Value =
-        from_slice(&requests[1]).unwrap_or_else(|err| panic!("parse compact request: {err}"));
-    let steered_body: Value =
-        from_slice(&requests[2]).unwrap_or_else(|err| panic!("parse steered request: {err}"));
+    let compact_body: Value = from_slice(&requests[1]).expect("parse compact request");
+    let steered_body: Value = from_slice(&requests[2]).expect("parse steered request");
 
     let compact_user_texts = message_input_texts(&compact_body, "user");
     assert!(
@@ -836,7 +829,7 @@ async fn steered_user_input_waits_when_tool_output_triggers_compact_before_next_
         })
         .build_with_streaming_server(&server)
         .await
-        .unwrap_or_else(|err| panic!("build streaming Codex test session: {err}"));
+        .expect("build streaming Codex test session");
     let codex = test.codex.clone();
 
     submit_danger_full_access_user_turn(&test, "first prompt").await;
@@ -849,12 +842,9 @@ async fn steered_user_input_waits_when_tool_output_triggers_compact_before_next_
     let requests = server.requests().await;
     assert_eq!(requests.len(), 4);
 
-    let compact_body: Value =
-        from_slice(&requests[1]).unwrap_or_else(|err| panic!("parse compact request: {err}"));
-    let post_compact_body: Value =
-        from_slice(&requests[2]).unwrap_or_else(|err| panic!("parse post-compact request: {err}"));
-    let steered_body: Value =
-        from_slice(&requests[3]).unwrap_or_else(|err| panic!("parse steered request: {err}"));
+    let compact_body: Value = from_slice(&requests[1]).expect("parse compact request");
+    let post_compact_body: Value = from_slice(&requests[2]).expect("parse post-compact request");
+    let steered_body: Value = from_slice(&requests[3]).expect("parse steered request");
 
     let compact_user_texts = message_input_texts(&compact_body, "user");
     assert!(

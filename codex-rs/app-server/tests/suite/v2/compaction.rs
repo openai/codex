@@ -201,7 +201,7 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
                 .header("x-codex-turn-metadata")
                 .as_deref()
                 .map(parse_json_header)
-                .unwrap_or_else(|| panic!("turn request should include turn metadata"))
+                .expect("turn request should include turn metadata")
         })
         .collect::<Vec<_>>();
     for (request, metadata) in response_requests.iter().zip(&turn_metadata) {
@@ -223,7 +223,7 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
         .header("x-codex-turn-metadata")
         .as_deref()
         .map(parse_json_header)
-        .unwrap_or_else(|| panic!("compact request should include turn metadata"));
+        .expect("compact request should include turn metadata");
     assert_eq!(
         compact_metadata["request_kind"].as_str(),
         Some("compaction")
@@ -470,5 +470,5 @@ async fn wait_for_context_compaction_completed(
 }
 
 fn parse_json_header(value: &str) -> serde_json::Value {
-    serde_json::from_str(value).unwrap_or_else(|err| panic!("turn metadata should be json: {err}"))
+    serde_json::from_str(value).expect("turn metadata should be JSON")
 }

@@ -147,12 +147,11 @@ fn assert_codex_client_metadata(
     );
     assert_eq!(client_metadata["session_id"].as_str(), Some(session_id));
     assert_eq!(client_metadata["thread_id"].as_str(), Some(thread_id));
-    let Some(turn_metadata_str) = client_metadata["x-codex-turn-metadata"].as_str() else {
-        panic!("missing x-codex-turn-metadata client metadata");
-    };
-    let Ok(turn_metadata) = serde_json::from_str::<serde_json::Value>(turn_metadata_str) else {
-        panic!("invalid x-codex-turn-metadata json");
-    };
+    let turn_metadata_str = client_metadata["x-codex-turn-metadata"]
+        .as_str()
+        .expect("missing x-codex-turn-metadata client metadata");
+    let turn_metadata = serde_json::from_str::<serde_json::Value>(turn_metadata_str)
+        .expect("invalid x-codex-turn-metadata json");
     assert_eq!(
         turn_metadata["installation_id"].as_str(),
         Some(installation_id)
@@ -2050,8 +2049,7 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
     )
     .await;
 
-    let mut model_catalog = bundled_models_response()
-        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    let mut model_catalog = bundled_models_response().expect("bundled models.json should parse");
     let model = model_catalog
         .models
         .iter_mut()
@@ -2173,8 +2171,7 @@ async fn reasoning_summary_none_overrides_model_catalog_default() -> anyhow::Res
     )
     .await;
 
-    let mut model_catalog = bundled_models_response()
-        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    let mut model_catalog = bundled_models_response().expect("bundled models.json should parse");
     let model = model_catalog
         .models
         .iter_mut()

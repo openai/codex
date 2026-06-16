@@ -127,9 +127,9 @@ async fn request_user_input_round_trip_for_mode(
         }]
     });
     if let Some(auto_resolution_ms) = auto_resolution_ms {
-        let Some(request_args) = request_args.as_object_mut() else {
-            panic!("request_user_input args should be a JSON object");
-        };
+        let request_args = request_args
+            .as_object_mut()
+            .expect("request_user_input args should be a JSON object");
         request_args.insert("autoResolutionMs".to_string(), json!(auto_resolution_ms));
     }
     let request_args = request_args.to_string();

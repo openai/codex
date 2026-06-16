@@ -82,16 +82,13 @@ struct TlsInterceptingProxy {
 
 fn write_cert_file(temp_dir: &TempDir, name: &str, contents: &str) -> PathBuf {
     let path = temp_dir.path().join(name);
-    fs::write(&path, contents).unwrap_or_else(|error| {
-        panic!("write cert fixture failed for {}: {error}", path.display())
-    });
+    fs::write(&path, contents).expect("certificate fixture should be writable");
     path
 }
 
 fn probe_command() -> Command {
     let mut cmd = Command::new(
-        cargo_bin("custom_ca_probe")
-            .unwrap_or_else(|error| panic!("failed to locate custom_ca_probe: {error}")),
+        cargo_bin("custom_ca_probe").expect("custom_ca_probe binary should be available"),
     );
     // `Command` inherits the parent environment by default, so scrub CA-related variables first or
     // these tests can accidentally pass/fail based on the developer shell or CI runner.
@@ -111,8 +108,7 @@ fn run_probe(envs: &[(&str, &Path)]) -> std::process::Output {
     for (key, value) in envs {
         cmd.env(key, value);
     }
-    cmd.output()
-        .unwrap_or_else(|error| panic!("failed to run custom_ca_probe: {error}"))
+    cmd.output().expect("custom_ca_probe should run")
 }
 
 fn run_probe_posting_to_tls13_server(envs: &[(&str, &Path)], url: &str) -> std::process::Output {
@@ -122,8 +118,7 @@ fn run_probe_posting_to_tls13_server(envs: &[(&str, &Path)], url: &str) -> std::
     }
     cmd.env(PROBE_TLS13_ENV, "1");
     cmd.env(PROBE_URL_ENV, url);
-    cmd.output()
-        .unwrap_or_else(|error| panic!("failed to run custom_ca_probe: {error}"))
+    cmd.output().expect("custom_ca_probe should run")
 }
 
 fn run_probe_posting_through_tls_intercepting_proxy(
@@ -138,27 +133,25 @@ fn run_probe_posting_through_tls_intercepting_proxy(
     cmd.env(PROBE_PROXY_ENV, proxy_url);
     cmd.env(PROBE_TLS13_ENV, "1");
     cmd.env(PROBE_URL_ENV, url);
-    cmd.output()
-        .unwrap_or_else(|error| panic!("failed to run custom_ca_probe: {error}"))
+    cmd.output().expect("custom_ca_probe should run")
 }
 
 fn spawn_tls13_test_server() -> Tls13TestServer {
     codex_utils_rustls_provider::ensure_rustls_crypto_provider();
     let material = generate_tls13_material();
-    let listener = TcpListener::bind(("127.0.0.1", 0))
-        .unwrap_or_else(|error| panic!("bind TLS test server: {error}"));
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("TLS test server should bind");
     listener
         .set_nonblocking(true)
-        .unwrap_or_else(|error| panic!("set TLS test server nonblocking: {error}"));
+        .expect("TLS test server should become nonblocking");
     let port = listener
         .local_addr()
-        .unwrap_or_else(|error| panic!("TLS test server addr: {error}"))
+        .expect("TLS test server should have a local address")
         .port();
     let config = Arc::new(
         rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .with_no_client_auth()
             .with_single_cert(vec![material.server_cert], material.server_key)
-            .unwrap_or_else(|error| panic!("TLS 1.3 server config: {error}")),
+            .expect("TLS 1.3 server config should be valid"),
     );
     let (request_tx, request_rx) = mpsc::channel();
 
@@ -175,14 +168,13 @@ fn spawn_tls13_test_server() -> Tls13TestServer {
 }
 
 fn spawn_plain_http_origin() -> PlainHttpOrigin {
-    let listener = TcpListener::bind(("127.0.0.1", 0))
-        .unwrap_or_else(|error| panic!("bind plain HTTP origin: {error}"));
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("plain HTTP origin should bind");
     listener
         .set_nonblocking(true)
-        .unwrap_or_else(|error| panic!("set plain HTTP origin nonblocking: {error}"));
+        .expect("plain HTTP origin should become nonblocking");
     let port = listener
         .local_addr()
-        .unwrap_or_else(|error| panic!("plain HTTP origin addr: {error}"))
+        .expect("plain HTTP origin should have a local address")
         .port();
     let (request_tx, request_rx) = mpsc::channel();
 
@@ -200,20 +192,19 @@ fn spawn_plain_http_origin() -> PlainHttpOrigin {
 fn spawn_tls_intercepting_proxy() -> TlsInterceptingProxy {
     codex_utils_rustls_provider::ensure_rustls_crypto_provider();
     let material = generate_tls13_material();
-    let listener = TcpListener::bind(("127.0.0.1", 0))
-        .unwrap_or_else(|error| panic!("bind TLS intercepting proxy: {error}"));
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("TLS intercepting proxy should bind");
     listener
         .set_nonblocking(true)
-        .unwrap_or_else(|error| panic!("set TLS intercepting proxy nonblocking: {error}"));
+        .expect("TLS intercepting proxy should become nonblocking");
     let port = listener
         .local_addr()
-        .unwrap_or_else(|error| panic!("TLS intercepting proxy addr: {error}"))
+        .expect("TLS intercepting proxy should have a local address")
         .port();
     let config = Arc::new(
         rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .with_no_client_auth()
             .with_single_cert(vec![material.server_cert], material.server_key)
-            .unwrap_or_else(|error| panic!("TLS intercepting proxy config: {error}")),
+            .expect("TLS intercepting proxy config should be valid"),
     );
     let (request_tx, request_rx) = mpsc::channel();
 
@@ -236,24 +227,24 @@ fn generate_tls13_material() -> Tls13Material {
     let mut ca_distinguished_name = DistinguishedName::new();
     ca_distinguished_name.push(DnType::CommonName, "codex test CA");
     ca_params.distinguished_name = ca_distinguished_name;
-    let ca_key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
-        .unwrap_or_else(|error| panic!("generate test CA key pair: {error}"));
+    let ca_key_pair =
+        KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("test CA key pair should generate");
     let ca = CertifiedIssuer::self_signed(ca_params, ca_key_pair)
-        .unwrap_or_else(|error| panic!("generate test CA certificate: {error}"));
+        .expect("test CA certificate should generate");
 
     let mut server_params =
         CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()])
-            .unwrap_or_else(|error| panic!("create test server certificate params: {error}"));
+            .expect("test server certificate params should be valid");
     server_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
     server_params.key_usages = vec![
         KeyUsagePurpose::DigitalSignature,
         KeyUsagePurpose::KeyEncipherment,
     ];
     let server_key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
-        .unwrap_or_else(|error| panic!("generate test server key pair: {error}"));
+        .expect("test server key pair should generate");
     let server_cert = server_params
         .signed_by(&server_key_pair, &ca)
-        .unwrap_or_else(|error| panic!("generate test server certificate: {error}"));
+        .expect("test server certificate should generate");
 
     Tls13Material {
         ca_cert_pem: ca.pem(),

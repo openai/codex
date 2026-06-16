@@ -550,22 +550,19 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         assert!((1..=31).contains(&d), "Day out of range: {d}");
     }
 
-    let content =
-        std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("Failed to read session file"));
+    let content = std::fs::read_to_string(&path).expect("failed to read session file");
     let mut lines = content.lines();
     let meta_line = lines
         .next()
         .ok_or("missing session meta line")
-        .unwrap_or_else(|_| panic!("missing session meta line"));
-    let meta: serde_json::Value = serde_json::from_str(meta_line)
-        .unwrap_or_else(|_| panic!("Failed to parse session meta line as JSON"));
+        .expect("missing session meta line");
+    let meta: serde_json::Value =
+        serde_json::from_str(meta_line).expect("failed to parse session meta line as JSON");
     assert_eq!(
         meta.get("type").and_then(|v| v.as_str()),
         Some("session_meta")
     );
-    let payload = meta
-        .get("payload")
-        .unwrap_or_else(|| panic!("Missing payload in meta line"));
+    let payload = meta.get("payload").expect("Missing payload in meta line");
     assert!(payload.get("id").is_some(), "SessionMeta missing id");
     assert!(
         payload.get("timestamp").is_some(),

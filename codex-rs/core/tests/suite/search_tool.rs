@@ -843,9 +843,7 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
     );
     let output = tool_search_output_item(&requests[1], call_id);
     let spawn_agent = namespace_child_tool(&output, "multi_agent_v1", "spawn_agent")
-        .unwrap_or_else(|| {
-            panic!("expected tool_search to return multi_agent_v1.spawn_agent: {output:?}")
-        });
+        .expect("tool_search should return multi_agent_v1.spawn_agent");
     assert_eq!(
         spawn_agent.get("defer_loading").and_then(Value::as_bool),
         Some(true)

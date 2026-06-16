@@ -200,17 +200,7 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     let request = captured
         .iter()
         .find(|req| req.path == "/v1/metrics")
-        .unwrap_or_else(|| {
-            let paths = captured
-                .iter()
-                .map(|req| req.path.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            panic!(
-                "missing /v1/metrics request; got {}: {paths}",
-                captured.len()
-            );
-        });
+        .expect("/v1/metrics request should be captured");
     let content_type = request
         .content_type
         .as_deref()
@@ -313,14 +303,7 @@ fn otlp_http_exporter_sends_logs_to_collector()
     let request = captured
         .iter()
         .find(|req| req.path == "/v1/logs")
-        .unwrap_or_else(|| {
-            let paths = captured
-                .iter()
-                .map(|req| req.path.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            panic!("missing /v1/logs request; got {}: {paths}", captured.len());
-        });
+        .expect("/v1/logs request should be captured");
     let content_type = request
         .content_type
         .as_deref()
@@ -362,9 +345,7 @@ fn otel_provider_rejects_header_unsafe_configured_tracestate() {
         )]),
     });
 
-    let Err(err) = result else {
-        panic!("expected header-unsafe configured tracestate to be rejected");
-    };
+    let err = result.expect_err("header-unsafe configured tracestate should be rejected");
     assert!(err.to_string().contains("configured tracestate value"));
 }
 
@@ -478,17 +459,7 @@ fn otlp_http_exporter_sends_traces_to_collector()
     let request = captured
         .iter()
         .find(|req| req.path == "/v1/traces")
-        .unwrap_or_else(|| {
-            let paths = captured
-                .iter()
-                .map(|req| req.path.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            panic!(
-                "missing /v1/traces request; got {}: {paths}",
-                captured.len()
-            );
-        });
+        .expect("/v1/traces request should be captured");
     let content_type = request
         .content_type
         .as_deref()
@@ -601,17 +572,7 @@ async fn otlp_http_exporter_sends_traces_to_collector_in_tokio_runtime()
     let request = captured
         .iter()
         .find(|req| req.path == "/v1/traces")
-        .unwrap_or_else(|| {
-            let paths = captured
-                .iter()
-                .map(|req| req.path.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            panic!(
-                "missing /v1/traces request; got {}: {paths}",
-                captured.len()
-            );
-        });
+        .expect("/v1/traces request should be captured");
     let content_type = request
         .content_type
         .as_deref()
@@ -733,17 +694,7 @@ fn otlp_http_exporter_sends_traces_to_collector_in_current_thread_tokio_runtime(
     let request = captured
         .iter()
         .find(|req| req.path == "/v1/traces")
-        .unwrap_or_else(|| {
-            let paths = captured
-                .iter()
-                .map(|req| req.path.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            panic!(
-                "missing /v1/traces request; got {}: {paths}",
-                captured.len()
-            );
-        });
+        .expect("/v1/traces request should be captured");
     let content_type = request
         .content_type
         .as_deref()

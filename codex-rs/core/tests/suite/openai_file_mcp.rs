@@ -147,9 +147,8 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
 
     let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone())
         .with_pre_build_hook(move |home| {
-            if let Err(error) = write_post_tool_use_hook(home) {
-                panic!("failed to write apps file post tool use hook fixture: {error}");
-            }
+            write_post_tool_use_hook(home)
+                .expect("failed to write apps file post tool use hook fixture");
         })
         .with_config(move |config| {
             trust_discovered_hooks(config);

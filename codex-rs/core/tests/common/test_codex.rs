@@ -287,14 +287,13 @@ impl TestCodexBuilder {
         let model = model.to_string();
         self.with_config(move |config| {
             let model_catalog = config.model_catalog.get_or_insert_with(|| {
-                bundled_models_response()
-                    .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"))
+                bundled_models_response().expect("bundled models.json should parse")
             });
             let model_info = model_catalog
                 .models
                 .iter_mut()
                 .find(|model_info| model_info.slug == model)
-                .unwrap_or_else(|| panic!("{model} should exist in the configured model catalog"));
+                .expect("model should exist in the configured model catalog");
             override_model_info(model_info);
             config.model = Some(model);
         })
@@ -672,14 +671,13 @@ fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {
         return Ok(());
     }
 
-    let bundled_models = bundled_models_response()
-        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    let bundled_models = bundled_models_response().expect("bundled models.json should parse");
     let mut model = bundled_models
         .models
         .iter()
         .find(|candidate| candidate.slug == "gpt-5.2")
         .cloned()
-        .unwrap_or_else(|| panic!("missing bundled model gpt-5.2"));
+        .expect("missing bundled model gpt-5.2");
     model.slug = TEST_MODEL_WITH_EXPERIMENTAL_TOOLS.to_string();
     model.display_name = TEST_MODEL_WITH_EXPERIMENTAL_TOOLS.to_string();
     model.experimental_supported_tools = vec!["test_sync_tool".to_string()];
@@ -1111,9 +1109,8 @@ fn custom_tool_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value 
 fn custom_tool_call_output_text(bodies: &[Value], call_id: &str) -> String {
     let output = custom_tool_call_output(bodies, call_id)
         .get("output")
-        .unwrap_or_else(|| panic!("custom_tool_call_output {call_id} missing output"));
-    output_value_to_text(output)
-        .unwrap_or_else(|| panic!("custom_tool_call_output {call_id} missing text output"))
+        .expect("custom tool call output missing output");
+    output_value_to_text(output).expect("custom tool call output missing text output")
 }
 
 fn function_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {

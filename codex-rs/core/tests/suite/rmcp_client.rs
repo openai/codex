@@ -85,20 +85,20 @@ fn assert_wall_time_line(line: &str) {
 }
 
 fn split_wall_time_wrapped_output(output: &str) -> &str {
-    let Some((wall_time, rest)) = output.split_once('\n') else {
-        panic!("wall-time output should contain an Output section: {output}");
-    };
+    let (wall_time, rest) = output
+        .split_once('\n')
+        .expect("wall-time output should contain an Output section");
     assert_wall_time_line(wall_time);
-    let Some(output) = rest.strip_prefix("Output:\n") else {
-        panic!("wall-time output should contain Output marker: {output}");
-    };
+    let output = rest
+        .strip_prefix("Output:\n")
+        .expect("wall-time output should contain Output marker");
     output
 }
 
 fn assert_wall_time_header(output: &str) {
-    let Some((wall_time, marker)) = output.split_once('\n') else {
-        panic!("wall-time header should contain an Output marker: {output}");
-    };
+    let (wall_time, marker) = output
+        .split_once('\n')
+        .expect("wall-time header should contain an Output marker");
     assert_wall_time_line(wall_time);
     assert_eq!(marker, "Output:");
 }
@@ -332,9 +332,10 @@ fn insert_mcp_server(
             tools: HashMap::new(),
         },
     );
-    if let Err(err) = config.mcp_servers.set(servers) {
-        panic!("test mcp servers should accept any configuration: {err}");
-    }
+    config
+        .mcp_servers
+        .set(servers)
+        .expect("test mcp servers should accept any configuration");
 }
 
 async fn call_cwd_tool(

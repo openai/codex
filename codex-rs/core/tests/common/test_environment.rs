@@ -61,7 +61,7 @@ pub fn test_environment() -> TestEnvironment {
         std::env::var_os(LEGACY_REMOTE_ENV_ENV_VAR).as_deref(),
         std::env::var_os(DOCKER_CONTAINER_ENV_VAR).as_deref(),
     )
-    .unwrap_or_else(|error| panic!("invalid test environment configuration: {error}"));
+    .expect("invalid test environment configuration");
 
     if matches!(environment, TestEnvironment::WineExec) && !cfg!(target_os = "linux") {
         panic!("{TEST_ENVIRONMENT_ENV_VAR}=wine-exec is only supported on Linux");

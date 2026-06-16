@@ -47,9 +47,9 @@ async fn test_shell_command_approval_triggers_elicitation() {
 
     // Apparently `#[tokio::test]` must return `()`, so we create a helper
     // function that returns `Result` so we can use `?` in favor of `unwrap`.
-    if let Err(err) = shell_command_approval_triggers_elicitation().await {
-        panic!("failure: {err}");
-    }
+    shell_command_approval_triggers_elicitation()
+        .await
+        .expect("shell command approval should trigger elicitation");
 }
 
 async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
@@ -225,9 +225,9 @@ async fn test_patch_approval_triggers_elicitation() {
         return;
     }
 
-    if let Err(err) = patch_approval_triggers_elicitation().await {
-        panic!("failure: {err}");
-    }
+    patch_approval_triggers_elicitation()
+        .await
+        .expect("patch approval should trigger elicitation");
 }
 
 async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
@@ -356,9 +356,9 @@ async fn test_codex_tool_passes_base_instructions() {
 
     // Apparently `#[tokio::test]` must return `()`, so we create a helper
     // function that returns `Result` so we can use `?` in favor of `unwrap`.
-    if let Err(err) = codex_tool_passes_base_instructions().await {
-        panic!("failure: {err}");
-    }
+    codex_tool_passes_base_instructions()
+        .await
+        .expect("codex tool should pass base instructions");
 }
 
 async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {

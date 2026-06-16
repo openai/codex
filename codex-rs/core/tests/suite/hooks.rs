@@ -104,9 +104,10 @@ fn non_openai_model_provider(server: &wiremock::MockServer) -> ModelProviderInfo
 }
 
 fn trust_plugin_hooks(config: &mut Config, plugin_hook_sources: Vec<PluginHookSource>) {
-    if let Err(err) = config.features.enable(Feature::CodexHooks) {
-        panic!("test config should allow feature update: {err}");
-    }
+    config
+        .features
+        .enable(Feature::CodexHooks)
+        .expect("test config should allow feature update");
     let listed = codex_hooks::list_hooks(codex_hooks::HooksConfig {
         feature_enabled: true,
         config_layer_stack: Some(config.config_layer_stack.clone()),
@@ -1096,12 +1097,11 @@ async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_stop_hook(
+            write_stop_hook(
                 home,
                 &[FIRST_CONTINUATION_PROMPT, SECOND_CONTINUATION_PROMPT],
-            ) {
-                panic!("failed to write stop hook test fixture: {error}");
-            }
+            )
+            .expect("failed to write stop hook test fixture");
         })
         .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
@@ -1193,9 +1193,8 @@ async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_session_start_hook_recording_transcript(home) {
-                panic!("failed to write session start hook test fixture: {error}");
-            }
+            write_session_start_hook_recording_transcript(home)
+                .expect("failed to write session start hook test fixture");
         })
         .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
@@ -1233,9 +1232,8 @@ async fn session_start_runs_before_user_prompt_submit_on_first_turn() -> Result<
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_session_start_and_user_prompt_submit_order_hooks(home) {
-                panic!("failed to write hook ordering fixtures: {error}");
-            }
+            write_session_start_and_user_prompt_submit_order_hooks(home)
+                .expect("failed to write hook ordering fixtures");
         })
         .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
@@ -1284,10 +1282,8 @@ async fn session_start_hook_spills_large_additional_context() -> Result<()> {
         .with_pre_build_hook({
             let additional_context = additional_context.clone();
             move |home| {
-                if let Err(error) = write_session_start_hook_with_context(home, &additional_context)
-                {
-                    panic!("failed to write session start hook test fixture: {error}");
-                }
+                write_session_start_hook_with_context(home, &additional_context)
+                    .expect("failed to write session start hook test fixture");
             }
         })
         .with_config(trust_discovered_hooks);
@@ -1486,13 +1482,12 @@ async fn resumed_thread_runs_resume_then_compact_session_start_hooks() -> Result
 
     let mut builder = test_codex()
         .with_pre_build_hook(move |home| {
-            if let Err(error) = write_resume_and_compact_session_start_hook_with_context(
+            write_resume_and_compact_session_start_hook_with_context(
                 home,
                 resume_context,
                 compact_context,
-            ) {
-                panic!("failed to write resume/compact session start hook fixture: {error}");
-            }
+            )
+            .expect("failed to write resume/compact session start hook fixture");
         })
         .with_config(move |config| {
             config.model_auto_compact_token_limit = Some(limit);
@@ -1573,9 +1568,8 @@ async fn stop_hook_spills_large_continuation_prompt() -> Result<()> {
         .with_pre_build_hook({
             let continuation_prompt = continuation_prompt.clone();
             move |home| {
-                if let Err(error) = write_stop_hook(home, &[&continuation_prompt]) {
-                    panic!("failed to write stop hook test fixture: {error}");
-                }
+                write_stop_hook(home, &[&continuation_prompt])
+                    .expect("failed to write stop hook test fixture");
             }
         })
         .with_config(trust_discovered_hooks);
@@ -1619,9 +1613,8 @@ async fn resumed_thread_keeps_stop_continuation_prompt_in_history() -> Result<()
 
     let mut initial_builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_stop_hook(home, &[FIRST_CONTINUATION_PROMPT]) {
-                panic!("failed to write stop hook test fixture: {error}");
-            }
+            write_stop_hook(home, &[FIRST_CONTINUATION_PROMPT])
+                .expect("failed to write stop hook test fixture");
         })
         .with_config(trust_discovered_hooks);
     let initial = initial_builder.build(&server).await?;
@@ -1685,12 +1678,11 @@ async fn multiple_blocking_stop_hooks_persist_multiple_hook_prompt_fragments() -
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_parallel_stop_hooks(
+            write_parallel_stop_hooks(
                 home,
                 &[FIRST_CONTINUATION_PROMPT, SECOND_CONTINUATION_PROMPT],
-            ) {
-                panic!("failed to write parallel stop hook fixtures: {error}");
-            }
+            )
+            .expect("failed to write parallel stop hook fixtures");
         })
         .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
@@ -1994,9 +1986,8 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = install_allow_permission_request_hook(home) {
-                panic!("failed to write permission request hook test fixture: {error}");
-            }
+            install_allow_permission_request_hook(home)
+                .expect("failed to write permission request hook test fixture");
         })
         .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
@@ -2069,14 +2060,13 @@ async fn permission_request_hook_allows_apply_patch_with_write_alias() -> Result
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_permission_request_hook(
+            write_permission_request_hook(
                 home,
                 Some("^Write$"),
                 "allow",
                 PERMISSION_REQUEST_ALLOW_REASON,
-            ) {
-                panic!("failed to write permission request hook test fixture: {error}");
-            }
+            )
+            .expect("failed to write permission request hook test fixture");
         })
         .with_config(|config| {
             trust_discovered_hooks(config);
@@ -2147,9 +2137,8 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = install_allow_permission_request_hook(home) {
-                panic!("failed to write permission request hook test fixture: {error}");
-            }
+            install_allow_permission_request_hook(home)
+                .expect("failed to write permission request hook test fixture");
         })
         .with_config(|config| {
             config.use_experimental_unified_exec_tool = true;
@@ -2232,9 +2221,8 @@ allow_local_binding = true
     let test = test_codex()
         .with_home(Arc::clone(&home))
         .with_pre_build_hook(|home| {
-            if let Err(error) = install_allow_permission_request_hook(home) {
-                panic!("failed to write permission request hook test fixture: {error}");
-            }
+            install_allow_permission_request_hook(home)
+                .expect("failed to write permission request hook test fixture");
         })
         .with_cloud_config_bundle(managed_network_requirements_loader())
         .with_config(move |config| {
@@ -2343,9 +2331,8 @@ async fn permission_request_hook_sees_retry_context_after_sandbox_denial() -> Re
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = install_allow_permission_request_hook(home) {
-                panic!("failed to write permission request hook test fixture: {error}");
-            }
+            install_allow_permission_request_hook(home)
+                .expect("failed to write permission request hook test fixture");
         })
         .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
@@ -2663,9 +2650,10 @@ impl BashRewriteSurface {
         trust_discovered_hooks(config);
         if matches!(self, BashRewriteSurface::ExecCommand) {
             config.use_experimental_unified_exec_tool = true;
-            if let Err(error) = config.features.enable(Feature::UnifiedExec) {
-                panic!("test config should allow feature update: {error}");
-            }
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
         }
     }
 }
@@ -2700,9 +2688,8 @@ async fn assert_pre_tool_use_rewrites_bash_surface(surface: BashRewriteSurface) 
     let updated_input = serde_json::json!({ "command": rewritten_command });
     let mut builder = test_codex()
         .with_pre_build_hook(move |home| {
-            if let Err(error) = write_updating_pre_tool_use_hook(home, "^Bash$", &updated_input) {
-                panic!("failed to write updating pre tool use hook fixture: {error}");
-            }
+            write_updating_pre_tool_use_hook(home, "^Bash$", &updated_input)
+                .expect("failed to write updating pre tool use hook fixture");
         })
         .with_config(move |config| surface.configure(config));
     let test = builder.build(&server).await?;
@@ -2795,9 +2782,8 @@ text(output.output);
     let mut builder = test_codex()
         .with_model("test-gpt-5.1-codex")
         .with_pre_build_hook(move |home| {
-            if let Err(error) = write_updating_pre_tool_use_hook(home, "^Bash$", &updated_input) {
-                panic!("failed to write updating pre tool use hook fixture: {error}");
-            }
+            write_updating_pre_tool_use_hook(home, "^Bash$", &updated_input)
+                .expect("failed to write updating pre tool use hook fixture");
         })
         .with_config(|config| {
             let _ = config.features.enable(Feature::CodeMode);
@@ -2881,9 +2867,8 @@ try {{
     let mut builder = test_codex()
         .with_model("test-gpt-5.1-codex")
         .with_pre_build_hook(move |home| {
-            if let Err(error) = write_pre_tool_use_hook(home, Some("^Bash$"), "json_deny", reason) {
-                panic!("failed to write blocking pre tool use hook fixture: {error}");
-            }
+            write_pre_tool_use_hook(home, Some("^Bash$"), "json_deny", reason)
+                .expect("failed to write blocking pre tool use hook fixture");
         })
         .with_config(|config| {
             let _ = config.features.enable(Feature::CodeMode);
@@ -2961,9 +2946,8 @@ try {{
     let mut builder = test_codex()
         .with_model("test-gpt-5.1-codex")
         .with_pre_build_hook(move |home| {
-            if let Err(error) = write_post_tool_use_hook(home, Some("^Bash$"), hook_mode, reason) {
-                panic!("failed to write blocking post tool use hook fixture: {error}");
-            }
+            write_post_tool_use_hook(home, Some("^Bash$"), hook_mode, reason)
+                .expect("failed to write blocking post tool use hook fixture");
         })
         .with_config(|config| {
             let _ = config.features.enable(Feature::CodeMode);
@@ -3203,16 +3187,15 @@ async fn pre_tool_use_blocks_shell_when_defined_in_config_toml() -> Result<()> {
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_pre_tool_use_hook_toml(
+            write_pre_tool_use_hook_toml(
                 home,
                 "pre_tool_use_config_hook.py",
                 "pre_tool_use_config_hook_log.jsonl",
                 Some("^Bash$"),
                 "json_deny",
                 "blocked by config toml hook",
-            ) {
-                panic!("failed to write config.toml hook test fixture: {error}");
-            }
+            )
+            .expect("failed to write config.toml hook test fixture");
         })
         .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
@@ -3287,19 +3270,17 @@ async fn pre_tool_use_merges_hooks_json_and_config_toml() -> Result<()> {
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_pre_tool_use_hook(home, Some("^Bash$"), "allow", "unused") {
-                panic!("failed to write hooks.json hook fixture: {error}");
-            }
-            if let Err(error) = write_pre_tool_use_hook_toml(
+            write_pre_tool_use_hook(home, Some("^Bash$"), "allow", "unused")
+                .expect("failed to write hooks.json hook fixture");
+            write_pre_tool_use_hook_toml(
                 home,
                 "pre_tool_use_toml_hook.py",
                 "pre_tool_use_toml_hook_log.jsonl",
                 Some("^Bash$"),
                 "allow",
                 "unused",
-            ) {
-                panic!("failed to write config.toml hook fixture: {error}");
-            }
+            )
+            .expect("failed to write config.toml hook fixture");
         })
         .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
@@ -3475,14 +3456,13 @@ async fn pre_tool_use_blocks_apply_patch_before_execution() -> Result<()> {
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_pre_tool_use_hook(
+            write_pre_tool_use_hook(
                 home,
                 Some("^apply_patch$"),
                 "json_deny",
                 "blocked apply_patch",
-            ) {
-                panic!("failed to write pre tool use hook test fixture: {error}");
-            }
+            )
+            .expect("failed to write pre tool use hook test fixture");
         })
         .with_config(|config| {
             trust_discovered_hooks(config);
@@ -4202,9 +4182,8 @@ async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> R
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_logging_pre_and_blocking_post_tool_use_hooks(home, feedback) {
-                panic!("failed to write tool use hook test fixture: {error}");
-            }
+            write_logging_pre_and_blocking_post_tool_use_hooks(home, feedback)
+                .expect("failed to write tool use hook test fixture");
         })
         .with_config(|config| {
             config.use_experimental_unified_exec_tool = true;

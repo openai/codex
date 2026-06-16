@@ -1295,14 +1295,8 @@ fn jwt_with_payload(payload: serde_json::Value) -> String {
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
     }
 
-    let header_bytes = match serde_json::to_vec(&header) {
-        Ok(bytes) => bytes,
-        Err(err) => panic!("serialize header: {err}"),
-    };
-    let payload_bytes = match serde_json::to_vec(&payload) {
-        Ok(bytes) => bytes,
-        Err(err) => panic!("serialize payload: {err}"),
-    };
+    let header_bytes = serde_json::to_vec(&header).expect("header should serialize");
+    let payload_bytes = serde_json::to_vec(&payload).expect("payload should serialize");
     let header_b64 = b64(&header_bytes);
     let payload_b64 = b64(&payload_bytes);
     let signature_b64 = b64(b"sig");

@@ -225,7 +225,7 @@ async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
         _ => None,
     })
     .await
-    .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
+    .expect("conversation start failed");
 
     wait_for_event_match(codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {

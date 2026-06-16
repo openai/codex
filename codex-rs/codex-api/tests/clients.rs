@@ -53,7 +53,7 @@ impl RecordingState {
         let mut guard = self
             .stream_requests
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
+            .expect("stream requests mutex should not be poisoned");
         guard.push(req);
     }
 
@@ -61,7 +61,7 @@ impl RecordingState {
         let mut guard = self
             .stream_requests
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
+            .expect("stream requests mutex should not be poisoned");
         std::mem::take(&mut *guard)
     }
 }
@@ -172,14 +172,14 @@ impl FlakyTransport {
     fn attempts(&self) -> i64 {
         self.state
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"))
+            .expect("flaky transport state mutex should not be poisoned")
             .attempts
     }
 
     fn requests(&self) -> Vec<(RequestBody, HeaderMap, codex_client::RequestCompression)> {
         self.state
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"))
+            .expect("flaky transport state mutex should not be poisoned")
             .requests
             .clone()
     }
@@ -212,14 +212,14 @@ impl FailsOnceAuth {
         *self
             .attempts
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"))
+            .expect("auth attempts mutex should not be poisoned")
     }
 
     async fn apply_auth(&self, request: Request) -> Result<Request, AuthError> {
         let mut attempts = self
             .attempts
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
+            .expect("auth attempts mutex should not be poisoned");
         *attempts += 1;
 
         if *attempts == 1 {
@@ -253,7 +253,7 @@ impl HttpTransport for FlakyTransport {
         let mut state = self
             .state
             .lock()
-            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
+            .expect("flaky transport state mutex should not be poisoned");
         state.attempts += 1;
         state
             .requests

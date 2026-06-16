@@ -249,9 +249,10 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
 
     let builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
-        if let Err(err) = config.features.enable(Feature::UnifiedExec) {
-            panic!("test config should allow feature update: {err}");
-        }
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let harness = TestCodexHarness::with_builder(builder).await?;
 
@@ -2075,9 +2076,10 @@ async fn assert_write_stdin_ctrl_c_interrupts_non_tty_session(
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        if let Err(err) = config.features.enable(Feature::UnifiedExec) {
-            panic!("test config should allow feature update: {err}");
-        }
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let test = builder.build_with_remote_env(&server).await?;
 
