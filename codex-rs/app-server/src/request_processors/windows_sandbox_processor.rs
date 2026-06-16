@@ -63,6 +63,15 @@ impl WindowsSandboxRequestProcessor {
             config.config_layer_stack.requirements(),
             params.mode,
         )?;
+        let target_windows_sandbox_level = match setup_mode {
+            CoreWindowsSandboxSetupMode::Elevated => WindowsSandboxLevel::Elevated,
+            CoreWindowsSandboxSetupMode::Unelevated => WindowsSandboxLevel::RestrictedToken,
+        };
+        codex_core::config::validate_windows_sandbox_network_proxy_compatibility(
+            target_windows_sandbox_level,
+            config.permissions.network.as_ref(),
+        )
+        .map_err(|err| invalid_request(err.to_string()))?;
 
         self.outgoing
             .send_response(

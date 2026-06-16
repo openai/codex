@@ -742,6 +742,57 @@ personality = true
     );
 }
 
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn batch_write_rejects_unelevated_windows_sandbox_with_network_proxy() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    let original_config = r#"
+default_permissions = "networked"
+
+[features]
+network_proxy = true
+
+[windows]
+sandbox = "elevated"
+
+[permissions.networked.filesystem]
+":root" = "read"
+
+[permissions.networked.network]
+enabled = true
+"#;
+    std::fs::write(&config_path, original_config)?;
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    let error = service
+        .batch_write(ConfigBatchWriteParams {
+            edits: vec![codex_app_server_protocol::ConfigEdit {
+                key_path: "windows.sandbox".to_string(),
+                value: serde_json::json!("unelevated"),
+                merge_strategy: MergeStrategy::Replace,
+            }],
+            file_path: Some(config_path.display().to_string()),
+            expected_version: None,
+            reload_user_config: false,
+        })
+        .await
+        .expect_err("unelevated Windows sandbox should be rejected with network proxy");
+
+    assert_eq!(
+        error.write_error_code(),
+        Some(ConfigWriteErrorCode::ConfigValidationError)
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("The network proxy requires the elevated Windows sandbox backend"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read_to_string(&config_path)?, original_config);
+    Ok(())
+}
+
 #[tokio::test]
 async fn read_reports_managed_overrides_user_and_session_flags() {
     let tmp = tempdir().expect("tempdir");

@@ -290,6 +290,10 @@ fn config_error_location(err: &std::io::Error) -> Option<(String, AppTextRange)>
         })
 }
 
+fn is_unrecoverable_config_load_error(err: &std::io::Error) -> bool {
+    codex_core::config::is_windows_sandbox_network_proxy_incompatible_error(err)
+}
+
 fn exec_policy_warning_location(err: &ExecPolicyError) -> (Option<String>, Option<AppTextRange>) {
     match err {
         ExecPolicyError::ParsePolicy { path, source } => {
@@ -499,7 +503,7 @@ pub async fn run_main_with_transport_options(
     {
         Ok(config) => (config, true),
         Err(err) => {
-            if strict_config {
+            if strict_config || is_unrecoverable_config_load_error(&err) {
                 return Err(err);
             }
 

@@ -587,6 +587,41 @@ fn build_network_proxy_spec(
     })
 }
 
+const WINDOWS_SANDBOX_NETWORK_PROXY_INCOMPATIBLE_ERROR: &str = "The network proxy requires the elevated Windows sandbox backend, but Codex is using the unelevated backend. Set windows.sandbox = \"elevated\" or disable the network proxy. If these settings are managed by your organization, contact your administrator.";
+
+pub fn validate_windows_sandbox_network_proxy_compatibility(
+    windows_sandbox_level: WindowsSandboxLevel,
+    network_proxy: Option<&NetworkProxySpec>,
+) -> std::io::Result<()> {
+    validate_windows_sandbox_network_proxy_compatibility_for_platform(
+        cfg!(target_os = "windows"),
+        windows_sandbox_level,
+        network_proxy.is_some(),
+    )
+}
+
+pub fn is_windows_sandbox_network_proxy_incompatible_error(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::InvalidInput
+        && err.to_string() == WINDOWS_SANDBOX_NETWORK_PROXY_INCOMPATIBLE_ERROR
+}
+
+fn validate_windows_sandbox_network_proxy_compatibility_for_platform(
+    is_windows: bool,
+    windows_sandbox_level: WindowsSandboxLevel,
+    network_proxy_configured: bool,
+) -> std::io::Result<()> {
+    if is_windows
+        && network_proxy_configured
+        && windows_sandbox_level == WindowsSandboxLevel::RestrictedToken
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            WINDOWS_SANDBOX_NETWORK_PROXY_INCOMPATIBLE_ERROR,
+        ));
+    }
+    Ok(())
+}
+
 /// Configured thread persistence backend.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ThreadStoreConfig {
@@ -1318,6 +1353,27 @@ impl ConfigBuilder {
     pub(crate) fn without_managed_config_for_tests() -> Self {
         Self::default().loader_overrides(LoaderOverrides::without_managed_config_for_tests())
     }
+}
+
+pub async fn validate_materialized_config_from_layer_stack(
+    codex_home: PathBuf,
+    config_layer_stack: ConfigLayerStack,
+    overrides: ConfigOverrides,
+) -> std::io::Result<()> {
+    let cfg: ConfigToml = config_layer_stack
+        .effective_config()
+        .try_into()
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+    let codex_home = AbsolutePathBuf::from_absolute_path_checked(codex_home)?;
+    Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
+        cfg,
+        overrides,
+        codex_home,
+        config_layer_stack,
+    )
+    .await
+    .map(|_| ())
 }
 
 impl Config {
@@ -3723,6 +3779,10 @@ impl Config {
                 .unwrap_or_default(),
             otel,
         };
+        validate_windows_sandbox_network_proxy_compatibility(
+            WindowsSandboxLevel::from_config(&config),
+            config.permissions.network.as_ref(),
+        )?;
         Ok(config)
         })
         .await
@@ -3839,11 +3899,16 @@ impl Config {
             NetworkProxyConfig::default()
         };
 
-        build_network_proxy_spec(
+        let network_proxy = build_network_proxy_spec(
             configured_network_proxy_config,
             self.config_layer_stack.requirements().network.clone(),
             permission_profile,
-        )
+        )?;
+        validate_windows_sandbox_network_proxy_compatibility(
+            WindowsSandboxLevel::from_config(self),
+            network_proxy.as_ref(),
+        )?;
+        Ok(network_proxy)
     }
 
     pub fn bundled_skills_enabled(&self) -> bool {

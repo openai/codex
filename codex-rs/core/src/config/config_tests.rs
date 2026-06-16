@@ -1391,6 +1391,191 @@ enabled = true
     Ok(())
 }
 
+#[test]
+fn windows_sandbox_network_proxy_compatibility_rejects_network_proxy_with_unelevated_windows() {
+    let err = validate_windows_sandbox_network_proxy_compatibility_for_platform(
+        /*is_windows*/ true,
+        WindowsSandboxLevel::RestrictedToken,
+        /*network_proxy_configured*/ true,
+    )
+    .expect_err("unelevated Windows sandbox should reject configured network proxy");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        WINDOWS_SANDBOX_NETWORK_PROXY_INCOMPATIBLE_ERROR
+    );
+}
+
+#[test]
+fn windows_sandbox_network_proxy_compatibility_allows_compatible_combinations() {
+    for (windows_sandbox_level, network_proxy_configured) in [
+        (WindowsSandboxLevel::Disabled, true),
+        (WindowsSandboxLevel::Elevated, true),
+        (WindowsSandboxLevel::RestrictedToken, false),
+    ] {
+        validate_windows_sandbox_network_proxy_compatibility_for_platform(
+            /*is_windows*/ true,
+            windows_sandbox_level,
+            network_proxy_configured,
+        )
+        .expect("compatible Windows sandbox and network proxy settings");
+    }
+    validate_windows_sandbox_network_proxy_compatibility_for_platform(
+        /*is_windows*/ false,
+        WindowsSandboxLevel::RestrictedToken,
+        /*network_proxy_configured*/ true,
+    )
+    .expect("Windows sandbox compatibility should only be enforced on Windows");
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn disabled_experimental_network_requirements_reject_unelevated_windows_sandbox()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[windows]
+sandbox = "unelevated"
+"#,
+    )?;
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[experimental_network]
+enabled = false
+"#,
+            ),
+        )
+        .build()
+        .await
+        .expect_err("disabled experimental_network requirements still configure network proxy");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        WINDOWS_SANDBOX_NETWORK_PROXY_INCOMPATIBLE_ERROR
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn network_proxy_feature_rejects_unelevated_windows_sandbox() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+    let err = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            features: Some(toml::from_str("network_proxy = true").expect("valid features")),
+            default_permissions: Some("dev".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    "dev".to_string(),
+                    PermissionProfileToml {
+                        description: None,
+                        extends: None,
+                        workspace_roots: None,
+                        filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
+                            entries: BTreeMap::from([(
+                                ":minimal".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            )]),
+                        }),
+                        network: Some(NetworkToml {
+                            enabled: Some(true),
+                            ..Default::default()
+                        }),
+                    },
+                )]),
+            }),
+            windows: Some(WindowsToml {
+                sandbox: Some(WindowsSandboxModeToml::Unelevated),
+                sandbox_private_desktop: None,
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("network_proxy feature should reject unelevated Windows sandbox");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        WINDOWS_SANDBOX_NETWORK_PROXY_INCOMPATIBLE_ERROR
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn active_profile_network_proxy_rejects_unelevated_windows_sandbox() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+default_permissions = ":read-only"
+
+[features]
+network_proxy = true
+
+[windows]
+sandbox = "unelevated"
+
+[permissions.dev.filesystem]
+":minimal" = "read"
+
+[permissions.dev.network]
+enabled = true
+"#,
+    )?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert_eq!(config.permissions.network, None);
+    let err = config
+        .network_proxy_spec_for_active_permission_profile(
+            &ActivePermissionProfile::new("dev"),
+            &PermissionProfile::Managed {
+                file_system: ManagedFileSystemPermissions::Restricted {
+                    entries: Vec::new(),
+                    glob_scan_max_depth: None,
+                },
+                network: NetworkSandboxPolicy::Enabled,
+            },
+        )
+        .expect_err("inactive network proxy profile should be rejected with unelevated sandbox");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        WINDOWS_SANDBOX_NETWORK_PROXY_INCOMPATIBLE_ERROR
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn network_proxy_feature_uses_profile_network_proxy_settings() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
