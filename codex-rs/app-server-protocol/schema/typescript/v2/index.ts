@@ -355,9 +355,9 @@ export type { SendAddCreditsNudgeEmailResponse } from "./SendAddCreditsNudgeEmai
 export type { ServerRequestResolvedNotification } from "./ServerRequestResolvedNotification";
 export type { SessionMigration } from "./SessionMigration";
 export type { SessionSource } from "./SessionSource";
+export type { ShellEnvironmentPolicyFilter } from "./ShellEnvironmentPolicyFilter";
 export type { ShellEnvironmentPolicyInherit } from "./ShellEnvironmentPolicyInherit";
 export type { ShellEnvironmentPolicyRequirements } from "./ShellEnvironmentPolicyRequirements";
-export type { ShellEnvironmentPolicyRule } from "./ShellEnvironmentPolicyRule";
 export type { SkillDependencies } from "./SkillDependencies";
 export type { SkillErrorInfo } from "./SkillErrorInfo";
 export type { SkillInterface } from "./SkillInterface";

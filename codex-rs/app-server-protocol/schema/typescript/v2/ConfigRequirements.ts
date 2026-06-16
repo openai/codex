@@ -14,7 +14,8 @@ import type { ShellEnvironmentPolicyRequirements } from "./ShellEnvironmentPolic
 import type { WindowsSandboxSetupMode } from "./WindowsSandboxSetupMode";
 
 export type ConfigRequirements = {allowedApprovalPolicies: Array<AskForApproval> | null, allowedSandboxModes: Array<SandboxMode> | null, allowedWindowsSandboxImplementations: Array<WindowsSandboxSetupMode> | null, allowedPermissionProfiles: { [key in string]?: boolean } | null, defaultPermissions: string | null, allowedWebSearchModes: Array<WebSearchMode> | null, allowManagedHooksOnly: boolean | null, allowAppshots: boolean | null, allowRemoteControl: boolean | null, computerUse: ComputerUseRequirements | null, featureRequirements: { [key in string]?: boolean } | null, enforceResidency: ResidencyRequirement | null, allowedLoginMethods: { [key in string]?: boolean } | null, allowedChatgptWorkspaces: { [key in string]?: boolean } | null, cliAuthCredentialsStore: AuthCredentialsStoreMode | null, chatgptBaseUrl: string | null, sqliteHome: AbsolutePathBuf | null, logDir: AbsolutePathBuf | null, modelCatalogJson: AbsolutePathBuf | null, checkForUpdateOnStartup: boolean | null, /**
- * Lossless config-native OTEL requirements, including exporter headers.
+ * Config-native OTEL requirements. Exporter header names are preserved,
+ * while their values are redacted.
  */
 otel: JsonValue | null, allowLoginShell: boolean | null, /**
  * Lossless config-native shell environment policy requirements.

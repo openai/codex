@@ -17,7 +17,7 @@ use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirementsToml;
 use codex_config::config_toml::ConfigToml;
-use codex_config::merge_toml_values;
+use codex_config::merge_toml_values_at_path;
 use codex_core::config::deserialize_config_toml_with_base;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
@@ -237,6 +237,16 @@ impl ConfigManager {
             let segments = parse_key_path(&key_path).map_err(|message| {
                 ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
             })?;
+            if let Some(requirement) =
+                managed_requirement_for_path(layers.requirements_toml(), &segments)
+            {
+                return Err(ConfigManagerError::write(
+                    ConfigWriteErrorCode::ConfigRequirementReadonly,
+                    format!(
+                        "Configuration path `{key_path}` is read-only because it is managed by `{requirement}`"
+                    ),
+                ));
+            }
             if !value.is_null() {
                 match segments.as_slice() {
                     [segment] if segment == "profile" => {
@@ -357,6 +367,132 @@ impl ConfigManager {
     /// associated with this query.
     async fn load_thread_agnostic_config(&self) -> std::io::Result<ConfigLayerStack> {
         self.load_config_layers(/*cwd*/ None).await
+    }
+}
+
+fn managed_requirement_for_path(
+    requirements: &ConfigRequirementsToml,
+    segments: &[String],
+) -> Option<&'static str> {
+    let root = segments.first()?.as_str();
+    let ConfigRequirementsToml {
+        allowed_login_methods,
+        allowed_chatgpt_workspaces,
+        cli_auth_credentials_store,
+        chatgpt_base_url,
+        sqlite_home,
+        log_dir,
+        model_catalog_json,
+        check_for_update_on_startup,
+        otel,
+        allow_login_shell,
+        shell_environment_policy,
+        feedback,
+        allowed_approval_policies,
+        allowed_approvals_reviewers,
+        allowed_sandbox_modes,
+        allowed_permission_profiles,
+        default_permissions,
+        remote_sandbox_config,
+        allowed_web_search_modes,
+        allow_managed_hooks_only,
+        allow_appshots: _,
+        allow_remote_control,
+        computer_use,
+        windows,
+        feature_requirements,
+        hooks,
+        mcp_servers,
+        plugins,
+        apps,
+        rules,
+        enforce_residency,
+        network,
+        permissions,
+        guardian_policy_config,
+    } = requirements;
+
+    macro_rules! managed_root {
+        ($requirement:ident, $($root:literal),+ $(,)?) => {
+            if $requirement.is_some() && matches!(root, $($root)|+) {
+                return Some(stringify!($requirement));
+            }
+        };
+    }
+
+    managed_root!(allowed_login_methods, "forced_login_method");
+    managed_root!(allowed_chatgpt_workspaces, "forced_chatgpt_workspace_id");
+    managed_root!(cli_auth_credentials_store, "cli_auth_credentials_store");
+    managed_root!(chatgpt_base_url, "chatgpt_base_url");
+    managed_root!(sqlite_home, "sqlite_home");
+    managed_root!(log_dir, "log_dir");
+    managed_root!(model_catalog_json, "model_catalog_json");
+    managed_root!(check_for_update_on_startup, "check_for_update_on_startup");
+    managed_root!(otel, "otel");
+    managed_root!(allow_login_shell, "allow_login_shell");
+    managed_root!(shell_environment_policy, "shell_environment_policy");
+    managed_root!(feedback, "feedback");
+    managed_root!(allowed_approval_policies, "approval_policy");
+    managed_root!(allowed_approvals_reviewers, "approvals_reviewer");
+    managed_root!(
+        allowed_sandbox_modes,
+        "sandbox_mode",
+        "sandbox_workspace_write",
+        "permissions"
+    );
+    managed_root!(allowed_permission_profiles, "sandbox_mode", "permissions");
+    managed_root!(default_permissions, "sandbox_mode", "permissions");
+    managed_root!(remote_sandbox_config, "remote_sandbox_config");
+    managed_root!(allowed_web_search_modes, "web_search");
+    managed_root!(allow_managed_hooks_only, "hooks");
+    if allow_remote_control.is_some() && is_feature_path(segments, "remote_control") {
+        return Some("allow_remote_control");
+    }
+    if computer_use.is_some() && is_feature_path(segments, "computer_use") {
+        return Some("computer_use");
+    }
+    managed_root!(windows, "windows");
+    if let Some(requirements) = feature_requirements {
+        if matches!(segments, [root] if root == "features") {
+            return Some("feature_requirements");
+        }
+        let key = match segments {
+            [root, key, ..] if root == "features" => key.as_str(),
+            [key, ..] => key.as_str(),
+            [] => return None,
+        };
+        if let Some(feature) = codex_features::feature_for_key(key)
+            && requirements.entries.keys().any(|required| {
+                codex_features::feature_for_key(required).is_some_and(|value| value == feature)
+            })
+        {
+            return Some("feature_requirements");
+        }
+    }
+    managed_root!(hooks, "hooks");
+    managed_root!(mcp_servers, "mcp_servers");
+    managed_root!(plugins, "plugins");
+    managed_root!(apps, "apps");
+    managed_root!(rules, "rules");
+    managed_root!(enforce_residency, "enforce_residency");
+    managed_root!(network, "experimental_network", "network", "permissions");
+    managed_root!(permissions, "permissions", "sandbox_mode");
+    managed_root!(guardian_policy_config, "guardian_policy_config");
+    None
+}
+
+fn is_feature_path(segments: &[String], required_key: &str) -> bool {
+    match segments {
+        [root] if root == "features" => true,
+        [root, key, ..] if root == "features" => {
+            codex_features::feature_for_key(key)
+                == codex_features::canonical_feature_for_key(required_key)
+        }
+        [key, ..] => {
+            codex_features::feature_for_key(key)
+                == codex_features::canonical_feature_for_key(required_key)
+        }
+        [] => false,
     }
 }
 
@@ -512,7 +648,7 @@ fn apply_merge(
         && matches!(existing, TomlValue::Table(_))
         && matches!(value, TomlValue::Table(_))
     {
-        merge_toml_values(existing, value);
+        merge_toml_values_at_path(existing, value, segments);
         return Ok(true);
     }
 

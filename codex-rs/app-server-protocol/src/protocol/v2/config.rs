@@ -8,8 +8,8 @@ pub use codex_protocol::config_types::AuthCredentialsStoreMode;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ShellEnvironmentPolicyFilter;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
-use codex_protocol::config_types::ShellEnvironmentPolicyRule;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
@@ -339,6 +339,7 @@ pub struct ConfigWriteResponse {
 #[ts(export_to = "v2/")]
 pub enum ConfigWriteErrorCode {
     ConfigLayerReadonly,
+    ConfigRequirementReadonly,
     ConfigVersionConflict,
     ConfigValidationError,
     ConfigPathNotFound,
@@ -403,7 +404,8 @@ pub struct ConfigRequirements {
     pub log_dir: Option<AbsolutePathBuf>,
     pub model_catalog_json: Option<AbsolutePathBuf>,
     pub check_for_update_on_startup: Option<bool>,
-    /// Lossless config-native OTEL requirements, including exporter headers.
+    /// Config-native OTEL requirements. Exporter header names are preserved,
+    /// while their values are redacted.
     pub otel: Option<JsonValue>,
     pub allow_login_shell: Option<bool>,
     /// Lossless config-native shell environment policy requirements.
@@ -426,8 +428,7 @@ pub struct ShellEnvironmentPolicyRequirements {
     pub inherit: Option<ShellEnvironmentPolicyInherit>,
     pub ignore_default_excludes: Option<bool>,
     pub r#set: Option<HashMap<String, String>>,
-    pub rules: Option<BTreeMap<String, ShellEnvironmentPolicyRule>>,
-    pub experimental_use_profile: Option<bool>,
+    pub filters: Option<BTreeMap<String, ShellEnvironmentPolicyFilter>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

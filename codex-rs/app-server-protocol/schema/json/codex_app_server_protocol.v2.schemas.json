@@ -4685,7 +4685,7 @@
           ]
         },
         "otel": {
-          "description": "Lossless config-native OTEL requirements, including exporter headers."
+          "description": "Config-native OTEL requirements. Exporter header names are preserved, while their values are redacted."
         },
         "shellEnvironmentPolicy": {
           "anyOf": [
@@ -13802,6 +13802,14 @@
       ],
       "type": "object"
     },
+    "ShellEnvironmentPolicyFilter": {
+      "description": "Assigns a shell environment variable pattern to the include-only or exclude set. Includes do not re-add variables removed by another exclude pattern.",
+      "enum": [
+        "include",
+        "exclude"
+      ],
+      "type": "string"
+    },
     "ShellEnvironmentPolicyInherit": {
       "oneOf": [
         {
@@ -13829,9 +13837,12 @@
     },
     "ShellEnvironmentPolicyRequirements": {
       "properties": {
-        "experimental_use_profile": {
+        "filters": {
+          "additionalProperties": {
+            "$ref": "#/definitions/ShellEnvironmentPolicyFilter"
+          },
           "type": [
-            "boolean",
+            "object",
             "null"
           ]
         },
@@ -13851,15 +13862,6 @@
             }
           ]
         },
-        "rules": {
-          "additionalProperties": {
-            "$ref": "#/definitions/ShellEnvironmentPolicyRule"
-          },
-          "type": [
-            "object",
-            "null"
-          ]
-        },
         "set": {
           "additionalProperties": {
             "type": "string"
@@ -13871,14 +13873,6 @@
         }
       },
       "type": "object"
-    },
-    "ShellEnvironmentPolicyRule": {
-      "description": "Assigns a shell environment variable pattern to the include-only or exclude set. Includes do not re-add variables removed by another exclude pattern.",
-      "enum": [
-        "include",
-        "exclude"
-      ],
-      "type": "string"
     },
     "SkillDependencies": {
       "properties": {

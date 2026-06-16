@@ -40,6 +40,8 @@ use codex_config::MatcherGroup as CoreMatcherGroup;
 use codex_config::ResidencyRequirement as CoreResidencyRequirement;
 use codex_config::SandboxModeRequirement as CoreSandboxModeRequirement;
 use codex_config::ShellEnvironmentPolicyRequirementsToml;
+use codex_config::types::OtelConfigToml;
+use codex_config::types::OtelExporterKind;
 use codex_core::ThreadManager;
 use codex_features::canonical_feature_for_key;
 use codex_features::feature_for_key;
@@ -403,7 +405,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         log_dir: requirements.log_dir,
         model_catalog_json: requirements.model_catalog_json,
         check_for_update_on_startup: requirements.check_for_update_on_startup,
-        otel: requirements.otel.map(|otel| json!(otel)),
+        otel: requirements.otel.map(redact_otel_requirements),
         allow_login_shell: requirements.allow_login_shell,
         shell_environment_policy: requirements
             .shell_environment_policy
@@ -422,16 +424,32 @@ fn map_shell_environment_policy_requirements_to_api(
         inherit,
         ignore_default_excludes,
         r#set,
-        rules,
-        experimental_use_profile,
+        filters,
     } = policy;
     ShellEnvironmentPolicyRequirements {
         inherit,
         ignore_default_excludes,
         r#set,
-        rules,
-        experimental_use_profile,
+        filters,
     }
+}
+
+fn redact_otel_requirements(mut otel: OtelConfigToml) -> serde_json::Value {
+    for exporter in [
+        &mut otel.exporter,
+        &mut otel.trace_exporter,
+        &mut otel.metrics_exporter,
+    ] {
+        let headers = match exporter {
+            Some(OtelExporterKind::OtlpHttp { headers, .. })
+            | Some(OtelExporterKind::OtlpGrpc { headers, .. }) => headers,
+            Some(OtelExporterKind::None | OtelExporterKind::Statsig) | None => continue,
+        };
+        headers
+            .values_mut()
+            .for_each(|value| *value = "<redacted>".to_string());
+    }
+    json!(otel)
 }
 
 fn map_computer_use_requirements_to_api(
@@ -626,8 +644,8 @@ mod tests {
     use codex_config::ComputerUseRequirementsToml;
     use codex_config::ConfigRequirementsToml;
     use codex_config::WindowsRequirementsToml;
+    use codex_protocol::config_types::ShellEnvironmentPolicyFilter;
     use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
-    use codex_protocol::config_types::ShellEnvironmentPolicyRule;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -730,7 +748,7 @@ mod tests {
     }
 
     #[test]
-    fn requirements_api_preserves_otel_headers_and_shell_environment_policy() {
+    fn requirements_api_redacts_otel_headers_and_preserves_shell_environment_policy() {
         let requirements = toml::from_str(
             r#"
 [otel]
@@ -744,9 +762,7 @@ team = "codex"
 [shell_environment_policy]
 inherit = "core"
 ignore_default_excludes = false
-experimental_use_profile = false
-
-[shell_environment_policy.rules]
+[shell_environment_policy.filters]
 "*SECRET*" = "exclude"
 "HOME" = "include"
 "PATH" = "exclude"
@@ -763,7 +779,7 @@ MANAGED = "true"
                 .otel
                 .as_ref()
                 .and_then(|otel| otel.pointer("/exporter/otlp-http/headers")),
-            Some(&json!({"Authorization": "Bearer secret"}))
+            Some(&json!({"Authorization": "<redacted>"}))
         );
         assert_eq!(
             mapped.shell_environment_policy,
@@ -773,13 +789,16 @@ MANAGED = "true"
                 r#set: Some(HashMap::from([
                     ("MANAGED".to_string(), "true".to_string(),)
                 ])),
-                rules: Some(BTreeMap::from([
-                    ("*SECRET*".to_string(), ShellEnvironmentPolicyRule::Exclude,),
-                    ("HOME".to_string(), ShellEnvironmentPolicyRule::Include,),
-                    ("PATH".to_string(), ShellEnvironmentPolicyRule::Exclude,),
+                filters: Some(BTreeMap::from([
+                    (
+                        "*SECRET*".to_string(),
+                        ShellEnvironmentPolicyFilter::Exclude,
+                    ),
+                    ("HOME".to_string(), ShellEnvironmentPolicyFilter::Include,),
+                    ("PATH".to_string(), ShellEnvironmentPolicyFilter::Exclude,),
                 ])),
-                experimental_use_profile: Some(false),
             })
         );
+        assert!(!mapped.otel.unwrap().to_string().contains("Bearer secret"));
     }
 }

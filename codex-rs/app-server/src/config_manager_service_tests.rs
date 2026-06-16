@@ -458,7 +458,7 @@ writable_roots = ["~/code"]
 }
 
 #[tokio::test]
-async fn write_value_reports_override() {
+async fn write_value_rejects_managed_path_even_when_value_matches() {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(
         tmp.path().join(CONFIG_TOML_FILE),
@@ -477,7 +477,7 @@ async fn write_value_reports_override() {
         CloudConfigBundleLoader::default(),
     );
 
-    let result = service
+    let error = service
         .write_value(ConfigValueWriteParams {
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
             key_path: "approval_policy".to_string(),
@@ -486,7 +486,12 @@ async fn write_value_reports_override() {
             expected_version: None,
         })
         .await
-        .expect("result");
+        .expect_err("managed path should be read-only");
+
+    assert_eq!(
+        error.write_error_code(),
+        Some(ConfigWriteErrorCode::ConfigRequirementReadonly)
+    );
 
     let read_after = service
         .read(ConfigReadParams {
@@ -509,8 +514,10 @@ async fn write_value_reports_override() {
             file: managed_file.clone()
         }
     );
-    assert_eq!(result.status, WriteStatus::Ok);
-    assert!(result.overridden_metadata.is_none());
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).unwrap(),
+        "approval_policy = \"on-request\""
+    );
 }
 
 #[tokio::test]
@@ -636,7 +643,7 @@ async fn load_default_config_preserves_selected_user_config_path_after_load_erro
 }
 
 #[tokio::test]
-async fn invalid_user_value_rejected_even_if_overridden_by_managed() {
+async fn managed_write_is_rejected_before_value_validation() {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"user\"").unwrap();
 
@@ -663,7 +670,7 @@ async fn invalid_user_value_rejected_even_if_overridden_by_managed() {
 
     assert_eq!(
         error.write_error_code(),
-        Some(ConfigWriteErrorCode::ConfigValidationError)
+        Some(ConfigWriteErrorCode::ConfigRequirementReadonly)
     );
 
     let contents = std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
@@ -728,14 +735,81 @@ personality = true
 
     assert_eq!(
         error.write_error_code(),
-        Some(ConfigWriteErrorCode::ConfigValidationError)
+        Some(ConfigWriteErrorCode::ConfigRequirementReadonly)
     );
     assert!(
-        error
-            .to_string()
-            .contains("invalid value for `features`: `features.personality=false`"),
+        error.to_string().contains("feature_requirements"),
         "{error}"
     );
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).unwrap(),
+        ""
+    );
+}
+
+#[tokio::test]
+async fn write_value_allows_unmanaged_feature_next_to_requirement() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "").unwrap();
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![],
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            r#"
+[features]
+personality = true
+"#,
+        ),
+    );
+
+    service
+        .write_value(ConfigValueWriteParams {
+            file_path: None,
+            key_path: "features.mentions_v2".to_string(),
+            value: serde_json::json!(true),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect("unmanaged feature should remain writable");
+
+    assert!(
+        std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE))
+            .unwrap()
+            .contains("mentions_v2 = true")
+    );
+}
+
+#[tokio::test]
+async fn write_value_rejects_managed_exact_requirement_path() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "").unwrap();
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![],
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            r#"chatgpt_base_url = "https://managed.example""#,
+        ),
+    );
+
+    let error = service
+        .write_value(ConfigValueWriteParams {
+            file_path: None,
+            key_path: "chatgpt_base_url".to_string(),
+            value: serde_json::json!("https://user.example"),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect_err("managed config path should be read-only");
+
+    assert_eq!(
+        error.write_error_code(),
+        Some(ConfigWriteErrorCode::ConfigRequirementReadonly)
+    );
+    assert!(error.to_string().contains("chatgpt_base_url"));
     assert_eq!(
         std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).unwrap(),
         ""
@@ -803,42 +877,6 @@ async fn read_reports_managed_overrides_user_and_session_flags() {
             profile: None
         }
     );
-}
-
-#[tokio::test]
-async fn write_value_reports_managed_override() {
-    let tmp = tempdir().expect("tempdir");
-    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "").unwrap();
-
-    let managed_path = tmp.path().join("managed_config.toml");
-    std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
-    let managed_file = AbsolutePathBuf::try_from(managed_path.clone()).expect("managed file");
-
-    let service = ConfigManager::new_for_tests(
-        tmp.path().to_path_buf(),
-        vec![],
-        LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
-        CloudConfigBundleLoader::default(),
-    );
-
-    let result = service
-        .write_value(ConfigValueWriteParams {
-            file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
-            key_path: "approval_policy".to_string(),
-            value: serde_json::json!("on-request"),
-            merge_strategy: MergeStrategy::Replace,
-            expected_version: None,
-        })
-        .await
-        .expect("result");
-
-    assert_eq!(result.status, WriteStatus::OkOverridden);
-    let overridden = result.overridden_metadata.expect("overridden metadata");
-    assert_eq!(
-        overridden.overriding_layer.name,
-        ConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file }
-    );
-    assert_eq!(overridden.effective_value, serde_json::json!("never"));
 }
 
 #[tokio::test]
@@ -925,5 +963,46 @@ beta = "b"
     )?;
     assert_eq!(replaced, expected_replace);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn upsert_shell_environment_policy_uses_its_full_key_path() -> Result<()> {
+    let tmp = tempdir()?;
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(
+        &path,
+        r#"
+[shell_environment_policy]
+exclude = ["FLIP_*", "KEEP_*"]
+"#,
+    )?;
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+
+    service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(path.display().to_string()),
+            key_path: "shell_environment_policy".to_string(),
+            value: serde_json::json!({
+                "filters": {
+                    "FLIP_*": "include",
+                },
+            }),
+            merge_strategy: MergeStrategy::Upsert,
+            expected_version: None,
+        })
+        .await?;
+
+    let config: TomlValue = toml::from_str(&std::fs::read_to_string(path)?)?;
+    assert_eq!(
+        config,
+        toml::from_str(
+            r#"
+[shell_environment_policy.filters]
+"flip_*" = "include"
+"keep_*" = "exclude"
+"#,
+        )?
+    );
     Ok(())
 }

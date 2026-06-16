@@ -6,4 +6,4 @@
  * Assigns a shell environment variable pattern to the include-only or exclude
  * set. Includes do not re-add variables removed by another exclude pattern.
  */
-export type ShellEnvironmentPolicyRule = "include" | "exclude";
+export type ShellEnvironmentPolicyFilter = "include" | "exclude";

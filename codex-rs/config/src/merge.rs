@@ -5,10 +5,14 @@ use toml::Value as TomlValue;
 
 /// Merge config `overlay` into `base`, giving `overlay` precedence.
 pub fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
-    merge_toml_values_at_path(base, overlay, &mut Vec::new());
+    merge_toml_values_at_path(base, overlay, &[]);
 }
 
-fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &mut Vec<String>) {
+pub fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &[String]) {
+    merge_toml_values_recursive(base, overlay, &mut path.to_vec());
+}
+
+fn merge_toml_values_recursive(base: &mut TomlValue, overlay: &TomlValue, path: &mut Vec<String>) {
     prepare_shell_environment_policy_merge(base, overlay, path);
 
     if let TomlValue::Table(overlay_table) = overlay
@@ -31,7 +35,7 @@ fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &m
         for (key, value) in overlay_table {
             path.push(key.clone());
             if let Some(existing) = base_table.get_mut(&key) {
-                merge_toml_values_at_path(existing, &value, path);
+                merge_toml_values_recursive(existing, &value, path);
             } else {
                 base_table.insert(key, normalized_for_merge(&value, path));
             }
