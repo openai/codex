@@ -116,6 +116,7 @@ pub(super) async fn read_thread_by_rollout_path(
         });
     }
     if let Some(metadata) = read_sqlite_metadata(store, thread.thread_id).await {
+        thread.recency_at = metadata.recency_at;
         let existing_git_info = thread.git_info.take();
         let (fallback_sha, fallback_branch, fallback_origin_url) = match existing_git_info {
             Some(info) => (
@@ -550,6 +551,10 @@ mod tests {
         );
         builder.model_provider = Some(config.default_model_provider_id.clone());
         builder.git_branch = Some("sqlite-branch".to_string());
+        let recency_at = chrono::DateTime::parse_from_rfc3339("2026-01-03T12:00:00Z")
+            .expect("timestamp should parse")
+            .with_timezone(&Utc);
+        builder.recency_at = Some(recency_at);
         runtime
             .upsert_thread(&builder.build(config.default_model_provider_id.as_str()))
             .await
@@ -565,6 +570,7 @@ mod tests {
             .expect("read thread by rollout path");
 
         let git_info = thread.git_info.expect("git info should be present");
+        assert_eq!(thread.recency_at, recency_at);
         assert_eq!(git_info.branch.as_deref(), Some("sqlite-branch"));
         assert_eq!(
             git_info.commit_hash.as_ref().map(|sha| sha.0.as_str()),
