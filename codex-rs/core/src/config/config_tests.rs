@@ -51,7 +51,6 @@ use codex_config::types::OtelExporterKind;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::SessionPickerViewMode;
 use codex_config::types::SkillsConfig;
-use codex_config::types::SystemProxyFeatureModeToml;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_config::types::Tui;
@@ -1360,16 +1359,15 @@ sandbox = "elevated"
 }
 
 #[tokio::test]
-async fn system_proxy_feature_resolves_mode() -> std::io::Result<()> {
+async fn respect_system_proxy_feature_resolves_enabled() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
             features: Some(
                 toml::from_str(
                     r#"
-[system_proxy]
+[respect_system_proxy]
 enabled = true
-mode = "system"
 "#,
                 )
                 .expect("valid features"),
@@ -1381,50 +1379,18 @@ mode = "system"
     )
     .await?;
 
-    assert_eq!(
-        config
-            .system_proxy
-            .expect("system proxy should be active")
-            .mode,
-        Some(SystemProxyFeatureModeToml::System)
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn system_proxy_feature_mode_without_enabled_is_inactive() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            features: Some(
-                toml::from_str(
-                    r#"
-[system_proxy]
-mode = "system"
-"#,
-                )
-                .expect("valid features"),
-            ),
-            ..Default::default()
-        },
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(config.system_proxy, None);
+    assert!(config.respect_system_proxy);
     Ok(())
 }
 
 #[test]
-fn bootstrap_system_proxy_honors_feature_requirements() -> std::io::Result<()> {
+fn bootstrap_respect_system_proxy_honors_feature_requirements() -> std::io::Result<()> {
     let configured = ConfigToml {
         features: Some(
             toml::from_str(
                 r#"
-[system_proxy]
+[respect_system_proxy]
 enabled = true
-mode = "system"
 "#,
             )
             .expect("valid features"),
@@ -1433,71 +1399,50 @@ mode = "system"
     };
     let disabled = Sourced::new(
         FeatureRequirementsToml {
-            entries: BTreeMap::from([("system_proxy".to_string(), false)]),
+            entries: BTreeMap::from([("respect_system_proxy".to_string(), false)]),
         },
         RequirementSource::Unknown,
     );
-    assert_eq!(
-        resolve_bootstrap_system_proxy_config(&configured, Some(&disabled))?,
-        None
-    );
+    assert!(!resolve_bootstrap_respect_system_proxy(
+        &configured,
+        Some(&disabled)
+    )?);
 
-    let configured = ConfigToml {
-        features: Some(
-            toml::from_str(
-                r#"
-[system_proxy]
-mode = "system"
-"#,
-            )
-            .expect("valid features"),
-        ),
-        ..Default::default()
-    };
+    let configured = ConfigToml::default();
     let enabled = Sourced::new(
         FeatureRequirementsToml {
-            entries: BTreeMap::from([("system_proxy".to_string(), true)]),
+            entries: BTreeMap::from([("respect_system_proxy".to_string(), true)]),
         },
         RequirementSource::Unknown,
     );
-    assert_eq!(
-        resolve_bootstrap_system_proxy_config(&configured, Some(&enabled))?,
-        Some(SystemProxyFeatureConfigToml {
-            enabled: Some(true),
-            mode: Some(SystemProxyFeatureModeToml::System),
-        })
-    );
+    assert!(resolve_bootstrap_respect_system_proxy(
+        &configured,
+        Some(&enabled)
+    )?);
     Ok(())
 }
 
 #[tokio::test]
-async fn system_proxy_cli_enable_preserves_configured_mode() -> std::io::Result<()> {
+async fn respect_system_proxy_cli_override_enables_feature() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"
-[features.system_proxy]
+[features.respect_system_proxy]
 enabled = false
-mode = "system"
 "#,
     )?;
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cli_overrides(vec![(
-            "features.system_proxy.enabled".to_string(),
+            "features.respect_system_proxy.enabled".to_string(),
             toml::Value::Boolean(true),
         )])
         .build()
         .await?;
 
-    assert_eq!(
-        config.system_proxy,
-        Some(SystemProxyFeatureConfigToml {
-            enabled: Some(true),
-            mode: Some(SystemProxyFeatureModeToml::System),
-        })
-    );
+    assert!(config.respect_system_proxy);
     Ok(())
 }
 

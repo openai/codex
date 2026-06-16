@@ -183,13 +183,6 @@ fn network_proxy_is_experimental_and_disabled_by_default() {
 }
 
 #[test]
-fn system_proxy_is_under_development_and_disabled_by_default() {
-    assert_eq!(feature_for_key("system_proxy"), Some(Feature::SystemProxy));
-    assert_eq!(Feature::SystemProxy.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::SystemProxy.default_enabled(), false);
-}
-
-#[test]
 fn tool_search_is_removed_and_disabled_by_default() {
     assert_eq!(Feature::ToolSearch.stage(), Stage::Removed);
     assert_eq!(Feature::ToolSearch.default_enabled(), false);
@@ -630,7 +623,7 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
     features.enable(Feature::CodeMode);
     features.enable(Feature::MultiAgentV2);
     features.enable(Feature::NetworkProxy);
-    features.enable(Feature::SystemProxy);
+    features.enable(Feature::RespectSystemProxy);
 
     let mut features_toml = FeaturesToml {
         multi_agent_v2: Some(FeatureToml::Config(crate::MultiAgentV2ConfigToml {
@@ -643,10 +636,11 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
             proxy_url: Some("http://127.0.0.1:43128".to_string()),
             ..Default::default()
         })),
-        system_proxy: Some(FeatureToml::Config(crate::SystemProxyFeatureConfigToml {
-            enabled: Some(false),
-            mode: Some(crate::SystemProxyFeatureModeToml::System),
-        })),
+        respect_system_proxy: Some(FeatureToml::Config(
+            crate::RespectSystemProxyFeatureConfigToml {
+                enabled: Some(false),
+            },
+        )),
         entries: BTreeMap::new(),
         ..Default::default()
     };
@@ -679,11 +673,12 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
         }))
     );
     assert_eq!(
-        features_toml.system_proxy,
-        Some(FeatureToml::Config(crate::SystemProxyFeatureConfigToml {
-            enabled: Some(true),
-            mode: Some(crate::SystemProxyFeatureModeToml::System),
-        }))
+        features_toml.respect_system_proxy,
+        Some(FeatureToml::Config(
+            crate::RespectSystemProxyFeatureConfigToml {
+                enabled: Some(true),
+            },
+        ))
     );
     let replayed = Features::from_sources(
         FeatureConfigSource {

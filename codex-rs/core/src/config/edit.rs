@@ -883,7 +883,7 @@ impl ConfigEditsBuilder {
     /// persisting `false`, so the config does not pin the feature once it
     /// graduates to globally enabled.
     pub fn set_feature_enabled(mut self, key: &str, enabled: bool) -> Self {
-        if key == Feature::SystemProxy.key() {
+        if key == Feature::RespectSystemProxy.key() {
             self.edits.push(ConfigEdit::SetPath {
                 segments: vec![
                     "features".to_string(),

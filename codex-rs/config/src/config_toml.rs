@@ -986,52 +986,27 @@ mod tests {
     }
 
     #[test]
-    fn system_proxy_feature_accepts_mode() {
+    fn respect_system_proxy_feature_accepts_enabled() {
         let config: ConfigToml = toml::from_str(
             r#"
-            [features.system_proxy]
+            [features.respect_system_proxy]
             enabled = true
-            mode = "system"
             "#,
         )
-        .expect("system proxy config should deserialize");
+        .expect("respect system proxy config should deserialize");
 
         let features = config.features.expect("features should be present");
-        let codex_features::FeatureToml::Config(system_proxy) = features
-            .system_proxy
-            .expect("system proxy config should be present")
+        let codex_features::FeatureToml::Config(respect_system_proxy) = features
+            .respect_system_proxy
+            .expect("respect system proxy config should be present")
         else {
-            panic!("system proxy should be parsed as a structured feature");
+            panic!("respect system proxy should be parsed as a structured feature");
         };
-        assert_eq!(system_proxy.enabled, Some(true));
         assert_eq!(
-            system_proxy.mode,
-            Some(crate::types::SystemProxyFeatureModeToml::System)
-        );
-    }
-
-    #[test]
-    fn system_proxy_feature_mode_is_parsed_without_enabled_toggle() {
-        let config: ConfigToml = toml::from_str(
-            r#"
-            [features.system_proxy]
-            mode = "system"
-            "#,
-        )
-        .expect("system proxy config should deserialize");
-
-        let features = config.features.expect("features should be present");
-        assert_eq!(features.entries().get("system_proxy"), None);
-        let codex_features::FeatureToml::Config(system_proxy) = features
-            .system_proxy
-            .expect("system proxy config should be present")
-        else {
-            panic!("system proxy should be parsed as a structured feature");
-        };
-        assert_eq!(system_proxy.enabled, None);
-        assert_eq!(
-            system_proxy.mode,
-            Some(crate::types::SystemProxyFeatureModeToml::System)
+            respect_system_proxy,
+            codex_features::RespectSystemProxyFeatureConfigToml {
+                enabled: Some(true),
+            }
         );
     }
 

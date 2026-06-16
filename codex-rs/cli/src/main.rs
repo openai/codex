@@ -915,7 +915,7 @@ impl FeatureToggles {
     }
 
     fn config_override_key(feature: &str) -> String {
-        if feature == Feature::SystemProxy.key() {
+        if feature == Feature::RespectSystemProxy.key() {
             format!("features.{feature}.enabled")
         } else {
             format!("features.{feature}")
@@ -3951,17 +3951,17 @@ mod tests {
     }
 
     #[test]
-    fn feature_toggles_system_proxy_generate_structured_overrides() {
+    fn feature_toggles_respect_system_proxy_generate_structured_overrides() {
         let toggles = FeatureToggles {
-            enable: vec!["system_proxy".to_string()],
-            disable: vec!["system_proxy".to_string()],
+            enable: vec!["respect_system_proxy".to_string()],
+            disable: vec!["respect_system_proxy".to_string()],
         };
         let overrides = toggles.to_overrides().expect("valid features");
         assert_eq!(
             overrides,
             vec![
-                "features.system_proxy.enabled=true".to_string(),
-                "features.system_proxy.enabled=false".to_string(),
+                "features.respect_system_proxy.enabled=true".to_string(),
+                "features.respect_system_proxy.enabled=false".to_string(),
             ]
         );
     }

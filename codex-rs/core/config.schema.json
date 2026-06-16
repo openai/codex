@@ -579,6 +579,9 @@
             "resize_all_images": {
               "type": "boolean"
             },
+            "respect_system_proxy": {
+              "$ref": "#/definitions/FeatureToml_for_RespectSystemProxyFeatureConfigToml"
+            },
             "responses_websockets": {
               "type": "boolean"
             },
@@ -614,9 +617,6 @@
             },
             "steer": {
               "type": "boolean"
-            },
-            "system_proxy": {
-              "$ref": "#/definitions/FeatureToml_for_SystemProxyFeatureConfigToml"
             },
             "telepathy": {
               "type": "boolean"
@@ -879,13 +879,13 @@
         }
       ]
     },
-    "FeatureToml_for_SystemProxyFeatureConfigToml": {
+    "FeatureToml_for_RespectSystemProxyFeatureConfigToml": {
       "anyOf": [
         {
           "type": "boolean"
         },
         {
-          "$ref": "#/definitions/SystemProxyFeatureConfigToml"
+          "$ref": "#/definitions/RespectSystemProxyFeatureConfigToml"
         }
       ]
     },
@@ -2543,6 +2543,15 @@
         }
       ]
     },
+    "RespectSystemProxyFeatureConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -2687,27 +2696,6 @@
         }
       },
       "type": "object"
-    },
-    "SystemProxyFeatureConfigToml": {
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "mode": {
-          "$ref": "#/definitions/SystemProxyFeatureModeToml"
-        }
-      },
-      "type": "object"
-    },
-    "SystemProxyFeatureModeToml": {
-      "enum": [
-        "auto",
-        "env",
-        "system",
-        "direct"
-      ],
-      "type": "string"
     },
     "ThreadStoreToml": {
       "oneOf": [
@@ -4751,6 +4739,9 @@
         "resize_all_images": {
           "type": "boolean"
         },
+        "respect_system_proxy": {
+          "$ref": "#/definitions/FeatureToml_for_RespectSystemProxyFeatureConfigToml"
+        },
         "responses_websockets": {
           "type": "boolean"
         },
@@ -4786,9 +4777,6 @@
         },
         "steer": {
           "type": "boolean"
-        },
-        "system_proxy": {
-          "$ref": "#/definitions/FeatureToml_for_SystemProxyFeatureConfigToml"
         },
         "telepathy": {
           "type": "boolean"

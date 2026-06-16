@@ -945,9 +945,9 @@ fn sanitize_project_config(config: &mut TomlValue) -> Vec<String> {
         }
     }
     if let Some(features) = table.get_mut("features").and_then(TomlValue::as_table_mut)
-        && features.remove("system_proxy").is_some()
+        && features.remove("respect_system_proxy").is_some()
     {
-        ignored_keys.push("features.system_proxy".to_string());
+        ignored_keys.push("features.respect_system_proxy".to_string());
     }
 
     ignored_keys
