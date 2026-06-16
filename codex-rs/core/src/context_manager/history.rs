@@ -3,8 +3,6 @@ use crate::event_mapping::has_non_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_user_message_content;
 use crate::session::turn_context::TurnContext;
-use crate::tools::code_mode::PUBLIC_TOOL_NAME;
-use crate::tools::code_mode::WAIT_TOOL_NAME;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::models::BaseInstructions;
@@ -339,7 +337,6 @@ impl ContextManager {
 
     fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
         let policy_with_serialization_budget = policy * 1.2;
-        let output_is_pre_truncated = |call_id| self.output_is_pre_truncated(call_id);
         match item {
             ResponseItem::FunctionCallOutput {
                 call_id,
@@ -347,11 +344,7 @@ impl ContextManager {
                 metadata,
             } => ResponseItem::FunctionCallOutput {
                 call_id: call_id.clone(),
-                output: if output_is_pre_truncated(call_id) {
-                    output.clone()
-                } else {
-                    truncate_function_output_payload(output, policy_with_serialization_budget)
-                },
+                output: truncate_function_output_payload(output, policy_with_serialization_budget),
                 metadata: metadata.clone(),
             },
             ResponseItem::CustomToolCallOutput {
@@ -362,11 +355,7 @@ impl ContextManager {
             } => ResponseItem::CustomToolCallOutput {
                 call_id: call_id.clone(),
                 name: name.clone(),
-                output: if output_is_pre_truncated(call_id) {
-                    output.clone()
-                } else {
-                    truncate_function_output_payload(output, policy_with_serialization_budget)
-                },
+                output: truncate_function_output_payload(output, policy_with_serialization_budget),
                 metadata: metadata.clone(),
             },
             ResponseItem::Message { .. }
@@ -384,23 +373,6 @@ impl ContextManager {
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other => item.clone(),
         }
-    }
-
-    fn output_is_pre_truncated(&self, call_id: &str) -> bool {
-        self.items.iter().rev().find_map(|item| match item {
-            ResponseItem::CustomToolCall {
-                call_id: candidate,
-                name,
-                ..
-            } if candidate == call_id => Some(name == PUBLIC_TOOL_NAME),
-            ResponseItem::FunctionCall {
-                call_id: candidate,
-                name,
-                namespace,
-                ..
-            } if candidate == call_id => Some(namespace.is_none() && name == WAIT_TOOL_NAME),
-            _ => None,
-        }) == Some(true)
     }
 
     /// Walk backward from a rollback cut and trim contiguous pre-turn context-update items.

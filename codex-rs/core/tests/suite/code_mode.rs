@@ -964,7 +964,7 @@ text(result.output);
             &custom_tool_output_items(&second_mock.single_request(), "call-1"),
             /*index*/ 1
         ),
-        "Total output lines: 1\n\n0123456789…5 tokens truncated…0123456789"
+        "Warning: truncated output (original token count: 10)\nTotal output lines: 1\n\n0123456789…5 tokens truncated…0123456789"
     );
 
     Ok(())
@@ -972,7 +972,7 @@ text(result.output);
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_explicit_max_above_default_preserves_output() -> Result<()> {
+async fn code_mode_exec_explicit_max_above_default_preserves_variable() -> Result<()> {
     // TODO(anp): Remove after Wine exec returns complete nested-tool output to code mode.
     skip_if_wine_exec!(
         Ok(()),
@@ -981,7 +981,7 @@ async fn code_mode_exec_explicit_max_above_default_preserves_output() -> Result<
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let (_test, second_mock) = run_code_mode_turn(
+    let (_test, second_mock) = run_code_mode_turn_with_model_and_config(
         &server,
         "use exec_command from code mode",
         r#"// @exec: {"max_output_tokens": 20000}
@@ -989,17 +989,18 @@ const result = await tools.exec_command({
   cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\"",
   max_output_tokens: 20000
 });
-text(result.output);
+text(`Variable truncated: ${result.output.length === 50000 ? "False" : "True"}. Variable: ${result.output}`);
 "#,
+        "gpt-5.4",
+        |_| {},
     )
     .await?;
 
-    assert_eq!(
-        text_item(
-            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
-            /*index*/ 1
-        ),
-        "x".repeat(50_000)
+    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
+    let output = text_item(&items, /*index*/ 1);
+    assert_regex_match(
+        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
+        output,
     );
 
     Ok(())
@@ -1007,7 +1008,7 @@ text(result.output);
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_explicit_max_above_default_truncates_larger_output() -> Result<()> {
+async fn code_mode_exec_explicit_max_above_default_truncates_larger_variable() -> Result<()> {
     // TODO(anp): Remove after Wine exec returns complete nested-tool output to code mode.
     skip_if_wine_exec!(
         Ok(()),
@@ -1016,7 +1017,7 @@ async fn code_mode_exec_explicit_max_above_default_truncates_larger_output() -> 
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let (_test, second_mock) = run_code_mode_turn(
+    let (_test, second_mock) = run_code_mode_turn_with_model_and_config(
         &server,
         "use exec_command from code mode",
         r#"// @exec: {"max_output_tokens": 25000}
@@ -1024,21 +1025,19 @@ const result = await tools.exec_command({
   cmd: "python3 -c \"import sys; sys.stdout.write('A' * 90000)\"",
   max_output_tokens: 20000
 });
-text(result.output);
+const variableTruncated = result.output.includes("…2500 tokens truncated…");
+text(`Variable truncated: ${variableTruncated ? "True" : "False"}. Variable: ${result.output}`);
 "#,
+        "gpt-5.4",
+        |_| {},
     )
     .await?;
 
-    assert_eq!(
-        text_item(
-            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
-            /*index*/ 1
-        ),
-        format!(
-            "Warning: truncated output (original token count: 22500)\nTotal output lines: 1\n\n{}…2500 tokens truncated…{}",
-            "A".repeat(40_000),
-            "A".repeat(40_000)
-        )
+    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
+    let output = text_item(&items, /*index*/ 1);
+    assert_regex_match(
+        r"(?s)^Variable truncated: True\. Variable: .*…\d+ tokens truncated…A+$",
+        output,
     );
 
     Ok(())
@@ -1046,7 +1045,7 @@ text(result.output);
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_explicit_max_above_truncation_policy_preserves_output() -> Result<()> {
+async fn code_mode_exec_explicit_max_above_truncation_policy_preserves_variable() -> Result<()> {
     // TODO(anp): Remove after Wine exec returns complete nested-tool output to code mode.
     skip_if_wine_exec!(
         Ok(()),
@@ -1055,7 +1054,7 @@ async fn code_mode_exec_explicit_max_above_truncation_policy_preserves_output() 
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let (_test, second_mock) = run_code_mode_turn_with_config(
+    let (_test, second_mock) = run_code_mode_turn_with_model_and_config(
         &server,
         "use exec_command from code mode",
         r#"// @exec: {"max_output_tokens": 20000}
@@ -1063,20 +1062,20 @@ const result = await tools.exec_command({
   cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\"",
   max_output_tokens: 20000
 });
-text(result.output);
+text(`Variable truncated: ${result.output.length === 50000 ? "False" : "True"}. Variable: ${result.output}`);
 "#,
+        "gpt-5.4",
         |config| {
             config.tool_output_token_limit = Some(50);
         },
     )
     .await?;
 
-    assert_eq!(
-        text_item(
-            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
-            /*index*/ 1
-        ),
-        "x".repeat(50_000)
+    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
+    let output = text_item(&items, /*index*/ 1);
+    assert_regex_match(
+        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
+        output,
     );
 
     Ok(())
@@ -1084,7 +1083,7 @@ text(result.output);
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_without_max_preserves_output_beyond_default() -> Result<()> {
+async fn code_mode_exec_without_max_preserves_variable_beyond_default() -> Result<()> {
     // TODO(anp): Remove after Wine exec returns complete nested-tool output to code mode.
     skip_if_wine_exec!(
         Ok(()),
@@ -1093,24 +1092,25 @@ async fn code_mode_exec_without_max_preserves_output_beyond_default() -> Result<
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let (_test, second_mock) = run_code_mode_turn(
+    let (_test, second_mock) = run_code_mode_turn_with_model_and_config(
         &server,
         "use exec_command from code mode",
         r#"// @exec: {"max_output_tokens": 20000}
 const result = await tools.exec_command({
   cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\""
 });
-text(result.output);
+text(`Variable truncated: ${result.output.length === 50000 ? "False" : "True"}. Variable: ${result.output}`);
 "#,
+        "gpt-5.4",
+        |_| {},
     )
     .await?;
 
-    assert_eq!(
-        text_item(
-            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
-            /*index*/ 1
-        ),
-        "x".repeat(50_000)
+    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
+    let output = text_item(&items, /*index*/ 1);
+    assert_regex_match(
+        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
+        output,
     );
 
     Ok(())
@@ -1118,7 +1118,7 @@ text(result.output);
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_without_max_preserves_output_beyond_truncation_policy() -> Result<()> {
+async fn code_mode_exec_without_max_preserves_variable_beyond_truncation_policy() -> Result<()> {
     // TODO(anp): Remove after Wine exec returns complete nested-tool output to code mode.
     skip_if_wine_exec!(
         Ok(()),
@@ -1127,27 +1127,27 @@ async fn code_mode_exec_without_max_preserves_output_beyond_truncation_policy() 
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let (_test, second_mock) = run_code_mode_turn_with_config(
+    let (_test, second_mock) = run_code_mode_turn_with_model_and_config(
         &server,
         "use exec_command from code mode",
         r#"// @exec: {"max_output_tokens": 20000}
 const result = await tools.exec_command({
   cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\""
 });
-text(result.output);
+text(`Variable truncated: ${result.output.length === 50000 ? "False" : "True"}. Variable: ${result.output}`);
 "#,
+        "gpt-5.4",
         |config| {
             config.tool_output_token_limit = Some(50);
         },
     )
     .await?;
 
-    assert_eq!(
-        text_item(
-            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
-            /*index*/ 1
-        ),
-        "x".repeat(50_000)
+    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
+    let output = text_item(&items, /*index*/ 1);
+    assert_regex_match(
+        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
+        output,
     );
 
     Ok(())
