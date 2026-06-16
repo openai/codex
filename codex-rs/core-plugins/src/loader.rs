@@ -41,6 +41,7 @@ use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::find_plugin_manifest_path;
+use futures::StreamExt;
 use indexmap::IndexMap;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -60,6 +61,7 @@ const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
 const CONFIG_TOML_FILE: &str = "config.toml";
 const CURATED_PLUGIN_CACHE_VERSION_SHA_PREFIX_LEN: usize = 8;
+const MAX_CONCURRENT_PLUGIN_LOADS: usize = 8;
 
 /// Hook declarations and warnings resolved without loading other plugin capabilities.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -149,10 +151,22 @@ async fn load_plugins_from_layer_stack_with_scope(
     let mut configured_plugins: Vec<_> = configured_plugins.into_iter().collect();
     configured_plugins.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
-    let mut plugins = Vec::with_capacity(configured_plugins.len());
+    let loaded_plugins = futures::stream::iter(configured_plugins)
+        .map(|(configured_name, plugin)| {
+            let scope = &scope;
+            async move {
+                let loaded_plugin =
+                    load_plugin(configured_name.clone(), &plugin, store, scope).await;
+                (configured_name, loaded_plugin)
+            }
+        })
+        .buffered(MAX_CONCURRENT_PLUGIN_LOADS)
+        .collect::<Vec<_>>()
+        .await;
+
+    let mut plugins = Vec::with_capacity(loaded_plugins.len());
     let mut seen_mcp_server_names = HashMap::<String, String>::new();
-    for (configured_name, plugin) in configured_plugins {
-        let loaded_plugin = load_plugin(configured_name.clone(), &plugin, store, &scope).await;
+    for (configured_name, loaded_plugin) in loaded_plugins {
         for name in loaded_plugin.mcp_servers.keys() {
             if let Some(previous_plugin) =
                 seen_mcp_server_names.insert(name.clone(), configured_name.clone())
