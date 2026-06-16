@@ -1000,7 +1000,7 @@ fn format_file_system_entry_paths<'a>(
 ) -> String {
     entries
         .map(|entry| match &entry.path {
-            FileSystemPath::Path { path } => format!("`{}`", path.display()),
+            FileSystemPath::Path { path } => format!("`{path}`"),
             FileSystemPath::GlobPattern { pattern } => format!("glob `{pattern}`"),
             FileSystemPath::Special { value } => format!("`{}`", special_path_label(value)),
         })

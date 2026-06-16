@@ -89,6 +89,8 @@ fn app_server_exec_approval_request_preserves_permissions_context() {
         .expect("absolute read path");
     let write_path = AbsolutePathBuf::try_from(PathBuf::from(test_path_display("/tmp/write")))
         .expect("absolute write path");
+    let read_api_path = ApiPathString::from_abs_path(&read_path);
+    let write_api_path = ApiPathString::from_abs_path(&write_path);
     let request = exec_approval_request_from_params(
         AppServerCommandExecutionRequestApprovalParams {
             thread_id: "thread-1".to_string(),
@@ -109,8 +111,8 @@ fn app_server_exec_approval_request_preserves_permissions_context() {
                     enabled: Some(true),
                 }),
                 file_system: Some(AppServerAdditionalFileSystemPermissions {
-                    read: Some(vec![read_path.clone()]),
-                    write: Some(vec![write_path.clone()]),
+                    read: Some(vec![read_api_path.clone()]),
+                    write: Some(vec![write_api_path.clone()]),
                     glob_scan_max_depth: None,
                     entries: None,
                 }),
@@ -136,8 +138,8 @@ fn app_server_exec_approval_request_preserves_permissions_context() {
                 enabled: Some(true),
             }),
             file_system: Some(AppServerAdditionalFileSystemPermissions {
-                read: Some(vec![read_path]),
-                write: Some(vec![write_path]),
+                read: Some(vec![read_api_path]),
+                write: Some(vec![write_api_path]),
                 glob_scan_max_depth: None,
                 entries: None,
             }),
@@ -274,6 +276,8 @@ fn app_server_request_permissions_preserves_file_system_permissions() {
         .expect("absolute read path");
     let write_path = AbsolutePathBuf::try_from(PathBuf::from(test_path_display("/tmp/write")))
         .expect("absolute write path");
+    let read_api_path = ApiPathString::from_abs_path(&read_path);
+    let write_api_path = ApiPathString::from_abs_path(&write_path);
     let cwd =
         AbsolutePathBuf::try_from(PathBuf::from(test_path_display("/tmp"))).expect("absolute cwd");
 
@@ -290,13 +294,14 @@ fn app_server_request_permissions_preserves_file_system_permissions() {
                 enabled: Some(true),
             }),
             file_system: Some(AppServerAdditionalFileSystemPermissions {
-                read: Some(vec![read_path.clone()]),
-                write: Some(vec![write_path.clone()]),
+                read: Some(vec![read_api_path]),
+                write: Some(vec![write_api_path]),
                 glob_scan_max_depth: None,
                 entries: None,
             }),
         },
-    });
+    })
+    .expect("API paths should convert to native paths");
 
     assert_eq!(
         request.permissions,

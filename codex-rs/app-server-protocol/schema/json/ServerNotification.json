@@ -107,7 +107,7 @@
         "read": {
           "description": "This will be removed in favor of `entries`.",
           "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
+            "$ref": "#/definitions/ApiPathString"
           },
           "type": [
             "array",
@@ -117,7 +117,7 @@
         "write": {
           "description": "This will be removed in favor of `entries`.",
           "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
+            "$ref": "#/definitions/ApiPathString"
           },
           "type": [
             "array",
@@ -162,6 +162,9 @@
       "type": "object"
     },
     "AgentPath": {
+      "type": "string"
+    },
+    "ApiPathString": {
       "type": "string"
     },
     "AppBranding": {
@@ -1318,7 +1321,7 @@
         {
           "properties": {
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "$ref": "#/definitions/ApiPathString"
             },
             "type": {
               "enum": [

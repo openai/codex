@@ -444,7 +444,7 @@ fn renders_an_absolute_path_using_the_host_convention() {
         .expect("native path should be absolute");
 
     assert_eq!(
-        ApiPathString::from_abs_path(&path),
+        ApiPathString::from(path),
         ApiPathString(native_path.to_string())
     );
 }

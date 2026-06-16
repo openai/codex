@@ -260,7 +260,7 @@ async fn command_execution_request_approval_strips_additional_permissions_withou
                             network: None,
                             file_system: Some(
                                 codex_app_server_protocol::AdditionalFileSystemPermissions {
-                                    read: Some(vec![absolute_path("/tmp/allowed")]),
+                                    read: Some(vec![absolute_path("/tmp/allowed").into()]),
                                     write: None,
                                     glob_scan_max_depth: None,
                                     entries: None,
@@ -325,7 +325,7 @@ async fn command_execution_request_approval_keeps_additional_permissions_with_ca
                             network: None,
                             file_system: Some(
                                 codex_app_server_protocol::AdditionalFileSystemPermissions {
-                                    read: Some(vec![absolute_path("/tmp/allowed")]),
+                                    read: Some(vec![absolute_path("/tmp/allowed").into()]),
                                     write: None,
                                     glob_scan_max_depth: None,
                                     entries: None,
