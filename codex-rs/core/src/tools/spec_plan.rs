@@ -79,6 +79,7 @@ use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use codex_tools::UnifiedExecShellMode;
+use codex_tools::WAIT_FOR_ENVIRONMENT_TOOL_NAME;
 use codex_tools::can_request_original_image_detail;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
 use codex_tools::collect_request_plugin_install_entries;
@@ -934,6 +935,11 @@ fn append_extension_tool_executors(
 
     for executor in executors.iter().cloned() {
         let tool_name = executor.tool_name();
+        if tool_name == ToolName::plain(WAIT_FOR_ENVIRONMENT_TOOL_NAME)
+            && turn_context.pending_environment_selections.is_empty()
+        {
+            continue;
+        }
         if tool_name == ToolName::namespaced("web", "run")
             && (!standalone_web_search_enabled || !web_search_mode_on)
         {

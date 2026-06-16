@@ -203,6 +203,8 @@ pub enum Feature {
     TokenBudget,
     /// Expose an input-interruptible sleep tool.
     SleepTool,
+    /// Allow turns to start while selected remote environments are still resolving.
+    DeferredExecutor,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
     ToolCallMcpElicitation,
     /// Prompt Codex Apps connector auth failures through MCP URL elicitations.
@@ -1162,6 +1164,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SleepTool,
         key: "sleep_tool",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::DeferredExecutor,
+        key: "deferred_executor",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

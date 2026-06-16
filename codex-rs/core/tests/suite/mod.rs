@@ -48,6 +48,7 @@ mod compact;
 mod compact_remote;
 mod compact_remote_parity;
 mod compact_resume_fork;
+mod deferred_environment;
 mod deprecation_notice;
 mod exec;
 mod exec_policy;

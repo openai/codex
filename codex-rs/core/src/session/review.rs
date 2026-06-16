@@ -123,6 +123,7 @@ pub(super) async fn spawn_review_thread(
         parent_thread_id: parent_turn_context.parent_thread_id,
         thread_source: parent_turn_context.thread_source.clone(),
         environments: parent_turn_context.environments.clone(),
+        pending_environment_selections: parent_turn_context.pending_environment_selections.clone(),
         available_models,
         unified_exec_shell_mode,
         features: review_features,

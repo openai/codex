@@ -135,6 +135,7 @@ pub struct TurnContext {
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) environments: TurnEnvironmentSnapshot,
+    pub(crate) pending_environment_selections: Vec<TurnEnvironmentSelection>,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
@@ -307,6 +308,7 @@ impl TurnContext {
             parent_thread_id: self.parent_thread_id,
             thread_source: self.thread_source.clone(),
             environments: self.environments.clone(),
+            pending_environment_selections: self.pending_environment_selections.clone(),
             #[allow(deprecated)]
             cwd: self.cwd.clone(),
             current_date: self.current_date.clone(),
@@ -333,6 +335,63 @@ impl TurnContext {
             truncation_policy,
             dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
+            extension_data: Arc::clone(&self.extension_data),
+            turn_skills: self.turn_skills.clone(),
+            turn_timing_state: Arc::clone(&self.turn_timing_state),
+            server_model_warning_emitted: AtomicBool::new(
+                self.server_model_warning_emitted.load(Ordering::Relaxed),
+            ),
+            model_verification_emitted: AtomicBool::new(
+                self.model_verification_emitted.load(Ordering::Relaxed),
+            ),
+        }
+    }
+
+    pub(crate) fn with_environments(&self, environments: TurnEnvironmentSnapshot) -> Self {
+        Self {
+            sub_id: self.sub_id.clone(),
+            trace_id: self.trace_id.clone(),
+            realtime_active: self.realtime_active,
+            config: Arc::clone(&self.config),
+            auth_manager: self.auth_manager.clone(),
+            model_info: self.model_info.clone(),
+            comp_hash: self.comp_hash.clone(),
+            tool_mode: self.tool_mode,
+            session_telemetry: self.session_telemetry.clone(),
+            provider: self.provider.clone(),
+            reasoning_effort: self.reasoning_effort.clone(),
+            reasoning_summary: self.reasoning_summary,
+            session_source: self.session_source.clone(),
+            parent_thread_id: self.parent_thread_id,
+            thread_source: self.thread_source.clone(),
+            environments,
+            pending_environment_selections: Vec::new(),
+            #[allow(deprecated)]
+            cwd: self.cwd.clone(),
+            current_date: self.current_date.clone(),
+            timezone: self.timezone.clone(),
+            app_server_client_name: self.app_server_client_name.clone(),
+            developer_instructions: self.developer_instructions.clone(),
+            compact_prompt: self.compact_prompt.clone(),
+            user_instructions: self.user_instructions.clone(),
+            collaboration_mode: self.collaboration_mode.clone(),
+            multi_agent_version: self.multi_agent_version,
+            personality: self.personality,
+            approval_policy: self.approval_policy.clone(),
+            permission_profile: self.permission_profile.clone(),
+            network: self.network.clone(),
+            windows_sandbox_level: self.windows_sandbox_level,
+            shell_environment_policy: self.shell_environment_policy.clone(),
+            available_models: self.available_models.clone(),
+            unified_exec_shell_mode: self.unified_exec_shell_mode.clone(),
+            features: self.features.clone(),
+            ghost_snapshot: self.ghost_snapshot.clone(),
+            final_output_json_schema: self.final_output_json_schema.clone(),
+            codex_self_exe: self.codex_self_exe.clone(),
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+            truncation_policy: self.truncation_policy,
+            dynamic_tools: self.dynamic_tools.clone(),
+            turn_metadata_state: Arc::clone(&self.turn_metadata_state),
             extension_data: Arc::clone(&self.extension_data),
             turn_skills: self.turn_skills.clone(),
             turn_timing_state: Arc::clone(&self.turn_timing_state),
@@ -607,6 +666,7 @@ impl Session {
             parent_thread_id: session_configuration.parent_thread_id,
             thread_source: session_configuration.thread_source.clone(),
             environments,
+            pending_environment_selections: Vec::new(),
             #[allow(deprecated)]
             cwd,
             current_date: Some(current_date),
@@ -750,7 +810,18 @@ impl Session {
         final_output_json_schema: Option<Option<Value>>,
         multi_agent_runtime: TurnMultiAgentRuntime,
     ) -> Arc<TurnContext> {
-        let turn_environments = self.services.turn_environments.snapshot().await;
+        let deferred_executor = self.features.enabled(Feature::DeferredExecutor);
+        let ready_turn_environments = if deferred_executor {
+            self.services.turn_environments.snapshot_if_ready()
+        } else {
+            Some(self.services.turn_environments.snapshot().await)
+        };
+        let pending_environment_selections = if ready_turn_environments.is_none() {
+            session_configuration.environment_selections().to_vec()
+        } else {
+            Default::default()
+        };
+        let turn_environments = ready_turn_environments.unwrap_or_default();
         let primary_turn_environment = turn_environments.primary().cloned();
         let cwd = primary_turn_environment
             .as_ref()
@@ -826,6 +897,7 @@ impl Session {
             sub_id,
             skills_outcome,
         );
+        turn_context.pending_environment_selections = pending_environment_selections;
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 
         if let Some(final_schema) = final_output_json_schema {

@@ -142,6 +142,11 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
+    let mut turn_context = turn_context;
+    // Pick up an environment that became ready after this TurnContext was created.
+    if let Some(updated_turn_context) = attach_ready_environment(&sess, &turn_context) {
+        turn_context = updated_turn_context;
+    }
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
@@ -202,6 +207,21 @@ pub(crate) async fn run_turn(
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
 
     loop {
+        // Replace the frozen context only between model requests, then tell the model what changed.
+        if let Some(updated_turn_context) = attach_ready_environment(&sess, &turn_context) {
+            turn_context = updated_turn_context;
+            let environment_update = ContextualUserFragment::into(
+                crate::context::EnvironmentContext::environment_update_from_turn_context(
+                    turn_context.as_ref(),
+                    sess.user_shell().as_ref(),
+                ),
+            );
+            sess.record_conversation_items(
+                &turn_context,
+                std::slice::from_ref(&environment_update),
+            )
+            .await;
+        }
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
@@ -408,6 +428,18 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+fn attach_ready_environment(
+    sess: &Session,
+    turn_context: &Arc<TurnContext>,
+) -> Option<Arc<TurnContext>> {
+    // A pending selection means this frozen TurnContext still needs its resolved environment.
+    if turn_context.pending_environment_selections.is_empty() {
+        return None;
+    }
+    let environments = sess.services.turn_environments.snapshot_if_ready()?;
+    Some(Arc::new(turn_context.with_environments(environments)))
 }
 
 #[instrument(level = "trace", skip_all)]

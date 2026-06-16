@@ -179,6 +179,10 @@ impl ThreadEnvironments {
         self.snapshot_task.load_full().as_ref().clone().await
     }
 
+    pub(crate) fn snapshot_if_ready(&self) -> Option<TurnEnvironmentSnapshot> {
+        self.snapshot_task.load().peek().cloned()
+    }
+
     pub(crate) fn environment_manager(&self) -> Arc<EnvironmentManager> {
         Arc::clone(&self.environment_manager)
     }

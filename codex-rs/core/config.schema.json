@@ -464,6 +464,9 @@
             "default_mode_request_user_input": {
               "type": "boolean"
             },
+            "deferred_executor": {
+              "type": "boolean"
+            },
             "elevated_windows_sandbox": {
               "type": "boolean"
             },
@@ -4620,6 +4623,9 @@
           "type": "boolean"
         },
         "default_mode_request_user_input": {
+          "type": "boolean"
+        },
+        "deferred_executor": {
           "type": "boolean"
         },
         "elevated_windows_sandbox": {

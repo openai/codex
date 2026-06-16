@@ -1505,7 +1505,14 @@ impl Session {
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         self.services.skills_manager.clear_cache();
         self.services.plugins_manager.clear_cache();
-        let environments = self.services.turn_environments.snapshot().await;
+        let environments = if self.features.enabled(Feature::DeferredExecutor) {
+            self.services
+                .turn_environments
+                .snapshot_if_ready()
+                .unwrap_or_default()
+        } else {
+            self.services.turn_environments.snapshot().await
+        };
         let hooks = build_hooks_for_config(
             config.as_ref(),
             self.services.plugins_manager.as_ref(),

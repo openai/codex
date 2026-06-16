@@ -1,6 +1,8 @@
 //! Shared tool definitions and Responses API tool primitives that can live
 //! outside `codex-core`.
 
+pub const WAIT_FOR_ENVIRONMENT_TOOL_NAME: &str = "wait_for_environment";
+
 mod code_mode;
 mod dynamic_tool;
 mod function_call_error;

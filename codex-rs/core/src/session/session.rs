@@ -2,6 +2,7 @@ use super::input_queue::InputQueue;
 use super::*;
 use crate::agents_md::LoadedAgentsMd;
 use crate::config::ConstraintError;
+use crate::deferred_environment::EnvironmentWaiter;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::shell_snapshot::ShellSnapshot;
@@ -818,7 +819,16 @@ impl Session {
                 inherited_environments.unwrap_or_default(),
             ));
             turn_environments.update_selections(session_configuration.environment_selections());
-            let resolved_environments = turn_environments.snapshot().await;
+            if config.features.enabled(Feature::DeferredExecutor) {
+                thread_extension_data.insert(EnvironmentWaiter::new(Arc::clone(
+                    &turn_environments,
+                )));
+            }
+            let resolved_environments = if config.features.enabled(Feature::DeferredExecutor) {
+                turn_environments.snapshot_if_ready().unwrap_or_default()
+            } else {
+                turn_environments.snapshot().await
+            };
             session_configuration.loaded_agents_md = load_project_instructions(
                 config.as_ref(),
                 user_instructions,
@@ -1118,10 +1128,16 @@ impl Session {
                 cancel_token
             };
             let mcp_runtime_context = {
-                let turn_environments = sess.services.turn_environments.snapshot().await;
+                // Deferred startup uses the resolved cwd when ready without waiting for it.
+                let turn_environments = if config.features.enabled(Feature::DeferredExecutor) {
+                    sess.services.turn_environments.snapshot_if_ready()
+                } else {
+                    Some(sess.services.turn_environments.snapshot().await)
+                };
                 let cwd = turn_environments
-                    .primary()
-                    .map(|turn_environment| turn_environment.cwd().to_path_buf())
+                    .as_ref()
+                    .and_then(|environments| environments.primary())
+                    .map(|environment| environment.cwd().to_path_buf())
                     .unwrap_or_else(|| session_configuration.cwd().to_path_buf());
                 McpRuntimeContext::new(
                     sess.services.turn_environments.environment_manager(),

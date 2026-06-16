@@ -419,11 +419,27 @@ impl EnvironmentContext {
     }
 
     pub(crate) fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
-        let mut context = Self::new(
+        // A pending selection already provides its id and cwd, but not its executor-reported shell.
+        let environments = if !turn_context.pending_environment_selections.is_empty() {
+            turn_context
+                .pending_environment_selections
+                .iter()
+                .filter_map(|selection| {
+                    Some(EnvironmentContextEnvironment {
+                        id: selection.environment_id.clone(),
+                        cwd: selection.cwd.to_abs_path().ok()?,
+                        shell: "still loading".to_string(),
+                    })
+                })
+                .collect()
+        } else {
             EnvironmentContextEnvironment::from_turn_environments(
                 &turn_context.environments.turn_environments,
                 shell,
-            ),
+            )
+        };
+        let mut context = Self::new(
+            environments,
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
             Self::network_from_turn_context(turn_context),
@@ -434,6 +450,23 @@ impl EnvironmentContext {
             &turn_context.config.effective_workspace_roots(),
         ));
         context
+    }
+
+    pub(crate) fn environment_update_from_turn_context(
+        turn_context: &TurnContext,
+        shell: &Shell,
+    ) -> Self {
+        // Only environment details changed; the rest of the initial context remains in history.
+        Self::new(
+            EnvironmentContextEnvironment::from_turn_environments(
+                &turn_context.environments.turn_environments,
+                shell,
+            ),
+            /*current_date*/ None,
+            /*timezone*/ None,
+            /*network*/ None,
+            /*subagents*/ None,
+        )
     }
 
     pub(crate) fn from_turn_context_item(
