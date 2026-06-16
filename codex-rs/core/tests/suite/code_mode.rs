@@ -940,9 +940,24 @@ text(JSON.stringify(results));
     Ok(())
 }
 
+// This model uses token-based tool-output truncation, giving the downstream
+// history assertions a stable `…N tokens truncated…` marker.
+const TOKEN_POLICY_TEST_MODEL: &str = "gpt-5.4";
+
+/// Confirms JavaScript observed an intact result before its printed value was
+/// truncated while being recorded into conversation history.
+fn assert_result_variable_preserved_before_history_truncation(output: &str) {
+    assert_regex_match(
+        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
+        output,
+    );
+}
+
+// A nested `exec_command` limit applies to `result.output` inside JavaScript.
+// The outer code-mode and history budgets apply after the script calls `text`.
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_command_explicit_max_output_tokens_truncates() -> Result<()> {
+async fn code_mode_exec_nested_limit_formats_truncated_result_with_warning() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -972,7 +987,8 @@ text(result.output);
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_explicit_max_above_default_preserves_variable() -> Result<()> {
+async fn code_mode_exec_nested_limit_preserves_result_variable_before_default_history_truncation()
+-> Result<()> {
     // TODO(anp): Remove after Wine exec returns complete nested-tool output to code mode.
     skip_if_wine_exec!(
         Ok(()),
@@ -989,26 +1005,24 @@ const result = await tools.exec_command({
   cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\"",
   max_output_tokens: 20000
 });
-text(`Variable truncated: ${result.output.length === 50000 ? "False" : "True"}. Variable: ${result.output}`);
+const resultVariableWasTruncated = result.output.length !== 50000;
+text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Variable: ${result.output}`);
 "#,
-        "gpt-5.4",
+        TOKEN_POLICY_TEST_MODEL,
         |_| {},
     )
     .await?;
 
     let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
     let output = text_item(&items, /*index*/ 1);
-    assert_regex_match(
-        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
-        output,
-    );
+    assert_result_variable_preserved_before_history_truncation(output);
 
     Ok(())
 }
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_explicit_max_above_default_truncates_larger_variable() -> Result<()> {
+async fn code_mode_exec_nested_limit_truncates_result_variable_when_exceeded() -> Result<()> {
     // TODO(anp): Remove after Wine exec returns complete nested-tool output to code mode.
     skip_if_wine_exec!(
         Ok(()),
@@ -1025,16 +1039,18 @@ const result = await tools.exec_command({
   cmd: "python3 -c \"import sys; sys.stdout.write('A' * 90000)\"",
   max_output_tokens: 20000
 });
-const variableTruncated = result.output.includes("…2500 tokens truncated…");
-text(`Variable truncated: ${variableTruncated ? "True" : "False"}. Variable: ${result.output}`);
+const resultVariableWasTruncated = result.output.includes("…2500 tokens truncated…");
+text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Variable: ${result.output}`);
 "#,
-        "gpt-5.4",
+        TOKEN_POLICY_TEST_MODEL,
         |_| {},
     )
     .await?;
 
     let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
     let output = text_item(&items, /*index*/ 1);
+    // The boolean describes the nested result; the marker below comes from
+    // history truncating the value emitted with `text` afterward.
     assert_regex_match(
         r"(?s)^Variable truncated: True\. Variable: .*…\d+ tokens truncated…A+$",
         output,
@@ -1045,7 +1061,8 @@ text(`Variable truncated: ${variableTruncated ? "True" : "False"}. Variable: ${r
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_explicit_max_above_truncation_policy_preserves_variable() -> Result<()> {
+async fn code_mode_exec_nested_limit_preserves_result_variable_before_configured_history_truncation()
+-> Result<()> {
     // TODO(anp): Remove after Wine exec returns complete nested-tool output to code mode.
     skip_if_wine_exec!(
         Ok(()),
@@ -1062,9 +1079,10 @@ const result = await tools.exec_command({
   cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\"",
   max_output_tokens: 20000
 });
-text(`Variable truncated: ${result.output.length === 50000 ? "False" : "True"}. Variable: ${result.output}`);
+const resultVariableWasTruncated = result.output.length !== 50000;
+text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Variable: ${result.output}`);
 "#,
-        "gpt-5.4",
+        TOKEN_POLICY_TEST_MODEL,
         |config| {
             config.tool_output_token_limit = Some(50);
         },
@@ -1073,17 +1091,15 @@ text(`Variable truncated: ${result.output.length === 50000 ? "False" : "True"}. 
 
     let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
     let output = text_item(&items, /*index*/ 1);
-    assert_regex_match(
-        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
-        output,
-    );
+    assert_result_variable_preserved_before_history_truncation(output);
 
     Ok(())
 }
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_without_max_preserves_variable_beyond_default() -> Result<()> {
+async fn code_mode_exec_without_nested_limit_preserves_result_variable_before_default_history_truncation()
+-> Result<()> {
     // TODO(anp): Remove after Wine exec returns complete nested-tool output to code mode.
     skip_if_wine_exec!(
         Ok(()),
@@ -1099,26 +1115,25 @@ async fn code_mode_exec_without_max_preserves_variable_beyond_default() -> Resul
 const result = await tools.exec_command({
   cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\""
 });
-text(`Variable truncated: ${result.output.length === 50000 ? "False" : "True"}. Variable: ${result.output}`);
+const resultVariableWasTruncated = result.output.length !== 50000;
+text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Variable: ${result.output}`);
 "#,
-        "gpt-5.4",
+        TOKEN_POLICY_TEST_MODEL,
         |_| {},
     )
     .await?;
 
     let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
     let output = text_item(&items, /*index*/ 1);
-    assert_regex_match(
-        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
-        output,
-    );
+    assert_result_variable_preserved_before_history_truncation(output);
 
     Ok(())
 }
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_without_max_preserves_variable_beyond_truncation_policy() -> Result<()> {
+async fn code_mode_exec_without_nested_limit_preserves_result_variable_before_configured_history_truncation()
+-> Result<()> {
     // TODO(anp): Remove after Wine exec returns complete nested-tool output to code mode.
     skip_if_wine_exec!(
         Ok(()),
@@ -1134,9 +1149,10 @@ async fn code_mode_exec_without_max_preserves_variable_beyond_truncation_policy(
 const result = await tools.exec_command({
   cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\""
 });
-text(`Variable truncated: ${result.output.length === 50000 ? "False" : "True"}. Variable: ${result.output}`);
+const resultVariableWasTruncated = result.output.length !== 50000;
+text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Variable: ${result.output}`);
 "#,
-        "gpt-5.4",
+        TOKEN_POLICY_TEST_MODEL,
         |config| {
             config.tool_output_token_limit = Some(50);
         },
@@ -1145,17 +1161,16 @@ text(`Variable truncated: ${result.output.length === 50000 ? "False" : "True"}. 
 
     let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
     let output = text_item(&items, /*index*/ 1);
-    assert_regex_match(
-        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
-        output,
-    );
+    assert_result_variable_preserved_before_history_truncation(output);
 
     Ok(())
 }
 
+// The outer directive limits output after JavaScript emits it; it does not
+// limit `result.output` returned by the nested command.
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_explicit_max_output_tokens_truncates() -> Result<()> {
+async fn code_mode_exec_outer_limit_truncates_emitted_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
