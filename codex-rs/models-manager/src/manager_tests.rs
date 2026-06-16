@@ -232,6 +232,7 @@ c2ln",
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await
     .expect("auth should load")

@@ -2213,6 +2213,7 @@ mod tests {
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
+            /*auth_route_config*/ None,
         )
         .await;
         let mut auth_recovery = auth_manager.unauthorized_recovery();
@@ -2310,6 +2311,7 @@ mod tests {
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
+            /*auth_route_config*/ None,
         )
         .await;
         let mut auth_recovery = auth_manager.unauthorized_recovery();
@@ -2432,6 +2434,7 @@ mod tests {
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
+            /*auth_route_config*/ None,
         )
         .await;
         let mut auth_recovery = auth_manager.unauthorized_recovery();

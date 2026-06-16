@@ -50,6 +50,7 @@ async fn auth_manager_with_api_key() -> Arc<AuthManager> {
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
+            /*auth_route_config*/ None,
         )
         .await,
     )
@@ -79,6 +80,7 @@ async fn auth_manager_with_plan_and_identity(
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
+            /*auth_route_config*/ None,
         )
         .await,
     )
@@ -637,6 +639,7 @@ async fn get_bundle_recovers_after_unauthorized_reload() {
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
+            /*auth_route_config*/ None,
         )
         .await,
     );
@@ -692,6 +695,7 @@ async fn get_bundle_recovers_after_unauthorized_reload_updates_cache_identity() 
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
+            /*auth_route_config*/ None,
         )
         .await,
     );
@@ -755,6 +759,7 @@ async fn get_bundle_surfaces_auth_recovery_message() {
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
+            /*auth_route_config*/ None,
         )
         .await,
     );
@@ -820,6 +825,7 @@ async fn get_bundle_unauthorized_without_recovery_uses_generic_message() {
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
+            /*auth_route_config*/ None,
         )
         .await,
     );

@@ -348,6 +348,7 @@ impl AccountRequestProcessor {
                 config.forced_chatgpt_workspace_id.clone(),
                 config.cli_auth_credentials_store_mode,
                 config.auth_keyring_backend_kind(),
+                config.auth_route_config(),
             )
         };
         #[cfg(debug_assertions)]

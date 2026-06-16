@@ -62,6 +62,7 @@ async fn login_with_bedrock_api_key_replaces_openai_auth() -> anyhow::Result<()>
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await;
 
@@ -109,6 +110,7 @@ async fn logout_removes_bedrock_auth() -> anyhow::Result<()> {
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await;
 
@@ -132,6 +134,7 @@ async fn bedrock_only_auth_storage_creates_primary_auth() -> anyhow::Result<()> 
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await;
 

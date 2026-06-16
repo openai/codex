@@ -16,7 +16,8 @@ use super::manager::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
 use super::manager::oauth_client_id;
 use super::storage::AuthDotJson;
 use super::util::try_parse_error_message;
-use crate::default_client::create_client;
+use crate::default_client::create_default_auth_client;
+use crate::outbound_proxy::AuthRouteConfig;
 use crate::token_data::TokenData;
 
 const REVOKE_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -53,13 +54,14 @@ struct RevokeTokenRequest<'a> {
 
 pub(super) async fn revoke_auth_tokens(
     auth_dot_json: Option<&AuthDotJson>,
+    auth_route_config: Option<&AuthRouteConfig>,
 ) -> Result<(), std::io::Error> {
     let Some((token, kind)) = auth_dot_json.and_then(revocable_token) else {
         return Ok(());
     };
 
-    let client = create_client();
     let endpoint = revoke_token_endpoint();
+    let client = create_default_auth_client(&endpoint, auth_route_config)?;
     revoke_oauth_token(&client, endpoint.as_str(), token, kind, REVOKE_HTTP_TIMEOUT).await
 }
 

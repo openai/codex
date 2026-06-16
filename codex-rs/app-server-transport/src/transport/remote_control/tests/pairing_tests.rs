@@ -538,6 +538,7 @@ async fn remote_control_handle_recovers_auth_before_refreshing_pairing() {
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await;
     let mut fresh_auth = remote_control_auth_dot_json(Some("account_id"));
@@ -806,6 +807,7 @@ async fn remote_control_handle_discards_pairing_response_after_auth_change() {
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await;
     let remote_handle =

@@ -61,6 +61,7 @@ async fn logout_with_revoke_revokes_refresh_token_then_removes_auth() -> Result<
         codex_home.path(),
         AuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await?;
 
@@ -119,6 +120,7 @@ async fn logout_with_revoke_uses_stored_auth_when_access_token_env_is_set() -> R
         codex_home.path(),
         AuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await?;
 
@@ -161,6 +163,7 @@ async fn logout_with_revoke_removes_auth_when_revoke_fails() -> Result<()> {
         codex_home.path(),
         AuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await?;
 
@@ -203,6 +206,7 @@ async fn auth_manager_logout_with_revoke_uses_cached_auth() -> Result<()> {
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await;
     save_auth(

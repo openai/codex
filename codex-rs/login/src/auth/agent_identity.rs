@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use codex_agent_identity::AgentIdentityKey;
+use codex_agent_identity::agent_task_registration_url;
 use codex_agent_identity::register_agent_task;
 use codex_protocol::account::PlanType as AccountPlanType;
 
-use crate::default_client::build_reqwest_client;
+use crate::default_client::build_default_auth_reqwest_client;
+use crate::outbound_proxy::AuthRouteConfig;
 
 use super::storage::AgentIdentityAuthRecord;
 
@@ -20,12 +22,16 @@ struct AgentIdentityAuthInner {
 }
 
 impl AgentIdentityAuth {
-    pub async fn load(
+    pub(crate) async fn load(
         record: AgentIdentityAuthRecord,
         agent_identity_authapi_base_url: &str,
+        auth_route_config: Option<&AuthRouteConfig>,
     ) -> std::io::Result<Self> {
+        let task_registration_url =
+            agent_task_registration_url(agent_identity_authapi_base_url, &record.agent_runtime_id);
+        let client = build_default_auth_reqwest_client(&task_registration_url, auth_route_config)?;
         let run_task_id = register_agent_task(
-            &build_reqwest_client(),
+            &client,
             agent_identity_authapi_base_url,
             key_for_record(&record),
         )
@@ -131,9 +137,12 @@ mod tests {
             .mount(&server)
             .await;
 
-        let auth =
-            AgentIdentityAuth::load(agent_identity_record_with_generated_key(), &server.uri())
-                .await?;
+        let auth = AgentIdentityAuth::load(
+            agent_identity_record_with_generated_key(),
+            &server.uri(),
+            /*auth_route_config*/ None,
+        )
+        .await?;
 
         assert_eq!(auth.run_task_id(), "task-run-1");
         let requests = server
@@ -184,10 +193,11 @@ mod tests {
             .mount(&server)
             .await;
         let record = agent_identity_record_with_generated_key();
-        AgentIdentityAuth::load(record.clone(), &server.uri())
+        AgentIdentityAuth::load(record.clone(), &server.uri(), /*auth_route_config*/ None)
             .await
             .expect_err("first registration should fail");
-        let auth = AgentIdentityAuth::load(record, &server.uri()).await?;
+        let auth = AgentIdentityAuth::load(record, &server.uri(), /*auth_route_config*/ None)
+            .await?;
 
         assert_eq!(request_count.load(Ordering::SeqCst), 2);
         assert_eq!(auth.run_task_id(), "task-run-1");

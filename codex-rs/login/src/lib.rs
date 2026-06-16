@@ -3,6 +3,7 @@ pub mod auth_env_telemetry;
 pub mod token_data;
 
 mod device_code_auth;
+mod outbound_proxy;
 mod pkce;
 mod server;
 
@@ -52,4 +53,5 @@ pub use auth::read_openai_api_key_from_env;
 pub use auth::save_auth;
 pub use auth_env_telemetry::AuthEnvTelemetry;
 pub use auth_env_telemetry::collect_auth_env_telemetry;
+pub use outbound_proxy::AuthRouteConfig;
 pub use token_data::TokenData;

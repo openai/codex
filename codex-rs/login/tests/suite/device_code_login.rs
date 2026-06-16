@@ -112,6 +112,7 @@ fn server_opts(
         /*forced_chatgpt_workspace_id*/ None,
         cli_auth_credentials_store_mode,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     );
     opts.issuer = issuer;
     opts.open_browser = false;
@@ -277,6 +278,7 @@ async fn device_code_login_integration_persists_without_api_key_on_exchange_fail
         /*forced_chatgpt_workspace_id*/ None,
         AuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     );
     opts.issuer = issuer;
     opts.open_browser = false;
@@ -332,6 +334,7 @@ async fn device_code_login_integration_handles_error_payload() -> anyhow::Result
         /*forced_chatgpt_workspace_id*/ None,
         AuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     );
     opts.issuer = issuer;
     opts.open_browser = false;

@@ -1219,6 +1219,7 @@ impl RefreshTokenTestContext {
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
+            /*auth_route_config*/ None,
         )
         .await;
 

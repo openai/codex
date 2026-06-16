@@ -51,6 +51,7 @@ pub async fn load_auth_manager(chatgpt_base_url: Option<String>) -> Option<AuthM
             config.cli_auth_credentials_store_mode,
             chatgpt_base_url.or(Some(config.chatgpt_base_url.clone())),
             config.auth_keyring_backend_kind(),
+            config.auth_route_config(),
         )
         .await,
     )
