@@ -35,7 +35,7 @@ use codex_protocol::user_input::UserInput as CoreUserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
-use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::LegacyAppPathString;
 use pretty_assertions::assert_eq;
 use serde_json::Value as JsonValue;
 use serde_json::json;
@@ -579,8 +579,8 @@ fn additional_file_system_permissions_populates_entries_for_legacy_roots() {
     );
 
     let permissions = AdditionalFileSystemPermissions::from(core_permissions.clone());
-    let read_only_api_path = ApiPathString::from_abs_path(&read_only_path);
-    let read_write_api_path = ApiPathString::from_abs_path(&read_write_path);
+    let read_only_api_path = LegacyAppPathString::from_abs_path(&read_only_path);
+    let read_write_api_path = LegacyAppPathString::from_abs_path(&read_write_path);
 
     assert_eq!(
         permissions,

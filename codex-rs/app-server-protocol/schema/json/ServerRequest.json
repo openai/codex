@@ -27,7 +27,7 @@
         "read": {
           "description": "This will be removed in favor of `entries`.",
           "items": {
-            "$ref": "#/definitions/ApiPathString"
+            "$ref": "#/definitions/LegacyAppPathString"
           },
           "type": [
             "array",
@@ -37,7 +37,7 @@
         "write": {
           "description": "This will be removed in favor of `entries`.",
           "items": {
-            "$ref": "#/definitions/ApiPathString"
+            "$ref": "#/definitions/LegacyAppPathString"
           },
           "type": [
             "array",
@@ -83,9 +83,6 @@
         }
       },
       "type": "object"
-    },
-    "ApiPathString": {
-      "type": "string"
     },
     "ApplyPatchApprovalParams": {
       "properties": {
@@ -643,7 +640,7 @@
         {
           "properties": {
             "path": {
-              "$ref": "#/definitions/ApiPathString"
+              "$ref": "#/definitions/LegacyAppPathString"
             },
             "type": {
               "enum": [
@@ -825,6 +822,9 @@
           "type": "object"
         }
       ]
+    },
+    "LegacyAppPathString": {
+      "type": "string"
     },
     "McpElicitationArrayType": {
       "enum": [

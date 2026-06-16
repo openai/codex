@@ -23,4 +23,4 @@
  * [`AbsolutePathBuf`]. Relative path text remains valid until an operation
  * such as [`Self::to_path_uri`] requires an absolute path.
  */
-export type ApiPathString = string;
+export type LegacyAppPathString = string;

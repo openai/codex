@@ -1,7 +1,7 @@
 use std::ffi::OsStr;
 
 use anyhow::Result;
-use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 
@@ -28,7 +28,7 @@ impl TestEnvironment {
         }
     }
 
-    pub(crate) fn remote_cwd(&self, instance_id: &str) -> Result<Option<ApiPathString>> {
+    pub(crate) fn remote_cwd(&self, instance_id: &str) -> Result<Option<LegacyAppPathString>> {
         let path_uri = match self {
             Self::Local => return Ok(None),
             Self::Docker { .. } => {
@@ -40,7 +40,7 @@ impl TestEnvironment {
                 PathUri::parse(&format!("file:///C:/codex-core-test-cwd-{instance_id}"))?
             }
         };
-        Ok(Some(ApiPathString::from_path_uri(
+        Ok(Some(LegacyAppPathString::from_path_uri(
             &path_uri,
             self.path_convention(),
         )?))

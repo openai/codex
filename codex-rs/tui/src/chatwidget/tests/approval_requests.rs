@@ -89,8 +89,8 @@ fn app_server_exec_approval_request_preserves_permissions_context() {
         .expect("absolute read path");
     let write_path = AbsolutePathBuf::try_from(PathBuf::from(test_path_display("/tmp/write")))
         .expect("absolute write path");
-    let read_api_path = ApiPathString::from_abs_path(&read_path);
-    let write_api_path = ApiPathString::from_abs_path(&write_path);
+    let read_api_path = LegacyAppPathString::from_abs_path(&read_path);
+    let write_api_path = LegacyAppPathString::from_abs_path(&write_path);
     let request = exec_approval_request_from_params(
         AppServerCommandExecutionRequestApprovalParams {
             thread_id: "thread-1".to_string(),
@@ -276,8 +276,8 @@ fn app_server_request_permissions_preserves_file_system_permissions() {
         .expect("absolute read path");
     let write_path = AbsolutePathBuf::try_from(PathBuf::from(test_path_display("/tmp/write")))
         .expect("absolute write path");
-    let read_api_path = ApiPathString::from_abs_path(&read_path);
-    let write_api_path = ApiPathString::from_abs_path(&write_path);
+    let read_api_path = LegacyAppPathString::from_abs_path(&read_path);
+    let write_api_path = LegacyAppPathString::from_abs_path(&write_path);
     let cwd =
         AbsolutePathBuf::try_from(PathBuf::from(test_path_display("/tmp"))).expect("absolute cwd");
 
