@@ -587,6 +587,9 @@
             "resize_all_images": {
               "type": "boolean"
             },
+            "respect_system_proxy": {
+              "type": "boolean"
+            },
             "responses_websockets": {
               "type": "boolean"
             },
@@ -4743,6 +4746,9 @@
           "type": "boolean"
         },
         "resize_all_images": {
+          "type": "boolean"
+        },
+        "respect_system_proxy": {
           "type": "boolean"
         },
         "responses_websockets": {
