@@ -1,11 +1,9 @@
 use super::*;
-use codex_protocol::AgentPath;
 use codex_protocol::approvals::ElicitationRequest as CoreElicitationRequest;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::FileChangeItem;
 use codex_protocol::items::ImageViewItem;
-use codex_protocol::items::InterAgentCommunicationItem;
 use codex_protocol::items::McpToolCallItem;
 use codex_protocol::items::McpToolCallStatus as CoreMcpToolCallStatus;
 use codex_protocol::items::ReasoningItem;
@@ -2495,35 +2493,6 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
                 }],
                 thread_ids: vec!["rollout-1".to_string()],
             }),
-        }
-    );
-
-    let communication_item = TurnItem::InterAgentCommunication(InterAgentCommunicationItem {
-        id: "communication-1".to_string(),
-        source_call_id: Some("call-1".to_string()),
-        sender: AgentPath::root(),
-        receiver: AgentPath::root().join("worker").expect("receiver path"),
-        other_receivers: vec![
-            AgentPath::root()
-                .join("reviewer")
-                .expect("other receiver path"),
-        ],
-        content: "please check this".to_string(),
-        encrypted: true,
-        trigger_turn: false,
-    });
-
-    assert_eq!(
-        ThreadItem::from(communication_item),
-        ThreadItem::InterAgentCommunication {
-            id: "communication-1".to_string(),
-            source_call_id: Some("call-1".to_string()),
-            sender: "/root".to_string(),
-            receiver: "/root/worker".to_string(),
-            other_receivers: vec!["/root/reviewer".to_string()],
-            content: "please check this".to_string(),
-            encrypted: true,
-            trigger_turn: false,
         }
     );
 

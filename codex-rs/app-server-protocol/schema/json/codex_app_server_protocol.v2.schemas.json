@@ -15125,59 +15125,6 @@
           "type": "object"
         },
         {
-          "properties": {
-            "content": {
-              "type": "string"
-            },
-            "encrypted": {
-              "type": "boolean"
-            },
-            "id": {
-              "type": "string"
-            },
-            "otherReceivers": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "receiver": {
-              "type": "string"
-            },
-            "sender": {
-              "type": "string"
-            },
-            "sourceCallId": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "triggerTurn": {
-              "type": "boolean"
-            },
-            "type": {
-              "enum": [
-                "interAgentCommunication"
-              ],
-              "title": "InterAgentCommunicationThreadItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "content",
-            "encrypted",
-            "id",
-            "otherReceivers",
-            "receiver",
-            "sender",
-            "triggerTurn",
-            "type"
-          ],
-          "title": "InterAgentCommunicationThreadItem",
-          "type": "object"
-        },
-        {
           "description": "EXPERIMENTAL - proposed plan item content. The completed plan item is authoritative and may not match the concatenation of `PlanDelta` text.",
           "properties": {
             "id": {
