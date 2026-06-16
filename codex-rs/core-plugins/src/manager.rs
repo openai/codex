@@ -38,6 +38,7 @@ use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
 use crate::marketplace_upgrade::configured_git_marketplace_names;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
+use crate::remote::RecommendedPluginsMode;
 use crate::remote::RemoteInstalledPlugin;
 use crate::remote::RemotePluginCatalogError;
 use crate::remote::RemotePluginServiceConfig;
@@ -80,6 +81,7 @@ use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
+use tokio::sync::OnceCell;
 use tokio::sync::Semaphore;
 use tracing::instrument;
 use tracing::warn;
@@ -118,6 +120,11 @@ struct FeaturedPluginIdsCacheKey {
     account_id: Option<String>,
     chatgpt_user_id: Option<String>,
     is_workspace_account: bool,
+}
+
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct RecommendedPluginsCacheKey {
+    chatgpt_base_url: String,
 }
 
 #[derive(Clone)]
@@ -206,6 +213,12 @@ fn featured_plugin_ids_cache_key(
         account_id: auth.and_then(CodexAuth::get_account_id),
         chatgpt_user_id: auth.and_then(CodexAuth::get_chatgpt_user_id),
         is_workspace_account: auth.is_some_and(CodexAuth::is_workspace_account),
+    }
+}
+
+fn recommended_plugins_cache_key(config: &PluginsConfigInput) -> RecommendedPluginsCacheKey {
+    RecommendedPluginsCacheKey {
+        chatgpt_base_url: config.chatgpt_base_url.clone(),
     }
 }
 
@@ -318,6 +331,9 @@ pub struct PluginsManager {
     codex_home: PathBuf,
     store: PluginStore,
     featured_plugin_ids_cache: RwLock<Option<CachedFeaturedPluginIds>>,
+    recommended_plugins_cache: RwLock<HashMap<RecommendedPluginsCacheKey, RecommendedPluginsMode>>,
+    recommended_plugins_refreshes:
+        RwLock<HashMap<RecommendedPluginsCacheKey, Arc<OnceCell<RecommendedPluginsMode>>>>,
     configured_marketplace_upgrade_state: RwLock<ConfiguredMarketplaceUpgradeState>,
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
     // Keep the cache auth-independent so auth changes only need to resolve capabilities again.
@@ -371,6 +387,8 @@ impl PluginsManager {
             codex_home: codex_home.clone(),
             store: PluginStore::new(codex_home),
             featured_plugin_ids_cache: RwLock::new(None),
+            recommended_plugins_cache: RwLock::new(HashMap::new()),
+            recommended_plugins_refreshes: RwLock::new(HashMap::new()),
             configured_marketplace_upgrade_state: RwLock::new(
                 ConfiguredMarketplaceUpgradeState::default(),
             ),
@@ -497,6 +515,19 @@ impl PluginsManager {
             Err(err) => err.into_inner(),
         };
         *featured_plugin_ids_cache = None;
+    }
+
+    pub fn clear_recommended_plugins_cache(&self) {
+        let mut refreshes = match self.recommended_plugins_refreshes.write() {
+            Ok(refreshes) => refreshes,
+            Err(err) => err.into_inner(),
+        };
+        refreshes.clear();
+        let mut cache = match self.recommended_plugins_cache.write() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        cache.clear();
     }
 
     fn clear_loaded_plugins_cache(&self) {
@@ -700,7 +731,7 @@ impl PluginsManager {
         true
     }
 
-    pub fn maybe_start_remote_installed_plugins_cache_refresh(
+    pub fn maybe_start_remote_plugin_caches_refresh(
         self: &Arc<Self>,
         config: &PluginsConfigInput,
         auth: Option<CodexAuth>,
@@ -708,10 +739,18 @@ impl PluginsManager {
     ) {
         self.maybe_start_remote_installed_plugins_cache_refresh_with_notify(
             config,
-            auth,
+            auth.clone(),
             RemoteInstalledPluginsCacheRefreshNotify::IfCacheChanged,
             on_effective_plugins_changed,
         );
+
+        let manager = Arc::clone(self);
+        let config = config.clone();
+        tokio::spawn(async move {
+            manager
+                .recommended_plugins_mode_for_config(&config, auth.as_ref())
+                .await;
+        });
     }
 
     pub fn maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
@@ -805,7 +844,7 @@ impl PluginsManager {
         if options.refresh_global_remote_catalog_cache {
             self.maybe_start_global_remote_catalog_cache_refresh(config, auth.clone());
         }
-        self.maybe_start_remote_installed_plugins_cache_refresh(
+        self.maybe_start_remote_plugin_caches_refresh(
             config,
             auth.clone(),
             on_effective_plugins_changed.clone(),
@@ -886,6 +925,87 @@ impl PluginsManager {
         .await?;
         self.write_featured_plugin_ids_cache(cache_key, &featured_plugin_ids);
         Ok(featured_plugin_ids)
+    }
+
+    pub async fn recommended_plugins_mode_for_config(
+        &self,
+        config: &PluginsConfigInput,
+        auth: Option<&CodexAuth>,
+    ) -> RecommendedPluginsMode {
+        if !config.plugins_enabled
+            || !config.remote_plugin_enabled
+            || !auth.is_some_and(CodexAuth::uses_codex_backend)
+        {
+            return RecommendedPluginsMode::Legacy;
+        }
+
+        let cache_key = recommended_plugins_cache_key(config);
+        if let Some(cached) = self.cached_recommended_plugins_mode(&cache_key) {
+            return cached;
+        }
+
+        let refresh = {
+            let mut refreshes = match self.recommended_plugins_refreshes.write() {
+                Ok(refreshes) => refreshes,
+                Err(err) => err.into_inner(),
+            };
+            if let Some(cached) = self.cached_recommended_plugins_mode(&cache_key) {
+                return cached;
+            }
+            refreshes
+                .entry(cache_key.clone())
+                .or_insert_with(|| Arc::new(OnceCell::new()))
+                .clone()
+        };
+
+        let mode = refresh
+            .get_or_init(|| async {
+                match crate::remote::fetch_recommended_plugins(
+                    &remote_plugin_service_config(config),
+                    auth,
+                )
+                .await
+                {
+                    Ok(mode) => {
+                        let mut cache = match self.recommended_plugins_cache.write() {
+                            Ok(cache) => cache,
+                            Err(err) => err.into_inner(),
+                        };
+                        cache.insert(cache_key.clone(), mode.clone());
+                        mode
+                    }
+                    Err(err) => {
+                        warn!(error = %err, "failed to load recommended plugins");
+                        RecommendedPluginsMode::Legacy
+                    }
+                }
+            })
+            .await
+            .clone();
+
+        let mut refreshes = match self.recommended_plugins_refreshes.write() {
+            Ok(refreshes) => refreshes,
+            Err(err) => err.into_inner(),
+        };
+        if refreshes
+            .get(&cache_key)
+            .is_some_and(|current| Arc::ptr_eq(current, &refresh))
+        {
+            refreshes.remove(&cache_key);
+        }
+
+        mode
+    }
+
+    fn cached_recommended_plugins_mode(
+        &self,
+        cache_key: &RecommendedPluginsCacheKey,
+    ) -> Option<RecommendedPluginsMode> {
+        let cache = match self.recommended_plugins_cache.read() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        cache.get(cache_key).cloned()
     }
 
     pub async fn install_plugin(
@@ -1420,7 +1540,7 @@ impl PluginsManager {
             let on_effective_plugins_changed = on_effective_plugins_changed.clone();
             tokio::spawn(async move {
                 let auth = auth_manager_for_remote_sync.auth().await;
-                manager.maybe_start_remote_installed_plugins_cache_refresh(
+                manager.maybe_start_remote_plugin_caches_refresh(
                     &config_for_remote_sync,
                     auth.clone(),
                     on_effective_plugins_changed.clone(),
@@ -1453,12 +1573,12 @@ impl PluginsManager {
                 }
             });
 
-            let config = config.clone();
+            let config_for_featured_plugins = config.clone();
             let manager = Arc::clone(self);
             tokio::spawn(async move {
                 let auth = auth_manager.auth().await;
                 if let Err(err) = manager
-                    .featured_plugin_ids_for_config(&config, auth.as_ref())
+                    .featured_plugin_ids_for_config(&config_for_featured_plugins, auth.as_ref())
                     .await
                 {
                     warn!(
