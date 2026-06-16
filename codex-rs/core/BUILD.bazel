@@ -47,7 +47,7 @@ codex_rust_crate(
         "core-unit-tests": 8,
     },
     test_sizes = {
-        "core-unit-tests": "medium",
+        "core-all-test-windows-cross": "medium",
         "core-unit-tests-windows-cross": "medium",
     },
     test_tags = ["no-sandbox"],

@@ -14,4 +14,7 @@ codex_rust_crate(
         "CODEX_REPO_ROOT_MARKER": "$(rlocationpath :repo_root.marker)",
     },
     test_data_extra = ["repo_root.marker"],
+    test_sizes = {
+        "cargo-bin-unit-tests-windows-cross": "medium",
+    },
 )

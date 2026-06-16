@@ -6,4 +6,7 @@ codex_rust_crate(
     extra_binaries = [
         "//codex-rs/cli:codex",
     ],
+    test_sizes = {
+        "rmcp-client-unit-tests-windows-cross": "medium",
+    },
 )

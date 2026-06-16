@@ -21,7 +21,6 @@ codex_rust_crate(
         "app-server-unit-tests": 8,
     },
     test_sizes = {
-        "app-server-all-test": "medium",
         "app-server-all-test-windows-cross": "medium",
     },
     test_tags = ["no-sandbox"],

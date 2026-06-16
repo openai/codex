@@ -4,4 +4,7 @@ codex_rust_crate(
     name = "shell-command",
     compile_data = ["src/command_safety/powershell_parser.ps1"],
     crate_name = "codex_shell_command",
+    test_sizes = {
+        "shell-command-unit-tests-windows-cross": "medium",
+    },
 )

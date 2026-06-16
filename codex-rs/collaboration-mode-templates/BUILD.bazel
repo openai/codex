@@ -4,6 +4,9 @@ codex_rust_crate(
     name = "collaboration-mode-templates",
     compile_data = glob(["templates/*.md"]),
     crate_name = "codex_collaboration_mode_templates",
+    test_sizes = {
+        "collaboration-mode-templates-unit-tests-windows-cross": "medium",
+    },
 )
 
 exports_files(

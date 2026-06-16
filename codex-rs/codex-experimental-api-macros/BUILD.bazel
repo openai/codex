@@ -4,4 +4,7 @@ codex_rust_crate(
     name = "codex-experimental-api-macros",
     crate_name = "codex_experimental_api_macros",
     proc_macro = True,
+    test_sizes = {
+        "codex-experimental-api-macros-unit-tests-windows-cross": "medium",
+    },
 )

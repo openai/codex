@@ -3,4 +3,7 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "uds",
     crate_name = "codex_uds",
+    test_sizes = {
+        "uds-unit-tests-windows-cross": "medium",
+    },
 )

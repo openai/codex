@@ -3,4 +3,7 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "git-utils",
     crate_name = "codex_git_utils",
+    test_sizes = {
+        "git-utils-unit-tests-windows-cross": "medium",
+    },
 )

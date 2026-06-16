@@ -6,4 +6,8 @@ codex_rust_crate(
     extra_binaries = [
         "//codex-rs/bwrap:bwrap",
     ],
+    test_sizes = {
+        "linux-sandbox-all-test-windows-cross": "medium",
+        "linux-sandbox-unit-tests-windows-cross": "medium",
+    },
 )

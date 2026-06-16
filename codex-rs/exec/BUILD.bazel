@@ -6,9 +6,5 @@ codex_rust_crate(
     test_shard_counts = {
         "exec-all-test": 8,
     },
-    test_sizes = {
-        "exec-all-test": "medium",
-        "exec-all-test-windows-cross": "medium",
-    },
     test_tags = ["no-sandbox"],
 )
