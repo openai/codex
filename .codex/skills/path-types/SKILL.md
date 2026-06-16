@@ -16,3 +16,5 @@ migration; if compliance is difficult, ask the user how to proceed.
   appropriate.
 - In dependencies shared by both servers, use `PathUri` or separate APIs that decouple their use
   cases.
+- Tool call arguments that the model is expected to generate should be deserialized as regular
+  `String`s with feature-specific path handling code.
