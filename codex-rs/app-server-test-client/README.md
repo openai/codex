@@ -26,8 +26,9 @@ app-server connection. Analytics are captured to a local JSONL file and are
 not sent to the analytics backend. The model turn uses a loopback Responses
 API server.
 
-The selected plugin must already be installed remotely, and the active Codex
-profile must be authenticated.
+The selected plugin must already be installed and enabled remotely, and the
+active Codex profile must be authenticated. On a fresh local cache, the command
+retries ephemeral turns while the installed remote bundle finishes syncing.
 
 ```bash
 # Build a debug Codex binary; analytics capture is unavailable in release builds.
@@ -42,9 +43,11 @@ cargo run -p codex-app-server-test-client -- \
 Use `--capture-file /tmp/plugin-analytics.jsonl` to select the output path.
 The command validates one `codex_plugin_disabled`, `codex_plugin_enabled`, and
 `codex_plugin_used` event with the expected local plugin identity and capability
-metadata. It prints the events and leaves the JSONL file in place for
-inspection. It does not install or uninstall plugins and does not modify the
-profile's persistent config.
+metadata. The enabled and disabled events come from successful writes to the
+temporary config; the command does not mutate the remote enabled state. It
+prints the events and leaves the JSONL file in place for inspection. It does not
+install or uninstall plugins and does not modify the profile's persistent
+config.
 
 ## Watching Raw Inbound Traffic
 
