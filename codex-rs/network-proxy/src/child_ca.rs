@@ -168,11 +168,7 @@ where
             }
         }
     }
-    if trust_bundle.is_empty() {
-        None
-    } else {
-        Some(trust_bundle)
-    }
+    (!trust_bundle.is_empty()).then_some(trust_bundle)
 }
 
 fn managed_mitm_ca_trust_bundle_paths_for_env(

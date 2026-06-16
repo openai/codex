@@ -74,7 +74,6 @@ fn materializes_readable_startup_ca_override() {
         HashMap::from([(REQUESTS_CA_BUNDLE_ENV_KEY, "startup-ca.pem".to_string())]),
     );
     let mut env = requests_ca_bundle_env("startup-ca.pem");
-
     let bundle_paths = prepare_mitm_ca_trust_bundle_env(
         &mitm_ca_trust_bundle,
         &mut env,
