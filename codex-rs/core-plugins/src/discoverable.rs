@@ -76,11 +76,17 @@ impl PluginsManager {
             return Ok(Vec::new());
         }
 
+        let use_remote_global_catalog =
+            input.plugins.remote_plugin_enabled && auth.is_some_and(CodexAuth::uses_codex_backend);
         let marketplaces = self
-            .list_marketplaces_for_config(&input.plugins, &[], /*include_openai_curated*/ true)
+            .list_marketplaces_for_config(
+                &input.plugins,
+                &[],
+                /*include_openai_curated*/ !use_remote_global_catalog,
+            )
             .context("failed to list plugin marketplaces for tool suggestions")?
             .marketplaces;
-        let remote_installed_marketplaces = if input.plugins.remote_plugin_enabled {
+        let remote_installed_marketplaces = if use_remote_global_catalog {
             self.build_remote_installed_plugin_marketplaces_from_cache(&[
                 REMOTE_GLOBAL_MARKETPLACE_NAME,
             ])
