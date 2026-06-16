@@ -747,8 +747,7 @@ impl App {
                 tui,
                 self.state_db.as_deref(),
                 &current_cwd,
-                target_session.thread_id,
-                target_session.path.as_deref(),
+                &target_session,
                 CwdPromptAction::Resume,
                 /*allow_prompt*/ true,
             )
@@ -782,8 +781,22 @@ impl App {
             self.chat_widget.thread_name(),
             self.chat_widget.rollout_path().as_deref(),
         );
+        let rollout_path = match target_session.path.as_deref() {
+            Some(path) => {
+                crate::session_resume::verified_rollout_path_for_thread(
+                    path,
+                    target_session.thread_id,
+                )
+                .await
+            }
+            None => None,
+        };
         match app_server
-            .resume_thread(resume_config.clone(), target_session.thread_id)
+            .resume_thread_with_path(
+                resume_config.clone(),
+                target_session.thread_id,
+                rollout_path,
+            )
             .await
         {
             Ok(resumed) => {

@@ -137,7 +137,14 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::ResumeSessionByIdOrName(id_or_name) => {
-                match crate::lookup_session_target_with_app_server(app_server, &id_or_name).await? {
+                match crate::lookup_session_target_with_app_server(
+                    app_server,
+                    &id_or_name,
+                    self.config.codex_home.as_path(),
+                    self.state_db.as_deref(),
+                )
+                .await?
+                {
                     Some(target_session) => {
                         return self
                             .resume_target_session(tui, app_server, target_session)

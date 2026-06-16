@@ -19,6 +19,7 @@ fn startup_waiting_gate_is_only_for_fresh_or_exit_session_selection() {
             crate::resume_picker::SessionTarget {
                 path: Some(PathBuf::from("/tmp/restore")),
                 thread_id: ThreadId::new(),
+                cwd: None,
             }
         )),
         false
@@ -28,6 +29,7 @@ fn startup_waiting_gate_is_only_for_fresh_or_exit_session_selection() {
             crate::resume_picker::SessionTarget {
                 path: Some(PathBuf::from("/tmp/fork")),
                 thread_id: ThreadId::new(),
+                cwd: None,
             }
         )),
         false
@@ -39,10 +41,12 @@ fn startup_paused_goal_prompt_gate_is_only_for_quiet_resume() {
     let resume = SessionSelection::Resume(crate::resume_picker::SessionTarget {
         path: Some(PathBuf::from("/tmp/restore")),
         thread_id: ThreadId::new(),
+        cwd: None,
     });
     let fork = SessionSelection::Fork(crate::resume_picker::SessionTarget {
         path: Some(PathBuf::from("/tmp/fork")),
         thread_id: ThreadId::new(),
+        cwd: None,
     });
     let no_images: Vec<PathBuf> = Vec::new();
     let initial_images = vec![PathBuf::from("/tmp/image.png")];
@@ -111,6 +115,7 @@ fn startup_waiting_gate_not_applied_for_resume_or_fork_session_selection() {
         crate::resume_picker::SessionTarget {
             path: Some(PathBuf::from("/tmp/restore")),
             thread_id: ThreadId::new(),
+            cwd: None,
         },
     ));
     assert_eq!(
@@ -124,6 +129,7 @@ fn startup_waiting_gate_not_applied_for_resume_or_fork_session_selection() {
         crate::resume_picker::SessionTarget {
             path: Some(PathBuf::from("/tmp/fork")),
             thread_id: ThreadId::new(),
+            cwd: None,
         },
     ));
     assert_eq!(
@@ -266,6 +272,7 @@ async fn ignore_same_thread_resume_reports_noop_for_current_thread() {
     let ignored = app.ignore_same_thread_resume(&crate::resume_picker::SessionTarget {
         path: Some(test_path_buf("/tmp/project")),
         thread_id,
+        cwd: None,
     });
 
     assert!(ignored);
@@ -290,6 +297,7 @@ async fn ignore_same_thread_resume_allows_reattaching_displayed_inactive_thread(
     let ignored = app.ignore_same_thread_resume(&crate::resume_picker::SessionTarget {
         path: Some(test_path_buf("/tmp/project")),
         thread_id,
+        cwd: None,
     });
 
     assert!(!ignored);

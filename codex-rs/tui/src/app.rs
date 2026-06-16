@@ -915,8 +915,18 @@ impl App {
                 (chat_widget, None)
             }
             SessionSelection::Resume(target_session) => {
+                let rollout_path = match target_session.path.as_deref() {
+                    Some(path) => {
+                        crate::session_resume::verified_rollout_path_for_thread(
+                            path,
+                            target_session.thread_id,
+                        )
+                        .await
+                    }
+                    None => None,
+                };
                 let resumed = app_server
-                    .resume_thread(config.clone(), target_session.thread_id)
+                    .resume_thread_with_path(config.clone(), target_session.thread_id, rollout_path)
                     .await
                     .map_err(|err| session_start_error("resume", &target_session, err))?;
                 let init = crate::chatwidget::ChatWidgetInit {
@@ -954,8 +964,18 @@ impl App {
                     /*inc*/ 1,
                     &[("source", "cli_subcommand")],
                 );
+                let rollout_path = match target_session.path.as_deref() {
+                    Some(path) => {
+                        crate::session_resume::verified_rollout_path_for_thread(
+                            path,
+                            target_session.thread_id,
+                        )
+                        .await
+                    }
+                    None => None,
+                };
                 let forked = app_server
-                    .fork_thread(config.clone(), target_session.thread_id)
+                    .fork_thread_with_path(config.clone(), target_session.thread_id, rollout_path)
                     .await
                     .map_err(|err| session_start_error("fork", &target_session, err))?;
                 let init = crate::chatwidget::ChatWidgetInit {

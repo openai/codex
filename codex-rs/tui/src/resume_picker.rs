@@ -82,6 +82,7 @@ const PICKER_LIST_HORIZONTAL_INSET: u16 = 4;
 pub struct SessionTarget {
     pub path: Option<PathBuf>,
     pub thread_id: ThreadId,
+    pub cwd: Option<PathBuf>,
 }
 
 impl SessionTarget {
@@ -128,8 +129,17 @@ impl SessionPickerAction {
         }
     }
 
-    fn selection(self, path: Option<PathBuf>, thread_id: ThreadId) -> SessionSelection {
-        let target_session = SessionTarget { path, thread_id };
+    fn selection(
+        self,
+        path: Option<PathBuf>,
+        thread_id: ThreadId,
+        cwd: Option<PathBuf>,
+    ) -> SessionSelection {
+        let target_session = SessionTarget {
+            path,
+            thread_id,
+            cwd,
+        };
         match self {
             SessionPickerAction::Resume => SessionSelection::Resume(target_session),
             SessionPickerAction::Fork => SessionSelection::Fork(target_session),
@@ -1107,6 +1117,7 @@ impl PickerState {
             _ if self.list_keymap.accept.is_pressed(key) => {
                 if let Some(row) = self.filtered_rows.get(self.selected) {
                     let path = row.path.clone();
+                    let cwd = row.cwd.clone();
                     let thread_id = match row.thread_id {
                         Some(thread_id) => Some(thread_id),
                         None => match path.as_ref() {
@@ -1118,7 +1129,7 @@ impl PickerState {
                         },
                     };
                     if let Some(thread_id) = thread_id {
-                        return Ok(Some(self.action.selection(path, thread_id)));
+                        return Ok(Some(self.action.selection(path, thread_id, cwd)));
                     }
                     self.inline_error = Some(match path {
                         Some(path) => {
@@ -5710,6 +5721,7 @@ session_picker_view = "dense"
             Some(SessionSelection::Resume(SessionTarget {
                 path: None,
                 thread_id: selected_thread_id,
+                ..
             })) => assert_eq!(selected_thread_id, thread_id),
             other => panic!("unexpected selection: {other:?}"),
         }

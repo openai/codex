@@ -585,6 +585,7 @@ fn session_target_from_app_server_thread(
         Ok(thread_id) => Some(resume_picker::SessionTarget {
             path: thread.path,
             thread_id,
+            cwd: Some(thread.cwd.to_path_buf()),
         }),
         Err(err) => {
             warn!(
@@ -595,6 +596,41 @@ fn session_target_from_app_server_thread(
             None
         }
     }
+}
+
+async fn lookup_local_session_target_by_id(
+    thread_id: ThreadId,
+    codex_home: &Path,
+    state_db_ctx: Option<&codex_state::StateRuntime>,
+) -> Option<resume_picker::SessionTarget> {
+    let state_db_ctx = state_db_ctx?;
+    let id = thread_id.to_string();
+    let metadata = state_db_ctx.get_thread(thread_id).await.ok().flatten();
+    if let Some(metadata) = metadata.as_ref()
+        && let Some(verified_path) = crate::session_resume::verified_rollout_path_for_thread(
+            metadata.rollout_path.as_path(),
+            thread_id,
+        )
+        .await
+    {
+        return Some(resume_picker::SessionTarget {
+            path: Some(verified_path),
+            thread_id,
+            cwd: Some(metadata.cwd.clone()),
+        });
+    }
+    let path =
+        codex_rollout::find_any_thread_path_by_id_str(codex_home, id.as_str(), Some(state_db_ctx))
+            .await
+            .ok()
+            .flatten()?;
+    let verified_path =
+        crate::session_resume::verified_rollout_path_for_thread(path.as_path(), thread_id).await;
+    Some(resume_picker::SessionTarget {
+        path: verified_path,
+        thread_id,
+        cwd: metadata.map(|metadata| metadata.cwd),
+    })
 }
 
 pub(crate) fn resume_source_kinds(include_non_interactive: bool) -> Vec<ThreadSourceKind> {
@@ -646,6 +682,8 @@ async fn lookup_session_target_by_name_with_app_server(
 async fn lookup_session_target_with_app_server(
     app_server: &mut AppServerSession,
     id_or_name: &str,
+    codex_home: &Path,
+    state_db_ctx: Option<&codex_state::StateRuntime>,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
     if Uuid::parse_str(id_or_name).is_ok() {
         let thread_id = match ThreadId::from_string(id_or_name) {
@@ -659,6 +697,12 @@ async fn lookup_session_target_with_app_server(
                 return Ok(None);
             }
         };
+        if !app_server.uses_remote_workspace()
+            && let Some(target) =
+                lookup_local_session_target_by_id(thread_id, codex_home, state_db_ctx).await
+        {
+            return Ok(Some(target));
+        }
         return match app_server
             .thread_read(thread_id, /*include_turns*/ false)
             .await
@@ -702,10 +746,10 @@ async fn lookup_latest_session_target_with_app_server(
             .data
             .into_iter()
             .find_map(session_target_from_app_server_thread);
-        if target.as_ref().is_some_and(|target| {
-            uses_remote_workspace || target.path.as_deref().is_some_and(std::path::Path::exists)
-        }) {
-            return Ok(target);
+        if let Some(target) = target
+            && (uses_remote_workspace || target.path.is_some())
+        {
+            return Ok(Some(target));
         }
     }
     Ok(None)
@@ -1474,7 +1518,14 @@ async fn run_ratatui_app(
             let Some(startup_app_server) = app_server.as_mut() else {
                 unreachable!("app server should be initialized for --fork <id>");
             };
-            match lookup_session_target_with_app_server(startup_app_server, id_str).await? {
+            match lookup_session_target_with_app_server(
+                startup_app_server,
+                id_str,
+                config.codex_home.as_path(),
+                state_db.as_deref(),
+            )
+            .await?
+            {
                 Some(target_session) => resume_picker::SessionSelection::Fork(target_session),
                 None => {
                     shutdown_app_server_if_present(app_server.take()).await;
@@ -1531,7 +1582,14 @@ async fn run_ratatui_app(
         let Some(startup_app_server) = app_server.as_mut() else {
             unreachable!("app server should be initialized for --resume <id>");
         };
-        match lookup_session_target_with_app_server(startup_app_server, id_str).await? {
+        match lookup_session_target_with_app_server(
+            startup_app_server,
+            id_str,
+            config.codex_home.as_path(),
+            state_db.as_deref(),
+        )
+        .await?
+        {
             Some(target_session) => resume_picker::SessionSelection::Resume(target_session),
             None => {
                 shutdown_app_server_if_present(app_server.take()).await;
@@ -1609,8 +1667,7 @@ async fn run_ratatui_app(
                     &mut tui,
                     state_db.as_deref(),
                     &current_cwd,
-                    target_session.thread_id,
-                    target_session.path.as_deref(),
+                    target_session,
                     action,
                     allow_prompt,
                 )
@@ -2152,6 +2209,7 @@ mod tests {
         let target = crate::resume_picker::SessionTarget {
             path: None,
             thread_id,
+            cwd: None,
         };
 
         assert_eq!(target.display_label(), format!("thread {thread_id}"));
@@ -2847,6 +2905,52 @@ mod tests {
             Ok(())
         })
         .await
+    }
+
+    #[tokio::test]
+    async fn lookup_local_session_target_by_id_uses_state_db_path() -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+        let uuid = Uuid::new_v4();
+        let thread_id = ThreadId::from_string(&uuid.to_string())?;
+        let rollout_path = temp_dir
+            .path()
+            .join("sessions/2025/02/02")
+            .join(format!("rollout-2025-02-02T10-00-00-{uuid}.jsonl"));
+        std::fs::create_dir_all(rollout_path.parent().expect("rollout parent"))?;
+        std::fs::write(&rollout_path, "")?;
+
+        let state_runtime = codex_state::StateRuntime::init(
+            config.codex_home.to_path_buf(),
+            config.model_provider_id.clone(),
+        )
+        .await
+        .map_err(std::io::Error::other)?;
+        let mut builder = codex_state::ThreadMetadataBuilder::new(
+            thread_id,
+            rollout_path.clone(),
+            chrono::Utc::now(),
+            serde_json::from_value(serde_json::json!("cli"))
+                .expect("cli session source should deserialize"),
+        );
+        builder.model_provider = Some(config.model_provider_id.clone());
+        let metadata = builder.build(config.model_provider_id.as_str());
+        state_runtime
+            .upsert_thread(&metadata)
+            .await
+            .map_err(std::io::Error::other)?;
+
+        let target = lookup_local_session_target_by_id(
+            thread_id,
+            config.codex_home.as_path(),
+            Some(state_runtime.as_ref()),
+        )
+        .await
+        .expect("state db path should resolve");
+
+        assert_eq!(target.thread_id, thread_id);
+        assert_eq!(target.path, Some(rollout_path));
+        Ok(())
     }
 
     #[tokio::test]
