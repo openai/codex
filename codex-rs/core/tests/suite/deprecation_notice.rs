@@ -92,7 +92,7 @@ async fn emits_deprecation_notice_for_web_search_feature_flag_values() -> anyhow
         assert_eq!(
             details.as_deref(),
             Some(
-                "Set `web_search` to `\"live\"`, `\"semi_offline\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml if you want to override it."
+                "Set `web_search` to `\"live\"`, `\"index_gated\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml if you want to override it."
             ),
         );
     }

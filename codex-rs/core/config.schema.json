@@ -515,6 +515,9 @@
             "in_app_browser": {
               "type": "boolean"
             },
+            "index_gated_web_search": {
+              "type": "boolean"
+            },
             "js_repl": {
               "type": "boolean"
             },
@@ -600,9 +603,6 @@
               "type": "boolean"
             },
             "secret_auth_storage": {
-              "type": "boolean"
-            },
-            "semi_offline_web_search": {
               "type": "boolean"
             },
             "shell_snapshot": {
@@ -4326,7 +4326,7 @@
       "enum": [
         "disabled",
         "cached",
-        "semi_offline",
+        "index_gated",
         "live"
       ],
       "type": "string"
@@ -4677,6 +4677,9 @@
         "in_app_browser": {
           "type": "boolean"
         },
+        "index_gated_web_search": {
+          "type": "boolean"
+        },
         "js_repl": {
           "type": "boolean"
         },
@@ -4762,9 +4765,6 @@
           "type": "boolean"
         },
         "secret_auth_storage": {
-          "type": "boolean"
-        },
-        "semi_offline_web_search": {
           "type": "boolean"
         },
         "shell_snapshot": {
@@ -5273,7 +5273,7 @@
           "$ref": "#/definitions/WebSearchMode"
         }
       ],
-      "description": "Controls the web search tool mode: disabled, cached, semi-offline, or live."
+      "description": "Controls the web search tool mode: disabled, cached, index-gated, or live."
     },
     "windows": {
       "allOf": [

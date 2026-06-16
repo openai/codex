@@ -409,7 +409,7 @@ pub struct ConfigToml {
     pub experimental_thread_store: Option<ThreadStoreToml>,
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
-    /// Controls the web search tool mode: disabled, cached, semi-offline, or live.
+    /// Controls the web search tool mode: disabled, cached, index-gated, or live.
     pub web_search: Option<WebSearchMode>,
 
     /// Nested tools section for feature toggles

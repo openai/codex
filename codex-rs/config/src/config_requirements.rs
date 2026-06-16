@@ -669,7 +669,7 @@ fn is_glob_metacharacter(ch: char) -> bool {
 pub enum WebSearchModeRequirement {
     Disabled,
     Cached,
-    SemiOffline,
+    IndexGated,
     Live,
 }
 
@@ -678,7 +678,7 @@ impl From<WebSearchMode> for WebSearchModeRequirement {
         match mode {
             WebSearchMode::Disabled => WebSearchModeRequirement::Disabled,
             WebSearchMode::Cached => WebSearchModeRequirement::Cached,
-            WebSearchMode::SemiOffline => WebSearchModeRequirement::SemiOffline,
+            WebSearchMode::IndexGated => WebSearchModeRequirement::IndexGated,
             WebSearchMode::Live => WebSearchModeRequirement::Live,
         }
     }
@@ -689,7 +689,7 @@ impl From<WebSearchModeRequirement> for WebSearchMode {
         match mode {
             WebSearchModeRequirement::Disabled => WebSearchMode::Disabled,
             WebSearchModeRequirement::Cached => WebSearchMode::Cached,
-            WebSearchModeRequirement::SemiOffline => WebSearchMode::SemiOffline,
+            WebSearchModeRequirement::IndexGated => WebSearchMode::IndexGated,
             WebSearchModeRequirement::Live => WebSearchMode::Live,
         }
     }
@@ -700,7 +700,7 @@ impl fmt::Display for WebSearchModeRequirement {
         match self {
             WebSearchModeRequirement::Disabled => write!(f, "disabled"),
             WebSearchModeRequirement::Cached => write!(f, "cached"),
-            WebSearchModeRequirement::SemiOffline => write!(f, "semi_offline"),
+            WebSearchModeRequirement::IndexGated => write!(f, "index_gated"),
             WebSearchModeRequirement::Live => write!(f, "live"),
         }
     }
@@ -1349,8 +1349,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
 
                 let initial_value = if accepted.contains(&WebSearchModeRequirement::Cached) {
                     WebSearchMode::Cached
-                } else if accepted.contains(&WebSearchModeRequirement::SemiOffline) {
-                    WebSearchMode::SemiOffline
+                } else if accepted.contains(&WebSearchModeRequirement::IndexGated) {
+                    WebSearchMode::IndexGated
                 } else if accepted.contains(&WebSearchModeRequirement::Live) {
                     WebSearchMode::Live
                 } else {

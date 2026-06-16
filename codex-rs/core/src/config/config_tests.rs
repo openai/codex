@@ -4975,21 +4975,21 @@ fn web_search_mode_disabled_overrides_legacy_request() {
 }
 
 #[test]
-fn semi_offline_feature_resolves_live_config_and_survives_disabled_permissions() {
+fn index_gated_feature_resolves_live_config_and_survives_disabled_permissions() {
     let cfg = ConfigToml {
         web_search: Some(WebSearchMode::Live),
         ..Default::default()
     };
     let mut features = Features::with_defaults();
-    features.enable(Feature::SemiOfflineWebSearch);
+    features.enable(Feature::IndexGatedWebSearch);
 
     let resolved = resolve_web_search_mode(&cfg, &features);
-    assert_eq!(resolved, Some(WebSearchMode::SemiOffline));
+    assert_eq!(resolved, Some(WebSearchMode::IndexGated));
 
     let web_search_mode = Constrained::allow_any(resolved.expect("mode should resolve"));
     assert_eq!(
         resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled),
-        WebSearchMode::SemiOffline
+        WebSearchMode::IndexGated
     );
 }
 

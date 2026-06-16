@@ -38,7 +38,7 @@ pub enum ToolSpec {
         #[serde(skip_serializing_if = "Option::is_none")]
         external_web_access: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        semi_offline_web_access: Option<bool>,
+        index_gated_web_access: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
         filters: Option<ResponsesApiWebSearchFilters>,
         #[serde(skip_serializing_if = "Option::is_none")]
