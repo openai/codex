@@ -278,9 +278,13 @@ fn resolve_manifest_mcp_servers(
             resolve_manifest_path(plugin_root, "mcpServers", Some(&path))
                 .map(PluginManifestMcpServers::Path)
         }
-        RawPluginManifestMcpServers::Object(servers) => Some(PluginManifestMcpServers::Object(
-            serde_json::to_string(&servers).expect("serialize manifest MCP object"),
-        )),
+        RawPluginManifestMcpServers::Object(servers) => match serde_json::to_string(&servers) {
+            Ok(servers) => Some(PluginManifestMcpServers::Object(servers)),
+            Err(err) => {
+                tracing::warn!("ignoring mcpServers: failed to serialize object: {err}");
+                None
+            }
+        },
         RawPluginManifestMcpServers::Invalid(value) => {
             tracing::warn!(
                 "ignoring mcpServers: expected a string or object; found {}",
