@@ -3,6 +3,8 @@ use std::path::Path;
 use anyhow::Result;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::load_global_mcp_servers;
+use codex_rmcp_client::resolve_mcp_oauth_callback_url;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -230,6 +232,56 @@ async fn add_streamable_http_with_oauth_options() -> Result<()> {
         oauth_server.oauth_resource.as_deref(),
         Some("https://resource.example.com")
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn add_streamable_http_prints_configured_oauth_callback_url() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"mcp_oauth_callback_url = "https://callbacks.example.com/oauth/callback"
+"#,
+    )?;
+    let expected = resolve_mcp_oauth_callback_url(
+        "https://example.com/mcp",
+        /*callback_port*/ None,
+        Some("https://callbacks.example.com/oauth/callback"),
+    )?;
+
+    let mut add_cmd = codex_command(codex_home.path())?;
+    add_cmd
+        .args([
+            "mcp",
+            "add",
+            "oauth-server",
+            "--url",
+            "https://example.com/mcp",
+        ])
+        .assert()
+        .success()
+        .stdout(contains(format!("OAuth callback URL: {expected}")));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn add_streamable_http_does_not_print_ephemeral_callback_port_hint() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut add_cmd = codex_command(codex_home.path())?;
+    add_cmd
+        .args([
+            "mcp",
+            "add",
+            "oauth-server",
+            "--url",
+            "https://example.com/mcp",
+        ])
+        .assert()
+        .success()
+        .stdout(contains("OAuth callback URL: unavailable").not());
 
     Ok(())
 }

@@ -104,6 +104,7 @@ pub async fn perform_oauth_login(
         callback_port,
         callback_url,
         /*emit_browser_url*/ true,
+        CallbackUrlOutput::Suppress,
     )
     .await
 }
@@ -135,6 +136,39 @@ pub async fn perform_oauth_login_silent(
         callback_port,
         callback_url,
         /*emit_browser_url*/ false,
+        CallbackUrlOutput::Suppress,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn perform_oauth_login_print_callback_url(
+    server_name: &str,
+    server_url: &str,
+    store_mode: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    http_headers: Option<HashMap<String, String>>,
+    env_http_headers: Option<HashMap<String, String>>,
+    scopes: &[String],
+    oauth_client_id: Option<&str>,
+    oauth_resource: Option<&str>,
+    callback_port: Option<u16>,
+    callback_url: Option<&str>,
+) -> Result<()> {
+    perform_oauth_login_with_browser_output(
+        server_name,
+        server_url,
+        store_mode,
+        keyring_backend_kind,
+        http_headers,
+        env_http_headers,
+        scopes,
+        oauth_client_id,
+        oauth_resource,
+        callback_port,
+        callback_url,
+        /*emit_browser_url*/ true,
+        CallbackUrlOutput::Print,
     )
     .await
 }
@@ -153,6 +187,7 @@ async fn perform_oauth_login_with_browser_output(
     callback_port: Option<u16>,
     callback_url: Option<&str>,
     emit_browser_url: bool,
+    callback_url_output: CallbackUrlOutput,
 ) -> Result<()> {
     let headers = OauthHeaders {
         http_headers,
@@ -173,7 +208,7 @@ async fn perform_oauth_login_with_browser_output(
         /*timeout_secs*/ None,
     )
     .await?
-    .finish(emit_browser_url)
+    .finish(emit_browser_url, callback_url_output)
     .await
 }
 
@@ -275,6 +310,12 @@ enum CallbackResult {
     Error(OAuthProviderError),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallbackUrlOutput {
+    Print,
+    Suppress,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum CallbackOutcome {
     Success(OauthCallbackResult),
@@ -353,6 +394,7 @@ impl OauthLoginHandle {
 
 struct OauthLoginFlow {
     auth_url: String,
+    redirect_uri: String,
     oauth_state: OAuthState,
     rx: oneshot::Receiver<CallbackResult>,
     guard: CallbackServerGuard,
@@ -394,13 +436,49 @@ fn local_redirect_uri(server: &Server) -> Result<String> {
     }
 }
 
-fn resolve_redirect_uri(server: &Server, callback_url: Option<&str>) -> Result<String> {
-    let Some(callback_url) = callback_url else {
-        return local_redirect_uri(server);
-    };
+fn configured_redirect_uri(callback_url: &str) -> Result<String> {
     Url::parse(callback_url)
         .with_context(|| format!("invalid MCP OAuth callback URL `{callback_url}`"))?;
     Ok(callback_url.to_string())
+}
+
+fn local_redirect_uri_from_port(callback_port: Option<u16>) -> Result<String> {
+    let Some(port) = callback_port else {
+        bail!(
+            "cannot determine MCP OAuth callback URL with an ephemeral callback port; set `mcp_oauth_callback_port` or `mcp_oauth_callback_url`"
+        );
+    };
+    Ok(format!("http://127.0.0.1:{port}/callback"))
+}
+
+/// Resolve the final OAuth redirect URI Codex will use for an MCP server.
+///
+/// The returned URI includes the deterministic callback ID suffix derived from
+/// the normalized MCP server URL. This helper is read-only and does not start an
+/// OAuth flow, bind a callback listener, or perform network I/O.
+pub fn resolve_mcp_oauth_callback_url(
+    server_url: &str,
+    callback_port: Option<u16>,
+    callback_url: Option<&str>,
+) -> Result<String> {
+    let callback_port = resolve_callback_port(callback_port)?;
+    let redirect_uri = match callback_url {
+        Some(callback_url) => configured_redirect_uri(callback_url)?,
+        None => local_redirect_uri_from_port(callback_port)?,
+    };
+    append_callback_id_to_redirect_uri(server_url, &redirect_uri)
+}
+
+fn resolve_redirect_uri(
+    server: &Server,
+    server_url: &str,
+    callback_url: Option<&str>,
+) -> Result<String> {
+    let redirect_uri = match callback_url {
+        Some(callback_url) => configured_redirect_uri(callback_url)?,
+        None => local_redirect_uri(server)?,
+    };
+    append_callback_id_to_redirect_uri(server_url, &redirect_uri)
 }
 
 fn callback_id_from_server_url(server_url: &str) -> Result<String> {
@@ -415,7 +493,8 @@ fn callback_id_from_server_url(server_url: &str) -> Result<String> {
     Ok(URL_SAFE_NO_PAD.encode(&digest[..9]))
 }
 
-fn append_callback_id_to_redirect_uri(redirect_uri: &str, callback_id: &str) -> Result<String> {
+fn append_callback_id_to_redirect_uri(server_url: &str, redirect_uri: &str) -> Result<String> {
+    let callback_id = callback_id_from_server_url(server_url)?;
     let mut parsed = Url::parse(redirect_uri)
         .with_context(|| format!("invalid redirect URI `{redirect_uri}`"))?;
     let path = parsed.path();
@@ -479,9 +558,7 @@ impl OauthLoginFlow {
             server: Arc::clone(&server),
         };
 
-        let redirect_uri = resolve_redirect_uri(&server, callback_url)?;
-        let callback_id = callback_id_from_server_url(server_url)?;
-        let redirect_uri = append_callback_id_to_redirect_uri(&redirect_uri, &callback_id)?;
+        let redirect_uri = resolve_redirect_uri(&server, server_url, callback_url)?;
         let callback_path = callback_path_from_redirect_uri(&redirect_uri)?;
 
         let (tx, rx) = oneshot::channel();
@@ -513,6 +590,7 @@ impl OauthLoginFlow {
 
         Ok(Self {
             auth_url,
+            redirect_uri,
             oauth_state,
             rx,
             guard,
@@ -529,10 +607,18 @@ impl OauthLoginFlow {
         self.auth_url.clone()
     }
 
-    async fn finish(mut self, emit_browser_url: bool) -> Result<()> {
+    async fn finish(
+        mut self,
+        emit_browser_url: bool,
+        callback_url_output: CallbackUrlOutput,
+    ) -> Result<()> {
         if self.launch_browser {
             let server_name = &self.server_name;
             let auth_url = &self.auth_url;
+            if callback_url_output == CallbackUrlOutput::Print {
+                let redirect_uri = &self.redirect_uri;
+                println!("OAuth callback URL: {redirect_uri}");
+            }
             if emit_browser_url {
                 println!(
                     "Authorize `{server_name}` by opening this URL in your browser:\n{auth_url}\n"
@@ -603,7 +689,9 @@ impl OauthLoginFlow {
         let (tx, rx) = oneshot::channel();
 
         tokio::spawn(async move {
-            let result = self.finish(/*emit_browser_url*/ false).await;
+            let result = self
+                .finish(/*emit_browser_url*/ false, CallbackUrlOutput::Suppress)
+                .await;
 
             if let Err(err) = &result {
                 eprintln!(
@@ -671,6 +759,8 @@ mod tests {
     use axum::Json;
     use axum::Router;
     use axum::routing::get;
+    use codex_config::types::AuthKeyringBackendKind;
+    use codex_config::types::OAuthCredentialsStoreMode;
     use pretty_assertions::assert_eq;
     use reqwest::Url;
     use serde_json::json;
@@ -678,11 +768,14 @@ mod tests {
 
     use super::CallbackOutcome;
     use super::OAuthProviderError;
+    use super::OauthHeaders;
+    use super::OauthLoginFlow;
     use super::append_callback_id_to_redirect_uri;
     use super::append_query_param;
     use super::callback_id_from_server_url;
     use super::callback_path_from_redirect_uri;
     use super::parse_oauth_callback;
+    use super::resolve_mcp_oauth_callback_url;
     use super::start_authorization;
 
     async fn spawn_oauth_metadata_server() -> String {
@@ -748,6 +841,44 @@ mod tests {
         assert_eq!(client_id.as_deref(), Some("eci-prd-pub-codex-123"));
     }
 
+    #[tokio::test]
+    async fn oauth_flow_redirect_uri_matches_authorization_url() {
+        let base_url = spawn_oauth_metadata_server().await;
+        let server_url = format!("{base_url}/mcp");
+
+        let flow = OauthLoginFlow::new(
+            "test-server",
+            &server_url,
+            OAuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+            OauthHeaders {
+                http_headers: None,
+                env_http_headers: None,
+            },
+            &[],
+            Some("eci-prd-pub-codex-123"),
+            /*oauth_resource*/ None,
+            /*launch_browser*/ false,
+            /*callback_port*/ None,
+            /*callback_url*/ None,
+            Some(1),
+        )
+        .await
+        .expect("start oauth flow");
+
+        let authorization_url = flow.authorization_url();
+        let auth_url = Url::parse(&authorization_url).expect("authorization url should parse");
+        let redirect_uri = auth_url
+            .query_pairs()
+            .find(|(key, _)| key == "redirect_uri")
+            .map(|(_, value)| value.into_owned())
+            .expect("authorization url should include redirect_uri");
+
+        assert_eq!(redirect_uri, flow.redirect_uri);
+        assert!(redirect_uri.starts_with("http://127.0.0.1:"));
+        assert!(redirect_uri.contains("/callback/"));
+    }
+
     #[test]
     fn parse_oauth_callback_accepts_default_path() {
         let parsed = parse_oauth_callback("/callback?code=abc&state=xyz", "/callback");
@@ -803,6 +934,66 @@ mod tests {
     }
 
     #[test]
+    fn precomputed_configured_callback_url_includes_callback_id() {
+        let server_url = "https://mcp.example.com/mcp";
+        let callback_id = callback_id_from_server_url(server_url).expect("derive callback ID");
+
+        let redirect_uri = resolve_mcp_oauth_callback_url(
+            server_url,
+            /*callback_port*/ None,
+            Some("https://callbacks.example.com/oauth/callback"),
+        )
+        .expect("resolve redirect URI");
+
+        assert_eq!(
+            redirect_uri,
+            format!("https://callbacks.example.com/oauth/callback/{callback_id}")
+        );
+    }
+
+    #[test]
+    fn precomputed_local_callback_url_includes_callback_id() {
+        let server_url = "https://mcp.example.com/mcp";
+        let callback_id = callback_id_from_server_url(server_url).expect("derive callback ID");
+
+        let redirect_uri =
+            resolve_mcp_oauth_callback_url(server_url, Some(4321), /*callback_url*/ None)
+                .expect("resolve redirect URI");
+
+        assert_eq!(
+            redirect_uri,
+            format!("http://127.0.0.1:4321/callback/{callback_id}")
+        );
+    }
+
+    #[test]
+    fn precomputed_local_callback_url_rejects_ephemeral_port() {
+        let err = resolve_mcp_oauth_callback_url(
+            "https://mcp.example.com/mcp",
+            /*callback_port*/ None,
+            /*callback_url*/ None,
+        )
+        .expect_err("ephemeral callback port should not resolve");
+
+        assert!(
+            err.to_string()
+                .contains("set `mcp_oauth_callback_port` or `mcp_oauth_callback_url`")
+        );
+    }
+
+    #[test]
+    fn precomputed_callback_url_rejects_invalid_callback_port() {
+        let err = resolve_mcp_oauth_callback_url(
+            "https://mcp.example.com/mcp",
+            Some(0),
+            Some("https://callbacks.example.com/oauth/callback"),
+        )
+        .expect_err("invalid callback port should not resolve");
+
+        assert!(err.to_string().contains("port must be between 1 and 65535"));
+    }
+
+    #[test]
     fn callback_id_is_bound_to_server_url() {
         let callback_id = callback_id_from_server_url("https://mcp.example.com/mcp?tenant=one")
             .expect("server URL should parse");
@@ -830,24 +1021,33 @@ mod tests {
 
     #[test]
     fn callback_id_is_appended_to_redirect_uri_path() {
-        let redirect_uri =
-            append_callback_id_to_redirect_uri("http://127.0.0.1:1234/callback", "abc123")
-                .expect("redirect URI should parse");
-
-        assert_eq!(redirect_uri, "http://127.0.0.1:1234/callback/abc123");
-    }
-
-    #[test]
-    fn callback_id_is_appended_before_redirect_uri_query() {
+        let callback_id =
+            callback_id_from_server_url("https://mcp.example.com/mcp").expect("derive callback ID");
         let redirect_uri = append_callback_id_to_redirect_uri(
-            "https://callbacks.example.com/oauth/callback?provider=github",
-            "abc123",
+            "https://mcp.example.com/mcp",
+            "http://127.0.0.1:1234/callback",
         )
         .expect("redirect URI should parse");
 
         assert_eq!(
             redirect_uri,
-            "https://callbacks.example.com/oauth/callback/abc123?provider=github"
+            format!("http://127.0.0.1:1234/callback/{callback_id}")
+        );
+    }
+
+    #[test]
+    fn callback_id_is_appended_before_redirect_uri_query() {
+        let callback_id =
+            callback_id_from_server_url("https://mcp.example.com/mcp").expect("derive callback ID");
+        let redirect_uri = append_callback_id_to_redirect_uri(
+            "https://mcp.example.com/mcp",
+            "https://callbacks.example.com/oauth/callback?provider=github",
+        )
+        .expect("redirect URI should parse");
+
+        assert_eq!(
+            redirect_uri,
+            format!("https://callbacks.example.com/oauth/callback/{callback_id}?provider=github")
         );
     }
 
