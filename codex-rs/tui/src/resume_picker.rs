@@ -66,7 +66,9 @@ use loading::PageLoadRequest;
 use loading::PickerLoadRequest;
 use loading::PickerLoader;
 use loading::PickerPage;
+use loading::SelectionValidation;
 use loading::spawn_app_server_page_loader;
+use loading::validate_provisional_session_target;
 
 const LOAD_NEAR_THRESHOLD: usize = 5;
 const SESSION_META_INDENT_WIDTH: usize = 2;
@@ -243,6 +245,7 @@ struct SessionPickerRunOptions {
     pager_keymap: PagerKeymap,
     list_keymap: ListKeymap,
     initial_page_load: InitialPageLoad,
+    include_non_interactive: bool,
 }
 
 /// Interactive session picker that lists app-server threads with simple search,
@@ -338,6 +341,7 @@ async fn run_resume_picker_with_launch_context(
         } else {
             InitialPageLoad::state_db_first()
         },
+        include_non_interactive,
     };
     run_session_picker_with_loader(
         tui,
@@ -388,6 +392,7 @@ pub async fn run_fork_picker_with_app_server(
         } else {
             InitialPageLoad::state_db_first()
         },
+        include_non_interactive: false,
     };
     run_session_picker_with_loader(
         tui,
@@ -425,6 +430,7 @@ async fn run_session_picker_with_loader(
     state.list_keymap = options.list_keymap;
     state.launch_context = options.launch_context;
     state.initial_page_load = options.initial_page_load;
+    state.include_non_interactive = options.include_non_interactive;
     state.start_initial_load();
     state.request_frame();
 
@@ -586,6 +592,7 @@ struct PickerState {
     pager_keymap: PagerKeymap,
     list_keymap: ListKeymap,
     initial_page_load: InitialPageLoad,
+    include_non_interactive: bool,
 }
 
 struct PaginationState {
@@ -824,6 +831,7 @@ impl PickerState {
             pager_keymap: RuntimeKeymap::defaults().pager,
             list_keymap: RuntimeKeymap::defaults().list,
             initial_page_load: InitialPageLoad::default(),
+            include_non_interactive: false,
         }
     }
 
@@ -988,14 +996,10 @@ impl PickerState {
                 self.toggle_density().await;
             }
             _ if self.list_keymap.accept.is_pressed(key) => {
-                if self.initial_page_load.is_provisional() {
-                    self.inline_error =
-                        Some(String::from("Wait for session verification to finish"));
-                    self.request_frame();
-                    return Ok(None);
-                }
                 if let Some(row) = self.filtered_rows.get(self.selected) {
                     let path = row.path.clone();
+                    let thread_name = row.thread_name.clone();
+                    let git_branch = row.git_branch.clone();
                     let thread_id = match row.thread_id {
                         Some(thread_id) => Some(thread_id),
                         None => match path.as_ref() {
@@ -1007,6 +1011,52 @@ impl PickerState {
                         },
                     };
                     if let Some(thread_id) = thread_id {
+                        if self.initial_page_load.is_provisional() {
+                            let Some(validation_path) = path.clone() else {
+                                warn!(%thread_id, "Cannot validate selected session without rollout path");
+                                self.inline_error = Some(String::from(
+                                    "Selected session is no longer available",
+                                ));
+                                self.request_frame();
+                                return Ok(None);
+                            };
+                            let Some(codex_home) = self
+                                .view_persistence
+                                .as_ref()
+                                .map(|persistence| persistence.codex_home.clone())
+                            else {
+                                warn!(%thread_id, "Cannot validate selected session without Codex home");
+                                self.inline_error = Some(String::from(
+                                    "Selected session is no longer available",
+                                ));
+                                self.request_frame();
+                                return Ok(None);
+                            };
+                            let validation = SelectionValidation {
+                                path: validation_path,
+                                thread_id,
+                                thread_name,
+                                git_branch,
+                                codex_home,
+                                cwd_filter: self.active_cwd_filter(),
+                                provider_filter: self.provider_filter.clone(),
+                                include_non_interactive: self.include_non_interactive,
+                                query: self.query.clone(),
+                            };
+                            return match validate_provisional_session_target(validation).await {
+                                Ok(target) => {
+                                    Ok(Some(self.action.selection(target.path, target.thread_id)))
+                                }
+                                Err(err) => {
+                                    warn!(%err, %thread_id, "Selected session failed validation");
+                                    self.inline_error = Some(String::from(
+                                        "Selected session is no longer available",
+                                    ));
+                                    self.request_frame();
+                                    Ok(None)
+                                }
+                            };
+                        }
                         return Ok(Some(self.action.selection(path, thread_id)));
                     }
                     self.inline_error = Some(match path {
@@ -1964,23 +2014,13 @@ fn footer_hint_lines(state: &PickerState, width: u16) -> Vec<Line<'static>> {
         SessionListDensity::Comfortable => "dense",
         SessionListDensity::Dense => "comfy",
     };
-    let primary_hint = if state.initial_page_load.is_provisional() {
-        PickerFooterHint {
-            key: "verifying",
-            wide_label: String::from("sessions"),
-            compact_label: String::from("sessions"),
-            priority: 0,
-        }
-    } else {
+    let first_row_hints = vec![
         PickerFooterHint {
             key: "enter",
             wide_label: action_label.to_string(),
             compact_label: action_label.to_string(),
             priority: 0,
-        }
-    };
-    let first_row_hints = vec![
-        primary_hint,
+        },
         PickerFooterHint {
             key: "esc",
             wide_label: esc_label.to_string(),
@@ -5451,7 +5491,7 @@ session_picker_view = "dense"
     }
 
     #[test]
-    fn hint_line_snapshot_blocks_accept_for_provisional_rows() {
+    fn hint_line_snapshot_allows_accept_for_provisional_rows() {
         let loader = page_only_loader(|_| {});
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
