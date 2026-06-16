@@ -13,7 +13,6 @@ use crossterm::event::KeyCode;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 use ratatui::crossterm::execute;
-use ratatui::layout::Position;
 use ratatui::layout::Rect;
 
 use crate::key_hint;
@@ -72,7 +71,30 @@ impl SuspendContext {
         }
         let y = self.suspend_cursor_y.load(Ordering::Relaxed);
         let _ = execute!(stdout(), MoveTo(0, y), Show);
-        suspend_process()
+        suspend_process()?;
+        super::reapply_raw_mode_after_resume()?;
+
+        // The shell writes its job-control status and the resumed command after `fg`, so the
+        // cursor may no longer be on the row cached before suspending. The event stream remains
+        // paused until this method returns, which makes it safe for the probe to consume both an
+        // interleaved focus report and the cursor-position response without racing the background
+        // input reader.
+        match crate::terminal_probe::cursor_position(crate::terminal_probe::DEFAULT_TIMEOUT) {
+            Ok(Some(position)) => self.set_cursor_y(position.y),
+            Ok(None) => tracing::debug!("terminal cursor position unavailable after resume"),
+            Err(err) => tracing::debug!(
+                error = %err,
+                "failed to read terminal cursor position after resume"
+            ),
+        }
+        super::flush_terminal_input_buffer();
+        tracing::trace!(
+            event = "tui_suspend_resumed",
+            cursor_y = self.cursor_y(),
+            "restored terminal state after resume"
+        );
+
+        Ok(())
     }
 
     /// Consume the pending resume intent and precompute any viewport changes needed post-resume.
@@ -81,23 +103,22 @@ impl SuspendContext {
     /// resumes; returns `None` when there was no pending suspend intent.
     pub(crate) fn prepare_resume_action(
         &self,
-        terminal: &mut Terminal,
         alt_saved_viewport: &mut Option<Rect>,
     ) -> Option<PreparedResumeAction> {
         let action = self.take_resume_action()?;
         match action {
             ResumeAction::RealignInline => {
-                let cursor_pos = terminal
-                    .get_cursor_position()
-                    .unwrap_or(terminal.last_known_cursor_pos);
-                let viewport = Rect::new(0, cursor_pos.y, 0, 0);
+                let viewport = Rect::new(
+                    /*x*/ 0,
+                    self.cursor_y(),
+                    /*width*/ 0,
+                    /*height*/ 0,
+                );
                 Some(PreparedResumeAction::RealignViewport(viewport))
             }
             ResumeAction::RestoreAlt => {
-                if let Ok(Position { y, .. }) = terminal.get_cursor_position()
-                    && let Some(saved) = alt_saved_viewport.as_mut()
-                {
-                    saved.y = y;
+                if let Some(saved) = alt_saved_viewport.as_mut() {
+                    saved.y = self.cursor_y();
                 }
                 Some(PreparedResumeAction::RestoreAltScreen)
             }
@@ -110,6 +131,10 @@ impl SuspendContext {
     /// position to restore before yielding.
     pub(crate) fn set_cursor_y(&self, value: u16) {
         self.suspend_cursor_y.store(value, Ordering::Relaxed);
+    }
+
+    fn cursor_y(&self) -> u16 {
+        self.suspend_cursor_y.load(Ordering::Relaxed)
     }
 
     /// Record a pending resume action to apply after SIGTSTP returns control.
