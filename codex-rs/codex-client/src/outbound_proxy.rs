@@ -186,7 +186,7 @@ impl RequestOrigin {
         let uri = request_url.parse::<http::Uri>().ok()?;
         let scheme = uri.scheme_str()?.to_ascii_lowercase();
         let host = uri.host()?.trim_matches(['[', ']']).to_ascii_lowercase();
-        let port = uri.port_u16().or_else(|| match scheme.as_str() {
+        let port = uri.port_u16().or(match scheme.as_str() {
             "http" => Some(80),
             "https" => Some(443),
             _ => None,
