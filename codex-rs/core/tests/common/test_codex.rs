@@ -53,7 +53,6 @@ use serde_json::Value;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
-use crate::PathBufExt;
 use crate::TempDirExt;
 use crate::get_remote_test_env;
 use crate::load_default_config_for_test;
@@ -164,8 +163,10 @@ pub async fn test_env() -> Result<TestEnv> {
             let websocket_url = remote_exec_server_url()?;
             let environment =
                 codex_exec_server::Environment::create_for_tests(Some(websocket_url.clone()))?;
-            let cwd = remote_aware_cwd_path();
-            let cwd_uri = PathUri::from_path(&cwd)?;
+            let cwd = remote_env
+                .remote_cwd(&remote_test_instance_id())?
+                .context("remote test environment should define a cwd")?;
+            let cwd_uri = cwd.to_path_uri(remote_env.path_convention())?;
             environment
                 .get_filesystem()
                 .create_directory(
@@ -174,24 +175,17 @@ pub async fn test_env() -> Result<TestEnv> {
                     /*sandbox*/ None,
                 )
                 .await?;
+            let cwd = cwd_uri.to_abs_path()?;
             Ok(TestEnv {
                 environment,
                 exec_server_url: Some(websocket_url),
                 cwd,
                 local_cwd_temp_dir: None,
-                remote_container_name: Some(remote_env.container_name),
+                remote_container_name: remote_env.docker_container_name().map(str::to_owned),
             })
         }
         None => TestEnv::local().await,
     }
-}
-
-fn remote_aware_cwd_path() -> AbsolutePathBuf {
-    PathBuf::from(format!(
-        "/tmp/codex-core-test-cwd-{}",
-        remote_test_instance_id()
-    ))
-    .abs()
 }
 
 fn remote_exec_server_url() -> Result<String> {
@@ -293,14 +287,13 @@ impl TestCodexBuilder {
         let model = model.to_string();
         self.with_config(move |config| {
             let model_catalog = config.model_catalog.get_or_insert_with(|| {
-                bundled_models_response()
-                    .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"))
+                bundled_models_response().expect("bundled models.json should parse")
             });
             let model_info = model_catalog
                 .models
                 .iter_mut()
                 .find(|model_info| model_info.slug == model)
-                .unwrap_or_else(|| panic!("{model} should exist in the configured model catalog"));
+                .expect("model should exist in the configured model catalog");
             override_model_info(model_info);
             config.model = Some(model);
         })
@@ -678,14 +671,13 @@ fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {
         return Ok(());
     }
 
-    let bundled_models = bundled_models_response()
-        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    let bundled_models = bundled_models_response().expect("bundled models.json should parse");
     let mut model = bundled_models
         .models
         .iter()
         .find(|candidate| candidate.slug == "gpt-5.2")
         .cloned()
-        .unwrap_or_else(|| panic!("missing bundled model gpt-5.2"));
+        .expect("missing bundled model gpt-5.2");
     model.slug = TEST_MODEL_WITH_EXPERIMENTAL_TOOLS.to_string();
     model.display_name = TEST_MODEL_WITH_EXPERIMENTAL_TOOLS.to_string();
     model.experimental_supported_tools = vec!["test_sync_tool".to_string()];
@@ -1100,41 +1092,37 @@ impl TestCodexHarness {
 }
 
 fn custom_tool_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
-    for body in bodies {
-        if let Some(items) = body.get("input").and_then(Value::as_array) {
-            for item in items {
-                if item.get("type").and_then(Value::as_str) == Some("custom_tool_call_output")
-                    && item.get("call_id").and_then(Value::as_str) == Some(call_id)
-                {
-                    return item;
-                }
-            }
-        }
-    }
-    panic!("custom_tool_call_output {call_id} not found");
+    let missing_output = format!("custom_tool_call_output {call_id} not found");
+    bodies
+        .iter()
+        .filter_map(|body| body.get("input").and_then(Value::as_array))
+        .flatten()
+        .find(|item| {
+            item.get("type").and_then(Value::as_str) == Some("custom_tool_call_output")
+                && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+        })
+        .expect(&missing_output)
 }
 
 fn custom_tool_call_output_text(bodies: &[Value], call_id: &str) -> String {
+    let missing_output = format!("custom_tool_call_output {call_id} missing output");
     let output = custom_tool_call_output(bodies, call_id)
         .get("output")
-        .unwrap_or_else(|| panic!("custom_tool_call_output {call_id} missing output"));
-    output_value_to_text(output)
-        .unwrap_or_else(|| panic!("custom_tool_call_output {call_id} missing text output"))
+        .expect(&missing_output);
+    output_value_to_text(output).expect("custom tool call output missing text output")
 }
 
 fn function_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
-    for body in bodies {
-        if let Some(items) = body.get("input").and_then(Value::as_array) {
-            for item in items {
-                if item.get("type").and_then(Value::as_str) == Some("function_call_output")
-                    && item.get("call_id").and_then(Value::as_str) == Some(call_id)
-                {
-                    return item;
-                }
-            }
-        }
-    }
-    panic!("function_call_output {call_id} not found");
+    let missing_output = format!("function_call_output {call_id} not found");
+    bodies
+        .iter()
+        .filter_map(|body| body.get("input").and_then(Value::as_array))
+        .flatten()
+        .find(|item| {
+            item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+        })
+        .expect(&missing_output)
 }
 
 pub fn test_codex() -> TestCodexBuilder {

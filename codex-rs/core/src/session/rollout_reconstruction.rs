@@ -296,7 +296,7 @@ impl Session {
                         // prompt shape.
                         // TODO(ccunningham): if we drop support for None replacement_history compaction items,
                         // we can get rid of this second loop entirely and just build `history` directly in the first loop.
-                        let user_messages = collect_user_messages(history.raw_items());
+                        let user_messages = compact::collect_user_messages(history.raw_items());
                         let rebuilt = compact::build_compacted_history(
                             Vec::new(),
                             &user_messages,

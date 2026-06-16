@@ -1,6 +1,7 @@
 use super::PluginLoadOutcome;
-use crate::OPENAI_CURATED_MARKETPLACE_NAME;
+use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
+use crate::is_openai_curated_marketplace_name;
 use crate::loader::PluginHookLoadOutcome;
 use crate::loader::configured_curated_plugin_ids_from_codex_home;
 use crate::loader::curated_plugin_cache_version;
@@ -41,6 +42,7 @@ use crate::remote::RemotePluginCatalogError;
 use crate::remote::RemotePluginServiceConfig;
 use crate::remote_legacy::RemotePluginFetchError;
 use crate::remote_legacy::RemotePluginMutationError;
+use crate::startup_sync::curated_plugins_api_marketplace_path;
 use crate::startup_sync::curated_plugins_repo_path;
 use crate::startup_sync::read_curated_plugins_sha;
 use crate::startup_sync::sync_openai_plugins_repo;
@@ -210,23 +212,15 @@ fn project_plugin_load_outcome_for_auth(
     outcome: PluginLoadOutcome,
     auth_mode: Option<AuthMode>,
 ) -> PluginLoadOutcome {
-    let apps_route_available = auth_mode.is_some_and(AuthMode::uses_codex_backend);
     let mut plugins = outcome.plugins().to_vec();
     for plugin in &mut plugins {
-        if apps_route_available {
-            if plugin.is_active() && !plugin.apps.is_empty() {
-                let app_declaration_names = plugin
-                    .apps
-                    .iter()
-                    .map(|app| app.name.as_str())
-                    .collect::<HashSet<_>>();
-                plugin
-                    .mcp_servers
-                    .retain(|name, _| !app_declaration_names.contains(name.as_str()));
-            }
-        } else {
-            plugin.apps.clear();
-        }
+        let plugin_active = plugin.is_active();
+        apply_app_mcp_routing_policy(
+            &mut plugin.apps,
+            &mut plugin.mcp_servers,
+            auth_mode,
+            plugin_active,
+        );
     }
     PluginLoadOutcome::from_plugins(plugins)
 }
@@ -940,7 +934,7 @@ impl PluginsManager {
     ) -> Result<PluginInstallOutcome, PluginInstallError> {
         let auth_policy = resolved.policy.authentication;
         let plugin_version =
-            if resolved.plugin_id.marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
+            if is_openai_curated_marketplace_name(&resolved.plugin_id.marketplace_name) {
                 let curated_plugin_version = read_curated_plugins_sha(self.codex_home.as_path())
                     .ok_or_else(|| {
                         PluginStoreError::Invalid(
@@ -1060,11 +1054,8 @@ impl PluginsManager {
         }
 
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
-        let mut marketplace_roots = self.marketplace_roots(config, additional_roots);
-        if !include_openai_curated {
-            let curated_repo_root = curated_plugins_repo_path(self.codex_home.as_path());
-            marketplace_roots.retain(|root| root.as_path() != curated_repo_root.as_path());
-        }
+        let marketplace_roots =
+            self.marketplace_roots(config, additional_roots, include_openai_curated);
         let marketplace_outcome = list_marketplaces(&marketplace_roots)?;
         let mut seen_plugin_keys = HashSet::new();
         let marketplaces = marketplace_outcome
@@ -1152,7 +1143,11 @@ impl PluginsManager {
             return Ok(MarketplaceListOutcome::default());
         }
 
-        list_marketplaces(&self.marketplace_roots(config, additional_roots))
+        list_marketplaces(&self.marketplace_roots(
+            config,
+            additional_roots,
+            /*include_openai_curated*/ true,
+        ))
     }
 
     pub async fn read_plugin_for_config(
@@ -1319,7 +1314,17 @@ impl PluginsManager {
                 event_name: hook.event_name,
             })
             .collect();
-        let app_declarations = load_plugin_apps(source_path.as_path()).await;
+        let auth_mode = self.auth_mode();
+        let mut app_declarations = load_plugin_apps(source_path.as_path()).await;
+        let mut mcp_servers = load_plugin_mcp_servers(source_path.as_path(), auth_mode).await;
+        if auth_mode.is_some() {
+            apply_app_mcp_routing_policy(
+                &mut app_declarations,
+                &mut mcp_servers,
+                auth_mode,
+                /*plugin_active*/ true,
+            );
+        }
         let apps = app_connector_ids_from_declarations(&app_declarations);
         let mut seen_app_connector_ids = HashSet::new();
         let mut app_category_by_id = HashMap::new();
@@ -1330,10 +1335,7 @@ impl PluginsManager {
                 app_category_by_id.insert(app.connector_id.0.clone(), category.clone());
             }
         }
-        let mut mcp_server_names = load_plugin_mcp_servers(source_path.as_path(), self.auth_mode())
-            .await
-            .into_keys()
-            .collect::<Vec<_>>();
+        let mut mcp_server_names = mcp_servers.into_keys().collect::<Vec<_>>();
         mcp_server_names.sort_unstable();
         mcp_server_names.dedup();
 
@@ -1886,6 +1888,7 @@ impl PluginsManager {
         &self,
         config: &PluginsConfigInput,
         additional_roots: &[AbsolutePathBuf],
+        include_openai_curated: bool,
     ) -> Vec<AbsolutePathBuf> {
         // Treat the curated catalog as an extra marketplace root so plugin listing can surface it
         // without requiring every caller to know where it is stored.
@@ -1894,11 +1897,28 @@ impl PluginsManager {
             &config.config_layer_stack,
             self.codex_home.as_path(),
         ));
-        let curated_repo_root = curated_plugins_repo_path(self.codex_home.as_path());
-        if curated_repo_root.is_dir()
-            && let Ok(curated_repo_root) = AbsolutePathBuf::try_from(curated_repo_root)
+        let curated_marketplace_path = if include_openai_curated {
+            if matches!(
+                self.auth_mode(),
+                Some(AuthMode::ApiKey | AuthMode::BedrockApiKey)
+            ) {
+                let api_marketplace_path =
+                    curated_plugins_api_marketplace_path(self.codex_home.as_path());
+                api_marketplace_path
+                    .is_file()
+                    .then_some(api_marketplace_path)
+            } else {
+                let curated_repo_root = curated_plugins_repo_path(self.codex_home.as_path());
+                curated_repo_root.is_dir().then_some(curated_repo_root)
+            }
+        } else {
+            None
+        };
+        if let Some(curated_marketplace_path) = curated_marketplace_path
+            && let Ok(curated_marketplace_path) =
+                AbsolutePathBuf::try_from(curated_marketplace_path)
         {
-            roots.push(curated_repo_root);
+            roots.push(curated_marketplace_path);
         }
         roots.sort_unstable();
         roots.dedup();

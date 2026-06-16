@@ -4,6 +4,7 @@ use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
+use tokio_tungstenite::connect_async_with_config;
 use tracing::debug;
 use tracing::warn;
 
@@ -11,15 +12,25 @@ use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 
 use crate::ExecServerClient;
 use crate::ExecServerError;
+use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
+use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
+use crate::client_api::NoiseRendezvousConnectArgs;
+use crate::client_api::NoiseRendezvousConnectBundle;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::client_api::StdioExecServerCommand;
 use crate::client_api::StdioExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
+use crate::noise_relay::NoiseHarnessConnectionArgs;
+use crate::noise_relay::noise_harness_connection_from_websocket;
+use crate::noise_relay::noise_relay_websocket_config;
 use crate::relay::harness_connection_from_websocket;
 
 const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
 
 impl ExecServerClient {
+    /// Open the selected transport and run the common JSON-RPC initialization.
+    /// Noise connection details are fetched here so reconnects get a fresh URL
+    /// and authorization without replacing the harness identity.
     pub(crate) async fn connect_for_transport(
         transport_params: crate::client_api::ExecServerTransportParams,
     ) -> Result<Self, ExecServerError> {
@@ -34,6 +45,21 @@ impl ExecServerClient {
                     client_name: ENVIRONMENT_CLIENT_NAME.to_string(),
                     connect_timeout,
                     initialize_timeout,
+                    resume_session_id: None,
+                })
+                .await
+            }
+            crate::client_api::ExecServerTransportParams::NoiseRendezvous {
+                provider,
+                identity,
+            } => {
+                let bundle = provider.connect_bundle(identity.public_key()).await?;
+                Self::connect_noise_rendezvous(NoiseRendezvousConnectArgs {
+                    bundle,
+                    harness_identity: identity,
+                    client_name: ENVIRONMENT_CLIENT_NAME.to_string(),
+                    connect_timeout: DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
+                    initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
                     resume_session_id: None,
                 })
                 .await
@@ -77,6 +103,76 @@ impl ExecServerClient {
             JsonRpcConnection::from_websocket(stream, connection_label)
         };
         Self::connect(connection, args.into()).await
+    }
+
+    /// Connect to one exec-server through an authenticated rendezvous stream.
+    /// The executor key is pinned before JSON-RPC starts; the websocket carries
+    /// only ciphertext after that.
+    pub async fn connect_noise_rendezvous(
+        args: NoiseRendezvousConnectArgs,
+    ) -> Result<Self, ExecServerError> {
+        ensure_rustls_crypto_provider();
+        // Keep the registry-issued URL, key, and authorization together for this
+        // connection attempt.
+        let NoiseRendezvousConnectArgs {
+            bundle,
+            harness_identity,
+            client_name,
+            connect_timeout,
+            initialize_timeout,
+            resume_session_id,
+        } = args;
+        let NoiseRendezvousConnectBundle {
+            websocket_url,
+            environment_id,
+            executor_registration_id,
+            executor_public_key,
+            harness_key_authorization,
+        } = bundle;
+        let diagnostic_url = websocket_url
+            .split(['?', '#'])
+            .next()
+            .unwrap_or(websocket_url.as_str())
+            .to_string();
+        let (stream, _) = timeout(
+            connect_timeout,
+            connect_async_with_config(
+                websocket_url.as_str(),
+                Some(noise_relay_websocket_config()),
+                /*disable_nagle*/ false,
+            ),
+        )
+        .await
+        .map_err(|_| ExecServerError::WebSocketConnectTimeout {
+            url: diagnostic_url.clone(),
+            timeout: connect_timeout,
+        })?
+        .map_err(|source| ExecServerError::WebSocketConnect {
+            url: diagnostic_url.clone(),
+            source,
+        })?;
+
+        let connection_label = format!("Noise exec-server rendezvous websocket {diagnostic_url}");
+        let connection = noise_harness_connection_from_websocket(
+            stream,
+            NoiseHarnessConnectionArgs {
+                connection_label,
+                environment_id,
+                executor_registration_id,
+                identity: harness_identity,
+                responder_public_key: executor_public_key,
+                harness_key_authorization,
+            },
+        );
+        Self::connect(
+            connection,
+            crate::client_api::ExecServerClientConnectOptions {
+                client_name,
+                initialize_timeout,
+                resume_session_id,
+            },
+        )
+        .await
     }
 
     pub(crate) async fn connect_stdio_command(

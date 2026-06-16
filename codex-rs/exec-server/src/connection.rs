@@ -44,6 +44,7 @@ pub(crate) enum JsonRpcConnectionEvent {
 
 #[derive(Clone)]
 pub(crate) enum JsonRpcTransport {
+    // Plain means no child process; transport bytes may still be encrypted.
     Plain,
     Stdio { transport: StdioTransport },
 }

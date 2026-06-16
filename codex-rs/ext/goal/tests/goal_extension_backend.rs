@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
@@ -1320,7 +1322,7 @@ impl GoalExtensionHarness {
     fn runtime_handle(&self) -> Arc<GoalRuntimeHandle> {
         self.thread_store
             .get::<GoalRuntimeHandle>()
-            .unwrap_or_else(|| panic!("goal runtime handle should exist"))
+            .expect("goal runtime handle should exist")
     }
 }
 
@@ -1331,7 +1333,7 @@ fn tool_by_name<'a>(
     tools
         .iter()
         .find(|tool| tool.tool_name().namespace.is_none() && tool.tool_name().name == name)
-        .unwrap_or_else(|| panic!("missing tool {name}"))
+        .expect("requested goal tool should exist")
 }
 
 fn tool_call(tool_name: &str, call_id: &str, arguments: serde_json::Value) -> ToolCall {

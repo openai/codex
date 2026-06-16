@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -79,11 +81,13 @@ const SKILL_REFERENCE_CONTENTS: &str =
     "# Deploy reference\n\nUse the orchestrator deployment API.\n";
 const SKILLS_LIST_CALL_ID: &str = "skills-list";
 const SKILLS_READ_CALL_ID: &str = "skills-read";
+const SKILLS_READ_AGAIN_CALL_ID: &str = "skills-read-again";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
-    let (apps_server_url, apps_server_handle) = start_resource_apps_mcp_server().await?;
+    let (apps_server_url, _apps_server_calls, apps_server_handle) =
+        start_resource_apps_mcp_server().await?;
     let responses_server_uri = responses_server.uri();
     let (_codex_home, mut mcp) =
         start_resource_test_app_server(&apps_server_url, &responses_server_uri).await?;
@@ -126,7 +130,8 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
-    let (apps_server_url, apps_server_handle) = start_resource_apps_mcp_server().await?;
+    let (apps_server_url, apps_server_calls, apps_server_handle) =
+        start_resource_apps_mcp_server().await?;
     let responses_server_uri = responses_server.uri();
     let (_codex_home, mut mcp) =
         start_resource_test_app_server(&apps_server_url, &responses_server_uri).await?;
@@ -181,16 +186,38 @@ async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -
                 responses::ev_completed("resp-skills-read"),
             ]),
             responses::sse(vec![
+                responses::ev_response_created("resp-skills-read-again"),
+                responses::ev_function_call_with_namespace(
+                    SKILLS_READ_AGAIN_CALL_ID,
+                    "skills",
+                    "read",
+                    &json!({
+                        "authority": {
+                            "kind": "orchestrator",
+                        },
+                        "package": SKILL_RESOURCE_URI,
+                        "resource": SKILL_REFERENCE_URI,
+                    })
+                    .to_string(),
+                ),
+                responses::ev_completed("resp-skills-read-again"),
+            ]),
+            responses::sse(vec![
                 responses::ev_response_created("resp-orchestrator-skill"),
                 responses::ev_assistant_message("msg-orchestrator-skill", "Done"),
                 responses::ev_completed("resp-orchestrator-skill"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-orchestrator-skill-after-refresh"),
+                responses::ev_assistant_message("msg-orchestrator-skill-after-refresh", "Done"),
+                responses::ev_completed("resp-orchestrator-skill-after-refresh"),
             ]),
         ],
     )
     .await;
     let turn_start_id = mcp
         .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id,
+            thread_id: thread.id.clone(),
             input: vec![UserInput::Text {
                 text: format!("Use ${SKILL_NAME}"),
                 text_elements: Vec::new(),
@@ -210,7 +237,7 @@ async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -
     .await??;
 
     let requests = response_mock.requests();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 4);
     let first_request = &requests[0];
     assert!(first_request.tool_by_name("skills", "list").is_some());
     assert!(first_request.tool_by_name("skills", "read").is_some());
@@ -276,6 +303,61 @@ async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -
             "contents": SKILL_REFERENCE_CONTENTS,
         })
     );
+    let repeated_read_output = requests[3]
+        .function_call_output_text(SKILLS_READ_AGAIN_CALL_ID)
+        .ok_or_else(|| {
+            anyhow::anyhow!("repeated skills.read output should be sent to the model")
+        })?;
+    assert_eq!(read_output, repeated_read_output);
+    assert_eq!(
+        ResourceAppsMcpCallCounts {
+            list_resources: 3,
+            main_prompt_reads: 1,
+            reference_reads: 1,
+        },
+        apps_server_calls.snapshot()
+    );
+
+    let refresh_request_id = mcp
+        .send_raw_request("config/mcpServer/reload", /*params*/ None)
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(refresh_request_id)),
+    )
+    .await??;
+
+    let refreshed_turn_start_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![UserInput::Text {
+                text: format!("Use ${SKILL_NAME} after refreshing MCP"),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(refreshed_turn_start_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 5);
+    assert_eq!(
+        ResourceAppsMcpCallCounts {
+            list_resources: 6,
+            main_prompt_reads: 2,
+            reference_reads: 1,
+        },
+        apps_server_calls.snapshot()
+    );
     apps_server_handle.abort();
     let _ = apps_server_handle.await;
     Ok(())
@@ -284,7 +366,8 @@ async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn local_executor_does_not_expose_orchestrator_skills() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
-    let (apps_server_url, apps_server_handle) = start_resource_apps_mcp_server().await?;
+    let (apps_server_url, _apps_server_calls, apps_server_handle) =
+        start_resource_apps_mcp_server().await?;
     let responses_server_uri = responses_server.uri();
     let (_codex_home, mut mcp) =
         start_resource_test_app_server(&apps_server_url, &responses_server_uri).await?;
@@ -355,7 +438,8 @@ async fn local_executor_does_not_expose_orchestrator_skills() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_resource_read_returns_resource_contents_without_thread() -> Result<()> {
-    let (apps_server_url, apps_server_handle) = start_resource_apps_mcp_server().await?;
+    let (apps_server_url, _apps_server_calls, apps_server_handle) =
+        start_resource_apps_mcp_server().await?;
 
     let codex_home = TempDir::new()?;
     std::fs::write(
@@ -514,13 +598,20 @@ stream_max_retries = 0
     Ok((codex_home, mcp))
 }
 
-async fn start_resource_apps_mcp_server() -> Result<(String, JoinHandle<()>)> {
+async fn start_resource_apps_mcp_server()
+-> Result<(String, Arc<ResourceAppsMcpCalls>, JoinHandle<()>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let apps_server_url = format!("http://{addr}");
+    let calls = Arc::new(ResourceAppsMcpCalls::default());
+    let server_calls = Arc::clone(&calls);
 
     let mcp_service = StreamableHttpService::new(
-        move || Ok(ResourceAppsMcpServer),
+        move || {
+            Ok(ResourceAppsMcpServer {
+                calls: Arc::clone(&server_calls),
+            })
+        },
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
     );
@@ -529,7 +620,7 @@ async fn start_resource_apps_mcp_server() -> Result<(String, JoinHandle<()>)> {
         let _ = axum::serve(listener, router).await;
     });
 
-    Ok((apps_server_url, apps_server_handle))
+    Ok((apps_server_url, calls, apps_server_handle))
 }
 
 fn expected_resource_read_response() -> McpResourceReadResponse {
@@ -551,8 +642,34 @@ fn expected_resource_read_response() -> McpResourceReadResponse {
     }
 }
 
-#[derive(Clone, Default)]
-struct ResourceAppsMcpServer;
+#[derive(Debug, Default)]
+struct ResourceAppsMcpCalls {
+    list_resources: AtomicUsize,
+    main_prompt_reads: AtomicUsize,
+    reference_reads: AtomicUsize,
+}
+
+impl ResourceAppsMcpCalls {
+    fn snapshot(&self) -> ResourceAppsMcpCallCounts {
+        ResourceAppsMcpCallCounts {
+            list_resources: self.list_resources.load(Ordering::Relaxed),
+            main_prompt_reads: self.main_prompt_reads.load(Ordering::Relaxed),
+            reference_reads: self.reference_reads.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ResourceAppsMcpCallCounts {
+    list_resources: usize,
+    main_prompt_reads: usize,
+    reference_reads: usize,
+}
+
+#[derive(Clone)]
+struct ResourceAppsMcpServer {
+    calls: Arc<ResourceAppsMcpCalls>,
+}
 
 impl ServerHandler for ResourceAppsMcpServer {
     fn get_info(&self) -> ServerInfo {
@@ -565,6 +682,7 @@ impl ServerHandler for ResourceAppsMcpServer {
         request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, rmcp::ErrorData> {
+        self.calls.list_resources.fetch_add(1, Ordering::Relaxed);
         let cursor = request.and_then(|request| request.cursor);
         if cursor.is_none() {
             return Ok(ListResourcesResult {
@@ -614,6 +732,7 @@ impl ServerHandler for ResourceAppsMcpServer {
     ) -> Result<ReadResourceResult, rmcp::ErrorData> {
         let uri = request.uri;
         if uri == SKILL_MAIN_PROMPT_URI {
+            self.calls.main_prompt_reads.fetch_add(1, Ordering::Relaxed);
             return Ok(ReadResourceResult::new(vec![
                 ResourceContents::TextResourceContents {
                     uri: SKILL_MAIN_PROMPT_URI.to_string(),
@@ -624,6 +743,7 @@ impl ServerHandler for ResourceAppsMcpServer {
             ]));
         }
         if uri == SKILL_REFERENCE_URI {
+            self.calls.reference_reads.fetch_add(1, Ordering::Relaxed);
             return Ok(ReadResourceResult::new(vec![
                 ResourceContents::TextResourceContents {
                     uri: SKILL_REFERENCE_URI.to_string(),

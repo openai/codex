@@ -30,6 +30,7 @@ mod windows_impl {
     use crate::env::ensure_non_interactive_pager;
     use crate::env::inherit_path_env;
     use crate::env::normalize_null_device_env;
+    use crate::identity::refresh_logon_sandbox_creds;
     use crate::identity::require_logon_sandbox_creds;
     use crate::ipc_framed::EmptyPayload;
     use crate::ipc_framed::FramedMessage;
@@ -43,6 +44,7 @@ mod windows_impl {
     use crate::logging::log_start;
     use crate::logging::log_success;
     use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
+    use crate::runner_client::is_stale_sandbox_creds_error;
     use crate::runner_client::spawn_runner_transport;
     use crate::sandbox_utils::ensure_codex_home_exists;
     use crate::sandbox_utils::inject_git_safe_directory;
@@ -137,7 +139,7 @@ mod windows_impl {
 
         let logs_base_dir: Option<&Path> = Some(sandbox_base.as_path());
         log_start(&command, logs_base_dir);
-        let sandbox_creds = require_logon_sandbox_creds(
+        let mut sandbox_creds = require_logon_sandbox_creds(
             &permissions,
             cwd,
             &env_map,
@@ -192,13 +194,37 @@ mod windows_impl {
                 stdin_open: false,
                 use_private_desktop,
             };
-            let transport = spawn_runner_transport(
+            let transport = match spawn_runner_transport(
                 codex_home,
                 cwd,
                 &sandbox_creds,
                 logs_base_dir,
-                spawn_request,
-            )?;
+                spawn_request.clone(),
+            ) {
+                Ok(transport) => transport,
+                Err(err) if is_stale_sandbox_creds_error(&err) => {
+                    sandbox_creds = refresh_logon_sandbox_creds(
+                        &permissions,
+                        cwd,
+                        &env_map,
+                        codex_home,
+                        read_roots_override,
+                        read_roots_include_platform_defaults,
+                        write_roots_override,
+                        &deny_read_paths_override,
+                        &deny_write_paths_override,
+                        proxy_enforced,
+                    )?;
+                    spawn_runner_transport(
+                        codex_home,
+                        cwd,
+                        &sandbox_creds,
+                        logs_base_dir,
+                        spawn_request,
+                    )?
+                }
+                Err(err) => return Err(err),
+            };
             let (pipe_write, mut pipe_read) = transport.into_files();
             let cancel_writer = spawn_cancel_writer(&pipe_write, cancellation)?;
 

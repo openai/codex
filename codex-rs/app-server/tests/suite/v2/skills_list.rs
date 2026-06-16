@@ -268,6 +268,7 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
 
     for (scope, body) in [
         ("GLOBAL", global_installed_body),
+        ("USER", empty_page_body),
         ("WORKSPACE", empty_page_body),
     ] {
         Mock::given(method("GET"))

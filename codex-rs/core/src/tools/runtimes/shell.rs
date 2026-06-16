@@ -16,6 +16,7 @@ use crate::guardian::review_approval_request;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
+use crate::session::turn_context::TurnEnvironment;
 use crate::shell::ShellType;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalMode;
@@ -53,6 +54,7 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone, Debug)]
 pub struct ShellRequest {
     pub command: Vec<String>,
+    pub turn_environment: TurnEnvironment,
     pub shell_type: Option<ShellType>,
     pub hook_command: String,
     pub cwd: AbsolutePathBuf,
@@ -240,10 +242,12 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
         let session_shell = ctx.session.user_shell();
-        let shell_snapshot = ctx.session.services.shell_snapshot.load_full();
-        let shell_snapshot_location = shell_snapshot
+        let shell = req
+            .turn_environment
+            .shell
             .as_ref()
-            .and_then(|snapshot| snapshot.location(&req.cwd));
+            .unwrap_or(session_shell.as_ref());
+        let shell_snapshot_location = req.turn_environment.shell_snapshot(&req.cwd);
         let (file_system_sandbox_policy, _) = attempt.permissions.to_runtime_permissions();
         let sandbox_permissions = sandbox_permissions_preserving_denied_reads(
             req.sandbox_permissions,
@@ -272,7 +276,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let runtime_path_prepends = RuntimePathPrepends::default();
         let command = maybe_wrap_shell_lc_with_snapshot(
             &req.command,
-            session_shell.as_ref(),
+            shell,
             shell_snapshot_location.as_ref(),
             &explicit_env_overrides,
             &env,
@@ -284,7 +288,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             attempt.sandbox,
             attempt.windows_sandbox_level,
         );
-        let command = if matches!(session_shell.shell_type, ShellType::PowerShell) {
+        let command = if matches!(shell.shell_type, ShellType::PowerShell) {
             prefix_powershell_script_with_utf8(&command)
         } else {
             command
