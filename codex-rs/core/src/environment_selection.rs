@@ -15,6 +15,7 @@ use futures::future::Shared;
 
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
+use crate::shell_snapshot::ShellSnapshot;
 
 pub(crate) fn default_thread_environment_selections(
     environment_manager: &EnvironmentManager,
@@ -34,18 +35,23 @@ type SnapshotTask = Shared<BoxFuture<'static, TurnEnvironmentSnapshot>>;
 
 pub(crate) struct ThreadEnvironments {
     environment_manager: Arc<EnvironmentManager>,
+    local_shell: Shell,
+    shell_snapshot: ShellSnapshot,
     snapshot_task: ArcSwap<SnapshotTask>,
 }
 
 impl ThreadEnvironments {
-    pub(crate) fn new(environment_manager: Arc<EnvironmentManager>) -> Self {
+    pub(crate) fn new(
+        environment_manager: Arc<EnvironmentManager>,
+        local_shell: Shell,
+        shell_snapshot: ShellSnapshot,
+        current: TurnEnvironmentSnapshot,
+    ) -> Self {
         Self {
             environment_manager,
-            snapshot_task: ArcSwap::from_pointee(
-                futures::future::ready(TurnEnvironmentSnapshot::default())
-                    .boxed()
-                    .shared(),
-            ),
+            local_shell,
+            shell_snapshot,
+            snapshot_task: ArcSwap::from_pointee(futures::future::ready(current).boxed().shared()),
         }
     }
 
@@ -57,9 +63,18 @@ impl ThreadEnvironments {
             .cloned()
             .unwrap_or_default();
         let environment_manager = Arc::clone(&self.environment_manager);
+        let local_shell = self.local_shell.clone();
+        let shell_snapshot = self.shell_snapshot.clone();
         let environments = environments.to_vec();
         let (snapshot_task, snapshot) = async move {
-            Self::resolve_snapshot(environment_manager, previous, environments).await
+            Self::resolve_snapshot(
+                environment_manager,
+                local_shell,
+                shell_snapshot,
+                previous,
+                environments,
+            )
+            .await
         }
         .remote_handle();
         self.snapshot_task
@@ -69,6 +84,8 @@ impl ThreadEnvironments {
 
     async fn resolve_snapshot(
         environment_manager: Arc<EnvironmentManager>,
+        local_shell: Shell,
+        shell_snapshot: ShellSnapshot,
         current: TurnEnvironmentSnapshot,
         environments: Vec<TurnEnvironmentSelection>,
     ) -> TurnEnvironmentSnapshot {
@@ -83,8 +100,13 @@ impl ThreadEnvironments {
                     && environment.cwd_uri() == &selected_environment.cwd
             }) {
                 Some(environment) => environment.clone(),
-                None => match Self::resolve_selection(&environment_manager, selected_environment)
-                    .await
+                None => match Self::resolve_selection(
+                    &environment_manager,
+                    &local_shell,
+                    &shell_snapshot,
+                    selected_environment,
+                )
+                .await
                 {
                     Ok(environment) => environment,
                     Err(err) => {
@@ -103,6 +125,8 @@ impl ThreadEnvironments {
 
     async fn resolve_selection(
         environment_manager: &EnvironmentManager,
+        local_shell: &Shell,
+        shell_snapshot: &ShellSnapshot,
         selected_environment: &TurnEnvironmentSelection,
     ) -> CodexResult<TurnEnvironment> {
         let environment_id = selected_environment.environment_id.clone();
@@ -111,22 +135,26 @@ impl ThreadEnvironments {
             .ok_or_else(|| {
                 CodexErr::InvalidRequest(format!("unknown turn environment id `{environment_id}`"))
             })?;
-        let shell = match environment.info().await {
-            Ok(info) => match Shell::from_environment_shell_info(info.shell) {
-                Ok(shell) => Some(shell),
+        let shell = if environment.is_remote() {
+            match environment.info().await {
+                Ok(info) => match Shell::from_environment_shell_info(info.shell) {
+                    Ok(shell) => Some(shell),
+                    Err(err) => {
+                        tracing::warn!(
+                            "failed to resolve shell for environment `{environment_id}`: {err}"
+                        );
+                        None
+                    }
+                },
                 Err(err) => {
-                    tracing::warn!(
-                        "failed to resolve shell for environment `{environment_id}`: {err}"
-                    );
+                    tracing::warn!("failed to get info for environment `{environment_id}`: {err}");
                     None
                 }
-            },
-            Err(err) => {
-                tracing::warn!("failed to get info for environment `{environment_id}`: {err}");
-                None
             }
+        } else {
+            Some(local_shell.clone())
         };
-        Ok(TurnEnvironment::new(
+        let mut turn_environment = TurnEnvironment::new(
             environment_id,
             environment,
             selected_environment.cwd.to_abs_path().map_err(|err| {
@@ -136,7 +164,15 @@ impl ThreadEnvironments {
                 ))
             })?,
             shell,
-        ))
+        );
+        let task = shell_snapshot
+            .clone()
+            .build(turn_environment.clone())
+            .boxed()
+            .shared();
+        drop(tokio::spawn(task.clone()));
+        turn_environment.shell_snapshot = task;
+        Ok(turn_environment)
     }
 
     pub(crate) async fn snapshot(&self) -> TurnEnvironmentSnapshot {
@@ -158,6 +194,12 @@ impl TurnEnvironmentSnapshot {
         self.turn_environments.first()
     }
 
+    pub(crate) fn local(&self) -> Option<&TurnEnvironment> {
+        self.turn_environments
+            .iter()
+            .find(|environment| !environment.environment.is_remote())
+    }
+
     #[cfg(test)]
     pub(crate) fn primary_environment(&self) -> Option<Arc<codex_exec_server::Environment>> {
         self.primary()
@@ -176,12 +218,16 @@ impl TurnEnvironmentSnapshot {
             .map(|environment| environment.environment.get_filesystem())
     }
 
-    pub(crate) fn single_local_environment_cwd(&self) -> Option<&AbsolutePathBuf> {
+    pub(crate) fn single_local_environment(&self) -> Option<&TurnEnvironment> {
         let [environment] = self.turn_environments.as_slice() else {
             return None;
         };
 
-        (!environment.environment.is_remote()).then_some(environment.cwd())
+        (!environment.environment.is_remote()).then_some(environment)
+    }
+
+    pub(crate) fn single_local_environment_cwd(&self) -> Option<&AbsolutePathBuf> {
+        self.single_local_environment().map(TurnEnvironment::cwd)
     }
 }
 
@@ -202,7 +248,12 @@ mod tests {
         environment_manager: Arc<EnvironmentManager>,
         selections: &[TurnEnvironmentSelection],
     ) -> Arc<ThreadEnvironments> {
-        let turn_environments = Arc::new(ThreadEnvironments::new(environment_manager));
+        let turn_environments = Arc::new(ThreadEnvironments::new(
+            environment_manager,
+            crate::shell::default_user_shell(),
+            ShellSnapshot::disabled(),
+            TurnEnvironmentSnapshot::default(),
+        ));
         turn_environments.update_selections(selections);
         turn_environments.snapshot().await;
         turn_environments
@@ -277,6 +328,34 @@ url = "ws://127.0.0.1:8765"
         assert_eq!(
             default_thread_environment_selections(&manager, &cwd),
             Vec::<TurnEnvironmentSelection>::new()
+        );
+    }
+
+    #[tokio::test]
+    async fn local_environment_uses_configured_shell() {
+        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let local_shell = Shell {
+            shell_type: crate::shell::ShellType::Zsh,
+            shell_path: std::path::PathBuf::from("/configured/zsh"),
+        };
+        let turn_environments = ThreadEnvironments::new(
+            Arc::new(EnvironmentManager::default_for_tests()),
+            local_shell.clone(),
+            ShellSnapshot::disabled(),
+            TurnEnvironmentSnapshot::default(),
+        );
+        turn_environments.update_selections(&[TurnEnvironmentSelection {
+            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+            cwd: PathUri::from_abs_path(&cwd),
+        }]);
+
+        let snapshot = turn_environments.snapshot().await;
+
+        assert_eq!(
+            snapshot
+                .primary()
+                .and_then(|environment| environment.shell.as_ref()),
+            Some(&local_shell)
         );
     }
 
@@ -387,7 +466,12 @@ url = "ws://127.0.0.1:8765"
             .await,
         );
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
-        let turn_environments = Arc::new(ThreadEnvironments::new(manager));
+        let turn_environments = Arc::new(ThreadEnvironments::new(
+            manager,
+            crate::shell::default_user_shell(),
+            ShellSnapshot::disabled(),
+            TurnEnvironmentSnapshot::default(),
+        ));
         turn_environments.update_selections(&[TurnEnvironmentSelection {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&cwd),

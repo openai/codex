@@ -37,7 +37,7 @@ use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::PluginUninstallResponse;
-use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
+use codex_core_plugins::is_openai_curated_marketplace_name;
 use codex_core_plugins::remote::REMOTE_WORKSPACE_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME;
@@ -1554,7 +1554,7 @@ impl ChatWidget {
 
         let curated_marketplace = marketplaces
             .iter()
-            .find(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
+            .find(|marketplace| is_openai_curated_marketplace_name(&marketplace.name))
             .copied();
         let curated_entries = curated_marketplace
             .map(|marketplace| plugin_entries_for_marketplaces([marketplace]))
@@ -1582,7 +1582,7 @@ impl ChatWidget {
         let mut additional_marketplaces: Vec<&PluginMarketplaceEntry> = marketplaces
             .iter()
             .copied()
-            .filter(|marketplace| marketplace.name != OPENAI_CURATED_MARKETPLACE_NAME)
+            .filter(|marketplace| !is_openai_curated_marketplace_name(&marketplace.name))
             .collect();
         additional_marketplaces.sort_by(|left, right| {
             marketplace_display_name(left)

@@ -1,16 +1,16 @@
-//! Short, best-effort terminal response probes for TUI startup.
+//! Short, best-effort terminal response probes for TUI startup and resume.
 //!
 //! Crossterm's public helpers wait up to two seconds for terminal responses. That is too long for
-//! TUI startup, where unsupported terminals should simply fall back to conservative defaults.
+//! TUI startup and resume, where unsupported terminals should simply fall back to conservative
+//! defaults.
 //! This module sends the same kinds of optional terminal queries with a caller-provided deadline,
 //! prefers duplicated stdio handles, falls back to the controlling terminal path when stdio is
 //! unavailable, and reports `None` when a response is unavailable.
 //!
-//! The probes run before the crossterm event stream is created, so they do not share crossterm's
-//! internal skipped-event queue. Bytes read while looking for probe responses are consumed from the
-//! terminal; keeping the timeout short is part of the contract that makes this acceptable for
-//! startup. A future input-preservation layer would need to replay unrelated bytes through the same
-//! parser that normal TUI input uses.
+//! Probes run only while the crossterm event stream is absent or paused, so they do not share
+//! crossterm's internal skipped-event queue. Bytes read while looking for probe responses are
+//! consumed from the terminal; callers must therefore own terminal input for the duration of the
+//! short timeout and accept that unrelated buffered input will be discarded.
 
 use std::time::Duration;
 
@@ -58,7 +58,7 @@ mod imp {
         Skip,
     }
 
-    /// Temporary terminal handle used while a startup probe owns terminal input.
+    /// Temporary terminal handle used while a probe owns terminal input.
     ///
     /// The preferred path is duplicated stdin/stdout, because terminal replies are delivered to the
     /// same input stream crossterm reads from. Some embedded or redirected environments expose a
@@ -72,7 +72,7 @@ mod imp {
     }
 
     impl Tty {
-        /// Opens an isolated reader and writer for startup probes.
+        /// Opens an isolated reader and writer for terminal probes.
         ///
         /// The reader and writer must be separate file descriptions so switching the reader into
         /// nonblocking mode does not also make writes fail with `WouldBlock` under terminal
@@ -232,6 +232,17 @@ mod imp {
         Ok(Some(colors))
     }
 
+    /// Queries the terminal cursor position while normal input polling is paused.
+    ///
+    /// Resume can emit a focus report immediately before the cursor-position response. Reusing
+    /// the startup parser lets the probe find the response without leaking either sequence into
+    /// the composer.
+    pub(crate) fn cursor_position(timeout: Duration) -> io::Result<Option<Position>> {
+        let mut tty = Tty::open()?;
+        tty.write_all(b"\x1B[6n")?;
+        read_until(&mut tty, timeout, parse_cursor_position)
+    }
+
     /// Runs the optional terminal queries needed during TUI startup under one shared deadline.
     ///
     /// Keeping these queries batched avoids paying one timeout per unsupported capability before
@@ -255,8 +266,8 @@ mod imp {
     /// Reads available terminal bytes until `parse` recognizes a probe response or time expires.
     ///
     /// The accumulated buffer may include unrelated terminal input. This helper intentionally does
-    /// not try to replay those bytes, so it must stay limited to short startup probes that run
-    /// before normal crossterm input polling begins.
+    /// not try to replay those bytes, so callers must use it only during short, exclusive probe
+    /// windows before normal crossterm input polling begins or while that polling is paused.
     fn read_until<T>(
         tty: &mut Tty,
         timeout: Duration,

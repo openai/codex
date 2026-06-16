@@ -26,6 +26,8 @@ The CLI entrypoint supports:
 
 Remote mode registers the local exec-server with the environment registry,
 then reconnects to the service-provided rendezvous websocket as the environment.
+Remote communication uses the Noise relay contract; the registry and harness
+must support it.
 It uses the standard Codex ChatGPT sign-in state; run `codex login` first when
 remote registration needs authentication. Containerized callers that receive an
 Agent Identity JWT in `CODEX_ACCESS_TOKEN` can opt into that auth path with
@@ -45,7 +47,7 @@ codex exec-server \
 Wire framing:
 
 - local websocket: one JSON-RPC message per websocket frame
-- remote websocket: binary protobuf relay frames carrying JSON-RPC payloads
+- Noise remote websocket: binary protobuf relay frames carrying encrypted payloads
 
 ## Remote Relay Message Format
 
@@ -57,13 +59,13 @@ identity plus endpoint-owned reliability metadata:
 ```text
 version
 stream_id
-body              // data | ack_frame | resume | reset | heartbeat
+body              // handshake | data | ack_frame | resume | reset | heartbeat
 ack               // highest contiguous peer segment seq received
 ack_bits          // bitset for peer segment seqs after ack
 seq               // data only: segment sequence number
 segment_index     // data only: 0-based index within message
 segment_count     // data only: number of segments in message
-payload           // data only: JSON-RPC message bytes or segment bytes
+payload           // handshake bytes or encrypted data record
 next_seq          // resume only: next sender seq
 reason            // reset only: reset reason
 ```

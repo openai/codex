@@ -14,7 +14,6 @@ use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ConversationTextRole;
-use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
@@ -304,7 +303,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
         _ => None,
     })
     .await
-    .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
+    .expect("conversation start failed");
     assert!(started.realtime_session_id.is_some());
     assert_eq!(started.version, RealtimeConversationVersion::V1);
 
@@ -449,7 +448,7 @@ async fn conversation_start_defaults_to_v2_and_gpt_realtime_1_5() -> Result<()> 
         _ => None,
     })
     .await
-    .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
+    .expect("conversation start failed");
 
     assert!(
         realtime_server
@@ -547,7 +546,7 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
         _ => None,
     })
     .await
-    .unwrap_or_else(|err: ErrorEvent| panic!("conversation call create failed: {err:?}"));
+    .expect("conversation call create failed");
     assert_eq!(created.sdp, "v=answer\r\n");
     assert!(
         realtime_server.handshakes().is_empty(),
@@ -728,7 +727,7 @@ async fn conversation_webrtc_start_uses_avas_architecture_query() -> Result<()> 
         _ => None,
     })
     .await
-    .unwrap_or_else(|err: ErrorEvent| panic!("conversation call create failed: {err:?}"));
+    .expect("conversation call create failed");
     assert_eq!(created.sdp, "v=answer\r\n");
 
     let request = capture.single_request();
@@ -829,7 +828,7 @@ async fn conversation_webrtc_start_uses_configured_call_base_url_for_avas() -> R
         _ => None,
     })
     .await
-    .unwrap_or_else(|err: ErrorEvent| panic!("conversation call create failed: {err:?}"));
+    .expect("conversation call create failed");
     assert_eq!(created.sdp, "v=answer\r\n");
 
     let request = capture.single_request();
@@ -1102,7 +1101,7 @@ async fn conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth() -> 
         _ => None,
     })
     .await
-    .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
+    .expect("conversation start failed");
     assert!(started.realtime_session_id.is_some());
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
@@ -1174,7 +1173,7 @@ async fn conversation_transport_close_emits_closed_event() -> Result<()> {
         _ => None,
     })
     .await
-    .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
+    .expect("conversation start failed");
     assert!(started.realtime_session_id.is_some());
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
@@ -1423,7 +1422,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
         _ => None,
     })
     .await
-    .unwrap_or_else(|err: ErrorEvent| panic!("first conversation start failed: {err:?}"));
+    .expect("first conversation start failed");
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
@@ -1452,7 +1451,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
         _ => None,
     })
     .await
-    .unwrap_or_else(|err: ErrorEvent| panic!("second conversation start failed: {err:?}"));
+    .expect("second conversation start failed");
 
     test.codex
         .submit(Op::RealtimeConversationAudio(ConversationAudioParams {

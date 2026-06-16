@@ -523,6 +523,62 @@ fn list_marketplaces_prefers_first_supported_manifest_layout() {
 }
 
 #[test]
+fn list_marketplaces_supports_explicit_api_marketplace_manifest_path() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/api_marketplace.json")).unwrap();
+    fs::write(
+        marketplace_path.as_path(),
+        r#"{
+  "name": "openai-api-curated",
+  "plugins": [
+    {
+      "name": "api-plugin",
+      "source": {
+        "source": "local",
+        "path": "./plugins/api-plugin"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let marketplaces = list_marketplaces_with_home(
+        std::slice::from_ref(&marketplace_path),
+        /*home_dir*/ None,
+    )
+    .unwrap()
+    .marketplaces;
+
+    assert_eq!(
+        marketplaces,
+        vec![Marketplace {
+            name: "openai-api-curated".to_string(),
+            path: marketplace_path,
+            interface: None,
+            plugins: vec![MarketplacePlugin {
+                name: "api-plugin".to_string(),
+                local_version: None,
+                source: MarketplacePluginSource::Local {
+                    path: AbsolutePathBuf::try_from(repo_root.join("plugins/api-plugin")).unwrap(),
+                },
+                policy: MarketplacePluginPolicy {
+                    installation: MarketplacePluginInstallPolicy::Available,
+                    authentication: MarketplacePluginAuthPolicy::OnInstall,
+                    products: None,
+                },
+                interface: None,
+                keywords: Vec::new(),
+            }],
+        }]
+    );
+}
+
+#[test]
 fn list_marketplaces_returns_home_and_repo_marketplaces() {
     let tmp = tempdir().unwrap();
     let home_root = tmp.path().join("home");
