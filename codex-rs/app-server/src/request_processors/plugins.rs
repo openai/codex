@@ -1386,6 +1386,10 @@ impl PluginRequestProcessor {
                 ));
             }
         };
+        let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
+        let config = self.load_latest_config(config_cwd.clone()).await?;
+        let auth = self.auth_manager.auth().await;
+
         let plugins_manager = self.thread_manager.plugins_manager();
         let request = PluginInstallRequest {
             plugin_name,
