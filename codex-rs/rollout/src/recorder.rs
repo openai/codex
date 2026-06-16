@@ -1299,9 +1299,20 @@ async fn list_threads_from_files_asc(
         .collect::<Vec<_>>();
 
     if let Some(cursor) = cursor {
-        let anchor = cursor.timestamp();
-        all_items
-            .retain(|item| thread_item_sort_key(item, sort_key).is_some_and(|key| key.0 > anchor));
+        let anchor = (
+            cursor.timestamp(),
+            cursor
+                .thread_id()
+                .and_then(|id| uuid::Uuid::parse_str(&id.to_string()).ok()),
+        );
+        all_items.retain(|item| {
+            thread_item_sort_key(item, sort_key).is_some_and(|key| match anchor.1 {
+                Some(anchor_id) if sort_key == ThreadSortKey::RecencyAt => {
+                    key > (anchor.0, anchor_id)
+                }
+                _ => key.0 > anchor.0,
+            })
+        });
     }
 
     let more_matches_available = all_items.len() > page_size || reached_scan_cap;
@@ -1372,9 +1383,14 @@ fn thread_item_sort_key(
 }
 
 fn cursor_from_thread_item(item: &ThreadItem, sort_key: ThreadSortKey) -> Option<Cursor> {
-    let (timestamp, _id) = thread_item_sort_key(item, sort_key)?;
-    let cursor_token = timestamp.format(&Rfc3339).ok()?;
-    parse_cursor(cursor_token.as_str())
+    let (timestamp, id) = thread_item_sort_key(item, sort_key)?;
+    match sort_key {
+        ThreadSortKey::RecencyAt => Some(Cursor::with_thread_id(
+            timestamp,
+            ThreadId::from_string(&id.to_string()).ok()?,
+        )),
+        ThreadSortKey::CreatedAt | ThreadSortKey::UpdatedAt => Some(Cursor::new(timestamp)),
+    }
 }
 
 struct LogFileInfo {

@@ -34,6 +34,8 @@ pub enum SortDirection {
 pub struct Anchor {
     /// The timestamp component of the anchor.
     pub ts: DateTime<Utc>,
+    /// The thread ID component used to disambiguate equal recency timestamps.
+    pub id: Option<ThreadId>,
 }
 
 /// A single page of thread metadata results.
@@ -479,7 +481,10 @@ pub(crate) fn anchor_from_item(item: &ThreadMetadata, sort_key: SortKey) -> Opti
         SortKey::UpdatedAt => item.updated_at,
         SortKey::RecencyAt => item.recency_at,
     };
-    Some(Anchor { ts })
+    Some(Anchor {
+        ts,
+        id: (sort_key == SortKey::RecencyAt).then_some(item.id),
+    })
 }
 
 pub(crate) fn datetime_to_epoch_millis(dt: DateTime<Utc>) -> i64 {

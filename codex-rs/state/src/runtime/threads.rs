@@ -1264,6 +1264,19 @@ pub(super) fn push_thread_filters<'a>(
         builder.push(operator);
         builder.push(" ");
         builder.push_bind(anchor_ts);
+        if sort_key == SortKey::RecencyAt
+            && let Some(anchor_id) = anchor.id
+        {
+            builder.push(" OR (");
+            builder.push(column);
+            builder.push(" = ");
+            builder.push_bind(anchor_ts);
+            builder.push(" AND threads.id ");
+            builder.push(operator);
+            builder.push(" ");
+            builder.push_bind(anchor_id.to_string());
+            builder.push(")");
+        }
         builder.push(")");
     }
 }
@@ -1304,6 +1317,10 @@ pub(super) fn push_thread_order_and_limit(
     builder.push(order_column);
     builder.push(" ");
     builder.push(order_direction);
+    if sort_key == SortKey::RecencyAt {
+        builder.push(", threads.id ");
+        builder.push(order_direction);
+    }
     builder.push(" LIMIT ");
     builder.push_bind(limit as i64);
 }
@@ -1578,6 +1595,7 @@ mod tests {
 
         let anchor = Anchor {
             ts: older_updated_at,
+            id: None,
         };
         let model_providers = ["test-provider".to_string()];
         let page = runtime
@@ -1604,6 +1622,7 @@ mod tests {
             Some(Anchor {
                 ts: DateTime::<Utc>::from_timestamp_millis(1_700_000_200_000)
                     .expect("valid timestamp"),
+                id: None,
             })
         );
 
@@ -1688,6 +1707,7 @@ mod tests {
             Some(Anchor {
                 ts: DateTime::<Utc>::from_timestamp_millis(1_700_000_300_000)
                     .expect("valid timestamp"),
+                id: None,
             })
         );
 
@@ -1750,6 +1770,7 @@ mod tests {
         ];
         let anchor = Anchor {
             ts: DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("valid timestamp"),
+            id: None,
         };
         for (sort_key, visible_index, cwd_index) in [
             (
@@ -2406,16 +2427,16 @@ mod tests {
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("state db should initialize");
-        let older_id =
+        let first_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000793").expect("valid thread id");
-        let newer_id =
+        let second_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000794").expect("valid thread id");
-        let older_recency =
-            DateTime::<Utc>::from_timestamp_millis(1_700_001_000_123).expect("timestamp");
-        let newer_recency =
+        let third_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000795").expect("valid thread id");
+        let recency_at =
             DateTime::<Utc>::from_timestamp_millis(1_700_002_000_456).expect("timestamp");
 
-        for (thread_id, recency_at) in [(older_id, older_recency), (newer_id, newer_recency)] {
+        for thread_id in [first_id, second_id, third_id] {
             let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
             metadata.recency_at = recency_at;
             runtime
@@ -2423,6 +2444,12 @@ mod tests {
                 .await
                 .expect("thread insert should succeed");
         }
+        sqlx::query("UPDATE threads SET recency_at = ?, recency_at_ms = ?")
+            .bind(datetime_to_epoch_seconds(recency_at))
+            .bind(datetime_to_epoch_millis(recency_at))
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("recency timestamps should match");
 
         let first_page = runtime
             .list_threads(
@@ -2446,9 +2473,15 @@ mod tests {
                 .iter()
                 .map(|item| item.id)
                 .collect::<Vec<_>>(),
-            vec![newer_id]
+            vec![third_id]
         );
-        assert_eq!(first_page.next_anchor, Some(Anchor { ts: newer_recency }));
+        assert_eq!(
+            first_page.next_anchor,
+            Some(Anchor {
+                ts: recency_at,
+                id: Some(third_id),
+            })
+        );
 
         let second_page = runtime
             .list_threads(
@@ -2472,9 +2505,41 @@ mod tests {
                 .iter()
                 .map(|item| item.id)
                 .collect::<Vec<_>>(),
-            vec![older_id]
+            vec![second_id]
         );
-        assert_eq!(second_page.next_anchor, None);
+        assert_eq!(
+            second_page.next_anchor,
+            Some(Anchor {
+                ts: recency_at,
+                id: Some(second_id),
+            })
+        );
+
+        let third_page = runtime
+            .list_threads(
+                /*page_size*/ 1,
+                ThreadFilterOptions {
+                    archived_only: false,
+                    allowed_sources: &[],
+                    model_providers: None,
+                    cwd_filters: None,
+                    anchor: second_page.next_anchor.as_ref(),
+                    sort_key: SortKey::RecencyAt,
+                    sort_direction: SortDirection::Desc,
+                    search_term: None,
+                },
+            )
+            .await
+            .expect("third list should succeed");
+        assert_eq!(
+            third_page
+                .items
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            vec![first_id]
+        );
+        assert_eq!(third_page.next_anchor, None);
     }
 
     #[tokio::test]

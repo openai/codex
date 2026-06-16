@@ -24,5 +24,5 @@ CREATE INDEX idx_threads_archived_cwd_recency_at_ms
     ON threads(archived, cwd, recency_at_ms DESC, id DESC);
 
 CREATE INDEX idx_threads_visible_recency_at_ms
-    ON threads(archived, recency_at_ms DESC)
+    ON threads(archived, recency_at_ms DESC, id DESC)
     WHERE preview <> '';
