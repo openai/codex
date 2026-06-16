@@ -1025,6 +1025,7 @@ async fn auth_manager_rejects_env_personal_access_token_workspace_mismatch() {
         Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await;
 
