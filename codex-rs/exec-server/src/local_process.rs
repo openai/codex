@@ -53,6 +53,8 @@ use crate::rpc::RpcServerOutboundMessage;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
 use crate::rpc::invalid_request;
+use crate::telemetry::ExecServerTelemetry;
+use crate::telemetry::ProcessMetricGuard;
 
 const RETAINED_OUTPUT_BYTES_PER_PROCESS: usize = 1024 * 1024;
 const NOTIFICATION_CHANNEL_CAPACITY: usize = 256;
@@ -85,6 +87,8 @@ struct RunningProcess {
     output_notify: Arc<Notify>,
     open_streams: usize,
     closed: bool,
+    metrics: Option<ProcessMetricGuard>,
+    termination_requested: bool,
 }
 
 /// Bounded cache of stdin write ids that have already been accepted for one process.
@@ -128,6 +132,7 @@ enum ProcessEntry {
 struct Inner {
     notifications: std::sync::RwLock<Option<RpcNotificationSender>>,
     processes: Mutex<HashMap<ProcessId, ProcessEntry>>,
+    telemetry: ExecServerTelemetry,
 }
 
 #[derive(Clone)]
@@ -147,16 +152,23 @@ impl Default for LocalProcess {
         let (outgoing_tx, mut outgoing_rx) =
             mpsc::channel::<RpcServerOutboundMessage>(NOTIFICATION_CHANNEL_CAPACITY);
         tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
-        Self::new(RpcNotificationSender::new(outgoing_tx))
+        Self::new(
+            RpcNotificationSender::new(outgoing_tx),
+            ExecServerTelemetry::default(),
+        )
     }
 }
 
 impl LocalProcess {
-    pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
+    pub(crate) fn new(
+        notifications: RpcNotificationSender,
+        telemetry: ExecServerTelemetry,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 notifications: std::sync::RwLock::new(Some(notifications)),
                 processes: Mutex::new(HashMap::new()),
+                telemetry,
             }),
         }
     }
@@ -172,7 +184,10 @@ impl LocalProcess {
                 })
                 .collect::<Vec<_>>()
         };
-        for process in remaining {
+        for mut process in remaining {
+            if let Some(metrics) = process.metrics.take() {
+                metrics.finish("terminated");
+            }
             process.session.terminate();
         }
     }
@@ -296,10 +311,11 @@ impl LocalProcess {
                     output_notify: Arc::clone(&output_notify),
                     open_streams: 2,
                     closed: false,
+                    metrics: Some(self.inner.telemetry.process_started()),
+                    termination_requested: false,
                 })),
             );
         }
-
         tokio::spawn(stream_output(
             process_id.clone(),
             if params.tty {
@@ -510,11 +526,12 @@ impl LocalProcess {
     ) -> Result<TerminateResponse, JSONRPCErrorError> {
         let running = {
             let mut process_map = self.inner.processes.lock().await;
-            match process_map.get(&params.process_id) {
+            match process_map.get_mut(&params.process_id) {
                 Some(ProcessEntry::Running(process)) => {
                     if process.exit_code.is_some() {
                         return Ok(TerminateResponse { running: false });
                     }
+                    process.termination_requested = true;
                     process.session.terminate();
                     true
                 }
@@ -780,7 +797,7 @@ async fn watch_exit(
     output_notify: Arc<Notify>,
 ) {
     let exit_code = exit_rx.await.unwrap_or(-1);
-    let notification = {
+    let (notification, process_metrics, termination_requested) = {
         let mut processes = inner.processes.lock().await;
         if let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) {
             let seq = process.next_seq;
@@ -790,15 +807,28 @@ async fn watch_exit(
             process
                 .events
                 .publish(ExecProcessEvent::Exited { seq, exit_code });
-            Some(ExecExitedNotification {
-                process_id: process_id.clone(),
-                seq,
-                exit_code,
-            })
+            (
+                Some(ExecExitedNotification {
+                    process_id: process_id.clone(),
+                    seq,
+                    exit_code,
+                }),
+                process.metrics.take(),
+                process.termination_requested,
+            )
         } else {
-            None
+            (None, None, false)
         }
     };
+    if let Some(metrics) = process_metrics {
+        metrics.finish(if termination_requested {
+            "terminated"
+        } else if exit_code == 0 {
+            "success"
+        } else {
+            "error"
+        });
+    }
     output_notify.notify_waiters();
     if let Some(notification) = notification
         && let Some(notifications) = notification_sender(&inner)
@@ -1105,6 +1135,8 @@ mod tests {
                 output_notify: Arc::clone(&output_notify),
                 open_streams: 2,
                 closed: false,
+                metrics: Some(ExecServerTelemetry::default().process_started()),
+                termination_requested: false,
             })),
         );
         assert!(previous.is_none());

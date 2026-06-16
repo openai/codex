@@ -11,6 +11,7 @@ use crate::rpc::RpcNotificationSender;
 use crate::rpc::invalid_request;
 use crate::rpc::session_already_attached;
 use crate::server::process_handler::ProcessHandler;
+use crate::telemetry::ExecServerTelemetry;
 
 #[cfg(test)]
 const DETACHED_SESSION_TTL: Duration = Duration::from_millis(200);
@@ -19,6 +20,7 @@ const DETACHED_SESSION_TTL: Duration = Duration::from_secs(30);
 
 pub(crate) struct SessionRegistry {
     sessions: Mutex<HashMap<String, Arc<SessionEntry>>>,
+    telemetry: ExecServerTelemetry,
 }
 
 struct SessionEntry {
@@ -50,9 +52,10 @@ pub(crate) struct SessionHandle {
 }
 
 impl SessionRegistry {
-    pub(crate) fn new() -> Arc<Self> {
+    pub(crate) fn new(telemetry: ExecServerTelemetry) -> Arc<Self> {
         Arc::new(Self {
             sessions: Mutex::new(HashMap::new()),
+            telemetry,
         })
     }
 
@@ -95,7 +98,7 @@ impl SessionRegistry {
                 let session_id = Uuid::new_v4().to_string();
                 let entry = Arc::new(SessionEntry::new(
                     session_id.clone(),
-                    ProcessHandler::new(notifications),
+                    ProcessHandler::new(notifications, self.telemetry.clone()),
                     connection_id,
                 ));
                 sessions.insert(session_id, Arc::clone(&entry));
@@ -141,6 +144,7 @@ impl Default for SessionRegistry {
     fn default() -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
+            telemetry: ExecServerTelemetry::default(),
         }
     }
 }
