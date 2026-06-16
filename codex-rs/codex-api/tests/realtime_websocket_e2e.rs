@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use std::collections::HashMap;
 use std::future::Future;
 use std::time::Duration;

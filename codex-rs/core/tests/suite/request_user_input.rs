@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
 use core_test_support::test_codex::local_selections;

@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
 use codex_otel::OtelExporter;
@@ -345,7 +346,9 @@ fn otel_provider_rejects_header_unsafe_configured_tracestate() {
         )]),
     });
 
-    let err = result.expect_err("header-unsafe configured tracestate should be rejected");
+    let err = result
+        .err()
+        .expect("header-unsafe configured tracestate should be rejected");
     assert!(err.to_string().contains("configured tracestate value"));
 }
 

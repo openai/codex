@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use codex_git_utils::collect_git_info;
 use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_login::CODEX_API_KEY_ENV_VAR;

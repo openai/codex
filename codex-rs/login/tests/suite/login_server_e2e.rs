@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 use std::io;
 use std::net::SocketAddr;

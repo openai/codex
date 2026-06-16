@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;

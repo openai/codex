@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use anyhow::Result;
 use app_test_support::TestAppServer;
 use app_test_support::create_fake_parented_rollout_with_source;

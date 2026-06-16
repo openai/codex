@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use codex_tools::ToolName;
 use codex_tools::mcp_tool_to_responses_api_tool;
 use pretty_assertions::assert_eq;

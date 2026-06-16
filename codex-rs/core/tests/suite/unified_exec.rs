@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use core_test_support::test_codex::local_selections;
 use std::collections::HashMap;
 use std::ffi::OsStr;

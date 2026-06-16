@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 

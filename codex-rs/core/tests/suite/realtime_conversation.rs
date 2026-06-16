@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use anyhow::Context;
 use anyhow::Result;
 use chrono::Utc;
@@ -14,7 +15,6 @@ use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ConversationTextRole;
-use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;

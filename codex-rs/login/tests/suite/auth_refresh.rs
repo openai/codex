@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;

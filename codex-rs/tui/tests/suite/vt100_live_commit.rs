@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use crate::test_backend::VT100Backend;
 use ratatui::layout::Rect;
 use ratatui::text::Line;

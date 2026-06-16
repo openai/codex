@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;

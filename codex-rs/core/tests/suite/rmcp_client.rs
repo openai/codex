@@ -89,10 +89,8 @@ fn split_wall_time_wrapped_output(output: &str) -> &str {
         .split_once('\n')
         .expect("wall-time output should contain an Output section");
     assert_wall_time_line(wall_time);
-    let output = rest
-        .strip_prefix("Output:\n")
-        .expect("wall-time output should contain Output marker");
-    output
+    rest.strip_prefix("Output:\n")
+        .expect("wall-time output should contain Output marker")
 }
 
 fn assert_wall_time_header(output: &str) {
