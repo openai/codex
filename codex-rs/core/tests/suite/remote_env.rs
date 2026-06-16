@@ -987,8 +987,6 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
-    // TODO(anp): Remove after remote sandbox fixtures use target-native paths.
-    skip_if_wine_exec!(Ok(()), "requires the Docker-backed POSIX executor");
     skip_if_no_network!(Ok(()));
     let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
@@ -997,10 +995,10 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
     let test_env = test_env().await?;
     let file_system = test_env.environment().get_filesystem();
 
-    let allowed_dir = PathBuf::from(format!("/tmp/codex-remote-readable-{}", std::process::id()));
+    let allowed_dir = test_env.cwd().join("readable");
     let file_path = allowed_dir.join("note.txt");
-    let allowed_dir_uri = PathUri::from_path(&allowed_dir)?;
-    let file_path_uri = PathUri::from_path(&file_path)?;
+    let allowed_dir_uri = PathUri::from_abs_path(&allowed_dir);
+    let file_path_uri = PathUri::from_abs_path(&file_path);
     file_system
         .create_directory(
             &allowed_dir_uri,
@@ -1016,7 +1014,7 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
         )
         .await?;
 
-    let sandbox = read_only_sandbox(allowed_dir.clone());
+    let sandbox = read_only_sandbox(allowed_dir.to_path_buf());
     let contents = file_system
         .read_file(&file_path_uri, Some(&sandbox))
         .await?;
