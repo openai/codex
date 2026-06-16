@@ -1082,11 +1082,13 @@ async fn code_mode_exec_nested_limit_preserves_result_variable_before_configured
         &server,
         "use exec_command from code mode",
         r#"// @exec: {"max_output_tokens": 20000}
+// This value stays below the default history cap but exceeds the configured
+// 50-token cap.
 const result = await tools.exec_command({
-  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\"",
+  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 2000)\"",
   max_output_tokens: 20000
 });
-const resultVariableWasTruncated = result.output.length !== 50000;
+const resultVariableWasTruncated = result.output.length !== 2000;
 text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Variable: ${result.output}`);
 "#,
         TOKEN_POLICY_TEST_MODEL,
@@ -1153,10 +1155,12 @@ async fn code_mode_exec_without_nested_limit_preserves_result_variable_before_co
         &server,
         "use exec_command from code mode",
         r#"// @exec: {"max_output_tokens": 20000}
+// This value stays below the default history cap but exceeds the configured
+// 50-token cap.
 const result = await tools.exec_command({
-  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\""
+  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 2000)\""
 });
-const resultVariableWasTruncated = result.output.length !== 50000;
+const resultVariableWasTruncated = result.output.length !== 2000;
 text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Variable: ${result.output}`);
 "#,
         TOKEN_POLICY_TEST_MODEL,
