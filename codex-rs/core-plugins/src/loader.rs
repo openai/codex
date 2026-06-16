@@ -1,6 +1,7 @@
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::app_mcp_routing::apps_route_available;
 use crate::is_openai_curated_marketplace_name;
+use crate::manifest::PluginManifest;
 use crate::manifest::PluginManifestHooks;
 use crate::manifest::PluginManifestMcpServers;
 use crate::manifest::PluginManifestPaths;
@@ -664,6 +665,7 @@ async fn load_plugin(
     let mut loaded_plugin = LoadedPlugin {
         config_name,
         manifest_name: None,
+        plugin_namespace: None,
         manifest_description: None,
         root,
         enabled: plugin.enabled,
@@ -706,6 +708,7 @@ async fn load_plugin(
     };
 
     let manifest_paths = &manifest.paths;
+    loaded_plugin.plugin_namespace = Some(manifest.name.clone());
     match scope {
         PluginLoadScope::AllCapabilities {
             restriction_product,
@@ -717,7 +720,7 @@ async fn load_plugin(
             let resolved_skills = load_plugin_skills(
                 &plugin_root,
                 &loaded_plugin_id,
-                manifest_paths,
+                &manifest,
                 *restriction_product,
                 skill_config_rules,
             )
@@ -785,17 +788,18 @@ impl ResolvedPluginSkills {
 pub async fn load_plugin_skills(
     plugin_root: &AbsolutePathBuf,
     plugin_id: &PluginId,
-    manifest_paths: &PluginManifestPaths,
+    manifest: &PluginManifest,
     restriction_product: Option<Product>,
     skill_config_rules: &SkillConfigRules,
 ) -> ResolvedPluginSkills {
-    let roots = plugin_skill_roots(plugin_root, manifest_paths)
+    let roots = plugin_skill_roots(plugin_root, &manifest.paths)
         .into_iter()
         .map(|path| SkillRoot {
             path,
             scope: SkillScope::User,
             file_system: Arc::clone(&LOCAL_FS),
             plugin_id: Some(plugin_id.as_key()),
+            plugin_namespace: Some(manifest.name.clone()),
             plugin_root: Some(plugin_root.clone()),
         })
         .collect::<Vec<_>>();

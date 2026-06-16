@@ -1586,7 +1586,7 @@ impl PluginsManager {
         let resolved_skills = load_plugin_skills(
             &source_path,
             &plugin_id,
-            &manifest.paths,
+            &manifest,
             self.restriction_product,
             &codex_core_skills::config_rules::skill_config_rules_from_stack(
                 &config.config_layer_stack,

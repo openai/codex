@@ -251,7 +251,7 @@ impl SkillsService {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConfigSkillsCacheKey {
-    roots: Vec<(AbsolutePathBuf, u8, Option<String>)>,
+    roots: Vec<(AbsolutePathBuf, u8, Option<String>, Option<String>)>,
     skill_config_rules: SkillConfigRules,
 }
 
@@ -291,7 +291,12 @@ fn config_skills_cache_key(
                     SkillScope::System => 2,
                     SkillScope::Admin => 3,
                 };
-                (root.path.clone(), scope_rank, root.plugin_id.clone())
+                (
+                    root.path.clone(),
+                    scope_rank,
+                    root.plugin_id.clone(),
+                    root.plugin_namespace.clone(),
+                )
             })
             .collect(),
         skill_config_rules: skill_config_rules.clone(),
