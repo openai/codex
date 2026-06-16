@@ -1,7 +1,6 @@
 use super::*;
 use crate::McpPluginAttribution;
 use crate::McpServerRegistration;
-use crate::server::McpStartupPolicy;
 use codex_config::Constrained;
 use codex_config::types::AppToolApproval;
 use codex_config::types::AuthKeyringBackendKind;
@@ -359,15 +358,6 @@ async fn effective_mcp_servers_preserve_runtime_servers() {
     let codex_apps = effective
         .get(CODEX_APPS_MCP_SERVER_NAME)
         .expect("codex apps server should exist");
-
-    assert_eq!(sample.startup_policy(), McpStartupPolicy::Blocking);
-    assert_eq!(docs.startup_policy(), McpStartupPolicy::Blocking);
-    assert_eq!(
-        codex_apps.startup_policy(),
-        McpStartupPolicy::CachedOrEmpty {
-            startup_grace_period: CODEX_APPS_STARTUP_GRACE_PERIOD,
-        }
-    );
 
     let sample = sample
         .configured_config()

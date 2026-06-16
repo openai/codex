@@ -15,7 +15,6 @@ use crate::rmcp_client::StartupOutcomeError;
 use crate::server::EffectiveMcpServer;
 use crate::server::McpServerMetadata;
 use crate::server::McpServerOrigin;
-use crate::server::McpStartupPolicy;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
@@ -817,7 +816,6 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_while_client_is_pending()
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            startup_policy: McpStartupPolicy::Blocking,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
@@ -855,7 +853,6 @@ async fn list_available_server_infos_uses_cache_while_client_is_pending() {
             cached_tool_info_snapshot: Some(Vec::new()),
             cached_server_info: Some(server_info.clone()),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            startup_policy: McpStartupPolicy::Blocking,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
@@ -893,7 +890,6 @@ async fn list_all_tools_accepts_canonical_namespaced_tool_names() {
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            startup_policy: McpStartupPolicy::Blocking,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
@@ -937,7 +933,6 @@ async fn list_all_tools_applies_legacy_mcp_prefix_by_default() {
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            startup_policy: McpStartupPolicy::Blocking,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
@@ -980,7 +975,6 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_
             cached_tool_info_snapshot: None,
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            startup_policy: McpStartupPolicy::Blocking,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
@@ -989,39 +983,6 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_
     let timeout_result =
         tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools()).await;
     assert!(timeout_result.is_err());
-}
-
-#[tokio::test]
-async fn list_all_tools_uses_empty_snapshot_for_non_blocking_startup_without_cache() {
-    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
-        .boxed()
-        .shared();
-    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-    let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let mut manager = McpConnectionManager::new_uninitialized(
-        &approval_policy,
-        &permission_profile,
-        /*prefix_mcp_tool_names*/ true,
-    );
-    manager.clients.insert(
-        CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        AsyncManagedClient {
-            client: pending_client,
-            cached_tool_info_snapshot: None,
-            cached_server_info: None,
-            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            startup_policy: McpStartupPolicy::CachedOrEmpty {
-                startup_grace_period: Duration::ZERO,
-            },
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
-            cancel_token: CancellationToken::new(),
-        },
-    );
-
-    let timeout_result =
-        tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools()).await;
-    let tools = timeout_result.expect("non-blocking startup should not wait for the client");
-    assert!(tools.is_empty());
 }
 
 #[tokio::test]
@@ -1050,7 +1011,6 @@ async fn shutdown_cancels_pending_tool_listing() {
             cached_tool_info_snapshot: None,
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            startup_policy: McpStartupPolicy::Blocking,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token,
         },
@@ -1086,7 +1046,6 @@ async fn list_all_tools_does_not_block_when_cached_tool_info_snapshot_is_empty()
             cached_tool_info_snapshot: Some(Vec::new()),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            startup_policy: McpStartupPolicy::Blocking,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
@@ -1127,7 +1086,6 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_when_client_startup_fails
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: Some(server_info.clone()),
             startup_complete,
-            startup_policy: McpStartupPolicy::Blocking,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
@@ -1185,7 +1143,6 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            startup_policy: McpStartupPolicy::Blocking,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
