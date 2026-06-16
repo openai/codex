@@ -1158,7 +1158,9 @@ async fn user_shell_commands_honor_disabled_login_shells() -> anyhow::Result<()>
     .await?;
     let turn_context = session.new_default_turn().await;
     let command = "echo managed-login-shell".to_string();
-    let expected_command = session.user_shell().derive_exec_args(&command, false);
+    let expected_command = session
+        .user_shell()
+        .derive_exec_args(&command, /*use_login_shell*/ false);
 
     execute_user_shell_command(
         Arc::clone(&session),
