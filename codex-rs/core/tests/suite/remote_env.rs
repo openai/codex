@@ -4,8 +4,11 @@ use codex_config::types::ApprovalsReviewer;
 use codex_core::config::Constrained;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::ExecParams;
+use codex_exec_server::ExecProcessEvent;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+use codex_exec_server::ProcessId;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
@@ -28,6 +31,8 @@ use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::ApiPathString;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
@@ -263,10 +268,7 @@ fn workspace_write_sandbox(writable_root: PathBuf) -> FileSystemSandboxContext {
 
 fn assert_normalized_path_rejected(error: &std::io::Error) {
     match error.kind() {
-        std::io::ErrorKind::NotFound => assert!(
-            error.to_string().contains("No such file or directory"),
-            "unexpected not-found message: {error}",
-        ),
+        std::io::ErrorKind::NotFound => {}
         std::io::ErrorKind::InvalidInput | std::io::ErrorKind::PermissionDenied => {
             let message = error.to_string();
             assert!(
@@ -1036,37 +1038,123 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_test_env_sandboxed_read_rejects_symlink_parent_dotdot_escape() -> Result<()> {
-    skip_if_wine_exec!(Ok(()), "tests POSIX symlink and parent traversal semantics");
     skip_if_no_network!(Ok(()));
-    let Some(_remote_env) = get_remote_test_env() else {
+    let Some(remote_env) = get_remote_test_env() else {
         return Ok(());
     };
 
     let test_env = test_env().await?;
     let file_system = test_env.environment().get_filesystem();
 
-    let root = PathBuf::from(format!("/tmp/codex-remote-dotdot-{}", std::process::id()));
+    let root = test_env.cwd().join("dotdot-escape");
     let allowed_dir = root.join("allowed");
     let outside_dir = root.join("outside");
     let secret_path = root.join("secret.txt");
-    remote_exec(&format!(
-        "rm -rf {root}; mkdir -p {allowed} {outside}; printf nope > {secret}; ln -s {outside} {allowed}/link",
-        root = root.display(),
-        allowed = allowed_dir.display(),
-        outside = outside_dir.display(),
-        secret = secret_path.display(),
-    ))?;
+    let root_uri = PathUri::from_abs_path(&root);
+    let allowed_dir_uri = PathUri::from_abs_path(&allowed_dir);
+    let outside_dir_uri = PathUri::from_abs_path(&outside_dir);
+    let secret_path_uri = PathUri::from_abs_path(&secret_path);
+    let symlink_path_uri = allowed_dir_uri.join("link")?;
+    file_system
+        .create_directory(
+            &allowed_dir_uri,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+    file_system
+        .create_directory(
+            &outside_dir_uri,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+    file_system
+        .write_file(&secret_path_uri, b"nope".to_vec(), /*sandbox*/ None)
+        .await?;
 
-    let requested_path =
-        PathUri::from_path(allowed_dir.join("link").join("..").join("secret.txt"))?;
-    let sandbox = read_only_sandbox(allowed_dir.clone());
+    match remote_env {
+        TestEnvironment::Docker { .. } => remote_exec(&format!(
+            "ln -s {} {}",
+            outside_dir.display(),
+            allowed_dir.join("link").display(),
+        ))?,
+        TestEnvironment::WineExec => {
+            let shell = test_env.environment().info().await?.shell;
+            let symlink_path =
+                ApiPathString::from_path_uri(&symlink_path_uri, PathConvention::Windows)?;
+            let outside_dir =
+                ApiPathString::from_path_uri(&outside_dir_uri, PathConvention::Windows)?;
+            let script = format!(
+                "$ErrorActionPreference = 'Stop'; New-Item -ItemType SymbolicLink -Path '{}' -Target '{}' | Out-Null",
+                symlink_path.as_str(),
+                outside_dir.as_str(),
+            );
+            let process = test_env
+                .environment()
+                .get_exec_backend()
+                .start(ExecParams {
+                    process_id: ProcessId::from("remote-env-create-symlink"),
+                    argv: vec![
+                        shell.path,
+                        "-NoLogo".to_string(),
+                        "-NoProfile".to_string(),
+                        "-NonInteractive".to_string(),
+                        "-Command".to_string(),
+                        script,
+                    ],
+                    cwd: PathUri::from_abs_path(test_env.cwd()),
+                    env_policy: None,
+                    env: Default::default(),
+                    tty: false,
+                    pipe_stdin: false,
+                    arg0: None,
+                })
+                .await?
+                .process;
+            let mut events = process.subscribe_events();
+            let mut output = Vec::new();
+            let mut exit_code = None;
+            loop {
+                match events.recv().await? {
+                    ExecProcessEvent::Output(chunk) => {
+                        output.extend(chunk.chunk.into_inner());
+                    }
+                    ExecProcessEvent::Exited {
+                        exit_code: code, ..
+                    } => exit_code = Some(code),
+                    ExecProcessEvent::Closed { .. } => break,
+                    ExecProcessEvent::Failed(message) => anyhow::bail!(message),
+                }
+            }
+            assert_eq!(
+                exit_code,
+                Some(0),
+                "creating remote symlink failed: {}",
+                String::from_utf8_lossy(&output),
+            );
+        }
+        TestEnvironment::Local => unreachable!("test requires a remote environment"),
+    }
+
+    let requested_path = allowed_dir_uri.join("link/../secret.txt")?;
+    let sandbox = read_only_sandbox(allowed_dir.to_path_buf());
     let error = match file_system.read_file(&requested_path, Some(&sandbox)).await {
         Ok(_) => anyhow::bail!("read should fail after path normalization"),
         Err(error) => error,
     };
     assert_normalized_path_rejected(&error);
 
-    remote_exec(&format!("rm -rf {}", root.display()))?;
+    file_system
+        .remove(
+            &root_uri,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
     Ok(())
 }
 
