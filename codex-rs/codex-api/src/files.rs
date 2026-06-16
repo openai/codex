@@ -1,15 +1,13 @@
-use std::path::Path;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::AuthProvider;
+use bytes::Bytes;
 use codex_client::build_reqwest_client_with_custom_ca;
+use futures::Stream;
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_LENGTH;
 use serde::Deserialize;
-use tokio::fs::File;
 use tokio::time::Instant;
-use tokio_util::io::ReaderStream;
 
 pub const OPENAI_FILE_URI_PREFIX: &str = "sediment://";
 pub const OPENAI_FILE_UPLOAD_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
@@ -27,26 +25,15 @@ pub struct UploadedOpenAiFile {
     pub file_name: String,
     pub file_size_bytes: u64,
     pub mime_type: Option<String>,
-    pub path: PathBuf,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum OpenAiFileError {
-    #[error("path `{path}` does not exist")]
-    MissingPath { path: PathBuf },
-    #[error("path `{path}` is not a file")]
-    NotAFile { path: PathBuf },
-    #[error("path `{path}` cannot be read: {source}")]
-    ReadFile {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
     #[error(
-        "file `{path}` is too large: {size_bytes} bytes exceeds the limit of {limit_bytes} bytes"
+        "file `{file_name}` is too large: {size_bytes} bytes exceeds the limit of {limit_bytes} bytes"
     )]
     FileTooLarge {
-        path: PathBuf,
+        file_name: String,
         size_bytes: u64,
         limit_bytes: u64,
     },
@@ -94,45 +81,26 @@ pub fn openai_file_uri(file_id: &str) -> String {
     format!("{OPENAI_FILE_URI_PREFIX}{file_id}")
 }
 
-pub async fn upload_local_file(
+pub async fn upload_openai_file(
     base_url: &str,
     auth: &dyn AuthProvider,
-    path: &Path,
+    file_name: String,
+    file_size_bytes: u64,
+    contents: impl Stream<Item = std::io::Result<Bytes>> + Send + 'static,
 ) -> Result<UploadedOpenAiFile, OpenAiFileError> {
-    let metadata = tokio::fs::metadata(path)
-        .await
-        .map_err(|source| match source.kind() {
-            std::io::ErrorKind::NotFound => OpenAiFileError::MissingPath {
-                path: path.to_path_buf(),
-            },
-            _ => OpenAiFileError::ReadFile {
-                path: path.to_path_buf(),
-                source,
-            },
-        })?;
-    if !metadata.is_file() {
-        return Err(OpenAiFileError::NotAFile {
-            path: path.to_path_buf(),
-        });
-    }
-    if metadata.len() > OPENAI_FILE_UPLOAD_LIMIT_BYTES {
+    if file_size_bytes > OPENAI_FILE_UPLOAD_LIMIT_BYTES {
         return Err(OpenAiFileError::FileTooLarge {
-            path: path.to_path_buf(),
-            size_bytes: metadata.len(),
+            file_name,
+            size_bytes: file_size_bytes,
             limit_bytes: OPENAI_FILE_UPLOAD_LIMIT_BYTES,
         });
     }
 
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("file")
-        .to_string();
     let create_url = format!("{}/files", base_url.trim_end_matches('/'));
     let create_response = authorized_request(auth, reqwest::Method::POST, &create_url)
         .json(&serde_json::json!({
-            "file_name": file_name,
-            "file_size": metadata.len(),
+            "file_name": file_name.as_str(),
+            "file_size": file_size_bytes,
             "use_case": OPENAI_FILE_USE_CASE,
         }))
         .send()
@@ -156,18 +124,12 @@ pub async fn upload_local_file(
             source,
         })?;
 
-    let upload_file = File::open(path)
-        .await
-        .map_err(|source| OpenAiFileError::ReadFile {
-            path: path.to_path_buf(),
-            source,
-        })?;
     let upload_response = build_reqwest_client()
         .put(&create_payload.upload_url)
         .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
         .header("x-ms-blob-type", "BlockBlob")
-        .header(CONTENT_LENGTH, metadata.len())
-        .body(reqwest::Body::wrap_stream(ReaderStream::new(upload_file)))
+        .header(CONTENT_LENGTH, file_size_bytes)
+        .body(reqwest::Body::wrap_stream(contents))
         .send()
         .await
         .map_err(|source| OpenAiFileError::Request {
@@ -226,9 +188,8 @@ pub async fn upload_local_file(
                         }
                     })?,
                     file_name: finalize_payload.file_name.unwrap_or(file_name),
-                    file_size_bytes: metadata.len(),
+                    file_size_bytes,
                     mime_type: finalize_payload.mime_type,
-                    path: path.to_path_buf(),
                 });
             }
             "retry" => {
@@ -281,7 +242,6 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
-    use tempfile::TempDir;
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::Request;
@@ -313,7 +273,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upload_local_file_returns_canonical_uri() {
+    async fn upload_openai_file_returns_canonical_uri() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/backend-api/files"))
@@ -359,13 +319,17 @@ mod tests {
             .await;
 
         let base_url = base_url_for(&server);
-        let dir = TempDir::new().expect("temp dir");
-        let path = dir.path().join("hello.txt");
-        tokio::fs::write(&path, b"hello").await.expect("write file");
-
-        let uploaded = upload_local_file(&base_url, &chatgpt_auth(), &path)
-            .await
-            .expect("upload succeeds");
+        let contents =
+            futures::stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"hello"))]);
+        let uploaded = upload_openai_file(
+            &base_url,
+            &chatgpt_auth(),
+            "hello.txt".to_string(),
+            /*file_size_bytes*/ 5,
+            contents,
+        )
+        .await
+        .expect("upload succeeds");
 
         assert_eq!(uploaded.file_id, "file_123");
         assert_eq!(uploaded.uri, "sediment://file_123");
