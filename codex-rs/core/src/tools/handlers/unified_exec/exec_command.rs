@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::function_tool::FunctionCallError;
@@ -139,7 +140,7 @@ impl ExecCommandHandler {
             );
         let environment = Arc::clone(&turn_environment.environment);
         let fs = environment.get_filesystem();
-        let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
+        let mut args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
         let hook_command = args.cmd.clone();
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
@@ -151,13 +152,28 @@ impl ExecCommandHandler {
         let process_id = manager.allocate_process_id().await;
         let shell_mode =
             shell_mode_for_environment(&turn.unified_exec_shell_mode, environment.as_ref());
-        // Remote environments may use a different OS and must build commands with their native
-        // shell; fall back to the session shell when the environment did not report one.
-        let shell = turn_environment
-            .shell
-            .clone()
-            .map(Arc::new)
-            .unwrap_or_else(|| session.user_shell());
+        let shell = if environment.is_remote() {
+            let environment_shell = turn_environment.shell.clone().ok_or_else(|| {
+                FunctionCallError::RespondToModel(format!(
+                    "shell is unavailable in environment `{}`",
+                    turn_environment.environment_id
+                ))
+            })?;
+            if let Some(provided_shell) = args.shell.as_deref() {
+                let matches_environment = provided_shell == environment_shell.name()
+                    || Path::new(provided_shell) == environment_shell.shell_path;
+                if !matches_environment {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "`shell` must match the selected remote environment shell `{}`",
+                        environment_shell.shell_path.display()
+                    )));
+                }
+                args.shell = None;
+            }
+            Arc::new(environment_shell)
+        } else {
+            session.user_shell()
+        };
         let resolved_command = get_command(
             &args,
             shell,

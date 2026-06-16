@@ -366,18 +366,43 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
         cwd: PathUri::from_abs_path(&remote_cwd),
     };
+    let selections = vec![local_selection, remote_selection];
+    let mismatched_shell_output = exec_command_routing_output(
+        &test,
+        &server,
+        "call-remote-mismatched-shell",
+        json!({
+            "shell": "/definitely/not/the/remote/shell",
+            "cmd": "echo should-not-run",
+            "environment_id": REMOTE_ENVIRONMENT_ID,
+        }),
+        Some(selections.clone()),
+    )
+    .await?;
+    assert!(
+        mismatched_shell_output
+            .contains("`shell` must match the selected remote environment shell"),
+        "unexpected mismatched shell output: {mismatched_shell_output}",
+    );
+    let remote_shell_path = test
+        .executor_environment()
+        .environment()
+        .info()
+        .await?
+        .shell
+        .path;
     let multi_env_output = exec_command_routing_output(
         &test,
         &server,
         "call-multi-env",
         json!({
-            "shell": "/bin/sh",
+            "shell": remote_shell_path,
             "cmd": format!("cat {remote_marker_name}"),
             "login": false,
             "yield_time_ms": 1_000,
             "environment_id": REMOTE_ENVIRONMENT_ID,
         }),
-        Some(vec![local_selection, remote_selection]),
+        Some(selections),
     )
     .await?;
     assert!(
@@ -496,7 +521,6 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
                     "exec-call",
                     "exec_command",
                     &json!({
-                        "shell": "/bin/sh",
                         "cmd": command,
                         "login": false,
                         "yield_time_ms": 1_000,
@@ -925,7 +949,6 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
                     call_id,
                     "exec_command",
                     &serde_json::to_string(&json!({
-                        "shell": "/bin/sh",
                         "cmd": command,
                         "login": false,
                         "yield_time_ms": 5_000,

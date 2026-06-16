@@ -405,10 +405,16 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
     });
     let test = builder.build_with_remote_env(&server).await?;
     let cwd = test.config.cwd.to_path_buf();
+    let shell_path = test
+        .executor_environment()
+        .environment()
+        .info()
+        .await?
+        .shell
+        .path;
 
     let call_id = "uexec-begin-event";
     let args = json!({
-        "shell": "bash".to_string(),
         "cmd": "/bin/echo hello unified exec".to_string(),
         "yield_time_ms": 250,
     });
@@ -435,7 +441,12 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
     })
     .await;
 
-    assert_command(&begin_event.command, "-lc", "/bin/echo hello unified exec");
+    assert_command(
+        &begin_event.command,
+        &shell_path,
+        "-lc",
+        "/bin/echo hello unified exec",
+    );
 
     assert_eq!(begin_event.cwd.as_path(), cwd.as_path());
 
@@ -1300,10 +1311,16 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
             .expect("test config should allow feature update");
     });
     let test = builder.build_with_remote_env(&server).await?;
+    let shell_path = test
+        .executor_environment()
+        .environment()
+        .info()
+        .await?
+        .shell
+        .path;
 
     let open_call_id = "uexec-open-session";
     let open_args = json!({
-        "shell": "bash".to_string(),
         "cmd": "sleep 0.1".to_string(),
         "yield_time_ms": 10,
     });
@@ -1393,7 +1410,7 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
 
     let open_event = &begin_events[0];
 
-    assert_command(&open_event.command, "-lc", "sleep 0.1");
+    assert_command(&open_event.command, &shell_path, "-lc", "sleep 0.1");
 
     assert!(
         open_event.interaction_input.is_none(),
@@ -2204,7 +2221,6 @@ async fn write_stdin_ctrl_c_reports_unsupported_interrupt_to_model_on_windows() 
     let interrupt_call_id = "uexec-windows-interrupt";
 
     let start_args = serde_json::json!({
-        "shell": "cmd",
         "cmd": "echo READY && ping -n 30 127.0.0.1 >NUL",
         "yield_time_ms": 250,
         "tty": false,
@@ -3552,16 +3568,14 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     Ok(())
 }
 
-fn assert_command(command: &[String], expected_args: &str, expected_cmd: &str) {
+fn assert_command(
+    command: &[String],
+    expected_shell: &str,
+    expected_args: &str,
+    expected_cmd: &str,
+) {
     assert_eq!(command.len(), 3);
-    let shell_path = &command[0];
-    assert!(
-        shell_path == "/bin/bash"
-            || shell_path == "/usr/bin/bash"
-            || shell_path == "/usr/local/bin/bash"
-            || shell_path.ends_with("/bash"),
-        "unexpected bash path: {shell_path}"
-    );
+    assert_eq!(command[0], expected_shell);
     assert_eq!(command[1], expected_args);
     assert_eq!(command[2], expected_cmd);
 }
