@@ -948,48 +948,6 @@ async fn handle_start_inner(
         .await;
     }
 
-    let mut pending_events = Vec::new();
-    let realtime_session_id = loop {
-        match events_rx.recv().await {
-            Ok(RealtimeEvent::SessionUpdated {
-                realtime_session_id,
-                instructions,
-            }) => {
-                let started_realtime_session_id = realtime_session_id.clone();
-                pending_events.push(RealtimeEvent::SessionUpdated {
-                    realtime_session_id,
-                    instructions,
-                });
-                break started_realtime_session_id;
-            }
-            Ok(RealtimeEvent::Error(message)) => {
-                sess.conversation.finish_if_active(&realtime_active).await;
-                return Err(CodexErr::Stream(message, None));
-            }
-            Ok(event) => pending_events.push(event),
-            Err(_) if !realtime_active.load(Ordering::Relaxed) => return Ok(()),
-            Err(_) => {
-                sess.conversation.finish_if_active(&realtime_active).await;
-                return Err(CodexErr::Stream(
-                    "realtime conversation ended before the upstream session was created"
-                        .to_string(),
-                    None,
-                ));
-            }
-        }
-    };
-
-    info!(%realtime_session_id, "realtime conversation started");
-
-    sess.send_event_raw(Event {
-        id: sub_id.to_string(),
-        msg: EventMsg::RealtimeConversationStarted(RealtimeConversationStartedEvent {
-            realtime_session_id: Some(realtime_session_id),
-            version,
-        }),
-    })
-    .await;
-
     let sess_clone = Arc::clone(sess);
     let sub_id = sub_id.to_string();
     let fanout_realtime_active = Arc::clone(&realtime_active);
@@ -999,10 +957,55 @@ async fn handle_start_inner(
             msg,
         };
         let mut end = RealtimeConversationEnd::TransportClosed;
+        let mut pending_events = Vec::new();
+        let realtime_session_id = loop {
+            match events_rx.recv().await {
+                Ok(RealtimeEvent::SessionUpdated {
+                    realtime_session_id,
+                    instructions,
+                }) => {
+                    let started_realtime_session_id = realtime_session_id.clone();
+                    pending_events.push(RealtimeEvent::SessionUpdated {
+                        realtime_session_id,
+                        instructions,
+                    });
+                    break Some(started_realtime_session_id);
+                }
+                Ok(RealtimeEvent::Error(message)) => {
+                    pending_events.push(RealtimeEvent::Error(message));
+                    end = RealtimeConversationEnd::Error;
+                    break None;
+                }
+                Ok(event) => pending_events.push(event),
+                Err(_) if !fanout_realtime_active.load(Ordering::Relaxed) => return,
+                Err(_) => {
+                    pending_events.push(RealtimeEvent::Error(
+                        "realtime conversation ended before the upstream session was created"
+                            .to_string(),
+                    ));
+                    end = RealtimeConversationEnd::Error;
+                    break None;
+                }
+            }
+        };
+        let startup_succeeded = realtime_session_id.is_some();
+        if let Some(realtime_session_id) = realtime_session_id {
+            info!(%realtime_session_id, "realtime conversation started");
+            sess_clone
+                .send_event_raw(ev(EventMsg::RealtimeConversationStarted(
+                    RealtimeConversationStartedEvent {
+                        realtime_session_id: Some(realtime_session_id),
+                        version,
+                    },
+                )))
+                .await;
+        }
+
         let mut pending_events = pending_events.into_iter();
         loop {
             let event = match pending_events.next() {
                 Some(event) => event,
+                None if !startup_succeeded => break,
                 None => match events_rx.recv().await {
                     Ok(event) => event,
                     Err(_) => break,

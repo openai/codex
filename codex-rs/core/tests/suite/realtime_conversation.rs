@@ -418,7 +418,11 @@ async fn conversation_start_defaults_to_v2_and_gpt_realtime_1_5() -> Result<()> 
     skip_if_no_network!(Ok(()));
 
     let api_server = start_mock_server().await;
-    let realtime_server = start_websocket_server(vec![vec![vec![]]]).await;
+    let realtime_server = start_websocket_server(vec![vec![vec![json!({
+        "type": "session.updated",
+        "session": { "id": "sess_defaults", "instructions": "backend prompt" }
+    })]]])
+    .await;
     let realtime_base_url = realtime_server.uri().to_string();
     let mut builder = test_codex().with_config(move |config| {
         config.experimental_realtime_ws_base_url = Some(realtime_base_url);
@@ -449,6 +453,10 @@ async fn conversation_start_defaults_to_v2_and_gpt_realtime_1_5() -> Result<()> 
     })
     .await
     .expect("conversation start failed");
+    assert_eq!(
+        started.realtime_session_id.as_deref(),
+        Some("sess_defaults")
+    );
 
     assert!(
         realtime_server
