@@ -29,13 +29,6 @@ pub(crate) enum RuntimeCommand {
     Terminate,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum PendingRuntimeMode {
-    #[cfg(test)]
-    Continue,
-    PauseUntilResumed,
-}
-
 #[derive(Debug)]
 pub(crate) enum RuntimeControlCommand {
     Continue,
@@ -69,7 +62,6 @@ pub(crate) fn spawn_runtime(
     stored_values: HashMap<String, JsonValue>,
     request: CreateCellRequest,
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
-    pending_mode: PendingRuntimeMode,
 ) -> Result<
     (
         std_mpsc::Sender<RuntimeCommand>,
@@ -102,7 +94,6 @@ pub(crate) fn spawn_runtime(
             event_tx,
             command_rx,
             control_rx,
-            pending_mode,
             isolate_handle_tx,
             runtime_command_tx,
         );
@@ -165,7 +156,6 @@ fn run_runtime(
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
     command_rx: std_mpsc::Receiver<RuntimeCommand>,
     control_rx: std_mpsc::Receiver<RuntimeControlCommand>,
-    pending_mode: PendingRuntimeMode,
     isolate_handle_tx: std_mpsc::SyncSender<v8::IsolateHandle>,
     runtime_command_tx: std_mpsc::Sender<RuntimeCommand>,
 ) {
@@ -221,9 +211,7 @@ fn run_runtime(
     }
 
     let mut pending_promise = pending_promise;
-    while let Some(command) =
-        next_runtime_command(&event_tx, &command_rx, &control_rx, pending_mode)
-    {
+    while let Some(command) = next_runtime_command(&event_tx, &command_rx, &control_rx) {
         match command {
             RuntimeCommand::Terminate => break,
             RuntimeCommand::ToolResponse { id, result } => {
@@ -276,7 +264,6 @@ fn next_runtime_command(
     event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
     command_rx: &std_mpsc::Receiver<RuntimeCommand>,
     control_rx: &std_mpsc::Receiver<RuntimeControlCommand>,
-    pending_mode: PendingRuntimeMode,
 ) -> Option<RuntimeCommand> {
     loop {
         match command_rx.try_recv() {
@@ -286,14 +273,10 @@ fn next_runtime_command(
         }
 
         let _ = event_tx.send(RuntimeEvent::Pending);
-        match pending_mode {
-            #[cfg(test)]
-            PendingRuntimeMode::Continue => return command_rx.recv().ok(),
-            PendingRuntimeMode::PauseUntilResumed => match control_rx.recv().ok()? {
-                RuntimeControlCommand::Continue => return command_rx.recv().ok(),
-                RuntimeControlCommand::Resume => continue,
-                RuntimeControlCommand::Terminate => return Some(RuntimeCommand::Terminate),
-            },
+        match control_rx.recv().ok()? {
+            RuntimeControlCommand::Continue => return command_rx.recv().ok(),
+            RuntimeControlCommand::Resume => continue,
+            RuntimeControlCommand::Terminate => return Some(RuntimeCommand::Terminate),
         }
     }
 }
@@ -331,7 +314,6 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::CreateCellRequest;
-    use super::PendingRuntimeMode;
     use super::RuntimeCommand;
     use super::RuntimeControlCommand;
     use super::RuntimeEvent;
@@ -349,13 +331,8 @@ mod tests {
     #[tokio::test]
     async fn terminate_execution_stops_cpu_bound_module() {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-        let (_runtime_tx, _runtime_control_tx, runtime_terminate_handle) = spawn_runtime(
-            HashMap::new(),
-            execute_request("while (true) {}"),
-            event_tx,
-            PendingRuntimeMode::Continue,
-        )
-        .unwrap();
+        let (_runtime_tx, _runtime_control_tx, runtime_terminate_handle) =
+            spawn_runtime(HashMap::new(), execute_request("while (true) {}"), event_tx).unwrap();
 
         let started_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
             .await
@@ -395,7 +372,6 @@ await new Promise(() => {});
 "#,
             ),
             event_tx,
-            PendingRuntimeMode::PauseUntilResumed,
         )
         .unwrap();
 

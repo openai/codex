@@ -30,7 +30,6 @@ pub(crate) use self::types::CellToolCall;
 pub(crate) use self::types::CompletionCommit;
 use self::types::CompletionDelivery;
 use self::types::ObservationDelivery;
-use crate::runtime::PendingRuntimeMode;
 use crate::runtime::RuntimeCommand;
 use crate::runtime::RuntimeControlCommand;
 use crate::runtime::RuntimeEvent;
@@ -52,12 +51,8 @@ impl CellActor {
     ) -> Result<(CellHandle, impl Future<Output = ()> + Send + 'static), String> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
-        let (runtime_tx, runtime_control_tx, runtime_terminate_handle) = spawn_runtime(
-            stored_values,
-            runtime_request(request),
-            event_tx,
-            PendingRuntimeMode::PauseUntilResumed,
-        )?;
+        let (runtime_tx, runtime_control_tx, runtime_terminate_handle) =
+            spawn_runtime(stored_values, runtime_request(request), event_tx)?;
         let handle = CellHandle::new(command_tx, Arc::clone(&cell_state));
         let task = run_cell(
             host,
