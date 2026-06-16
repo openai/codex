@@ -2300,6 +2300,7 @@ dependencies = [
  "codex-plugin",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
+ "codex-utils-plugins",
  "pretty_assertions",
  "serde",
  "serde_json",

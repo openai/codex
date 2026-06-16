@@ -1,6 +1,7 @@
 use super::RemotePluginDirectoryItem;
 use super::RemotePluginServiceConfig;
 use codex_login::CodexAuth;
+use codex_utils_plugins::plugin_service_routing::plugin_service_preview_enabled;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;
@@ -16,6 +17,8 @@ struct RemotePluginCatalogCacheKey {
     account_id: Option<String>,
     chatgpt_user_id: Option<String>,
     is_workspace_account: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    plugin_service_preview: bool,
 }
 
 impl RemotePluginCatalogCacheKey {
@@ -25,6 +28,7 @@ impl RemotePluginCatalogCacheKey {
             account_id: auth.get_account_id(),
             chatgpt_user_id: auth.get_chatgpt_user_id(),
             is_workspace_account: auth.is_workspace_account(),
+            plugin_service_preview: plugin_service_preview_enabled(),
         }
     }
 }
@@ -109,3 +113,7 @@ fn cache_path(codex_home: &Path, cache_key: &RemotePluginCatalogCacheKey) -> Pat
         .join(REMOTE_PLUGIN_CATALOG_DISK_CACHE_DIR)
         .join(format!("{cache_key_hash:016x}.json"))
 }
+
+#[cfg(test)]
+#[path = "catalog_cache_tests.rs"]
+mod tests;

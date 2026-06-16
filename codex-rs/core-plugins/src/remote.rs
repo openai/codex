@@ -10,6 +10,7 @@ use codex_app_server_protocol::PluginInterface;
 use codex_app_server_protocol::SkillInterface;
 use codex_login::CodexAuth;
 use codex_login::default_client::build_reqwest_client;
+use codex_login::default_client::chatgpt_cloudflare_cookie_header;
 use codex_plugin::AppConnectorId;
 use codex_plugin::AppDeclaration;
 use codex_plugin::PluginId;
@@ -1878,12 +1879,31 @@ async fn send_plugin_service_request_with_preview(
 ) -> Result<reqwest::Response, reqwest::Error> {
     let (client, request) = request.build_split();
     let mut request = request?;
-    let headers = request.headers_mut();
-    let existing_cookie_headers = headers
+    let cloudflare_cookie = (preview_enabled && !request.headers().contains_key(COOKIE))
+        .then(|| chatgpt_cloudflare_cookie_header(request.url().as_str()))
+        .flatten();
+    apply_plugin_service_routing_cookie(
+        request.headers_mut(),
+        preview_enabled,
+        cloudflare_cookie.as_deref(),
+    );
+
+    client.execute(request).await
+}
+
+fn apply_plugin_service_routing_cookie(
+    headers: &mut reqwest::header::HeaderMap,
+    preview_enabled: bool,
+    cloudflare_cookie: Option<&[u8]>,
+) {
+    let mut existing_cookie_headers = headers
         .get_all(COOKIE)
         .iter()
         .map(|value| value.as_bytes().to_vec())
         .collect::<Vec<_>>();
+    if let Some(cloudflare_cookie) = cloudflare_cookie {
+        existing_cookie_headers.push(cloudflare_cookie.to_vec());
+    }
     let existing_cookie_headers = existing_cookie_headers
         .iter()
         .map(Vec::as_slice)
@@ -1896,6 +1916,4 @@ async fn send_plugin_service_request_with_preview(
     {
         headers.insert(COOKIE, routing_cookie);
     }
-
-    client.execute(request).await
 }

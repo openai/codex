@@ -299,6 +299,23 @@ fn recommended_plugins_ignore_invalid_remote_plugin_ids() {
     );
 }
 
+#[test]
+fn plugin_service_routing_preserves_cloudflare_cookie_jar_values() {
+    let mut headers = reqwest::header::HeaderMap::new();
+    let cloudflare_cookie = HeaderValue::from_static("cf_clearance=clearance; _cfuvid=visitor");
+
+    apply_plugin_service_routing_cookie(
+        &mut headers,
+        /*preview_enabled*/ true,
+        Some(cloudflare_cookie.as_bytes()),
+    );
+
+    assert_eq!(
+        headers.get(COOKIE).and_then(|value| value.to_str().ok()),
+        Some("cf_clearance=clearance; _cfuvid=visitor; oai-chat-plugin-service-preview=true"),
+    );
+}
+
 #[tokio::test]
 async fn plugin_service_request_does_not_add_preview_cookie_when_disabled() {
     let server = MockServer::start().await;

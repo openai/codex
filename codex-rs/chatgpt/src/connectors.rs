@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::time::Duration;
 
-use crate::chatgpt_client::chatgpt_get_request_with_timeout;
+use crate::chatgpt_client::chatgpt_get_plugin_service_request_with_timeout;
 
 use codex_app_server_protocol::AppInfo;
 use codex_connectors::ConnectorDirectoryCacheContext;
@@ -21,6 +21,7 @@ pub use codex_core::connectors::with_app_enabled_state;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
+use codex_utils_plugins::plugin_service_routing::plugin_service_preview_enabled;
 
 const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -101,7 +102,7 @@ pub async fn list_all_connectors_with_options(
         auth.is_workspace_account(),
         force_refetch,
         |path| async move {
-            chatgpt_get_request_with_timeout::<DirectoryListResponse>(
+            chatgpt_get_plugin_service_request_with_timeout::<DirectoryListResponse>(
                 config,
                 path,
                 Some(DIRECTORY_CONNECTORS_TIMEOUT),
@@ -127,7 +128,8 @@ fn connector_directory_cache_context(
             auth.get_account_id(),
             auth.get_chatgpt_user_id(),
             auth.is_workspace_account(),
-        ),
+        )
+        .plugin_service_preview(plugin_service_preview_enabled()),
     )
 }
 

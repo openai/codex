@@ -33,6 +33,8 @@ pub struct ConnectorDirectoryCacheKey {
     account_id: Option<String>,
     chatgpt_user_id: Option<String>,
     is_workspace_account: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    plugin_service_preview: bool,
 }
 
 impl ConnectorDirectoryCacheKey {
@@ -47,7 +49,13 @@ impl ConnectorDirectoryCacheKey {
             account_id,
             chatgpt_user_id,
             is_workspace_account,
+            plugin_service_preview: false,
         }
+    }
+
+    pub fn plugin_service_preview(mut self, plugin_service_preview: bool) -> Self {
+        self.plugin_service_preview = plugin_service_preview;
+        self
     }
 }
 
@@ -490,6 +498,18 @@ mod tests {
 
     fn cache_context(codex_home: &TempDir, id: &str) -> ConnectorDirectoryCacheContext {
         ConnectorDirectoryCacheContext::new(codex_home.path().to_path_buf(), cache_key(id))
+    }
+
+    #[test]
+    fn directory_cache_is_scoped_by_plugin_service_preview() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let regular = cache_context(&codex_home, "user");
+        let preview = ConnectorDirectoryCacheContext::new(
+            codex_home.path().to_path_buf(),
+            cache_key("user").plugin_service_preview(true),
+        );
+
+        assert_ne!(regular.cache_path(), preview.cache_path());
     }
 
     fn clear_directory_memory_cache() {

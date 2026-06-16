@@ -86,6 +86,7 @@ fn create_codex_apps_tools_cache_context(
             account_id: account_id.map(ToOwned::to_owned),
             chatgpt_user_id: chatgpt_user_id.map(ToOwned::to_owned),
             is_workspace_account: false,
+            plugin_service_preview: false,
         },
     }
 }
@@ -608,6 +609,24 @@ fn codex_apps_tools_cache_is_scoped_per_user() {
         cache_context_user_1.tools_cache_path(),
         cache_context_user_2.tools_cache_path(),
         "each user should get an isolated cache file"
+    );
+}
+
+#[test]
+fn codex_apps_tools_cache_is_scoped_by_plugin_service_preview() {
+    let codex_home = tempdir().expect("tempdir");
+    let regular = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        Some("account-one"),
+        Some("user-one"),
+    );
+    let mut preview = regular.clone();
+    preview.user_key.plugin_service_preview = true;
+
+    assert_ne!(regular.tools_cache_path(), preview.tools_cache_path());
+    assert_ne!(
+        regular.server_info_cache_path(),
+        preview.server_info_cache_path()
     );
 }
 
@@ -1263,6 +1282,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
             account_id: None,
             chatgpt_user_id: None,
             is_workspace_account: false,
+            plugin_service_preview: false,
         },
         /*prefix_mcp_tool_names*/ true,
         ElicitationCapability::default(),
