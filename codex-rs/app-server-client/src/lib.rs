@@ -53,6 +53,7 @@ use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigToml;
 use codex_core::config::Config;
 pub use codex_core::otel_init::build_provider as build_otel_provider;
+pub use codex_core::otel_init::has_required_exporter as has_required_otel_exporter;
 use codex_core::personality_migration::PersonalityMigrationStatus;
 use codex_core::personality_migration::maybe_migrate_personality;
 pub use codex_exec_server::EnvironmentManager;

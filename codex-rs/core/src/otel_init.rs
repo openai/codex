@@ -10,6 +10,19 @@ use codex_otel::OtelSettings;
 use codex_otel::OtelTlsConfig as OtelTlsSettings;
 use std::error::Error;
 
+pub fn has_required_exporter(config: &Config) -> bool {
+    config
+        .config_layer_stack
+        .requirements()
+        .otel
+        .as_ref()
+        .is_some_and(|requirement| {
+            requirement.value.exporter.is_some()
+                || requirement.value.trace_exporter.is_some()
+                || requirement.value.metrics_exporter.is_some()
+        })
+}
+
 /// Build an OpenTelemetry provider from the app Config.
 ///
 /// Returns `None` when OTEL export is disabled.

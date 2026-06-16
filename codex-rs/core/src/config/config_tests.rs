@@ -11106,6 +11106,35 @@ async fn invalid_required_otel_trace_metadata_fails_closed() -> std::io::Result<
 }
 
 #[tokio::test]
+async fn invalid_required_otel_exporter_headers_fail_closed() -> std::io::Result<()> {
+    for (exporter, header) in [
+        (
+            "otlp-http",
+            r#"headers = { "invalid header" = "secret" }, protocol = "binary""#,
+        ),
+        ("otlp-grpc", r#"headers = { valid = "\u007f" }"#),
+    ] {
+        let codex_home = TempDir::new()?;
+        let requirements = format!(
+            r#"
+[otel]
+exporter = {{ {exporter} = {{ endpoint = "https://otel.example", {header} }} }}
+"#,
+        );
+        let err = load_with_enterprise_requirement(&codex_home, requirements)
+            .await
+            .expect_err("invalid managed OTEL headers should fail startup");
+
+        assert_eq!(err.kind(), ErrorKind::InvalidInput);
+        assert!(
+            err.to_string()
+                .contains("invalid required `otel.exporter` header")
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn required_otel_tracestate_survives_invalid_user_merge() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let configured_overflow = "u".repeat(/*n*/ 120);
