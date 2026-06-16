@@ -1,0 +1,20 @@
+[package]
+name = "codex-code-mode-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_code_mode_client"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-code-mode-protocol = { workspace = true }
+codex-protocol = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "process", "rt", "sync"] }
+tokio-util = { workspace = true, features = ["rt"] }
+tracing = { workspace = true }
