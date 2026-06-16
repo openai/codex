@@ -7,8 +7,11 @@ use crate::landlock::allow_network_for_proxy;
 use crate::landlock::create_linux_sandbox_command_args_for_permission_profile;
 use crate::policy_transforms::effective_permission_profile;
 use crate::policy_transforms::should_require_platform_sandbox;
+#[cfg(target_os = "windows")]
 use crate::resolve_windows_elevated_filesystem_overrides;
+#[cfg(target_os = "windows")]
 use crate::resolve_windows_restricted_token_filesystem_overrides;
+#[cfg(target_os = "windows")]
 use crate::windows_sandbox_uses_elevated_backend;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
