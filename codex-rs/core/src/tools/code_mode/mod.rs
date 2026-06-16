@@ -149,10 +149,15 @@ pub(super) async fn handle_runtime_response(
 
     match response {
         RuntimeResponse::Yielded { content_items, .. } => {
+            let wall_time = started_at.elapsed();
+            let mcp_connection_manager = exec.session.services.mcp_connection_manager.load_full();
+            mcp_connection_manager
+                .wait_until_elicitations_complete()
+                .await;
             let mut content_items = into_function_call_output_content_items(content_items);
             sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
             content_items = truncate_code_mode_result(content_items, max_output_tokens);
-            prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
+            prepend_script_status(&mut content_items, &script_status, wall_time);
             Ok(FunctionToolOutput::from_content(content_items, Some(true)))
         }
         RuntimeResponse::Terminated { content_items, .. } => {

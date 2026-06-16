@@ -32,7 +32,6 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
-use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
@@ -56,7 +55,6 @@ use rmcp::service::RoleServer;
 use rmcp::transport::StreamableHttpServerConfig;
 use rmcp::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
-use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -73,9 +71,14 @@ const TOOL_CALL_ID: &str = "call-calendar-confirm";
 const ELICITATION_MESSAGE: &str = "Allow this request?";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn mcp_server_elicitation_round_trip() -> Result<()> {
+async fn mcp_server_elicitation_pauses_after_code_mode_yield() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
-    let tool_call_arguments = serde_json::to_string(&json!({}))?;
+    let code = format!(
+        r#"// @exec: {{"yield_time_ms": 1000}}
+const pending = tools["{TOOL_NAMESPACE}{CALLABLE_TOOL_NAME}"]({{}});
+await pending;
+"#
+    );
     let response_mock = responses::mount_sse_sequence(
         &responses_server,
         vec![
@@ -86,12 +89,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
             ]),
             responses::sse(vec![
                 responses::ev_response_created("resp-1"),
-                responses::ev_function_call_with_namespace(
-                    TOOL_CALL_ID,
-                    TOOL_NAMESPACE,
-                    CALLABLE_TOOL_NAME,
-                    &tool_call_arguments,
-                ),
+                responses::ev_custom_tool_call(TOOL_CALL_ID, "exec", &code),
                 responses::ev_completed("resp-1"),
             ]),
             responses::sse(vec![
@@ -213,6 +211,13 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
         }
     );
 
+    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+    assert_eq!(
+        response_mock.requests().len(),
+        2,
+        "the model must not be sampled while the elicitation is unresolved"
+    );
+
     let resolved_request_id = request_id.clone();
     mcp.send_response(
         request_id,
@@ -266,32 +271,12 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
 
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 3);
-    let function_call_output = requests[2].function_call_output(TOOL_CALL_ID);
-    assert_eq!(
-        function_call_output.get("type"),
-        Some(&Value::String("function_call_output".to_string()))
-    );
-    assert_eq!(
-        function_call_output.get("call_id"),
-        Some(&Value::String(TOOL_CALL_ID.to_string()))
-    );
-    let output = function_call_output
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("function_call_output output should be a JSON string");
-    let payload = assert_regex_match(
-        r#"(?s)^Wall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n(.*)$"#,
-        output,
-    )
-    .get(1)
-    .expect("wall-time wrapped output should include payload")
-    .as_str();
-    assert_eq!(
-        serde_json::from_str::<Value>(payload)?,
-        json!([{
-            "type": "text",
-            "text": "accepted"
-        }])
+    let (output, _) = requests[2]
+        .custom_tool_call_output_content_and_success(TOOL_CALL_ID)
+        .expect("follow-up request should contain the yielded exec output");
+    assert!(
+        output.is_some_and(|text| text.starts_with("Script running with cell ID ")),
+        "expected the outer exec call to yield"
     );
 
     apps_server_handle.abort();
@@ -476,6 +461,7 @@ mcp_oauth_credentials_store = "file"
 
 [features]
 apps = true
+code_mode = true
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

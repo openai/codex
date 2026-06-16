@@ -421,6 +421,15 @@ impl McpConnectionManager {
         self.elicitation_requests.set_auto_deny(auto_deny);
     }
 
+    #[must_use = "dropping the guard marks the MCP elicitation inactive"]
+    pub fn begin_elicitation(&self) -> impl Drop + Send + 'static {
+        self.elicitation_requests.begin_activity()
+    }
+
+    pub async fn wait_until_elicitations_complete(&self) {
+        self.elicitation_requests.wait_until_inactive().await;
+    }
+
     pub async fn resolve_elicitation(
         &self,
         server_name: String,

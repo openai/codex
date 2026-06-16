@@ -31,6 +31,29 @@ use rmcp::model::ElicitationAction;
 use rmcp::model::RequestId;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
+
+#[derive(Debug)]
+#[must_use = "dropping the guard marks the MCP elicitation inactive"]
+struct McpElicitationActivityGuard {
+    active_count: watch::Sender<usize>,
+}
+
+fn begin_elicitation_activity(active_count: &watch::Sender<usize>) -> McpElicitationActivityGuard {
+    active_count.send_modify(|count| *count += 1);
+    McpElicitationActivityGuard {
+        active_count: active_count.clone(),
+    }
+}
+
+impl Drop for McpElicitationActivityGuard {
+    fn drop(&mut self) {
+        self.active_count.send_modify(|count| {
+            debug_assert!(*count > 0);
+            *count -= 1;
+        });
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ElicitationReviewRequest {
@@ -51,6 +74,7 @@ pub type ElicitationReviewerHandle = Arc<dyn ElicitationReviewer>;
 #[derive(Clone)]
 pub(crate) struct ElicitationRequestManager {
     requests: Arc<Mutex<ResponderMap>>,
+    active_elicitations: watch::Sender<usize>,
     pub(crate) approval_policy: Arc<StdMutex<AskForApproval>>,
     pub(crate) permission_profile: Arc<StdMutex<PermissionProfile>>,
     auto_deny: Arc<StdMutex<bool>>,
@@ -65,6 +89,7 @@ impl ElicitationRequestManager {
     ) -> Self {
         Self {
             requests: Arc::new(Mutex::new(HashMap::new())),
+            active_elicitations: watch::channel(0).0,
             approval_policy: Arc::new(StdMutex::new(approval_policy)),
             permission_profile: Arc::new(StdMutex::new(permission_profile)),
             auto_deny: Arc::new(StdMutex::new(false)),
@@ -83,6 +108,15 @@ impl ElicitationRequestManager {
         if let Ok(mut current) = self.auto_deny.lock() {
             *current = auto_deny;
         }
+    }
+
+    pub(crate) fn begin_activity(&self) -> impl Drop + Send + 'static {
+        begin_elicitation_activity(&self.active_elicitations)
+    }
+
+    pub(crate) async fn wait_until_inactive(&self) {
+        let mut active_count = self.active_elicitations.subscribe();
+        let _ = active_count.wait_for(|count| *count == 0).await;
     }
 
     pub(crate) async fn resolve(
@@ -106,12 +140,14 @@ impl ElicitationRequestManager {
         tx_event: Sender<Event>,
     ) -> SendElicitation {
         let elicitation_requests = self.requests.clone();
+        let active_elicitations = self.active_elicitations.clone();
         let approval_policy = self.approval_policy.clone();
         let permission_profile = self.permission_profile.clone();
         let auto_deny = self.auto_deny.clone();
         let reviewer = self.reviewer.clone();
         Box::new(move |id, elicitation| {
             let elicitation_requests = elicitation_requests.clone();
+            let active_elicitations = active_elicitations.clone();
             let tx_event = tx_event.clone();
             let server_name = server_name.clone();
             let approval_policy = approval_policy.clone();
@@ -159,6 +195,8 @@ impl ElicitationRequestManager {
                         meta: None,
                     });
                 }
+
+                let _activity_guard = begin_elicitation_activity(&active_elicitations);
 
                 if let Some(reviewer) = reviewer.as_ref() {
                     let request = ElicitationReviewRequest {
