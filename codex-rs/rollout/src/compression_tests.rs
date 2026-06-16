@@ -130,7 +130,7 @@ async fn search_rollout_matches_uses_logical_path_for_compressed_rollout() -> an
 }
 
 #[tokio::test]
-async fn worker_compresses_old_archived_rollouts_only() -> anyhow::Result<()> {
+async fn worker_compresses_old_active_and_archived_rollouts() -> anyhow::Result<()> {
     let home = TempDir::new()?;
     let active_uuid = Uuid::from_u128(3);
     let active_id = ThreadId::from_string(&active_uuid.to_string())?;
@@ -158,8 +158,8 @@ async fn worker_compresses_old_archived_rollouts_only() -> anyhow::Result<()> {
 
     worker::run(home.path().to_path_buf()).await?;
 
-    assert!(active_path.exists());
-    assert!(!compressed_rollout_path(&active_path).exists());
+    assert!(!active_path.exists());
+    assert!(compressed_rollout_path(&active_path).exists());
     assert!(!archived_path.exists());
     assert!(compressed_rollout_path(&archived_path).exists());
     assert!(fresh_path.exists());

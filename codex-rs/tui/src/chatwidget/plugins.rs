@@ -6,6 +6,7 @@ use std::time::Instant;
 use super::ChatWidget;
 use crate::app_event::AppEvent;
 use crate::app_event::PluginLocation;
+use crate::app_event::PluginRemoteSectionError;
 use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
@@ -36,7 +37,11 @@ use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::PluginUninstallResponse;
-use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
+use codex_core_plugins::is_openai_curated_marketplace_name;
+use codex_core_plugins::remote::REMOTE_WORKSPACE_MARKETPLACE_NAME;
+use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME;
+use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME;
+use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME;
 use codex_features::Feature;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -201,7 +206,9 @@ impl ChatWidget {
         cwd: PathBuf,
         result: Result<PluginListResponse, String>,
     ) {
-        if self.plugins_fetch_state.in_flight_cwd.as_deref() == Some(cwd.as_path()) {
+        let request_was_in_flight =
+            self.plugins_fetch_state.in_flight_cwd.as_deref() == Some(cwd.as_path());
+        if request_was_in_flight {
             self.plugins_fetch_state.in_flight_cwd = None;
         }
 
@@ -210,10 +217,28 @@ impl ChatWidget {
         }
 
         let auth_flow_active = self.plugin_install_auth_flow.is_some();
+        let should_refresh_plugins_popup = !auth_flow_active
+            && (self
+                .bottom_pane
+                .active_tab_id_for_active_view(PLUGINS_SELECTION_VIEW_ID)
+                .is_some()
+                || self
+                    .bottom_pane
+                    .selected_index_for_active_view(PLUGINS_SELECTION_VIEW_ID)
+                    .is_some()
+                || !matches!(
+                    self.plugins_cache_for_current_cwd(),
+                    PluginsCacheState::Ready(_)
+                ));
 
         match result {
             Ok(response) => {
                 self.plugins_fetch_state.cache_cwd = Some(cwd);
+                self.plugin_remote_sections_loading = request_was_in_flight;
+                if request_was_in_flight {
+                    self.plugin_remote_sections_loaded = false;
+                }
+                self.plugin_remote_section_errors.clear();
                 let active_tab_id = self
                     .plugins_active_tab_id
                     .as_deref()
@@ -229,13 +254,15 @@ impl ChatWidget {
                     });
                 self.plugins_active_tab_id = active_tab_id;
                 self.plugins_cache = PluginsCacheState::Ready(response.clone());
-                if !auth_flow_active {
+                if should_refresh_plugins_popup {
                     self.refresh_plugins_popup_if_open(&response);
                 }
                 self.newly_installed_marketplace_tab_id = None;
             }
             Err(err) => {
-                if !auth_flow_active {
+                self.plugin_remote_sections_loading = false;
+                self.plugin_remote_sections_loaded = false;
+                if should_refresh_plugins_popup {
                     self.plugins_fetch_state.cache_cwd = None;
                     self.plugins_cache = PluginsCacheState::Failed(err.clone());
                     let _ = self.bottom_pane.replace_selection_view_if_active(
@@ -247,9 +274,55 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn on_plugin_remote_sections_loaded(
+        &mut self,
+        cwd: PathBuf,
+        marketplaces: Vec<PluginMarketplaceEntry>,
+        section_errors: Vec<PluginRemoteSectionError>,
+    ) {
+        if self.config.cwd.as_path() != cwd.as_path() {
+            return;
+        }
+
+        let should_refresh_plugins_popup = self
+            .bottom_pane
+            .active_tab_id_for_active_view(PLUGINS_SELECTION_VIEW_ID)
+            .is_some();
+        self.plugin_remote_sections_loading = false;
+        self.plugin_remote_sections_loaded = true;
+        let refreshed_response = match &mut self.plugins_cache {
+            PluginsCacheState::Ready(response)
+                if self.plugins_fetch_state.cache_cwd.as_deref() == Some(cwd.as_path()) =>
+            {
+                merge_remote_marketplaces(response, marketplaces);
+                self.plugin_remote_section_errors = section_errors;
+                Some(response.clone())
+            }
+            _ => {
+                self.plugin_remote_section_errors = section_errors;
+                None
+            }
+        };
+
+        if let Some(response) = refreshed_response
+            && should_refresh_plugins_popup
+        {
+            self.refresh_plugins_popup_if_open(&response);
+        }
+    }
+
     fn prefetch_plugins(&mut self) {
         let cwd = self.config.cwd.to_path_buf();
         if self.plugins_fetch_state.in_flight_cwd.as_deref() == Some(cwd.as_path()) {
+            return;
+        }
+
+        self.on_plugins_list_fetch_started(cwd.clone());
+        self.app_event_tx.send(AppEvent::FetchPluginsList { cwd });
+    }
+
+    pub(crate) fn on_plugins_list_fetch_started(&mut self, cwd: PathBuf) {
+        if self.config.cwd.as_path() != cwd.as_path() {
             return;
         }
 
@@ -257,8 +330,6 @@ impl ChatWidget {
         if self.plugins_fetch_state.cache_cwd.as_deref() != Some(cwd.as_path()) {
             self.plugins_cache = PluginsCacheState::Loading;
         }
-
-        self.app_event_tx.send(AppEvent::FetchPluginsList { cwd });
     }
 
     fn plugins_cache_for_current_cwd(&self) -> PluginsCacheState {
@@ -1483,7 +1554,7 @@ impl ChatWidget {
 
         let curated_marketplace = marketplaces
             .iter()
-            .find(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
+            .find(|marketplace| is_openai_curated_marketplace_name(&marketplace.name))
             .copied();
         let curated_entries = curated_marketplace
             .map(|marketplace| plugin_entries_for_marketplaces([marketplace]))
@@ -1511,7 +1582,7 @@ impl ChatWidget {
         let mut additional_marketplaces: Vec<&PluginMarketplaceEntry> = marketplaces
             .iter()
             .copied()
-            .filter(|marketplace| marketplace.name != OPENAI_CURATED_MARKETPLACE_NAME)
+            .filter(|marketplace| !is_openai_curated_marketplace_name(&marketplace.name))
             .collect();
         additional_marketplaces.sort_by(|left, right| {
             marketplace_display_name(left)
@@ -2003,6 +2074,32 @@ fn marketplace_tab_id_matching_saved_id(
             .is_some_and(|path| path.as_path().starts_with(root))
             .then(|| marketplace_tab_id(marketplace))
     })
+}
+
+fn merge_remote_marketplaces(
+    response: &mut PluginListResponse,
+    remote_marketplaces: Vec<PluginMarketplaceEntry>,
+) {
+    let remote_names = remote_marketplaces
+        .iter()
+        .map(|marketplace| marketplace.name.clone())
+        .collect::<std::collections::HashSet<_>>();
+    response.marketplaces.retain(|marketplace| {
+        marketplace.path.is_some()
+            || !remote_marketplace_is_remote_section(marketplace)
+                && !remote_names.contains(marketplace.name.as_str())
+    });
+    response.marketplaces.extend(remote_marketplaces);
+}
+
+fn remote_marketplace_is_remote_section(marketplace: &PluginMarketplaceEntry) -> bool {
+    matches!(
+        marketplace.name.as_str(),
+        REMOTE_WORKSPACE_MARKETPLACE_NAME
+            | REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME
+            | REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME
+            | REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME
+    )
 }
 
 fn disambiguate_duplicate_tab_labels(labels: Vec<String>) -> Vec<String> {

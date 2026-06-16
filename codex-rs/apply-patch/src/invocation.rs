@@ -21,6 +21,7 @@ use crate::parser::Hunk;
 use crate::parser::ParseError;
 use crate::parser::parse_patch;
 use crate::unified_diff_from_chunks;
+use codex_utils_path_uri::PathUri;
 use std::str::Utf8Error;
 use tree_sitter::LanguageError;
 
@@ -185,7 +186,8 @@ pub async fn verify_apply_patch_args(
                 );
             }
             Hunk::DeleteFile { .. } => {
-                let content = match fs.read_file_text(&path, sandbox).await {
+                let path_uri = PathUri::from_abs_path(&path);
+                let content = match fs.read_file_text(&path_uri, sandbox).await {
                     Ok(content) => content,
                     Err(e) => {
                         return MaybeApplyPatchVerified::CorrectnessError(

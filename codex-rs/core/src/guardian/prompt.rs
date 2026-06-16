@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::plaintext_agent_message_content;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::user_input::UserInput;
@@ -452,6 +453,12 @@ pub(crate) fn collect_guardian_transcript_entries(
             ResponseItem::Message { role, content, .. } if role == "assistant" => {
                 content_entry(GuardianTranscriptEntryKind::Assistant, content)
             }
+            ResponseItem::AgentMessage {
+                author, content, ..
+            } => plaintext_agent_message_content(content).map(|text| GuardianTranscriptEntry {
+                kind: GuardianTranscriptEntryKind::Assistant,
+                text: format!("Agent message from {author}:\n{text}"),
+            }),
             ResponseItem::LocalShellCall { action, .. } => serialized_entry(
                 GuardianTranscriptEntryKind::Tool("tool shell call".to_string()),
                 serde_json::to_string(action).ok(),

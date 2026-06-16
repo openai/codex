@@ -19,6 +19,7 @@ mod turn_input;
 mod turn_lifecycle;
 
 pub use mcp::McpServerContribution;
+pub use mcp::McpServerContributionContext;
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
 pub use thread_lifecycle::ThreadIdleInput;
@@ -45,10 +46,19 @@ pub type ExtensionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Contributors run in registration order. Later contributions for the same
 /// name replace earlier ones. Implementations must contribute only names they
 /// own and must apply any source-specific policy before returning a server.
-/// Plugin-owned servers and their provenance continue to be resolved by the
-/// plugin manager until that ownership moves into an extension explicitly.
+/// Thread-scoped resolution exposes the host-seeded thread inputs; global
+/// resolution exposes none and must not imply a local fallback. Thread inputs
+/// are frozen for the runtime and do not include lifecycle-contributor state.
+/// Auto-discovered plugin servers are resolved by the plugin manager. A
+/// thread-selected plugin contribution must carry its own package provenance.
 pub trait McpServerContributor<C: Sync>: Send + Sync {
-    fn contribute<'a>(&'a self, config: &'a C) -> ExtensionFuture<'a, Vec<McpServerContribution>>;
+    /// Stable identity used for registration provenance and conflict diagnostics.
+    fn id(&self) -> &'static str;
+
+    fn contribute<'a>(
+        &'a self,
+        context: McpServerContributionContext<'a, C>,
+    ) -> ExtensionFuture<'a, Vec<McpServerContribution>>;
 }
 
 /// Extension contribution that adds prompt fragments during prompt assembly.
@@ -66,8 +76,7 @@ pub trait ContextContributor: Send + Sync {
 /// extension-private thread state. Heavy dependencies belong on the extension
 /// value created by the host, not in these inputs.
 pub trait ThreadLifecycleContributor<C: Sync>: Send + Sync {
-    /// Called after thread-scoped extension stores are created, before later
-    /// contributors can read from them.
+    /// Called after host startup has initialized the thread-scoped store.
     fn on_thread_start<'a>(&'a self, input: ThreadStartInput<'a, C>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             let _self = self;

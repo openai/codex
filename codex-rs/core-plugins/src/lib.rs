@@ -1,3 +1,4 @@
+mod app_mcp_routing;
 mod discoverable;
 pub mod installed_marketplaces;
 pub mod loader;
@@ -8,6 +9,7 @@ pub mod marketplace_add;
 pub mod marketplace_remove;
 pub mod marketplace_upgrade;
 mod plugin_bundle_archive;
+mod provider;
 pub mod remote;
 pub mod remote_bundle;
 pub mod remote_legacy;
@@ -18,11 +20,18 @@ mod test_support;
 pub mod toggles;
 
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
+pub const OPENAI_API_CURATED_MARKETPLACE_NAME: &str = "openai-api-curated";
 pub const OPENAI_BUNDLED_MARKETPLACE_NAME: &str = "openai-bundled";
+
+pub fn is_openai_curated_marketplace_name(marketplace_name: &str) -> bool {
+    marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME
+        || marketplace_name == OPENAI_API_CURATED_MARKETPLACE_NAME
+}
 
 pub type LoadedPlugin = codex_plugin::LoadedPlugin<codex_config::McpServerConfig>;
 pub type PluginLoadOutcome = codex_plugin::PluginLoadOutcome<codex_config::McpServerConfig>;
 
+pub use app_mcp_routing::apps_route_available;
 pub use discoverable::ToolSuggestDiscoverablePlugin;
 pub use discoverable::ToolSuggestPluginDiscoveryInput;
 pub use loader::PluginHookLoadOutcome;
@@ -42,3 +51,6 @@ pub use manager::PluginsConfigInput;
 pub use manager::PluginsManager;
 pub use marketplace_upgrade::ConfiguredMarketplaceUpgradeError as PluginMarketplaceUpgradeError;
 pub use marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome as PluginMarketplaceUpgradeOutcome;
+pub use provider::ExecutorPluginProvider;
+pub use provider::ExecutorPluginProviderError;
+pub use provider::ResolvedExecutorPlugin;

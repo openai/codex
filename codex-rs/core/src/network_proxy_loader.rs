@@ -7,7 +7,6 @@ use crate::exec_policy::format_exec_policy_error_with_source;
 use crate::exec_policy::load_exec_policy;
 use anyhow::Context;
 use anyhow::Result;
-use async_trait::async_trait;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerStack;
@@ -23,6 +22,7 @@ use codex_config::permissions_toml::PermissionsToml;
 use codex_config::permissions_toml::overlay_network_domain_permissions;
 use codex_exec_server::LOCAL_FS;
 use codex_network_proxy::ConfigReloader;
+use codex_network_proxy::ConfigReloaderFuture;
 use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkProxyConfig;
@@ -361,13 +361,6 @@ impl MtimeConfigReloader {
             }
         })
     }
-}
-
-#[async_trait]
-impl ConfigReloader for MtimeConfigReloader {
-    fn source_label(&self) -> String {
-        "config layers".to_string()
-    }
 
     async fn maybe_reload(&self) -> Result<Option<ConfigState>> {
         if !self.needs_reload().await {
@@ -385,6 +378,20 @@ impl ConfigReloader for MtimeConfigReloader {
         let mut guard = self.layer_mtimes.write().await;
         *guard = layer_mtimes;
         Ok(state)
+    }
+}
+
+impl ConfigReloader for MtimeConfigReloader {
+    fn source_label(&self) -> String {
+        "config layers".to_string()
+    }
+
+    fn maybe_reload(&self) -> ConfigReloaderFuture<'_, Option<ConfigState>> {
+        Box::pin(MtimeConfigReloader::maybe_reload(self))
+    }
+
+    fn reload_now(&self) -> ConfigReloaderFuture<'_, ConfigState> {
+        Box::pin(MtimeConfigReloader::reload_now(self))
     }
 }
 

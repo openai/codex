@@ -51,6 +51,8 @@ mod compact_resume_fork;
 mod deprecation_notice;
 mod exec;
 mod exec_policy;
+#[cfg(not(target_os = "windows"))]
+mod extension_sandbox;
 mod fork_thread;
 #[cfg(not(target_os = "windows"))]
 mod guardian_review;
@@ -110,6 +112,7 @@ mod sqlite_state;
 mod stream_error_allows_next_turn;
 mod stream_no_completed;
 mod subagent_notifications;
+mod token_budget;
 mod tool_harness;
 mod tool_parallelism;
 mod tools;

@@ -147,9 +147,8 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
 
     let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone())
         .with_pre_build_hook(move |home| {
-            if let Err(error) = write_post_tool_use_hook(home) {
-                panic!("failed to write apps file post tool use hook fixture: {error}");
-            }
+            write_post_tool_use_hook(home)
+                .expect("failed to write apps file post tool use hook fixture");
         })
         .with_config(move |config| {
             trust_discovered_hooks(config);
@@ -165,14 +164,13 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
     .await?;
 
     let requests = mock.requests();
-    let Some(extract_tool) =
-        requests[0].tool_by_name(DOCUMENT_EXTRACT_NAMESPACE, DOCUMENT_EXTRACT_TOOL)
-    else {
-        let body = requests[0].body_json();
-        panic!(
-            "missing tool {DOCUMENT_EXTRACT_NAMESPACE}{DOCUMENT_EXTRACT_TOOL} in /v1/responses request: {body:?}"
-        )
-    };
+    let body = requests[0].body_json();
+    let missing_tool_message = format!(
+        "missing tool {DOCUMENT_EXTRACT_NAMESPACE}{DOCUMENT_EXTRACT_TOOL} in /v1/responses request: {body:?}"
+    );
+    let extract_tool = requests[0]
+        .tool_by_name(DOCUMENT_EXTRACT_NAMESPACE, DOCUMENT_EXTRACT_TOOL)
+        .expect(&missing_tool_message);
     assert_eq!(
         extract_tool.pointer("/parameters/properties/file"),
         Some(&json!({

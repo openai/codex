@@ -68,7 +68,13 @@ pub struct TurnStartParams {
     #[ts(optional = nullable)]
     pub client_user_message_id: Option<String>,
     pub input: Vec<UserInput>,
-    /// Optional turn-scoped Responses API client metadata.
+    /// Optional metadata to enrich Codex's ResponsesAPI turn metadata.
+    ///
+    /// Entries are flattened into the JSON string sent as
+    /// `client_metadata["x-codex-turn-metadata"]` on ResponsesAPI HTTP and websocket requests.
+    ///
+    /// They are not sent as top-level ResponsesAPI `client_metadata` keys, and reserved keys
+    /// such as `session_id`, `thread_id`, `turn_id`, and `window_id` cannot be overridden.
     #[experimental("turn/start.responsesapiClientMetadata")]
     #[ts(optional = nullable)]
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
@@ -161,7 +167,13 @@ pub struct TurnSteerParams {
     #[ts(optional = nullable)]
     pub client_user_message_id: Option<String>,
     pub input: Vec<UserInput>,
-    /// Optional turn-scoped Responses API client metadata.
+    /// Optional metadata to enrich Codex's ResponsesAPI turn metadata.
+    ///
+    /// Entries are flattened into the JSON string sent as
+    /// `client_metadata["x-codex-turn-metadata"]` on ResponsesAPI HTTP and websocket requests.
+    ///
+    /// They are not sent as top-level ResponsesAPI `client_metadata` keys, and reserved keys
+    /// such as `session_id`, `thread_id`, `turn_id`, and `window_id` cannot be overridden.
     #[experimental("turn/steer.responsesapiClientMetadata")]
     #[ts(optional = nullable)]
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,

@@ -6,6 +6,7 @@
 use super::resize_reflow::trailing_run_start;
 use super::*;
 use crate::config_update::format_config_error;
+use crate::external_agent_config_migration_flow::ExternalAgentConfigMigrationFlowOutcome;
 #[cfg(target_os = "windows")]
 use codex_config::types::WindowsSandboxModeToml;
 
@@ -110,6 +111,31 @@ impl App {
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::OpenExternalAgentConfigMigration => {
+                match crate::external_agent_config_migration_flow::handle_external_agent_config_migration_prompt(
+                    tui,
+                    app_server,
+                    &self.config,
+                )
+                .await
+                {
+                    Ok(ExternalAgentConfigMigrationFlowOutcome::Started(message)) => {
+                        self.chat_widget.add_info_message(message, /*hint*/ None);
+                    }
+                    Ok(ExternalAgentConfigMigrationFlowOutcome::NoItems) => {
+                        self.chat_widget.add_info_message(
+                            crate::external_agent_config_migration_flow::EXTERNAL_AGENT_CONFIG_MIGRATION_NO_ITEMS_MESSAGE
+                                .to_string(),
+                            /*hint*/ None,
+                        );
+                    }
+                    Ok(ExternalAgentConfigMigrationFlowOutcome::Cancelled) => {}
+                    Err(error_message) => {
+                        self.chat_widget.add_error_message(error_message);
+                    }
+                }
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::ResumeSessionByIdOrName(id_or_name) => {
                 match crate::lookup_session_target_with_app_server(app_server, &id_or_name).await? {
                     Some(target_session) => {
@@ -126,6 +152,9 @@ impl App {
             }
             AppEvent::ArchiveCurrentThread => {
                 return Ok(self.archive_current_thread(app_server).await);
+            }
+            AppEvent::DeleteCurrentThread => {
+                return Ok(self.delete_current_thread(app_server).await);
             }
             AppEvent::ForkCurrentSession => {
                 self.session_telemetry.counter(
@@ -198,27 +227,7 @@ impl App {
                 self.begin_thread_switch_history_replay_buffer();
             }
             AppEvent::InsertHistoryCell(cell) => {
-                let cell: Arc<dyn HistoryCell> = cell.into();
-                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_cell(cell.clone());
-                    tui.frame_requester().schedule_frame();
-                }
-                self.transcript_cells.push(cell.clone());
-                if self.initial_history_replay_buffer.as_ref().is_some() {
-                    self.insert_history_cell_lines_with_initial_replay_buffer(
-                        tui,
-                        cell.as_ref(),
-                        self.chat_widget
-                            .history_wrap_width(tui.terminal.last_known_screen_size.width),
-                    );
-                } else {
-                    self.insert_history_cell_lines(
-                        tui,
-                        cell.as_ref(),
-                        self.chat_widget
-                            .history_wrap_width(tui.terminal.last_known_screen_size.width),
-                    );
-                }
+                self.insert_history_cell(tui, cell);
             }
             AppEvent::EndInitialHistoryReplayBuffer => {
                 self.finish_initial_history_replay_buffer(tui);
@@ -236,12 +245,10 @@ impl App {
                     scrollback_reflow,
                     deferred_history_cell,
                 )?;
+                self.chat_widget.note_stream_consolidation_completed();
+                self.insert_completed_token_activity_output_after_stream_shutdown(tui);
             }
             AppEvent::ConsolidateProposedPlan(source) => {
-                if !self.terminal_resize_reflow_enabled() {
-                    self.transcript_reflow.clear();
-                    return Ok(AppRunControl::Continue);
-                }
                 let end = self.transcript_cells.len();
                 let start = trailing_run_start::<history_cell::ProposedPlanStreamCell>(
                     &self.transcript_cells,
@@ -274,6 +281,8 @@ impl App {
 
                     self.maybe_finish_stream_reflow(tui)?;
                 }
+                self.chat_widget.note_stream_consolidation_completed();
+                self.insert_completed_token_activity_output_after_stream_shutdown(tui);
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
@@ -498,6 +507,17 @@ impl App {
             AppEvent::PluginsLoaded { cwd, result } => {
                 self.chat_widget.on_plugins_loaded(cwd, result);
             }
+            AppEvent::PluginRemoteSectionsLoaded {
+                cwd,
+                marketplaces,
+                section_errors,
+            } => {
+                self.chat_widget.on_plugin_remote_sections_loaded(
+                    cwd,
+                    marketplaces,
+                    section_errors,
+                );
+            }
             AppEvent::HooksLoaded { cwd, result } => {
                 self.chat_widget.on_hooks_loaded(cwd, result);
             }
@@ -693,18 +713,21 @@ impl App {
             AppEvent::RefreshRateLimits { origin } => {
                 self.refresh_rate_limits(app_server, origin);
             }
+            AppEvent::RefreshTokenActivity { request_id } => {
+                self.refresh_token_activity(app_server, request_id);
+            }
             AppEvent::OpenThreadGoalMenu { thread_id } => {
                 self.open_thread_goal_menu(app_server, thread_id).await;
             }
             AppEvent::OpenThreadGoalEditor { thread_id } => {
                 self.open_thread_goal_editor(app_server, thread_id).await;
             }
-            AppEvent::SetThreadGoalObjective {
+            AppEvent::SetThreadGoalDraft {
                 thread_id,
-                objective,
+                draft,
                 mode,
             } => {
-                self.set_thread_goal_objective(app_server, thread_id, objective, mode)
+                self.set_thread_goal_draft(app_server, thread_id, draft, mode)
                     .await;
             }
             AppEvent::SetThreadGoalStatus { thread_id, status } => {
@@ -749,6 +772,25 @@ impl App {
                     }
                 }
             },
+            AppEvent::TokenActivityLoaded { request_id, result } => {
+                if let Err(err) = &result {
+                    tracing::warn!("account/usage/read failed during TUI refresh: {err}");
+                }
+                if self
+                    .chat_widget
+                    .finish_token_activity_refresh(request_id, result)
+                {
+                    // Commit synchronously so an already queued /clear cannot overtake this card.
+                    // Do not route through ChatWidget::add_to_history: /usage may complete during
+                    // active work, and flushing an in-progress tool cell would corrupt its lifecycle.
+                    // If an answer stream is active, keep the settled card transient until its
+                    // provisional transcript cells have been consolidated.
+                    self.insert_completed_token_activity_output_if_ready(tui);
+                }
+            }
+            AppEvent::CommitCompletedTokenActivityOutput => {
+                self.insert_completed_token_activity_output_after_stream_shutdown(tui);
+            }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
             }
@@ -768,18 +810,6 @@ impl App {
                 self.on_update_personality(personality);
                 self.sync_active_thread_personality_setting(app_server, personality)
                     .await;
-            }
-            AppEvent::OpenRealtimeAudioDeviceSelection { kind } => {
-                self.chat_widget.open_realtime_audio_device_selection(kind);
-            }
-            AppEvent::RealtimeWebrtcOfferCreated { result } => {
-                self.chat_widget.on_realtime_webrtc_offer_created(result);
-            }
-            AppEvent::RealtimeWebrtcEvent(event) => {
-                self.chat_widget.on_realtime_webrtc_event(event);
-            }
-            AppEvent::RealtimeWebrtcLocalAudioLevel(peak) => {
-                self.chat_widget.on_realtime_webrtc_local_audio_level(peak);
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
@@ -920,9 +950,7 @@ impl App {
 
                     // If the elevated setup already ran on this machine, don't prompt for
                     // elevation again - just flip the config to use the elevated path.
-                    if crate::legacy_core::windows_sandbox::sandbox_setup_is_complete(
-                        codex_home.as_path(),
-                    ) {
+                    if crate::windows_sandbox::sandbox_setup_is_complete(codex_home.as_path()) {
                         tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                             preset,
                             mode: WindowsSandboxEnableMode::Elevated,
@@ -935,7 +963,7 @@ impl App {
                     self.windows_sandbox.setup_started_at = Some(Instant::now());
                     let session_telemetry = self.session_telemetry.clone();
                     tokio::task::spawn_blocking(move || {
-                        let result = crate::legacy_core::windows_sandbox::run_elevated_setup(
+                        let result = crate::windows_sandbox::run_elevated_setup(
                             &permission_profile,
                             workspace_roots.as_slice(),
                             command_cwd.as_path(),
@@ -959,9 +987,7 @@ impl App {
                                 let mut code_tag: Option<String> = None;
                                 let mut message_tag: Option<String> = None;
                                 if let Some((code, message)) =
-                                    crate::legacy_core::windows_sandbox::elevated_setup_failure_details(
-                                        &err,
-                                    )
+                                    crate::windows_sandbox::elevated_setup_failure_details(&err)
                                 {
                                     code_tag = Some(code);
                                     message_tag = Some(message);
@@ -974,7 +1000,7 @@ impl App {
                                     tags.push(("message", message));
                                 }
                                 session_telemetry.counter(
-                                    crate::legacy_core::windows_sandbox::elevated_setup_failure_metric_name(
+                                    crate::windows_sandbox::elevated_setup_failure_metric_name(
                                         &err,
                                     ),
                                     /*inc*/ 1,
@@ -1045,12 +1071,12 @@ impl App {
                     self.chat_widget.show_windows_sandbox_setup_status();
                     tokio::task::spawn_blocking(move || {
                         if let Err(err) =
-                            crate::legacy_core::windows_sandbox::run_legacy_setup_preflight(
+                            codex_windows_sandbox::run_windows_sandbox_legacy_preflight(
                                 &permission_profile,
                                 workspace_roots.as_slice(),
+                                codex_home.as_path(),
                                 command_cwd.as_path(),
                                 &env_map,
-                                codex_home.as_path(),
                             )
                         {
                             session_telemetry.counter(
@@ -1094,7 +1120,7 @@ impl App {
 
                     tokio::task::spawn_blocking(move || {
                         let requested_path = PathBuf::from(path);
-                        let event = match crate::legacy_core::grant_read_root_non_elevated(
+                        let event = match crate::windows_sandbox::grant_read_root_non_elevated(
                             &permission_profile,
                             workspace_roots.as_slice(),
                             command_cwd.as_path(),
@@ -1190,7 +1216,7 @@ impl App {
                                 self.config.permissions.windows_sandbox_mode,
                             );
                             let windows_sandbox_level =
-                                WindowsSandboxLevel::from_config(&self.config);
+                                crate::windows_sandbox::level_from_config(&self.config);
                             if let Some((sample_paths, extra_count, failed_scan)) =
                                 self.chat_widget.world_writable_warning_details()
                             {
@@ -1417,56 +1443,6 @@ impl App {
                     }
                 }
             }
-            AppEvent::PersistRealtimeAudioDeviceSelection { kind, name } => {
-                let builder = match kind {
-                    RealtimeAudioDeviceKind::Microphone => {
-                        ConfigEditsBuilder::for_config(&self.config)
-                            .set_realtime_microphone(name.as_deref())
-                    }
-                    RealtimeAudioDeviceKind::Speaker => {
-                        ConfigEditsBuilder::for_config(&self.config)
-                            .set_realtime_speaker(name.as_deref())
-                    }
-                };
-
-                match builder.apply().await {
-                    Ok(()) => {
-                        match kind {
-                            RealtimeAudioDeviceKind::Microphone => {
-                                self.config.realtime_audio.microphone = name.clone();
-                            }
-                            RealtimeAudioDeviceKind::Speaker => {
-                                self.config.realtime_audio.speaker = name.clone();
-                            }
-                        }
-                        self.chat_widget
-                            .set_realtime_audio_device(kind, name.clone());
-
-                        if self.chat_widget.realtime_conversation_is_live() {
-                            self.chat_widget.open_realtime_audio_restart_prompt(kind);
-                        } else {
-                            let selection = name.unwrap_or_else(|| "System default".to_string());
-                            self.chat_widget.add_info_message(
-                                format!("Realtime {} set to {selection}", kind.noun()),
-                                /*hint*/ None,
-                            );
-                        }
-                    }
-                    Err(err) => {
-                        tracing::error!(
-                            error = %err,
-                            "failed to persist realtime audio selection"
-                        );
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to save realtime {}: {err}",
-                            kind.noun()
-                        ));
-                    }
-                }
-            }
-            AppEvent::RestartRealtimeAudioDevice { kind } => {
-                self.chat_widget.restart_realtime_audio_device(kind);
-            }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
                 let mut config = self.config.clone();
                 if !self.try_set_approval_policy_on_config(
@@ -1533,7 +1509,7 @@ impl App {
                         return Ok(AppRunControl::Continue);
                     }
 
-                    let should_check = WindowsSandboxLevel::from_config(&self.config)
+                    let should_check = crate::windows_sandbox::level_from_config(&self.config)
                         != WindowsSandboxLevel::Disabled
                         && permission_profile_is_managed_restricted
                         && !self.chat_widget.world_writable_warning_hidden();
@@ -1918,18 +1894,6 @@ impl App {
                     ));
                 }
             },
-            #[cfg(not(target_os = "linux"))]
-            AppEvent::UpdateRecordingMeter { id, text } => {
-                // Update in place to preserve the element id for subsequent frames.
-                let updated = self.chat_widget.update_recording_meter_in_place(&id, &text);
-                if updated
-                    || self
-                        .chat_widget
-                        .stop_realtime_conversation_for_deleted_meter(&id)
-                {
-                    tui.frame_requester().schedule_frame();
-                }
-            }
             AppEvent::StatusLineSetup {
                 items,
                 use_theme_colors,
@@ -2015,6 +1979,7 @@ impl App {
                         }
                         self.sync_tui_theme_selection(name);
                         self.refresh_status_line();
+                        tui.frame_requester().schedule_frame();
                     }
                     Err(err) => {
                         self.restore_runtime_theme_from_config();
@@ -2027,6 +1992,7 @@ impl App {
             }
             AppEvent::SyntaxThemePreviewed => {
                 self.refresh_status_line();
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenKeymapActionMenu { context, action } => {
                 self.chat_widget
@@ -2243,6 +2209,33 @@ impl App {
             Err(err) => {
                 self.chat_widget
                     .add_error_message(format!("Failed to archive current thread: {err}"));
+                AppRunControl::Continue
+            }
+        }
+    }
+
+    pub(super) async fn delete_current_thread(
+        &mut self,
+        app_server: &mut AppServerSession,
+    ) -> AppRunControl {
+        let Some(thread_id) = self.active_thread_id.or(self.chat_widget.thread_id()) else {
+            self.chat_widget
+                .add_error_message("A thread must start before it can be deleted.".to_string());
+            return AppRunControl::Continue;
+        };
+        if self.side_threads.contains_key(&thread_id) {
+            self.chat_widget.add_error_message(
+                "'/delete' is unavailable in side conversations. Press Ctrl+C to return to the main thread first."
+                    .to_string(),
+            );
+            return AppRunControl::Continue;
+        }
+
+        match app_server.thread_delete(thread_id).await {
+            Ok(()) => AppRunControl::Exit(ExitReason::UserRequested),
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to delete current thread: {err}"));
                 AppRunControl::Continue
             }
         }

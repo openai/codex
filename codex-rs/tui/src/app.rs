@@ -12,8 +12,8 @@ use crate::app_event::FeedbackCategory;
 use crate::app_event::HistoryLookupResponse;
 use crate::app_event::PermissionProfileSelection;
 use crate::app_event::PluginLocation;
+use crate::app_event::PluginRemoteSectionError;
 use crate::app_event::RateLimitRefreshOrigin;
-use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -51,8 +51,6 @@ use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::PermissionProfileSnapshot;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
-#[cfg(target_os = "windows")]
-use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::model_catalog::ModelCatalog;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
@@ -107,8 +105,10 @@ use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
+use codex_app_server_protocol::PluginListMarketplaceKind;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
+use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallParams;
@@ -146,6 +146,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_otel::SessionTelemetry;
+use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
@@ -399,7 +400,7 @@ const COMMIT_ANIMATION_TICK: Duration = tui::TARGET_FRAME_INTERVAL;
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub thread_id: Option<ThreadId>,
-    pub thread_name: Option<String>,
+    pub resume_hint: Option<String>,
     pub update_action: Option<UpdateAction>,
     pub exit_reason: ExitReason,
 }
@@ -409,7 +410,7 @@ impl AppExitInfo {
         Self {
             token_usage: TokenUsage::default(),
             thread_id: None,
-            thread_name: None,
+            resume_hint: None,
             update_action: None,
             exit_reason: ExitReason::Fatal(message.into()),
         }
@@ -435,10 +436,7 @@ fn session_summary(
     rollout_path: Option<&Path>,
 ) -> Option<SessionSummary> {
     let usage_line = (!token_usage.is_zero()).then(|| token_usage.to_string());
-    let resumable_thread = resumable_thread(thread_id, thread_name, rollout_path);
-    let resume_hint = resumable_thread.as_ref().and_then(|thread| {
-        codex_utils_cli::resume_hint(thread.thread_name.as_deref(), Some(thread.thread_id))
-    });
+    let resume_hint = resume_hint_for_resumable_thread(thread_id, thread_name, rollout_path);
 
     if usage_line.is_none() && resume_hint.is_none() {
         return None;
@@ -467,6 +465,15 @@ fn resumable_thread(
         thread_id,
         thread_name,
     })
+}
+
+fn resume_hint_for_resumable_thread(
+    thread_id: Option<ThreadId>,
+    thread_name: Option<String>,
+    rollout_path: Option<&Path>,
+) -> Option<String> {
+    let thread = resumable_thread(thread_id, thread_name, rollout_path)?;
+    codex_utils_cli::resume_hint(thread.thread_name.as_deref(), Some(thread.thread_id))
 }
 
 fn rollout_path_is_resumable(rollout_path: &Path) -> bool {
@@ -731,6 +738,7 @@ impl App {
             initial_user_message,
             enhanced_keys_supported: self.enhanced_keys_supported,
             has_chatgpt_account: self.chat_widget.has_chatgpt_account(),
+            has_codex_backend_auth: self.chat_widget.has_codex_backend_auth(),
             model_catalog: self.model_catalog.clone(),
             feedback: self.feedback.clone(),
             is_first_run: false,
@@ -819,6 +827,7 @@ impl App {
         let feedback_audience = bootstrap.feedback_audience;
         let auth_mode = bootstrap.auth_mode;
         let has_chatgpt_account = bootstrap.has_chatgpt_account;
+        let has_codex_backend_auth = matches!(auth_mode, Some(TelemetryAuthMode::Chatgpt));
         let requires_openai_auth = bootstrap.requires_openai_auth;
         let status_account_display = bootstrap.status_account_display.clone();
         let initial_plan_type = bootstrap.plan_type;
@@ -887,6 +896,7 @@ impl App {
                     ),
                     enhanced_keys_supported,
                     has_chatgpt_account,
+                    has_codex_backend_auth,
                     model_catalog: model_catalog.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
@@ -922,6 +932,7 @@ impl App {
                     ),
                     enhanced_keys_supported,
                     has_chatgpt_account,
+                    has_codex_backend_auth,
                     model_catalog: model_catalog.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
@@ -960,6 +971,7 @@ impl App {
                     ),
                     enhanced_keys_supported,
                     has_chatgpt_account,
+                    has_codex_backend_auth,
                     model_catalog: model_catalog.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
@@ -1063,7 +1075,7 @@ See the Codex keymap documentation for supported actions and examples."
         #[cfg(target_os = "windows")]
         {
             let startup_permission_profile = app.config.permissions.effective_permission_profile();
-            let should_check = WindowsSandboxLevel::from_config(&app.config)
+            let should_check = crate::windows_sandbox::level_from_config(&app.config)
                 != WindowsSandboxLevel::Disabled
                 && managed_filesystem_sandbox_is_restricted(&startup_permission_profile)
                 && !app
@@ -1218,15 +1230,16 @@ See the Codex keymap documentation for supported actions and examples."
                 return Err(err);
             }
         };
-        let resumable_thread = resumable_thread(
-            app.chat_widget.thread_id(),
+        let thread_id = app.chat_widget.thread_id().or(app.primary_thread_id);
+        let resume_hint = resume_hint_for_resumable_thread(
+            thread_id,
             app.chat_widget.thread_name(),
             app.chat_widget.rollout_path().as_deref(),
         );
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
-            thread_id: resumable_thread.as_ref().map(|thread| thread.thread_id),
-            thread_name: resumable_thread.and_then(|thread| thread.thread_name),
+            thread_id,
+            resume_hint,
             update_action: app.pending_update_action,
             exit_reason,
         })
@@ -1238,14 +1251,8 @@ See the Codex keymap documentation for supported actions and examples."
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
-        let terminal_resize_reflow_enabled = self.terminal_resize_reflow_enabled();
-        if terminal_resize_reflow_enabled && matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
+        if matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
             self.handle_draw_pre_render(tui)?;
-        } else if matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
-            let size = tui.terminal.size()?;
-            if size != tui.terminal.last_known_screen_size {
-                self.refresh_status_line();
-            }
         }
 
         if self.overlay.is_some() {
@@ -1277,8 +1284,7 @@ See the Codex keymap documentation for supported actions and examples."
                     }
                     // Allow widgets to process any pending timers before rendering.
                     self.chat_widget.pre_draw_tick();
-                    let rendered_area =
-                        self.render_chat_widget_frame(tui, terminal_resize_reflow_enabled)?;
+                    let rendered_area = self.render_chat_widget_frame(tui)?;
                     if self.chat_widget.ambient_pet_image_enabled() {
                         let terminal_size = tui.terminal.size()?;
                         let ambient_pet_area = Rect::new(
@@ -1317,43 +1323,24 @@ See the Codex keymap documentation for supported actions and examples."
     pub(super) fn show_shutdown_feedback(&mut self, tui: &mut tui::Tui) -> Result<()> {
         self.disable_ambient_pet_before_shutdown(tui)?;
         self.chat_widget.show_shutdown_in_progress();
-        let terminal_resize_reflow_enabled = self.terminal_resize_reflow_enabled();
-        if terminal_resize_reflow_enabled {
-            self.handle_draw_pre_render(tui)?;
-        }
+        self.handle_draw_pre_render(tui)?;
         self.chat_widget.pre_draw_tick();
-        self.render_chat_widget_frame(tui, terminal_resize_reflow_enabled)?;
+        self.render_chat_widget_frame(tui)?;
         Ok(())
     }
 
-    fn render_chat_widget_frame(
-        &mut self,
-        tui: &mut tui::Tui,
-        terminal_resize_reflow_enabled: bool,
-    ) -> Result<Rect> {
+    fn render_chat_widget_frame(&mut self, tui: &mut tui::Tui) -> Result<Rect> {
         let desired_height = self.chat_widget.desired_height(tui.terminal.size()?.width);
         let mut rendered_area = Rect::default();
-        if terminal_resize_reflow_enabled {
-            tui.draw_with_resize_reflow(desired_height, |frame| {
-                let area = frame.area();
-                rendered_area = area;
-                self.chat_widget.render(area, frame.buffer);
-                if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
-                    frame.set_cursor_style(self.chat_widget.cursor_style(area));
-                    frame.set_cursor_position((x, y));
-                }
-            })?;
-        } else {
-            tui.draw(desired_height, |frame| {
-                let area = frame.area();
-                rendered_area = area;
-                self.chat_widget.render(area, frame.buffer);
-                if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
-                    frame.set_cursor_style(self.chat_widget.cursor_style(area));
-                    frame.set_cursor_position((x, y));
-                }
-            })?;
-        }
+        tui.draw_with_resize_reflow(desired_height, |frame| {
+            let area = frame.area();
+            rendered_area = area;
+            self.chat_widget.render(area, frame.buffer);
+            if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
+                frame.set_cursor_style(self.chat_widget.cursor_style(area));
+                frame.set_cursor_position((x, y));
+            }
+        })?;
         Ok(rendered_area)
     }
 }

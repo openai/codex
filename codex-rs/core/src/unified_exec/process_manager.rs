@@ -57,6 +57,7 @@ use codex_protocol::protocol::ExecCommandSource;
 use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
+use codex_utils_path_uri::PathUri;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
     ("NO_COLOR", "1"),
@@ -156,7 +157,7 @@ fn exec_server_params_for_request(
     codex_exec_server::ExecParams {
         process_id: exec_server_process_id(process_id).into(),
         argv: request.command.clone(),
-        cwd: request.cwd.to_path_buf(),
+        cwd: PathUri::from_abs_path(&request.cwd),
         env_policy,
         env,
         tty,
@@ -934,6 +935,7 @@ impl UnifiedExecProcessManager {
                         request.command.clone(),
                         request.cwd.as_path(),
                         request.env.clone(),
+                        request.network.is_some(),
                         None,
                         elevated_read_roots_override.as_deref(),
                         elevated_read_roots_include_platform_defaults,
@@ -1067,7 +1069,7 @@ impl UnifiedExecProcessManager {
             process_id: request.process_id,
             cwd,
             sandbox_cwd: request.sandbox_cwd.clone(),
-            environment: Arc::clone(&request.environment),
+            turn_environment: request.turn_environment.clone(),
             env,
             exec_server_env_config: Some(exec_server_env_config),
             explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),

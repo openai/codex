@@ -3,6 +3,7 @@ module(name = "codex")
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "llvm", version = "0.7.1")
+
 # The upstream LLVM archive contains a few unix-only symlink entries and is
 # missing a couple of MinGW compatibility archives that windows-gnullvm needs
 # during extraction and linking, so patch it until upstream grows native support.
@@ -11,9 +12,11 @@ single_version_override(
     patch_strip = 1,
     patches = [
         "//patches:llvm_rusty_v8_custom_libcxx.patch",
+        "//patches:llvm_windows_arm64_powl.patch",
         "//patches:llvm_windows_symlink_extract.patch",
     ],
 )
+
 # Abseil picks a MinGW pthread TLS path that does not match our hermetic
 # windows-gnullvm toolchain; force it onto the portable C++11 thread-local path.
 single_version_override(
@@ -85,8 +88,10 @@ single_version_override(
         "//patches:rules_cc_rusty_v8_custom_libcxx.patch",
     ],
 )
+
 bazel_dep(name = "rules_platform", version = "0.1.0")
 bazel_dep(name = "rules_rs", version = "0.0.58")
+
 # `rules_rs` still does not model `windows-gnullvm` as a distinct Windows exec
 # platform, so patch it until upstream grows that support for both x86_64 and
 # aarch64.
@@ -94,6 +99,7 @@ single_version_override(
     module_name = "rules_rs",
     patch_strip = 1,
     patches = [
+        "//patches:rules_rs_build_script_deps_annotation.patch",
         "//patches:rules_rs_windows_gnullvm_exec.patch",
         "//patches:rules_rs_windows_exec_linker.patch",
     ],
@@ -101,6 +107,7 @@ single_version_override(
 )
 
 rules_rust = use_extension("@rules_rs//rs/experimental:rules_rust.bzl", "rules_rust")
+
 # Build-script probe binaries inherit CFLAGS/CXXFLAGS from Bazel's C++
 # toolchain. On `windows-gnullvm`, llvm-mingw does not ship
 # `libssp_nonshared`, so strip the forwarded stack-protector flags there.
@@ -125,22 +132,23 @@ nightly_rust = use_extension(
     "rust",
 )
 nightly_rust.toolchain(
-    versions = ["nightly/2025-09-18"],
     dev_components = True,
     edition = "2024",
+    versions = ["nightly/2025-09-18"],
 )
+
 # Keep Windows exec tools on MSVC so Bazel helper binaries link correctly, but
 # lint crate targets as `windows-gnullvm` to preserve the repo's actual cfgs.
 nightly_rust.repository_set(
     name = "rust_windows_x86_64",
     dev_components = True,
     edition = "2024",
-    exec_triple = "x86_64-pc-windows-msvc",
     exec_compatible_with = [
         "@platforms//cpu:x86_64",
         "@platforms//os:windows",
         "@rules_rs//rs/experimental/platforms/constraints:windows_msvc",
     ],
+    exec_triple = "x86_64-pc-windows-msvc",
     target_compatible_with = [
         "@platforms//cpu:x86_64",
         "@platforms//os:windows",
@@ -168,6 +176,7 @@ toolchains.toolchain(
 use_repo(toolchains, "default_rust_toolchains")
 
 register_toolchains("@default_rust_toolchains//:all")
+
 register_toolchains("@rust_toolchains//:all")
 
 crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
@@ -239,7 +248,6 @@ crate.annotation(
         "//patches:aws-lc-sys_windows_msvc_memcmp_probe.patch",
     ],
 )
-
 crate.annotation(
     # The build script only validates embedded source/version metadata.
     crate = "rustc_apfloat",
@@ -247,6 +255,7 @@ crate.annotation(
 )
 
 inject_repo(crate, "zstd")
+
 use_repo(crate, "argument_comment_lint_crates")
 
 bazel_dep(name = "bzip2", version = "1.0.8.bcr.3")
@@ -298,6 +307,11 @@ crate.annotation(
     build_script_data = [
         "@openssl//:gen_dir",
     ],
+    # Build scripts compile in Bazel's exec configuration, so target-specific
+    # optional build deps are otherwise dropped for the musl release platforms.
+    build_script_deps = [
+        "@crates//:openssl-src-300.5.5+3.5.5",
+    ],
     build_script_env = {
         "OPENSSL_DIR": "$(execpath @openssl//:gen_dir)",
         "OPENSSL_NO_VENDOR": "1",
@@ -316,8 +330,12 @@ crate.annotation(
 )
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+
 new_local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
+
+include("//bazel/modules:wine.MODULE.bazel")
 
 new_local_repository(
     name = "v8_targets",

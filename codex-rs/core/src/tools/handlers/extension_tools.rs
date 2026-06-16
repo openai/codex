@@ -5,18 +5,21 @@ use codex_protocol::items::TurnItem;
 use codex_tools::ConversationHistory;
 use codex_tools::ExtensionTurnItem;
 use codex_tools::ToolCall as ExtensionToolCall;
+use codex_tools::ToolEnvironment;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use codex_tools::TurnItemEmissionFuture;
 use codex_tools::TurnItemEmitter;
 
+use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::finalize_turn_item;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 
@@ -109,6 +112,27 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
 async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
     let conversation_history =
         ConversationHistory::new(invocation.session.clone_history().await.into_raw_items());
+    let mut environments = Vec::with_capacity(invocation.turn.environments.turn_environments.len());
+    for environment in &invocation.turn.environments.turn_environments {
+        let additional_permissions = apply_granted_turn_permissions(
+            invocation.session.as_ref(),
+            &environment.environment_id,
+            environment.cwd().as_path(),
+            SandboxPermissions::UseDefault,
+            /*additional_permissions*/ None,
+        )
+        .await
+        .additional_permissions;
+        let file_system_sandbox_context = invocation
+            .turn
+            .file_system_sandbox_context(additional_permissions, environment.cwd_uri());
+        environments.push(ToolEnvironment {
+            environment_id: environment.environment_id.clone(),
+            cwd: environment.cwd().clone(),
+            file_system: environment.environment.get_filesystem(),
+            file_system_sandbox_context,
+        });
+    }
     ExtensionToolCall {
         turn_id: invocation.turn.sub_id.clone(),
         call_id: invocation.call_id.clone(),
@@ -120,6 +144,7 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
             session: Arc::downgrade(&invocation.session),
             turn: Arc::downgrade(&invocation.turn),
         }),
+        environments,
         payload: invocation.payload.clone(),
     }
 }
@@ -286,6 +311,12 @@ mod tests {
         let turn_id = turn.sub_id.clone();
         let model = turn.model_info.slug.clone();
         let truncation_policy = turn.truncation_policy;
+        let expected_sandbox_cwds = turn
+            .environments
+            .turn_environments
+            .iter()
+            .map(|environment| Some(environment.cwd_uri().clone()))
+            .collect::<Vec<_>>();
         let history_item = ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -293,6 +324,7 @@ mod tests {
                 text: "extension history".to_string(),
             }],
             phase: None,
+            metadata: None,
         };
         session
             .record_conversation_items(&turn, std::slice::from_ref(&history_item))
@@ -330,6 +362,14 @@ mod tests {
         );
         assert_eq!(captured_call.model, model);
         assert_eq!(captured_call.truncation_policy, truncation_policy);
+        assert_eq!(
+            captured_call
+                .environments
+                .iter()
+                .map(|environment| environment.file_system_sandbox_context.cwd.clone())
+                .collect::<Vec<_>>(),
+            expected_sandbox_cwds
+        );
         assert_eq!(
             captured_call.conversation_history.items(),
             std::slice::from_ref(&history_item)

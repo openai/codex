@@ -91,7 +91,6 @@ pub(super) async fn spawn_review_thread(
         forked_from_thread_id,
         parent_turn_context.parent_thread_id,
         &session_source,
-        parent_turn_context.thread_source.clone(),
         review_turn_id.clone(),
         #[allow(deprecated)]
         parent_turn_context.cwd.clone(),
@@ -114,6 +113,7 @@ pub(super) async fn spawn_review_thread(
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
         model_info: model_info.clone(),
+        comp_hash: model_info.comp_hash.clone(),
         tool_mode,
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
@@ -152,6 +152,7 @@ pub(super) async fn spawn_review_thread(
         extension_data,
         turn_skills: TurnSkillsContext::new(parent_turn_context.turn_skills.outcome.clone()),
         turn_timing_state: Arc::new(TurnTimingState::default()),
+        terminal_error: Arc::new(Mutex::new(None)),
         server_model_warning_emitted: AtomicBool::new(false),
         model_verification_emitted: AtomicBool::new(false),
     };

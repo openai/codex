@@ -3,6 +3,7 @@ use codex_core::parse_turn_item;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::plaintext_agent_message_content;
 use codex_tools::retain_tail_from_last_n_user_messages;
 use codex_tools::truncate_assistant_output_text_to_token_budget;
 
@@ -30,11 +31,30 @@ fn push_visible_message(messages: &mut Vec<ResponseItem>, item: &ResponseItem) {
         ResponseItem::Message { role, .. } if role == ASSISTANT_ROLE => {
             messages.push(item.clone());
         }
+        ResponseItem::AgentMessage {
+            author,
+            content,
+            metadata,
+            ..
+        } => {
+            if let Some(text) = plaintext_agent_message_content(content) {
+                messages.push(ResponseItem::Message {
+                    id: None,
+                    role: ASSISTANT_ROLE.to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: format!("Agent message from {author}:\n{text}"),
+                    }],
+                    phase: None,
+                    metadata: metadata.clone(),
+                });
+            }
+        }
         ResponseItem::Message {
             id,
             role,
             content,
             phase,
+            metadata,
         } if role == USER_ROLE
             && matches!(parse_turn_item(item), Some(TurnItem::UserMessage(_))) =>
         {
@@ -49,6 +69,7 @@ fn push_visible_message(messages: &mut Vec<ResponseItem>, item: &ResponseItem) {
                     role: role.clone(),
                     content,
                     phase: phase.clone(),
+                    metadata: metadata.clone(),
                 });
             }
         }
@@ -81,6 +102,7 @@ mod tests {
                 }
             }],
             phase: None,
+            metadata: None,
         }
     }
 
@@ -97,6 +119,7 @@ mod tests {
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-1".to_string(),
+                metadata: None,
             },
             message(ASSISTANT_ROLE, "previous assistant"),
             message("developer", "developer"),
@@ -129,6 +152,7 @@ mod tests {
                 },
             ],
             phase: None,
+            metadata: None,
         };
         let items = vec![
             previous_user,

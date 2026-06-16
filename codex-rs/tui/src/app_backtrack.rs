@@ -47,6 +47,8 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 
 const NO_PREVIOUS_MESSAGE_TO_EDIT: &str = "No previous message to edit.";
+pub(crate) const SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE: &str =
+    "Editing previous prompts is unavailable in side conversations.";
 
 /// Aggregates all backtrack-related state used by the App.
 #[derive(Default)]
@@ -191,6 +193,13 @@ impl App {
     /// The composer prefill is applied immediately as a UX convenience; it does not imply that
     /// core has accepted the rollback.
     pub(crate) fn apply_backtrack_rollback(&mut self, selection: BacktrackSelection) {
+        if self.chat_widget.side_conversation_active() {
+            self.reset_backtrack_state();
+            self.chat_widget
+                .add_error_message(SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE.to_string());
+            return;
+        }
+
         let user_total = user_count(&self.transcript_cells);
         if user_total == 0 {
             return;
@@ -285,6 +294,7 @@ impl App {
         }
         self.overlay = None;
         self.backtrack.overlay_preview_active = false;
+        tui.frame_requester().schedule_frame();
         if was_backtrack {
             // Ensure backtrack state is fully reset when overlay closes (e.g. via 'q').
             self.reset_backtrack_state();
@@ -530,6 +540,7 @@ impl App {
         if !trim_transcript_cells_drop_last_n_user_turns(&mut self.transcript_cells, num_turns) {
             return false;
         }
+        self.chat_widget.clear_pending_token_activity_refreshes();
         self.chat_widget
             .truncate_agent_copy_history_to_user_turn_count(user_count(&self.transcript_cells));
         self.sync_overlay_after_transcript_trim();
@@ -553,6 +564,7 @@ impl App {
             &mut self.transcript_cells,
             pending.selection.nth_user_message,
         ) {
+            self.chat_widget.clear_pending_token_activity_refreshes();
             self.chat_widget
                 .truncate_agent_copy_history_to_user_turn_count(user_count(&self.transcript_cells));
             self.sync_overlay_after_transcript_trim();

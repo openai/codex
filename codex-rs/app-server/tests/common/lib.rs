@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 mod analytics_server;
 mod auth_fixtures;
 mod config;

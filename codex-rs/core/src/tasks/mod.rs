@@ -19,6 +19,7 @@ use tracing::Span;
 use tracing::field;
 use tracing::info_span;
 use tracing::trace;
+use tracing::trace_span;
 use tracing::warn;
 
 use crate::codex_thread::BackgroundTerminalInfo;
@@ -108,6 +109,7 @@ pub(crate) fn interrupted_turn_history_marker(
                     text: marker.render(),
                 }],
                 phase: None,
+                metadata: None,
             })
         }
     }
@@ -400,6 +402,7 @@ impl Session {
                         task_input,
                         task_cancellation_token.child_token(),
                     )
+                    .instrument(trace_span!("session_task.run"))
                     .await;
                 let sess = session_ctx.clone_session();
                 if let Err(err) = sess.flush_rollout().await {

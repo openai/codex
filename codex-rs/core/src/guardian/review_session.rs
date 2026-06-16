@@ -6,7 +6,9 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use codex_analytics::GuardianReviewAnalyticsResult;
+use codex_analytics::GuardianReviewSessionAnalyticsParams;
 use codex_analytics::GuardianReviewSessionKind;
+use codex_extension_api::UserInstructions;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::Personality;
@@ -15,6 +17,8 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
@@ -29,7 +33,6 @@ use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::LoadedAgentsMd;
 use crate::codex_delegate::run_codex_thread_interactive;
 use crate::config::Config;
 use crate::config::Constrained;
@@ -46,7 +49,6 @@ use codex_features::Feature;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
-use super::GUARDIAN_REVIEW_TIMEOUT;
 use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
 use super::prompt::GuardianPromptMode;
@@ -60,7 +62,10 @@ const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) enum GuardianReviewSessionOutcome {
     Completed(anyhow::Result<Option<String>>),
     PromptBuildFailed(anyhow::Error),
-    SessionFailed(anyhow::Error),
+    SessionFailed {
+        error: anyhow::Error,
+        error_info: Option<CodexErrorInfo>,
+    },
     TimedOut,
     Aborted,
 }
@@ -74,9 +79,14 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) schema: Value,
     pub(crate) model: String,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
+    pub(crate) guardian_default_review_model_id: String,
+    pub(crate) guardian_catalog_contains_auto_review: bool,
+    pub(crate) guardian_review_model_overridden: bool,
+    pub(crate) guardian_review_model_override: Option<String>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) personality: Option<Personality>,
     pub(crate) external_cancel: Option<CancellationToken>,
+    pub(crate) deadline: tokio::time::Instant,
 }
 
 #[derive(Default)]
@@ -147,7 +157,7 @@ struct GuardianReviewSessionReuseKey {
     permissions: Permissions,
     developer_instructions: Option<String>,
     base_instructions: Option<String>,
-    user_instructions: Option<LoadedAgentsMd>,
+    user_instructions: Option<UserInstructions>,
     compact_prompt: Option<String>,
     cwd: AbsolutePathBuf,
     mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
@@ -159,7 +169,10 @@ struct GuardianReviewSessionReuseKey {
 }
 
 impl GuardianReviewSessionReuseKey {
-    fn from_spawn_config(spawn_config: &Config) -> Self {
+    fn from_spawn_config(
+        spawn_config: &Config,
+        user_instructions: Option<UserInstructions>,
+    ) -> Self {
         Self {
             model: spawn_config.model.clone(),
             model_provider_id: spawn_config.model_provider_id.clone(),
@@ -172,7 +185,7 @@ impl GuardianReviewSessionReuseKey {
             permissions: spawn_config.permissions.clone(),
             developer_instructions: spawn_config.developer_instructions.clone(),
             base_instructions: spawn_config.base_instructions.clone(),
-            user_instructions: spawn_config.user_instructions.clone(),
+            user_instructions,
             compact_prompt: spawn_config.compact_prompt.clone(),
             cwd: spawn_config.cwd.clone(),
             mcp_servers: spawn_config.mcp_servers.clone(),
@@ -312,8 +325,11 @@ impl GuardianReviewSessionManager {
         &self,
         params: GuardianReviewSessionParams,
     ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult) {
-        let deadline = tokio::time::Instant::now() + GUARDIAN_REVIEW_TIMEOUT;
-        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&params.spawn_config);
+        let deadline = params.deadline;
+        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &params.spawn_config,
+            params.parent_session.user_instructions().await,
+        );
         let mut stale_trunk_to_shutdown = None;
         let mut spawned_trunk = false;
         let trunk_candidate = match run_before_review_deadline(
@@ -364,7 +380,9 @@ impl GuardianReviewSessionManager {
 
                 state.trunk.as_ref().cloned()
             }
-            Err(outcome) => return (outcome, GuardianReviewAnalyticsResult::without_session()),
+            Err(outcome) => {
+                return (outcome, GuardianReviewAnalyticsResult::without_session());
+            }
         };
 
         if let Some(review_session) = stale_trunk_to_shutdown {
@@ -434,6 +452,7 @@ impl GuardianReviewSessionManager {
     pub(crate) async fn cache_for_test(&self, codex: Codex) {
         let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
             codex.session.get_config().await.as_ref(),
+            codex.session.user_instructions().await,
         );
         self.state.lock().await.trunk = Some(Arc::new(GuardianReviewSession {
             reuse_key,
@@ -452,6 +471,7 @@ impl GuardianReviewSessionManager {
     pub(crate) async fn register_ephemeral_for_test(&self, codex: Codex) {
         let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
             codex.session.get_config().await.as_ref(),
+            codex.session.user_instructions().await,
         );
         self.state
             .lock()
@@ -560,7 +580,9 @@ impl GuardianReviewSessionManager {
                     GuardianReviewAnalyticsResult::without_session(),
                 );
             }
-            Err(outcome) => return (outcome, GuardianReviewAnalyticsResult::without_session()),
+            Err(outcome) => {
+                return (outcome, GuardianReviewAnalyticsResult::without_session());
+            }
         };
         self.register_active_ephemeral(Arc::clone(&review_session))
             .await;
@@ -663,13 +685,19 @@ async fn run_review_on_session(
     } else {
         None
     };
-    let mut analytics_result = GuardianReviewAnalyticsResult::from_session(
-        review_session.codex.session.thread_id.to_string(),
-        guardian_session_kind,
-        params.model.clone(),
-        guardian_reasoning_effort.map(|effort| effort.to_string()),
-        had_prior_review_context(&prompt_mode),
-    );
+    let mut analytics_result =
+        GuardianReviewAnalyticsResult::from_session(GuardianReviewSessionAnalyticsParams {
+            guardian_thread_id: review_session.codex.session.thread_id.to_string(),
+            guardian_session_kind,
+            guardian_model: params.model.clone(),
+            guardian_reasoning_effort: guardian_reasoning_effort.map(|effort| effort.to_string()),
+            guardian_default_review_model_id: params.guardian_default_review_model_id.clone(),
+            guardian_catalog_contains_auto_review: params.guardian_catalog_contains_auto_review,
+            guardian_review_model_overridden: params.guardian_review_model_overridden,
+            guardian_review_model_override: params.guardian_review_model_override.clone(),
+            guardian_model_provider_id: params.spawn_config.model_provider_id.clone(),
+            had_prior_review_context: had_prior_review_context(&prompt_mode),
+        });
     if send_followup_reminder {
         append_guardian_followup_reminder(review_session).await;
     }
@@ -726,7 +754,7 @@ async fn run_review_on_session(
         .parent_turn
         .environments
         .primary()
-        .map(|environment| environment.cwd.clone())
+        .map(|environment| environment.cwd().clone())
         .unwrap_or_else(|| params.parent_turn.config.cwd.clone());
 
     let submit_result = run_before_review_deadline(
@@ -764,7 +792,10 @@ async fn run_review_on_session(
         Ok(Ok(child_turn_id)) => child_turn_id,
         Ok(Err(err)) => {
             return (
-                GuardianReviewSessionOutcome::SessionFailed(err.into()),
+                GuardianReviewSessionOutcome::SessionFailed {
+                    error: err.into(),
+                    error_info: None,
+                },
                 false,
                 analytics_result,
             );
@@ -825,7 +856,7 @@ async fn wait_for_guardian_review(
 ) -> (GuardianReviewSessionOutcome, bool, bool) {
     let timeout = tokio::time::sleep_until(deadline);
     tokio::pin!(timeout);
-    let mut last_error_message: Option<String> = None;
+    let mut last_error: Option<ErrorEvent> = None;
 
     loop {
         tokio::select! {
@@ -862,10 +893,13 @@ async fn wait_for_guardian_review(
                                 .time_to_first_token_ms
                                 .and_then(|ms| u64::try_from(ms).ok());
                             if turn_complete.last_agent_message.is_none()
-                                && let Some(error_message) = last_error_message
+                                && let Some(error) = last_error
                             {
                                 return (
-                                    GuardianReviewSessionOutcome::Completed(Err(anyhow!(error_message))),
+                                    GuardianReviewSessionOutcome::SessionFailed {
+                                        error: anyhow!(error.message),
+                                        error_info: error.codex_error_info,
+                                    },
                                     true,
                                     true,
                                 );
@@ -877,7 +911,7 @@ async fn wait_for_guardian_review(
                             );
                         }
                         EventMsg::Error(error) => {
-                            last_error_message = Some(error.message);
+                            last_error = Some(error);
                         }
                         EventMsg::TurnAborted(_) => {
                             return (GuardianReviewSessionOutcome::Aborted, true, false);
@@ -920,7 +954,11 @@ pub(crate) fn build_guardian_review_session_config(
     let mut guardian_config = parent_config.clone();
     guardian_config.model = Some(active_model.to_string());
     guardian_config.model_reasoning_effort = reasoning_effort;
+    guardian_config.model_provider.request_max_retries = Some(1);
+    guardian_config.model_provider.stream_max_retries = Some(1);
     guardian_config.include_skill_instructions = false;
+    guardian_config.memories.use_memories = false;
+    guardian_config.memories.dedicated_tools = false;
     guardian_config.base_instructions = Some(
         parent_config
             .guardian_policy_config
@@ -1058,8 +1096,10 @@ mod tests {
         let (tx_event, rx_event) = async_channel::unbounded();
         let (_agent_status_tx, agent_status) =
             tokio::sync::watch::channel(AgentStatus::PendingInit);
-        let reuse_key =
-            GuardianReviewSessionReuseKey::from_spawn_config(session.get_config().await.as_ref());
+        let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            session.get_config().await.as_ref(),
+            session.user_instructions().await,
+        );
 
         (
             GuardianReviewSession {
@@ -1145,9 +1185,14 @@ mod tests {
             schema: super::super::prompt::guardian_output_schema(),
             model,
             reasoning_effort,
+            guardian_default_review_model_id: "codex-auto-review".to_string(),
+            guardian_catalog_contains_auto_review: true,
+            guardian_review_model_overridden: false,
+            guardian_review_model_override: None,
             reasoning_summary,
             personality,
             external_cancel: None,
+            deadline: tokio::time::Instant::now() + Duration::from_secs(30),
         }
     }
 
@@ -1161,8 +1206,10 @@ mod tests {
             /*reasoning_effort*/ None,
         )
         .expect("cached guardian config");
-        let cached_reuse_key =
-            GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config);
+        let cached_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &cached_spawn_config,
+            /*user_instructions*/ None,
+        );
 
         let mut changed_parent_config = parent_config;
         changed_parent_config.model_provider.base_url =
@@ -1174,12 +1221,18 @@ mod tests {
             /*reasoning_effort*/ None,
         )
         .expect("next guardian config");
-        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&next_spawn_config);
+        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &next_spawn_config,
+            /*user_instructions*/ None,
+        );
 
         assert_ne!(cached_reuse_key, next_reuse_key);
         assert_eq!(
             cached_reuse_key,
-            GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config)
+            GuardianReviewSessionReuseKey::from_spawn_config(
+                &cached_spawn_config,
+                /*user_instructions*/ None,
+            )
         );
     }
 
@@ -1233,8 +1286,10 @@ mod tests {
             /*reasoning_effort*/ None,
         )
         .expect("cached guardian config");
-        let cached_reuse_key =
-            GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config);
+        let cached_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &cached_spawn_config,
+            /*user_instructions*/ None,
+        );
 
         let mut changed_parent_config = parent_config;
         changed_parent_config.model_auto_compact_token_limit_scope =
@@ -1246,7 +1301,10 @@ mod tests {
             /*reasoning_effort*/ None,
         )
         .expect("next guardian config");
-        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&next_spawn_config);
+        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &next_spawn_config,
+            /*user_instructions*/ None,
+        );
 
         assert_ne!(cached_reuse_key, next_reuse_key);
     }
@@ -1474,6 +1532,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_review_removes_trunk_when_event_stream_is_broken() {
+        let (mut review_session, tx_event, _rx_sub) = test_review_session().await;
+        let params = test_review_params().await;
+        review_session.reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            &params.spawn_config,
+            params.parent_session.user_instructions().await,
+        );
+        let manager = GuardianReviewSessionManager {
+            state: Arc::new(Mutex::new(GuardianReviewSessionState {
+                trunk: Some(Arc::new(review_session)),
+                ephemeral_reviews: Vec::new(),
+            })),
+        };
+        drop(tx_event);
+
+        let (outcome, _) = manager.run_review(params).await;
+
+        assert!(matches!(
+            outcome,
+            GuardianReviewSessionOutcome::Completed(Err(_))
+        ));
+        assert!(manager.state.lock().await.trunk.is_none());
+    }
+
+    #[tokio::test]
     async fn wait_for_guardian_review_ignores_prior_turn_completion() {
         let (review_session, tx_event, _rx_sub) = test_review_session().await;
         tx_event
@@ -1541,6 +1624,47 @@ mod tests {
         };
         assert_eq!(last_agent_message, None);
         assert_eq!(analytics_result.time_to_first_token_ms, Some(42));
+        assert!(keep_review_session);
+        assert!(capture_token_usage);
+    }
+
+    #[tokio::test]
+    async fn wait_for_guardian_review_preserves_structured_session_error() {
+        let (review_session, tx_event, _rx_sub) = test_review_session().await;
+        tx_event
+            .send(Event {
+                id: "current-turn".to_string(),
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "temporary failure".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::ServerOverloaded),
+                }),
+            })
+            .await
+            .expect("queue guardian error");
+        tx_event
+            .send(turn_complete_event(
+                "current-turn",
+                /*last_agent_message*/ None,
+                Some(42),
+            ))
+            .await
+            .expect("queue current turn completion");
+
+        let mut analytics_result = GuardianReviewAnalyticsResult::without_session();
+        let (outcome, keep_review_session, capture_token_usage) = wait_for_guardian_review(
+            &review_session,
+            "current-turn",
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            /*external_cancel*/ None,
+            &mut analytics_result,
+        )
+        .await;
+
+        let GuardianReviewSessionOutcome::SessionFailed { error, error_info } = outcome else {
+            panic!("expected structured session failure");
+        };
+        assert_eq!(error.to_string(), "temporary failure");
+        assert_eq!(error_info, Some(CodexErrorInfo::ServerOverloaded));
         assert!(keep_review_session);
         assert!(capture_token_usage);
     }

@@ -1,10 +1,8 @@
 use std::sync::Arc;
 
-use codex_core::config::Config;
 use codex_core_skills::HostLoadedSkills;
-use codex_core_skills::SkillInstructions;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
-use codex_core_skills::injection::SkillInjection;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ContextualUserFragment;
@@ -15,16 +13,23 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::PromptFragment;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
+use codex_extension_api::ToolCall;
+use codex_extension_api::ToolContributor;
+use codex_extension_api::ToolExecutor;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputContributor;
+use codex_mcp::McpResourceClient;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
 
+use crate::SkillsExtensionConfig;
+use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillSourceKind;
+use crate::fragments::SkillInstructions;
 use crate::provider::HostSkillProvider;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillReadRequest;
@@ -35,56 +40,72 @@ use crate::render::truncate_main_prompt_contents;
 use crate::render::truncate_utf8_to_bytes;
 use crate::selection::collect_explicit_skill_mentions;
 use crate::sources::SkillProviders;
-use crate::state::SkillsExtensionConfig;
 use crate::state::SkillsThreadState;
 use crate::state::SkillsTurnState;
+use crate::tools::skill_tools;
 
-#[derive(Clone)]
-struct SkillsExtension {
+struct SkillsExtension<C> {
     providers: SkillProviders,
     event_sink: Arc<dyn ExtensionEventSink>,
+    config_from_host: Arc<dyn Fn(&C) -> SkillsExtensionConfig + Send + Sync>,
 }
 
-impl ThreadLifecycleContributor<Config> for SkillsExtension {
-    fn on_thread_start<'a>(
-        &'a self,
-        input: ThreadStartInput<'a, Config>,
-    ) -> ExtensionFuture<'a, ()> {
+impl<C> ThreadLifecycleContributor<C> for SkillsExtension<C>
+where
+    C: Send + Sync + 'static,
+{
+    fn on_thread_start<'a>(&'a self, input: ThreadStartInput<'a, C>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             let selected_roots = input
                 .thread_store
                 .get::<Vec<SelectedCapabilityRoot>>()
                 .map(|selected_roots| selected_roots.as_ref().clone())
                 .unwrap_or_default();
+            let orchestrator_skills_enabled = !input
+                .environments
+                .iter()
+                .any(|environment| environment.environment_id == LOCAL_ENVIRONMENT_ID);
             input.thread_store.insert(SkillsThreadState::new(
-                SkillsExtensionConfig::from_config(input.config),
+                (self.config_from_host)(input.config),
                 selected_roots,
+                orchestrator_skills_enabled,
             ));
         })
     }
 }
 
-impl ConfigContributor<Config> for SkillsExtension {
+impl<C> ConfigContributor<C> for SkillsExtension<C>
+where
+    C: Send + Sync + 'static,
+{
     fn on_config_changed(
         &self,
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
-        _previous_config: &Config,
-        new_config: &Config,
+        _previous_config: &C,
+        new_config: &C,
     ) {
-        let next_config = SkillsExtensionConfig::from_config(new_config);
+        let next_config = (self.config_from_host)(new_config);
         if let Some(state) = thread_store.get::<SkillsThreadState>() {
             state.set_config(next_config);
         } else {
-            thread_store.insert(SkillsThreadState::new(next_config, Vec::new()));
+            let orchestrator_skills_enabled = true;
+            thread_store.insert(SkillsThreadState::new(
+                next_config,
+                Vec::new(),
+                orchestrator_skills_enabled,
+            ));
         }
     }
 }
 
-impl ContextContributor for SkillsExtension {
+impl<C> ContextContributor for SkillsExtension<C>
+where
+    C: Send + Sync + 'static,
+{
     fn contribute<'a>(
         &'a self,
-        _session_store: &'a ExtensionData,
+        session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
@@ -92,19 +113,22 @@ impl ContextContributor for SkillsExtension {
                 return Vec::new();
             };
             let config = thread_state.config();
-            if !config.include_instructions || thread_state.selected_roots().is_empty() {
+            if !config.include_instructions {
                 return Vec::new();
             }
             let catalog = self
-                .providers
-                .list_for_turn(SkillListQuery {
-                    turn_id: thread_store.level_id().to_string(),
-                    executor_roots: thread_state.selected_roots().to_vec(),
-                    host: None,
-                    include_host_skills: false,
-                    include_bundled_skills: config.bundled_skills_enabled,
-                    include_remote_skills: false,
-                })
+                .list_skills(
+                    SkillListQuery {
+                        turn_id: thread_store.level_id().to_string(),
+                        executor_roots: thread_state.selected_roots().to_vec(),
+                        host: None,
+                        include_host_skills: false,
+                        include_bundled_skills: config.bundled_skills_enabled,
+                        include_orchestrator_skills: thread_state.orchestrator_skills_enabled(),
+                        mcp_resources: session_store.get::<McpResourceClient>(),
+                    },
+                    &thread_state,
+                )
                 .await;
             for warning in &catalog.warnings {
                 self.emit_warning(thread_store.level_id(), warning.clone());
@@ -117,11 +141,40 @@ impl ContextContributor for SkillsExtension {
     }
 }
 
-impl TurnInputContributor for SkillsExtension {
+impl<C> ToolContributor for SkillsExtension<C>
+where
+    C: Send + Sync + 'static,
+{
+    fn tools(
+        &self,
+        session_store: &ExtensionData,
+        thread_store: &ExtensionData,
+    ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
+        let Some(thread_state) = thread_store.get::<SkillsThreadState>() else {
+            return Vec::new();
+        };
+        if !self.providers.has_orchestrator_provider()
+            || !thread_state.orchestrator_skills_enabled()
+        {
+            return Vec::new();
+        }
+
+        skill_tools(
+            self.providers.clone(),
+            session_store.get::<McpResourceClient>(),
+            thread_state,
+        )
+    }
+}
+
+impl<C> TurnInputContributor for SkillsExtension<C>
+where
+    C: Send + Sync + 'static,
+{
     fn contribute<'a>(
         &'a self,
         input: TurnInputContext,
-        _session_store: &'a ExtensionData,
+        session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
         turn_store: &'a ExtensionData,
     ) -> ExtensionFuture<'a, Vec<Box<dyn ContextualUserFragment + Send>>> {
@@ -138,9 +191,10 @@ impl TurnInputContributor for SkillsExtension {
                 host: host_loaded_skills.clone(),
                 include_host_skills: true,
                 include_bundled_skills: config.bundled_skills_enabled,
-                include_remote_skills: true,
+                include_orchestrator_skills: thread_state.orchestrator_skills_enabled(),
+                mcp_resources: session_store.get::<McpResourceClient>(),
             };
-            let catalog = self.providers.list_for_turn(query).await;
+            let catalog = self.list_skills(query, &thread_state).await;
             for warning in &catalog.warnings {
                 self.emit_warning(&input.turn_id, warning.clone());
             }
@@ -149,9 +203,10 @@ impl TurnInputContributor for SkillsExtension {
             let mut fragments: Vec<Box<dyn ContextualUserFragment + Send>> = Vec::new();
             if config.include_instructions {
                 let mut turn_catalog = catalog.clone();
-                turn_catalog
-                    .entries
-                    .retain(|entry| entry.authority.kind != SkillSourceKind::Executor);
+                turn_catalog.entries.retain(|entry| {
+                    entry.authority.kind != SkillSourceKind::Executor
+                        && entry.authority.kind != SkillSourceKind::Orchestrator
+                });
                 if let Some(fragment) = available_skills_fragment(&turn_catalog) {
                     fragments.push(Box::new(fragment));
                 }
@@ -162,7 +217,12 @@ impl TurnInputContributor for SkillsExtension {
             let mut injected_host_skill_prompts = InjectedHostSkillPrompts::default();
             for entry in &selected_entries {
                 match self
-                    .read_main_prompt(entry, host_loaded_skills.clone())
+                    .read_main_prompt(
+                        entry,
+                        host_loaded_skills.clone(),
+                        session_store,
+                        &thread_state,
+                    )
                     .await
                 {
                     Ok(read_result) => {
@@ -176,7 +236,7 @@ impl TurnInputContributor for SkillsExtension {
                             self.emit_warning(&input.turn_id, warning.clone());
                             warnings.push(warning);
                         }
-                        let injection = SkillInjection {
+                        let fragment = SkillInstructions {
                             name: truncate_utf8_to_bytes(&entry.name, MAX_SKILL_NAME_BYTES).0,
                             path: truncate_utf8_to_bytes(
                                 entry.rendered_path(),
@@ -185,7 +245,7 @@ impl TurnInputContributor for SkillsExtension {
                             .0,
                             contents,
                         };
-                        fragments.push(Box::new(SkillInstructions::from(&injection)));
+                        fragments.push(Box::new(fragment));
                         main_prompts_injected = true;
                         if entry.authority.kind == SkillSourceKind::Host {
                             injected_host_skill_prompts.insert_path(entry.main_prompt.as_str());
@@ -231,19 +291,49 @@ impl TurnInputContributor for SkillsExtension {
     }
 }
 
-impl SkillsExtension {
+impl<C> SkillsExtension<C> {
+    async fn list_skills(
+        &self,
+        mut query: SkillListQuery,
+        thread_state: &SkillsThreadState,
+    ) -> SkillCatalog {
+        let include_orchestrator_skills = query.include_orchestrator_skills;
+        let orchestrator_query = query.clone();
+        let mcp_resources = orchestrator_query.mcp_resources.clone();
+        query.include_orchestrator_skills = false;
+
+        let mut catalog = self.providers.list_for_turn(query).await;
+        if include_orchestrator_skills {
+            let orchestrator_catalog = thread_state
+                .orchestrator_catalog_snapshot(
+                    mcp_resources.as_deref(),
+                    self.providers
+                        .list_orchestrator_for_turn(orchestrator_query),
+                )
+                .await;
+            catalog.extend(orchestrator_catalog);
+        }
+        catalog
+    }
+
     async fn read_main_prompt(
         &self,
         entry: &SkillCatalogEntry,
         host_loaded_skills: Option<Arc<HostLoadedSkills>>,
+        session_store: &ExtensionData,
+        thread_state: &SkillsThreadState,
     ) -> Result<SkillReadResult, String> {
-        self.providers
-            .read(SkillReadRequest {
-                authority: entry.authority.clone(),
-                package: entry.id.clone(),
-                resource: entry.main_prompt.clone(),
-                host: host_loaded_skills,
-            })
+        thread_state
+            .read_skill(
+                &self.providers,
+                SkillReadRequest {
+                    authority: entry.authority.clone(),
+                    package: entry.id.clone(),
+                    resource: entry.main_prompt.clone(),
+                    host: host_loaded_skills,
+                    mcp_resources: session_store.get::<McpResourceClient>(),
+                },
+            )
             .await
             .map_err(|err| err.message)
     }
@@ -256,23 +346,34 @@ impl SkillsExtension {
     }
 }
 
-pub fn install(registry: &mut ExtensionRegistryBuilder<Config>) {
+pub fn install<C>(
+    registry: &mut ExtensionRegistryBuilder<C>,
+    config_from_host: impl Fn(&C) -> SkillsExtensionConfig + Send + Sync + 'static,
+) where
+    C: Send + Sync + 'static,
+{
     install_with_providers(
         registry,
         SkillProviders::new().with_host_provider(Arc::new(HostSkillProvider::new())),
+        config_from_host,
     );
 }
 
-pub fn install_with_providers(
-    registry: &mut ExtensionRegistryBuilder<Config>,
+pub fn install_with_providers<C>(
+    registry: &mut ExtensionRegistryBuilder<C>,
     providers: SkillProviders,
-) {
+    config_from_host: impl Fn(&C) -> SkillsExtensionConfig + Send + Sync + 'static,
+) where
+    C: Send + Sync + 'static,
+{
     let extension = Arc::new(SkillsExtension {
         providers,
         event_sink: registry.event_sink(),
+        config_from_host: Arc::new(config_from_host),
     });
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
     registry.prompt_contributor(extension.clone());
-    registry.turn_input_contributor(extension);
+    registry.turn_input_contributor(extension.clone());
+    registry.tool_contributor(extension);
 }

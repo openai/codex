@@ -369,52 +369,31 @@ async fn run_command_under_windows_session(
 ) -> ! {
     use codex_core::windows_sandbox::WindowsSandboxLevelExt;
     use codex_protocol::config_types::WindowsSandboxLevel;
-    use codex_windows_sandbox::spawn_windows_sandbox_session_elevated_for_permission_profile;
-    use codex_windows_sandbox::spawn_windows_sandbox_session_legacy;
+    use codex_windows_sandbox::WindowsSandboxSessionRequest;
+    use codex_windows_sandbox::spawn_windows_sandbox_session_for_level;
 
     let permission_profile = config.permissions.effective_permission_profile();
-
-    let use_elevated = matches!(
-        WindowsSandboxLevel::from_config(config),
-        WindowsSandboxLevel::Elevated
-    );
-
-    let spawned = if use_elevated {
-        spawn_windows_sandbox_session_elevated_for_permission_profile(
-            &permission_profile,
-            workspace_roots.as_slice(),
-            config.codex_home.as_path(),
-            command,
-            cwd.as_path(),
-            env,
-            None,
-            /*read_roots_override*/ None,
-            /*read_roots_include_platform_defaults*/ false,
-            /*write_roots_override*/ None,
-            /*deny_read_paths_override*/ &[],
-            /*deny_write_paths_override*/ &[],
-            /*tty*/ false,
-            /*stdin_open*/ true,
-            config.permissions.windows_sandbox_private_desktop,
-        )
-        .await
-    } else {
-        spawn_windows_sandbox_session_legacy(
-            &permission_profile,
-            workspace_roots.as_slice(),
-            config.codex_home.as_path(),
-            command,
-            cwd.as_path(),
-            env,
-            None,
-            /*additional_deny_read_paths*/ &[],
-            /*additional_deny_write_paths*/ &[],
-            /*tty*/ false,
-            /*stdin_open*/ true,
-            config.permissions.windows_sandbox_private_desktop,
-        )
-        .await
-    };
+    let empty_paths: &[AbsolutePathBuf] = &[];
+    let spawned = spawn_windows_sandbox_session_for_level(WindowsSandboxSessionRequest {
+        permission_profile: &permission_profile,
+        workspace_roots: workspace_roots.as_slice(),
+        codex_home: config.codex_home.as_path(),
+        command,
+        cwd: cwd.as_path(),
+        env_map: env,
+        windows_sandbox_level: WindowsSandboxLevel::from_config(config),
+        proxy_enforced: false,
+        timeout_ms: None,
+        read_roots_override: None,
+        read_roots_include_platform_defaults: false,
+        write_roots_override: None,
+        deny_read_paths_override: empty_paths,
+        deny_write_paths_override: empty_paths,
+        tty: false,
+        stdin_open: true,
+        use_private_desktop: config.permissions.windows_sandbox_private_desktop,
+    })
+    .await;
 
     let spawned = match spawned {
         Ok(spawned) => spawned,
@@ -424,63 +403,7 @@ async fn run_command_under_windows_session(
         }
     };
 
-    let session = std::sync::Arc::new(spawned.session);
-    let tokio_runtime = tokio::runtime::Handle::current();
-    // Give large or slow tail output a better chance to finish draining
-    // without letting rare EOF issues hang the wrapper indefinitely.
-    let output_drain_timeout = std::time::Duration::from_secs(5);
-    // A helper thread watches our stdin. When the input source closes it,
-    // the thread tells the main async code so we can also close stdin for
-    // the sandboxed child process.
-    let (stdin_eof_tx, stdin_eof_rx) = tokio::sync::oneshot::channel();
-
-    // Start background threads that copy stdin/stdout/stderr. We
-    // intentionally do not keep their JoinHandles; dropping the handle does
-    // not stop the thread, it just means we are not going to wait on it
-    // later.
-    drop(windows_stdio_bridge::spawn_input_forwarder(
-        std::io::stdin(),
-        session.writer_sender(),
-        stdin_eof_tx,
-    ));
-    let (stdout_forwarder, stdout_forwarder_done_rx) = windows_stdio_bridge::spawn_output_forwarder(
-        tokio_runtime.clone(),
-        spawned.stdout_rx,
-        std::io::stdout(),
-    );
-    drop(stdout_forwarder);
-    let (stderr_forwarder, stderr_forwarder_done_rx) = windows_stdio_bridge::spawn_output_forwarder(
-        tokio_runtime.clone(),
-        spawned.stderr_rx,
-        std::io::stderr(),
-    );
-    drop(stderr_forwarder);
-
-    let stdin_close_task = tokio::spawn({
-        let session = std::sync::Arc::clone(&session);
-        async move {
-            let _ = stdin_eof_rx.await;
-            session.close_stdin();
-        }
-    });
-
-    let mut exit_rx = spawned.exit_rx;
-    let exit_code = tokio::select! {
-        res = &mut exit_rx => res.unwrap_or(-1),
-        res = tokio::signal::ctrl_c() => {
-            if let Ok(()) = res {
-                session.request_terminate();
-            }
-            exit_rx.await.unwrap_or(-1)
-        }
-    };
-
-    stdin_close_task.abort();
-    let _ = tokio::time::timeout(output_drain_timeout, async {
-        let _ = stdout_forwarder_done_rx.await;
-        let _ = stderr_forwarder_done_rx.await;
-    })
-    .await;
+    let exit_code = codex_windows_sandbox::forward_sandbox_session_stdio(spawned).await;
     std::process::exit(exit_code);
 }
 
@@ -513,141 +436,6 @@ async fn spawn_debug_sandbox_child(
         .stderr(Stdio::inherit())
         .kill_on_drop(true)
         .spawn()
-}
-
-#[cfg(target_os = "windows")]
-mod windows_stdio_bridge {
-    use std::io::Read;
-    use std::io::Write;
-
-    use tokio::sync::mpsc;
-    use tokio::sync::oneshot;
-
-    const STDIN_FORWARD_CHUNK_SIZE: usize = 8 * 1024;
-
-    pub(super) fn spawn_input_forwarder<R>(
-        mut input: R,
-        writer_tx: mpsc::Sender<Vec<u8>>,
-        stdin_eof_tx: oneshot::Sender<()>,
-    ) -> std::thread::JoinHandle<()>
-    where
-        R: Read + Send + 'static,
-    {
-        std::thread::spawn(move || {
-            let mut buffer = [0_u8; STDIN_FORWARD_CHUNK_SIZE];
-            loop {
-                match input.read(&mut buffer) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if writer_tx.blocking_send(buffer[..n].to_vec()).is_err() {
-                            break;
-                        }
-                    }
-                    Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(err) => {
-                        eprintln!("windows sandbox stdin forwarder failed: {err}");
-                        break;
-                    }
-                }
-            }
-            let _ = stdin_eof_tx.send(());
-        })
-    }
-
-    pub(super) fn spawn_output_forwarder<W>(
-        tokio_runtime: tokio::runtime::Handle,
-        output_rx: mpsc::Receiver<Vec<u8>>,
-        mut writer: W,
-    ) -> (std::thread::JoinHandle<()>, oneshot::Receiver<()>)
-    where
-        W: Write + Send + 'static,
-    {
-        let (done_tx, done_rx) = oneshot::channel();
-        // The sandbox session emits output on Tokio channels, but writing to the
-        // caller's stdio is simplest from a dedicated blocking thread.
-        let handle = std::thread::spawn(move || {
-            let mut output_rx = output_rx;
-            while let Some(chunk) = tokio_runtime.block_on(output_rx.recv()) {
-                if let Err(err) = writer.write_all(&chunk) {
-                    eprintln!("windows sandbox output forwarder failed to write: {err}");
-                    break;
-                }
-                if let Err(err) = writer.flush() {
-                    eprintln!("windows sandbox output forwarder failed to flush: {err}");
-                    break;
-                }
-            }
-            let _ = done_tx.send(());
-        });
-        (handle, done_rx)
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use std::sync::Mutex;
-
-        use pretty_assertions::assert_eq;
-
-        use super::*;
-
-        #[tokio::test]
-        async fn input_forwarder_sends_chunks_and_reports_eof() -> anyhow::Result<()> {
-            let (writer_tx, mut writer_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(4);
-            let (stdin_closed_tx, stdin_closed_rx) = tokio::sync::oneshot::channel();
-            let input = std::io::Cursor::new(b"first\nsecond\n".to_vec());
-
-            let forwarder = spawn_input_forwarder(input, writer_tx, stdin_closed_tx);
-            let mut received = Vec::new();
-            while let Some(chunk) = writer_rx.recv().await {
-                received.extend_from_slice(&chunk);
-            }
-            stdin_closed_rx.await?;
-            forwarder.join().expect("stdin forwarder should finish");
-
-            assert_eq!(received, b"first\nsecond\n".to_vec());
-            Ok(())
-        }
-
-        #[tokio::test]
-        async fn output_forwarder_writes_all_chunks() -> anyhow::Result<()> {
-            #[derive(Clone, Default)]
-            struct SharedWriter(std::sync::Arc<Mutex<Vec<u8>>>);
-
-            impl std::io::Write for SharedWriter {
-                fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                    let mut guard = self
-                        .0
-                        .lock()
-                        .map_err(|_| std::io::Error::other("writer poisoned"))?;
-                    guard.extend_from_slice(buf);
-                    Ok(buf.len())
-                }
-
-                fn flush(&mut self) -> std::io::Result<()> {
-                    Ok(())
-                }
-            }
-
-            let runtime = tokio::runtime::Handle::current();
-            let (output_tx, output_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(4);
-            let writer = SharedWriter::default();
-            let sink = std::sync::Arc::clone(&writer.0);
-
-            let (forwarder, done_rx) = spawn_output_forwarder(runtime, output_rx, writer);
-            output_tx.send(b"alpha".to_vec()).await?;
-            output_tx.send(b"beta".to_vec()).await?;
-            drop(output_tx);
-            forwarder.join().expect("output forwarder should finish");
-            done_rx.await?;
-
-            let output = sink
-                .lock()
-                .map_err(|_| anyhow::anyhow!("writer poisoned"))?
-                .clone();
-            assert_eq!(output, b"alphabeta".to_vec());
-            Ok(())
-        }
-    }
 }
 
 async fn load_debug_sandbox_config(

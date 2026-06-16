@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
@@ -1130,6 +1132,7 @@ async fn installed_tools_with_start(
                 config: &(),
                 session_source: &session_source,
                 persistent_thread_state_available,
+                environments: &[],
                 session_store: &session_store,
                 thread_store: &thread_store,
             })
@@ -1182,6 +1185,7 @@ impl GoalExtensionHarness {
                     config: &(),
                     session_source: &session_source,
                     persistent_thread_state_available: true,
+                    environments: &[],
                     session_store: &session_store,
                     thread_store: &thread_store,
                 })
@@ -1318,7 +1322,7 @@ impl GoalExtensionHarness {
     fn runtime_handle(&self) -> Arc<GoalRuntimeHandle> {
         self.thread_store
             .get::<GoalRuntimeHandle>()
-            .unwrap_or_else(|| panic!("goal runtime handle should exist"))
+            .expect("goal runtime handle should exist")
     }
 }
 
@@ -1329,7 +1333,7 @@ fn tool_by_name<'a>(
     tools
         .iter()
         .find(|tool| tool.tool_name().namespace.is_none() && tool.tool_name().name == name)
-        .unwrap_or_else(|| panic!("missing tool {name}"))
+        .expect("requested goal tool should exist")
 }
 
 fn tool_call(tool_name: &str, call_id: &str, arguments: serde_json::Value) -> ToolCall {
@@ -1341,6 +1345,7 @@ fn tool_call(tool_name: &str, call_id: &str, arguments: serde_json::Value) -> To
         truncation_policy: TruncationPolicy::Bytes(1024),
         conversation_history: codex_extension_api::ConversationHistory::default(),
         turn_item_emitter: Arc::new(NoopTurnItemEmitter),
+        environments: Vec::new(),
         payload: ToolPayload::Function {
             arguments: arguments.to_string(),
         },

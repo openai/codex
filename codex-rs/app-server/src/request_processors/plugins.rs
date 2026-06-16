@@ -8,6 +8,8 @@ use codex_app_server_protocol::PluginShareTargetRole;
 use codex_config::types::McpServerConfig;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginListBackgroundTaskOptions;
+use codex_core_plugins::is_openai_curated_marketplace_name;
+use codex_core_plugins::remote::REMOTE_CREATED_BY_ME_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_WORKSPACE_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME;
@@ -156,6 +158,7 @@ fn remote_installed_plugin_visible_marketplaces(config: &Config) -> Vec<&'static
     let mut marketplaces = Vec::new();
     if config.features.enabled(Feature::RemotePlugin) {
         marketplaces.push(REMOTE_GLOBAL_MARKETPLACE_NAME);
+        marketplaces.push(REMOTE_CREATED_BY_ME_MARKETPLACE_NAME);
     }
     marketplaces.push(REMOTE_WORKSPACE_MARKETPLACE_NAME);
     if config.features.enabled(Feature::PluginSharing) {
@@ -172,9 +175,9 @@ fn filter_openai_curated_installed_conflicts(
 ) {
     let local_installed_plugin_names = marketplaces
         .iter()
-        .find(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
-        .map(|marketplace| installed_plugin_names(&marketplace.plugins))
-        .unwrap_or_default();
+        .filter(|marketplace| is_openai_curated_marketplace_name(&marketplace.name))
+        .flat_map(|marketplace| installed_plugin_names(&marketplace.plugins))
+        .collect::<HashSet<_>>();
     let remote_installed_plugin_names = marketplaces
         .iter()
         .find(|marketplace| marketplace.name == REMOTE_GLOBAL_MARKETPLACE_NAME)
@@ -188,13 +191,12 @@ fn filter_openai_curated_installed_conflicts(
         return;
     }
 
-    let marketplace_to_filter = if prefer_remote_curated_conflicts {
-        OPENAI_CURATED_MARKETPLACE_NAME
-    } else {
-        REMOTE_GLOBAL_MARKETPLACE_NAME
-    };
     for marketplace in marketplaces.iter_mut() {
-        if marketplace.name != marketplace_to_filter {
+        if prefer_remote_curated_conflicts {
+            if !is_openai_curated_marketplace_name(&marketplace.name) {
+                continue;
+            }
+        } else if marketplace.name != REMOTE_GLOBAL_MARKETPLACE_NAME {
             continue;
         }
         marketplace
@@ -549,15 +551,22 @@ impl PluginRequestProcessor {
         {
             return Ok(empty_response());
         }
+        let auth_mode = auth.as_ref().map(CodexAuth::api_auth_mode);
+        plugins_manager.set_auth_mode(auth_mode);
         let plugins_input = config.plugins_config_input();
         let include_shared_with_me =
             marketplace_kinds.contains(&PluginListMarketplaceKind::SharedWithMe);
+        let include_created_by_me_remote = marketplace_kinds
+            .contains(&PluginListMarketplaceKind::CreatedByMeRemote)
+            && config.features.enabled(Feature::RemotePlugin);
         let include_global_remote =
             !explicit_marketplace_kinds && config.features.enabled(Feature::RemotePlugin);
+        let use_remote_global_catalog =
+            include_global_remote && auth_mode.is_some_and(AuthMode::uses_codex_backend);
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
-        let refresh_global_remote_catalog_cache = include_global_remote
+        let refresh_global_remote_catalog_cache = use_remote_global_catalog
             && codex_core_plugins::remote::has_cached_global_remote_plugin_catalog(
                 config.codex_home.as_path(),
                 &remote_plugin_service_config,
@@ -573,6 +582,7 @@ impl PluginRequestProcessor {
                     .list_marketplaces_for_config(
                         &config_for_marketplace_listing,
                         &roots_for_marketplace_listing,
+                        /*include_openai_curated*/ !use_remote_global_catalog,
                     )?;
                 Ok::<
                     (
@@ -643,10 +653,14 @@ impl PluginRequestProcessor {
                     data.push(remote_marketplace_to_info(remote_marketplace));
                 }
                 Ok(None) => {}
-                Err(
-                    RemotePluginCatalogError::AuthRequired
-                    | RemotePluginCatalogError::UnsupportedAuthMode,
-                ) => {}
+                Err(RemotePluginCatalogError::UnsupportedAuthMode) => {}
+                Err(err) if explicit_marketplace_kinds => {
+                    return Err(remote_plugin_catalog_error_to_jsonrpc(
+                        err,
+                        "list OpenAI Curated remote plugin catalog",
+                    ));
+                }
+                Err(RemotePluginCatalogError::AuthRequired) => {}
                 Err(err) => {
                     warn!(
                         error = %err,
@@ -657,8 +671,11 @@ impl PluginRequestProcessor {
         }
 
         let mut remote_sources = Vec::new();
-        if include_global_remote {
+        if use_remote_global_catalog {
             remote_sources.push(RemoteMarketplaceSource::Global);
+        }
+        if include_created_by_me_remote {
+            remote_sources.push(RemoteMarketplaceSource::CreatedByMeRemote);
         }
         if marketplace_kinds.contains(&PluginListMarketplaceKind::WorkspaceDirectory) {
             remote_sources.push(RemoteMarketplaceSource::WorkspaceDirectory);
@@ -710,7 +727,11 @@ impl PluginRequestProcessor {
                 }
             }
         }
-        if include_local || include_shared_with_me || include_global_remote {
+        if include_local
+            || include_created_by_me_remote
+            || include_shared_with_me
+            || include_global_remote
+        {
             plugins_manager.maybe_start_plugin_list_background_tasks_for_config(
                 &plugins_input,
                 auth.clone(),
@@ -722,9 +743,10 @@ impl PluginRequestProcessor {
             );
         }
 
-        let featured_plugin_ids = if data
-            .iter()
-            .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
+        let featured_plugin_ids = if !plugins_input.remote_plugin_enabled
+            && data
+                .iter()
+                .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
         {
             match plugins_manager
                 .featured_plugin_ids_for_config(&plugins_input, auth.as_ref())
@@ -780,6 +802,7 @@ impl PluginRequestProcessor {
         {
             return Ok(empty_response());
         }
+        plugins_manager.set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
 
         let plugins_input = config.plugins_config_input();
         let remote_installed_plugin_visible_marketplaces =
@@ -837,8 +860,11 @@ impl PluginRequestProcessor {
         let config_for_marketplace_listing = plugins_input.clone();
         let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(config)?;
         match tokio::task::spawn_blocking(move || {
-            let outcome = plugins_manager
-                .list_marketplaces_for_config(&config_for_marketplace_listing, &roots)?;
+            let outcome = plugins_manager.list_marketplaces_for_config(
+                &config_for_marketplace_listing,
+                &roots,
+                /*include_openai_curated*/ true,
+            )?;
             Ok::<
                 (
                     Vec<PluginMarketplaceEntry>,
@@ -966,6 +992,8 @@ impl PluginRequestProcessor {
 
         let config = self.load_latest_config(config_cwd).await?;
         let plugins_input = config.plugins_config_input();
+        let auth = self.auth_manager.auth().await;
+        plugins_manager.set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
 
         let plugin = match read_source {
             Ok(marketplace_path) => {
@@ -985,7 +1013,6 @@ impl PluginRequestProcessor {
                 );
                 let share_context = match share_context {
                     Some(context) => {
-                        let auth = self.auth_manager.auth().await;
                         let remote_plugin_service_config = RemotePluginServiceConfig {
                             chatgpt_base_url: config.chatgpt_base_url.clone(),
                         };
@@ -1031,12 +1058,10 @@ impl PluginRequestProcessor {
                     }
                     None => None,
                 };
-                let environment_manager = self.thread_manager.environment_manager();
                 let app_summaries = load_plugin_app_summaries(
                     &config,
                     &outcome.plugin.apps,
-                    Arc::clone(&environment_manager),
-                    self.thread_manager.mcp_manager(),
+                    &outcome.plugin.app_category_by_id,
                 )
                 .await;
                 let visible_skills = outcome
@@ -1068,6 +1093,7 @@ impl PluginRequestProcessor {
                         interface: outcome.plugin.interface.map(local_plugin_interface_to_info),
                         keywords: outcome.plugin.keywords,
                     },
+                    share_url: None,
                     description: outcome.plugin.description,
                     skills: plugin_skills_to_info(
                         &visible_skills,
@@ -1093,7 +1119,6 @@ impl PluginRequestProcessor {
                         "remote plugin read is not enabled for marketplace {remote_marketplace_name}"
                     )));
                 }
-                let auth = self.auth_manager.auth().await;
                 let remote_plugin_service_config = RemotePluginServiceConfig {
                     chatgpt_base_url: config.chatgpt_base_url.clone(),
                 };
@@ -1114,14 +1139,13 @@ impl PluginRequestProcessor {
                     .cloned()
                     .map(codex_plugin::AppConnectorId)
                     .collect::<Vec<_>>();
-                let environment_manager = self.thread_manager.environment_manager();
-                let app_summaries = load_plugin_app_summaries(
-                    &config,
-                    &plugin_apps,
-                    Arc::clone(&environment_manager),
-                    self.thread_manager.mcp_manager(),
-                )
-                .await;
+                let app_category_by_id = remote_detail
+                    .app_manifest
+                    .as_ref()
+                    .map(plugin_app_category_by_id_from_value)
+                    .unwrap_or_default();
+                let app_summaries =
+                    load_plugin_app_summaries(&config, &plugin_apps, &app_category_by_id).await;
                 remote_plugin_detail_to_info(remote_detail, app_summaries)
             }
         };
@@ -1434,14 +1458,19 @@ impl PluginRequestProcessor {
 
         self.on_effective_plugins_changed();
 
-        let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path()).await;
+        let plugin_mcp_servers = load_plugin_mcp_servers(
+            result.installed_path.as_path(),
+            auth.as_ref().map(CodexAuth::auth_mode),
+        )
+        .await;
         if !plugin_mcp_servers.is_empty() {
             self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
                 .await;
         }
 
-        let plugin_apps = load_plugin_apps(result.installed_path.as_path()).await;
-        let auth = self.auth_manager.auth().await;
+        let plugin_app_declarations = load_plugin_apps(result.installed_path.as_path()).await;
+        let plugin_apps =
+            codex_plugin::app_connector_ids_from_declarations(&plugin_app_declarations);
         let apps_needing_auth = self
             .plugin_apps_needing_auth_for_install(
                 &config,
@@ -1550,48 +1579,66 @@ impl PluginRequestProcessor {
         self.analytics_events_client
             .track_plugin_installed(plugin_metadata);
 
-        let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path()).await;
+        let plugin_mcp_servers = load_plugin_mcp_servers(
+            result.installed_path.as_path(),
+            auth.as_ref().map(CodexAuth::auth_mode),
+        )
+        .await;
         if !plugin_mcp_servers.is_empty() {
             self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
                 .await;
         }
 
         let is_chatgpt_auth = auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth);
-        let apps_needing_auth =
-            if let Some(app_ids_needing_auth) = install_result.app_ids_needing_auth {
-                if app_ids_needing_auth.is_empty()
-                    || !config.features.apps_enabled_for_auth(is_chatgpt_auth)
-                {
-                    Vec::new()
-                } else {
-                    let plugin_apps = app_ids_needing_auth
-                        .into_iter()
-                        .map(codex_plugin::AppConnectorId)
-                        .collect::<Vec<_>>();
-                    let all_connectors = connectors::list_cached_all_connectors(&config)
-                        .await
-                        .unwrap_or_default();
-                    connectors::connectors_for_plugin_apps(all_connectors, &plugin_apps)
-                        .into_iter()
-                        .map(|connector| AppSummary {
+        let apps_needing_auth = if let Some(app_ids_needing_auth) =
+            install_result.app_ids_needing_auth
+        {
+            if app_ids_needing_auth.is_empty()
+                || !config.features.apps_enabled_for_auth(is_chatgpt_auth)
+            {
+                Vec::new()
+            } else {
+                let plugin_apps = app_ids_needing_auth
+                    .into_iter()
+                    .map(codex_plugin::AppConnectorId)
+                    .collect::<Vec<_>>();
+                let app_category_by_id = remote_detail
+                    .app_manifest
+                    .as_ref()
+                    .map(plugin_app_category_by_id_from_value)
+                    .unwrap_or_default();
+                let all_connectors = connectors::list_cached_all_connectors(&config, &[])
+                    .await
+                    .unwrap_or_default();
+                connectors::connectors_for_plugin_apps(all_connectors, &plugin_apps)
+                    .into_iter()
+                    .map(|connector| {
+                        let category = app_category_by_id
+                            .get(&connector.id)
+                            .cloned()
+                            .or_else(|| connector.category());
+                        AppSummary {
+                            category,
                             id: connector.id,
                             name: connector.name,
                             description: connector.description,
                             install_url: connector.install_url,
-                            needs_auth: true,
-                        })
-                        .collect()
-                }
-            } else {
-                let plugin_apps = load_plugin_apps(result.installed_path.as_path()).await;
-                self.plugin_apps_needing_auth_for_install(
-                    &config,
-                    is_chatgpt_auth,
-                    &result.plugin_id.as_key(),
-                    &plugin_apps,
-                )
-                .await
-            };
+                        }
+                    })
+                    .collect()
+            }
+        } else {
+            let plugin_app_declarations = load_plugin_apps(result.installed_path.as_path()).await;
+            let plugin_apps =
+                codex_plugin::app_connector_ids_from_declarations(&plugin_app_declarations);
+            self.plugin_apps_needing_auth_for_install(
+                &config,
+                is_chatgpt_auth,
+                &result.plugin_id.as_key(),
+                &plugin_apps,
+            )
+            .await
+        };
 
         Ok(PluginInstallResponse {
             auth_policy: remote_detail.summary.auth_policy,
@@ -1612,7 +1659,7 @@ impl PluginRequestProcessor {
 
         let environment_manager = self.thread_manager.environment_manager();
         let (all_connectors_result, accessible_connectors_result) = tokio::join!(
-            connectors::list_all_connectors_with_options(config, /*force_refetch*/ false),
+            connectors::list_all_connectors_with_options(config, /*force_refetch*/ false, &[]),
             connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
                 config,
                 /*force_refetch*/ true,
@@ -1628,7 +1675,7 @@ impl PluginRequestProcessor {
                     plugin = plugin_id,
                     "failed to load app metadata after plugin install: {err:#}"
                 );
-                connectors::list_cached_all_connectors(config)
+                connectors::list_cached_all_connectors(config, &[])
                     .await
                     .unwrap_or_default()
             }
@@ -1688,6 +1735,7 @@ impl PluginRequestProcessor {
             );
 
             let store_mode = config.mcp_oauth_credentials_store_mode;
+            let keyring_backend_kind = config.auth_keyring_backend_kind();
             let callback_port = config.mcp_oauth_callback_port;
             let callback_url = config.mcp_oauth_callback_url.clone();
             let outgoing = Arc::clone(&self.outgoing);
@@ -1699,6 +1747,7 @@ impl PluginRequestProcessor {
                     &name,
                     &oauth_config.url,
                     store_mode,
+                    keyring_backend_kind,
                     oauth_config.http_headers.clone(),
                     oauth_config.env_http_headers.clone(),
                     &resolved_scopes.scopes,
@@ -1715,6 +1764,7 @@ impl PluginRequestProcessor {
                             &name,
                             &oauth_config.url,
                             store_mode,
+                            keyring_backend_kind,
                             oauth_config.http_headers,
                             oauth_config.env_http_headers,
                             &[],
@@ -1883,68 +1933,52 @@ impl PluginRequestProcessor {
 async fn load_plugin_app_summaries(
     config: &Config,
     plugin_apps: &[codex_plugin::AppConnectorId],
-    environment_manager: Arc<EnvironmentManager>,
-    mcp_manager: Arc<McpManager>,
+    app_category_by_id: &HashMap<String, String>,
 ) -> Vec<AppSummary> {
     if plugin_apps.is_empty() {
         return Vec::new();
     }
 
-    let connectors =
-        match connectors::list_all_connectors_with_options(config, /*force_refetch*/ false).await {
-            Ok(connectors) => connectors,
-            Err(err) => {
-                warn!("failed to load app metadata for plugin/read: {err:#}");
-                connectors::list_cached_all_connectors(config)
-                    .await
-                    .unwrap_or_default()
-            }
-        };
+    let connectors = match connectors::list_all_connectors_with_options(
+        config,
+        /*force_refetch*/ false,
+        &[],
+    )
+    .await
+    {
+        Ok(connectors) => connectors,
+        Err(err) => {
+            warn!("failed to load app metadata for plugin/read: {err:#}");
+            connectors::list_cached_all_connectors(config, &[])
+                .await
+                .unwrap_or_default()
+        }
+    };
 
     let plugin_connectors = connectors::connectors_for_plugin_apps(connectors, plugin_apps);
-
-    let accessible_connectors =
-        match connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
-            config,
-            /*force_refetch*/ false,
-            environment_manager,
-            mcp_manager,
-        )
-        .await
-        {
-            Ok(status) if status.codex_apps_ready => status.connectors,
-            Ok(_) => {
-                return plugin_connectors
-                    .into_iter()
-                    .map(AppSummary::from)
-                    .collect();
-            }
-            Err(err) => {
-                warn!("failed to load app auth state for plugin/read: {err:#}");
-                return plugin_connectors
-                    .into_iter()
-                    .map(AppSummary::from)
-                    .collect();
-            }
-        };
-
-    let accessible_ids = accessible_connectors
-        .iter()
-        .map(|connector| connector.id.as_str())
-        .collect::<HashSet<_>>();
 
     plugin_connectors
         .into_iter()
         .map(|connector| {
-            let needs_auth = !accessible_ids.contains(connector.id.as_str());
+            let category = app_category_by_id
+                .get(&connector.id)
+                .cloned()
+                .or_else(|| connector.category());
             AppSummary {
                 id: connector.id,
                 name: connector.name,
                 description: connector.description,
                 install_url: connector.install_url,
-                needs_auth,
+                category,
             }
         })
+        .collect()
+}
+
+fn plugin_app_category_by_id_from_value(value: &serde_json::Value) -> HashMap<String, String> {
+    codex_core_plugins::loader::plugin_app_declarations_from_value(value)
+        .into_iter()
+        .filter_map(|app| app.category.map(|category| (app.connector_id.0, category)))
         .collect()
 }
 
@@ -1974,12 +2008,15 @@ fn plugin_apps_needing_auth(
                 && !accessible_ids.contains(connector.id.as_str())
         })
         .cloned()
-        .map(|connector| AppSummary {
-            id: connector.id,
-            name: connector.name,
-            description: connector.description,
-            install_url: connector.install_url,
-            needs_auth: true,
+        .map(|connector| {
+            let category = connector.category();
+            AppSummary {
+                category,
+                id: connector.id,
+                name: connector.name,
+                description: connector.description,
+                install_url: connector.install_url,
+            }
         })
         .collect()
 }
@@ -2067,6 +2104,7 @@ fn remote_plugin_detail_to_info(
             template_id: template.template_id,
             name: template.name,
             description: template.description,
+            category: template.category,
             canonical_connector_id: template.canonical_connector_id,
             logo_url: template.logo_url,
             logo_url_dark: template.logo_url_dark,
@@ -2086,6 +2124,7 @@ fn remote_plugin_detail_to_info(
         marketplace_name: detail.marketplace_name,
         marketplace_path: None,
         summary: remote_plugin_summary_to_info(detail.summary),
+        share_url: detail.share_url,
         description: detail.description,
         skills: detail
             .skills
