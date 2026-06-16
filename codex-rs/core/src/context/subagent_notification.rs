@@ -57,6 +57,6 @@ impl ContextualUserFragment for SubagentNotification {
                 "status": &self.status,
             }),
         };
-        format!("\n{}\n", body)
+        format!("\n{body}\n")
     }
 }
