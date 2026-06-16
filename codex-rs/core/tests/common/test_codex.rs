@@ -1108,9 +1108,10 @@ fn custom_tool_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value 
 }
 
 fn custom_tool_call_output_text(bodies: &[Value], call_id: &str) -> String {
+    let missing_output = format!("custom_tool_call_output {call_id} missing output");
     let output = custom_tool_call_output(bodies, call_id)
         .get("output")
-        .expect("custom tool call output missing output");
+        .expect(&missing_output);
     output_value_to_text(output).expect("custom tool call output missing text output")
 }
 
