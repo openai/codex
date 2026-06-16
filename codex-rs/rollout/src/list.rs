@@ -1,7 +1,12 @@
 #![allow(warnings, clippy::all)]
 
+use chrono::DateTime;
+use chrono::Datelike;
+use chrono::Timelike;
+use chrono::Utc;
 use codex_utils_path as path_utils;
 use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::ffi::OsStr;
 use std::io;
 use std::num::NonZero;
@@ -23,7 +28,6 @@ use crate::state_db;
 use codex_file_search as file_search;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
@@ -928,18 +932,60 @@ pub(crate) fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDa
     // Expected: rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl[.zst]
     let name = compression::parse_rollout_file_name(name)?;
     let core = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
-
-    // Scan from the right for a '-' such that the suffix parses as a UUID.
-    let (sep_idx, uuid) = core
-        .match_indices('-')
-        .rev()
-        .find_map(|(i, _)| Uuid::parse_str(&core[i + 1..]).ok().map(|u| (i, u)))?;
-
-    let ts_str = &core[..sep_idx];
-    let format: &[FormatItem] =
-        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
-    let ts = PrimitiveDateTime::parse(ts_str, format).ok()?.assume_utc();
+    let uuid_start = core.len().checked_sub(36)?;
+    let (ts_with_sep, uuid_str) = core.split_at(uuid_start);
+    let ts_str = ts_with_sep.strip_suffix('-')?;
+    let uuid = Uuid::parse_str(uuid_str).ok()?;
+    let ts = parse_rollout_filename_timestamp(ts_str)?;
     Some((ts, uuid))
+}
+
+fn parse_rollout_filename_timestamp(ts_str: &str) -> Option<OffsetDateTime> {
+    let bytes = ts_str.as_bytes();
+    if bytes.len() != 19
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b'-'
+        || bytes[16] != b'-'
+    {
+        return None;
+    }
+
+    let year = parse_decimal_i32(&bytes[0..4])?;
+    let month = parse_decimal_u8(&bytes[5..7])?;
+    let day = parse_decimal_u8(&bytes[8..10])?;
+    let hour = parse_decimal_u8(&bytes[11..13])?;
+    let minute = parse_decimal_u8(&bytes[14..16])?;
+    let second = parse_decimal_u8(&bytes[17..19])?;
+    let date =
+        time::Date::from_calendar_date(year, time::Month::try_from(month).ok()?, day).ok()?;
+    let time = time::Time::from_hms(hour, minute, second).ok()?;
+    Some(time::PrimitiveDateTime::new(date, time).assume_utc())
+}
+
+fn parse_decimal_i32(bytes: &[u8]) -> Option<i32> {
+    let mut value = 0i32;
+    for &byte in bytes {
+        let digit = byte.checked_sub(b'0')?;
+        if digit > 9 {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add(i32::from(digit))?;
+    }
+    Some(value)
+}
+
+fn parse_decimal_u8(bytes: &[u8]) -> Option<u8> {
+    let mut value = 0u8;
+    for &byte in bytes {
+        let digit = byte.checked_sub(b'0')?;
+        if digit > 9 {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add(digit)?;
+    }
+    Some(value)
 }
 
 struct ThreadCandidate {
@@ -1087,10 +1133,10 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
         }
         lines_scanned += 1;
 
-        let parsed: Result<RolloutLine, _> = serde_json::from_str(trimmed);
-        let Ok(rollout_line) = parsed else { continue };
+        let parsed: Result<RolloutItem, _> = serde_json::from_str(trimmed);
+        let Ok(rollout_item) = parsed else { continue };
 
-        match rollout_line.item {
+        match rollout_item {
             RolloutItem::SessionMeta(session_meta_line) => {
                 if !summary.saw_session_meta {
                     summary.source = Some(session_meta_line.meta.source.clone());
@@ -1118,9 +1164,8 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                 }
             }
             RolloutItem::ResponseItem(_) | RolloutItem::InterAgentCommunication(_) => {
-                summary
-                    .created_at
-                    .get_or_insert_with(|| rollout_line.timestamp.clone());
+                // The listing path only returns files with session metadata, which carries
+                // the canonical creation timestamp.
             }
             RolloutItem::TurnContext(_) => {
                 // Not included in `head`; skip.
@@ -1167,8 +1212,8 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
         if trimmed.is_empty() {
             continue;
         }
-        if let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) {
-            match rollout_line.item {
+        if let Ok(rollout_item) = serde_json::from_str::<RolloutItem>(trimmed) {
+            match rollout_item {
                 RolloutItem::SessionMeta(session_meta_line) => {
                     if let Ok(value) = serde_json::to_value(session_meta_line) {
                         head.push(value);
@@ -1229,19 +1274,32 @@ fn event_msg_preview(event: &EventMsg) -> Option<String> {
 /// Read the SessionMetaLine from the head of a rollout file for reuse by
 /// callers that need the session metadata (e.g. to derive a cwd for config).
 pub async fn read_session_meta_line(path: &Path) -> io::Result<SessionMetaLine> {
-    let head = read_head_for_summary(path).await?;
-    let Some(first) = head.first() else {
-        return Err(io::Error::other(format!(
-            "rollout at {} is empty",
-            path.display()
-        )));
-    };
-    serde_json::from_value::<SessionMetaLine>(first.clone()).map_err(|_| {
-        io::Error::other(format!(
-            "rollout at {} does not start with session metadata",
-            path.display()
-        ))
-    })
+    let mut lines = compression::open_rollout_line_reader(path).await?;
+    while let Some(line) = lines.next_line().await? {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(rollout_item) = serde_json::from_str::<RolloutItem>(trimmed) else {
+            continue;
+        };
+        return match rollout_item {
+            RolloutItem::SessionMeta(session_meta_line) => Ok(session_meta_line),
+            RolloutItem::ResponseItem(_) | RolloutItem::InterAgentCommunication(_) => {
+                Err(io::Error::other(format!(
+                    "rollout at {} does not start with session metadata",
+                    path.display()
+                )))
+            }
+            RolloutItem::Compacted(_) | RolloutItem::TurnContext(_) | RolloutItem::EventMsg(_) => {
+                continue;
+            }
+        };
+    }
+    Err(io::Error::other(format!(
+        "rollout at {} is empty",
+        path.display()
+    )))
 }
 
 async fn file_modified_time(path: &Path) -> io::Result<Option<OffsetDateTime>> {
