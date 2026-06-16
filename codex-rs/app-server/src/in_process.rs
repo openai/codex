@@ -594,12 +594,28 @@ async fn start_uninitialized(
         let mut pending_request_responses =
             HashMap::<RequestId, oneshot::Sender<PendingClientRequestResponse>>::new();
         let mut shutdown_ack = None;
+        let mut shutdown_requested = false;
 
         loop {
+            if !shutdown_requested {
+                match shutdown_rx.try_recv() {
+                    Ok(done_tx) => {
+                        shutdown_requested = true;
+                        shutdown_ack = Some(done_tx);
+                        client_rx.close();
+                    }
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        shutdown_requested = true;
+                        client_rx.close();
+                    }
+                    Err(mpsc::error::TryRecvError::Empty) => {}
+                }
+            }
             tokio::select! {
-                shutdown = shutdown_rx.recv() => {
+                shutdown = shutdown_rx.recv(), if !shutdown_requested => {
+                    shutdown_requested = true;
                     shutdown_ack = shutdown;
-                    break;
+                    client_rx.close();
                 }
                 message = client_rx.recv() => {
                     match message {
@@ -1030,6 +1046,74 @@ mod tests {
             saturated_warning_shutdown(InProcessEventDelivery::Lossless).await,
             vec!["first warning", "second warning"]
         );
+    }
+
+    #[tokio::test]
+    async fn shutdown_drains_client_messages_accepted_before_close() {
+        let (codex_home, mut args) =
+            build_test_start_args(SessionSource::Cli, /*channel_capacity*/ 1).await;
+        args.config_warnings = ["first warning", "second warning"]
+            .into_iter()
+            .map(|summary| ConfigWarningNotification {
+                summary: summary.to_string(),
+                details: None,
+                path: None,
+                range: None,
+            })
+            .collect();
+        let initialize = args.initialize.clone();
+        let options =
+            InProcessStartOptions::default().with_event_delivery(InProcessEventDelivery::Lossless);
+        let mut client = start_uninitialized(args, options)
+            .await
+            .expect("in-process runtime should start");
+        client._test_codex_home = Some(codex_home);
+        client
+            .request(ClientRequest::Initialize {
+                request_id: RequestId::Integer(5),
+                params: initialize,
+            })
+            .await
+            .expect("initialize transport should work")
+            .expect("initialize should succeed");
+
+        timeout(Duration::from_secs(1), async {
+            while client.event_rx.len() != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("event queue should saturate");
+
+        let (response_tx, response_rx) = oneshot::channel();
+        client
+            .client
+            .try_send_client_message(InProcessClientMessage::Request {
+                request: Box::new(ClientRequest::ConfigRequirementsRead {
+                    request_id: RequestId::Integer(6),
+                    params: None,
+                }),
+                response_tx,
+            })
+            .expect("request should enter the client queue");
+        let shutdown = client
+            .begin_shutdown()
+            .await
+            .expect("runtime should accept shutdown");
+
+        while timeout(SHUTDOWN_TIMEOUT, client.next_event())
+            .await
+            .expect("event stream should close during shutdown")
+            .is_some()
+        {}
+        client
+            .finish_shutdown(shutdown)
+            .await
+            .expect("in-process runtime should shutdown cleanly");
+
+        let _response = response_rx
+            .await
+            .expect("accepted request should receive a response");
     }
 
     #[tokio::test]
