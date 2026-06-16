@@ -215,6 +215,12 @@ fn parse_feature_requirements(
             continue;
         }
 
+        #[cfg(target_os = "windows")]
+        if key == "windows_computer_use" {
+            pinned_features.insert(Feature::ComputerUse, enabled);
+            continue;
+        }
+
         if let Some(feature) = canonical_feature_for_key(&key) {
             pinned_features.insert(feature, enabled);
             continue;
