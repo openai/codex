@@ -239,7 +239,9 @@ def codex_rust_crate(
             The launcher resolves the real Rust test binary through runfiles
             and then assigns each libtest case to a stable bucket by hashing
             the test name. Matching tests are also marked flaky, which gives
-            them Bazel's default three attempts.
+            them Bazel's default three attempts. Windows-cross and Wine
+            variants inherit the native target's count unless callers
+            override the generated variant name explicitly.
         test_sizes: Mapping from generated test target name to Bazel test size.
             All generated tests default to small. Callers can override slower
             targets individually, including Windows-cross and Wine tests.
@@ -327,6 +329,9 @@ def codex_rust_crate(
         windows_cross_unit_test_name = unit_test_name + "-windows-cross"
         generated_test_names.extend([unit_test_name, windows_cross_unit_test_name])
         unit_test_shard_count = _test_shard_count(test_shard_counts, unit_test_name)
+        windows_cross_unit_test_shard_count = _test_shard_count(test_shard_counts, windows_cross_unit_test_name)
+        if windows_cross_unit_test_shard_count == None:
+            windows_cross_unit_test_shard_count = unit_test_shard_count
 
         # Shard at the workspace_root_test layer. rules_rust's sharding wrapper
         # expects to run from its own runfiles cwd, while workspace_root_test
@@ -352,19 +357,19 @@ def codex_rust_crate(
             tags = test_tags + ["manual"],
         )
 
-        # Keep a distinct Windows-cross label so callers can raise its
-        # nonconfigurable size without slowing the native test everywhere.
-        for unit_test_target_name, target_compatible_with in [
-            (unit_test_name, WINDOWS_GNULLVM_INCOMPATIBLE),
-            (windows_cross_unit_test_name, WINDOWS_GNULLVM_ONLY),
+        # Keep a distinct Windows-cross label so callers can tune its
+        # nonconfigurable test attributes without changing every platform.
+        for unit_test_target_name, target_compatible_with, shard_count in [
+            (unit_test_name, WINDOWS_GNULLVM_INCOMPATIBLE, unit_test_shard_count),
+            (windows_cross_unit_test_name, WINDOWS_GNULLVM_ONLY, windows_cross_unit_test_shard_count),
         ]:
             unit_test_kwargs = {
                 "size": _test_size(test_sizes, unit_test_target_name),
             }
             if unit_test_timeout:
                 unit_test_kwargs["timeout"] = unit_test_timeout
-            if unit_test_shard_count:
-                unit_test_kwargs["shard_count"] = unit_test_shard_count
+            if shard_count:
+                unit_test_kwargs["shard_count"] = shard_count
                 unit_test_kwargs["flaky"] = True
 
             workspace_root_test(
@@ -457,6 +462,9 @@ def codex_rust_crate(
         }
         test_kwargs.update(integration_test_kwargs)
         test_shard_count = _test_shard_count(test_shard_counts, test_name)
+        windows_cross_test_shard_count = _test_shard_count(test_shard_counts, windows_cross_test_name)
+        if windows_cross_test_shard_count == None:
+            windows_cross_test_shard_count = test_shard_count
         if test_shard_count:
             # Put Bazel sharding on the label users/CI invoke. Do not set
             # rules_rust's experimental_enable_sharding on the Rust test
@@ -578,8 +586,11 @@ def codex_rust_crate(
             wine_test_kwargs = {}
             wine_test_kwargs.update(integration_test_kwargs)
             wine_test_kwargs["size"] = _test_size(test_sizes, wine_test_name)
-            if test_shard_count:
-                wine_test_kwargs["shard_count"] = test_shard_count
+            wine_test_shard_count = _test_shard_count(test_shard_counts, wine_test_name)
+            if wine_test_shard_count == None:
+                wine_test_shard_count = test_shard_count
+            if wine_test_shard_count:
+                wine_test_kwargs["shard_count"] = wine_test_shard_count
                 wine_test_kwargs["flaky"] = True
 
             # The Wine runner is a binary rather than a rust_test, but it still
@@ -601,8 +612,8 @@ def codex_rust_crate(
             "size": _test_size(test_sizes, windows_cross_test_name),
         }
         windows_cross_test_kwargs.update(integration_test_kwargs)
-        if test_shard_count:
-            windows_cross_test_kwargs["shard_count"] = test_shard_count
+        if windows_cross_test_shard_count:
+            windows_cross_test_kwargs["shard_count"] = windows_cross_test_shard_count
             windows_cross_test_kwargs["flaky"] = True
 
         rust_test(
@@ -642,6 +653,14 @@ def codex_rust_crate(
     ])
     if unknown_test_sizes:
         fail("test_sizes contains unknown generated test targets: {}".format(", ".join(unknown_test_sizes)))
+
+    unknown_test_shard_counts = sorted([
+        test_name
+        for test_name in test_shard_counts
+        if test_name not in generated_test_names
+    ])
+    if unknown_test_shard_counts:
+        fail("test_shard_counts contains unknown generated test targets: {}".format(", ".join(unknown_test_shard_counts)))
 
 def _test_shard_count(test_shard_counts, test_name):
     shard_count = test_shard_counts.get(test_name)

@@ -4,7 +4,7 @@ codex_rust_crate(
     name = "exec",
     crate_name = "codex_exec",
     test_shard_counts = {
-        "exec-all-test": 8,
+        "exec-all-test": 16,
     },
     test_tags = ["no-sandbox"],
 )

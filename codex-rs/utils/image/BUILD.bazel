@@ -3,7 +3,7 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "image",
     crate_name = "codex_utils_image",
-    test_sizes = {
-        "image-unit-tests-windows-cross": "medium",
+    test_shard_counts = {
+        "image-unit-tests": 4,
     },
 )
