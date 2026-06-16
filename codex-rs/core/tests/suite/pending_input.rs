@@ -79,14 +79,19 @@ fn function_call_output_text<'a>(body: &'a Value, call_id: &str) -> Option<&'a s
 }
 
 fn assert_interrupted_sleep_output(output: Option<&str>) {
-    let output = output.expect("sleep output");
-    let wall_time = output
+    let Some(output) = output else {
+        panic!("sleep output missing");
+    };
+    let Some(wall_time) = output
         .strip_prefix("Wall time: ")
         .and_then(|output| output.strip_suffix(" seconds\nSleep interrupted by new input."))
-        .expect("sleep output should include wall time");
-    wall_time
-        .parse::<f64>()
-        .expect("sleep wall time should be a number");
+    else {
+        panic!("sleep output should include wall time");
+    };
+    assert!(
+        wall_time.parse::<f64>().is_ok(),
+        "sleep wall time should be a number"
+    );
 }
 
 fn chunk(event: Value) -> StreamingSseChunk {
