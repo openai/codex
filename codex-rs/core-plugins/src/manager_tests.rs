@@ -359,7 +359,7 @@ enabled = true
 }
 
 #[tokio::test]
-async fn plugin_auth_projection_reprojects_cached_outcome_when_auth_changes() {
+async fn plugin_auth_projection_reprojects_cached_plugins_when_auth_changes() {
     let codex_home = TempDir::new().unwrap();
     write_auth_projection_plugin(codex_home.path(), "sample", /*include_app*/ true);
     write_auth_projection_plugin(codex_home.path(), "docs", /*include_app*/ false);
@@ -379,6 +379,27 @@ async fn plugin_auth_projection_reprojects_cached_outcome_when_auth_changes() {
         chatgpt_outcome.effective_apps(),
         vec![AppConnectorId("connector_sample".to_string())]
     );
+    assert_eq!(
+        chatgpt_outcome.capability_summaries(),
+        &[
+            PluginCapabilitySummary {
+                config_name: "docs@test".to_string(),
+                display_name: "docs".to_string(),
+                description: None,
+                has_skills: false,
+                mcp_server_names: vec!["docs".to_string()],
+                app_connector_ids: Vec::new(),
+            },
+            PluginCapabilitySummary {
+                config_name: "sample@test".to_string(),
+                display_name: "sample".to_string(),
+                description: None,
+                has_skills: false,
+                mcp_server_names: Vec::new(),
+                app_connector_ids: vec![AppConnectorId("connector_sample".to_string())],
+            },
+        ]
+    );
 
     assert!(manager.set_auth_mode(Some(AuthMode::ApiKey)));
     let api_key_outcome = manager.plugins_for_config(&config).await;
@@ -388,6 +409,27 @@ async fn plugin_auth_projection_reprojects_cached_outcome_when_auth_changes() {
         vec!["docs".to_string(), "sample".to_string()]
     );
     assert!(api_key_outcome.effective_apps().is_empty());
+    assert_eq!(
+        api_key_outcome.capability_summaries(),
+        &[
+            PluginCapabilitySummary {
+                config_name: "docs@test".to_string(),
+                display_name: "docs".to_string(),
+                description: None,
+                has_skills: false,
+                mcp_server_names: vec!["docs".to_string()],
+                app_connector_ids: Vec::new(),
+            },
+            PluginCapabilitySummary {
+                config_name: "sample@test".to_string(),
+                display_name: "sample".to_string(),
+                description: None,
+                has_skills: false,
+                mcp_server_names: vec!["sample".to_string()],
+                app_connector_ids: Vec::new(),
+            },
+        ]
+    );
 }
 
 fn write_plugin_with_version(
@@ -1781,7 +1823,7 @@ async fn plugin_cache_ignores_unrelated_session_overrides() {
 }
 
 #[test]
-fn plugin_cache_invalidation_rejects_stale_load_completion() {
+fn loaded_plugins_cache_invalidation_rejects_stale_load_completion() {
     let codex_home = TempDir::new().unwrap();
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
     let cache_key = PluginLoadCacheKey {
@@ -1789,16 +1831,12 @@ fn plugin_cache_invalidation_rejects_stale_load_completion() {
         skill_config_rules: SkillConfigRules::default(),
         remote_plugin_enabled: false,
     };
-    let stale_generation = manager.enabled_outcome_cache_generation();
+    let stale_generation = manager.loaded_plugins_cache_generation();
 
-    manager.clear_enabled_outcome_cache();
-    manager.cache_enabled_outcome_if_current(
-        stale_generation,
-        cache_key.clone(),
-        PluginLoadOutcome::default(),
-    );
+    manager.clear_loaded_plugins_cache();
+    manager.cache_loaded_plugins_if_current(stale_generation, cache_key.clone(), Vec::new());
 
-    assert_eq!(manager.cached_enabled_outcome(&cache_key), None);
+    assert_eq!(manager.cached_loaded_plugins(&cache_key), None);
 }
 
 #[tokio::test]
@@ -4265,7 +4303,7 @@ async fn load_plugins_ignores_project_config_files() {
     )
     .expect("config layer stack should build");
 
-    let outcome = load_plugins_from_layer_stack(
+    let plugins = load_plugins_from_layer_stack(
         &stack,
         std::collections::HashMap::new(),
         &PluginStore::new(codex_home.path().to_path_buf()),
@@ -4274,7 +4312,7 @@ async fn load_plugins_ignores_project_config_files() {
     )
     .await;
 
-    assert_eq!(outcome, PluginLoadOutcome::default());
+    assert_eq!(plugins, Vec::new());
 }
 
 #[tokio::test]
