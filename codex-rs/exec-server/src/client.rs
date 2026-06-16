@@ -27,6 +27,7 @@ use crate::client_api::ExecServerTransportParams;
 use crate::client_api::HttpClient;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::client_api::StdioExecServerConnectArgs;
+use crate::client_transport::ExecServerReconnectStrategy;
 use crate::connection::JsonRpcConnection;
 use crate::process::ExecProcessEvent;
 use crate::process::ExecProcessEventLog;
@@ -187,7 +188,7 @@ struct Inner {
     http_body_streams_write_lock: Mutex<()>,
     http_body_stream_next_id: AtomicU64,
     session_id: OnceLock<String>,
-    remote_connect_args: Option<RemoteExecServerConnectArgs>,
+    reconnect_strategy: Option<ExecServerReconnectStrategy>,
 }
 
 struct ConnectionState {
@@ -590,13 +591,13 @@ impl ExecServerClient {
         connection: JsonRpcConnection,
         options: ExecServerClientConnectOptions,
     ) -> Result<Self, ExecServerError> {
-        Self::connect_with_recovery(connection, options, /*remote_connect_args*/ None).await
+        Self::connect_with_recovery(connection, options, /*reconnect_strategy*/ None).await
     }
 
     pub(crate) async fn connect_with_recovery(
         connection: JsonRpcConnection,
         options: ExecServerClientConnectOptions,
-        remote_connect_args: Option<RemoteExecServerConnectArgs>,
+        reconnect_strategy: Option<ExecServerReconnectStrategy>,
     ) -> Result<Self, ExecServerError> {
         let (rpc_client, events_rx) = RpcClient::new(connection);
         let rpc_client = Arc::new(rpc_client);
@@ -615,7 +616,7 @@ impl ExecServerClient {
             http_body_streams_write_lock: Mutex::new(()),
             http_body_stream_next_id: AtomicU64::new(1),
             session_id,
-            remote_connect_args,
+            reconnect_strategy,
         });
         let client = Self { inner };
         // An explicit resume can redirect notifications from running processes
@@ -1666,6 +1667,7 @@ mod tests {
             "ws://{}",
             listener.local_addr().expect("listener should have address")
         );
+        let (initialized_tx, initialized_rx) = oneshot::channel();
         let (finish_tx, finish_rx) = oneshot::channel();
         let server = tokio::spawn(async move {
             let mut websocket = accept_websocket(&listener).await;
@@ -1715,6 +1717,9 @@ mod tests {
                     if notification.method == INITIALIZED_METHOD => {}
                 other => panic!("expected initialized notification, got {other:?}"),
             }
+            initialized_tx
+                .send(())
+                .expect("initialized notification should signal");
             finish_rx.await.expect("test should finish");
         });
 
@@ -1733,7 +1738,10 @@ mod tests {
         .expect("explicit resume should connect");
         assert_eq!(client.session_id().as_deref(), Some("session-1"));
 
-        drop(client);
+        timeout(Duration::from_secs(1), initialized_rx)
+            .await
+            .expect("initialized notification should not time out")
+            .expect("initialized notification should signal");
         finish_tx.send(()).expect("test should finish");
         server.await.expect("server task should finish");
     }

@@ -273,7 +273,7 @@ impl Inner {
             self.fail(message).await;
             return;
         }
-        if self.remote_connect_args.is_none() {
+        if self.reconnect_strategy.is_none() {
             self.fail(disconnect_message).await;
             return;
         }
@@ -359,12 +359,11 @@ impl Inner {
         self: &Arc<Self>,
         session_id: &str,
     ) -> Result<Arc<RpcClient>, ExecServerError> {
-        let mut connect_args = self
-            .remote_connect_args
-            .clone()
-            .ok_or_else(|| ExecServerError::Protocol("missing reconnect arguments".to_string()))?;
-        connect_args.resume_session_id = Some(session_id.to_string());
-        let connection = ExecServerClient::open_websocket_connection(&connect_args).await?;
+        let reconnect_strategy = self
+            .reconnect_strategy
+            .as_ref()
+            .ok_or_else(|| ExecServerError::Protocol("missing reconnect strategy".to_string()))?;
+        let (connection, options) = reconnect_strategy.resume(session_id).await?;
         let (rpc_client, events_rx) = RpcClient::new(connection);
         let rpc_client = Arc::new(rpc_client);
         let client = ExecServerClient {
@@ -375,9 +374,7 @@ impl Inner {
         // burst cannot fill the bounded event channel and block the initialize
         // response behind it.
         client.spawn_rpc_reader(&rpc_client, events_rx);
-        client
-            .initialize_rpc(&rpc_client, connect_args.into())
-            .await?;
+        client.initialize_rpc(&rpc_client, options).await?;
 
         self.recover_processes(&rpc_client).await?;
         Ok(rpc_client)
@@ -498,6 +495,18 @@ fn is_retryable_recovery_error(error: &ExecServerError) -> bool {
             ExecServerError::WebSocketConnectTimeout { .. }
                 | ExecServerError::WebSocketConnect { .. }
                 | ExecServerError::InitializeTimedOut { .. }
+        )
+        || matches!(
+            error,
+            ExecServerError::EnvironmentRegistryRequest(error)
+                if error.is_connect() || error.is_timeout()
+        )
+        || matches!(
+            error,
+            ExecServerError::EnvironmentRegistryHttp { status, .. }
+                if status.is_server_error()
+                    || *status == reqwest::StatusCode::REQUEST_TIMEOUT
+                    || *status == reqwest::StatusCode::TOO_MANY_REQUESTS
         )
         || matches!(
             error,
