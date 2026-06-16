@@ -3448,7 +3448,6 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     let RestartedThreadFixture {
         mut mcp, thread_id, ..
     } = start_materialized_thread_and_restart(codex_home.path(), "seed history").await?;
-    let expected_forked_from_id = thread_id.clone();
 
     let history_text = "Hello from history";
     let history = vec![ResponseItem::Message {
@@ -3494,7 +3493,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
             "mock_provider",
             history_text,
             ThreadStatus::Idle,
-            Some(expected_forked_from_id),
+            None,
         )
     );
 

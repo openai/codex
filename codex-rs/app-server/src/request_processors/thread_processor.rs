@@ -2597,7 +2597,7 @@ impl ThreadRequestProcessor {
         let include_turns = !exclude_turns;
 
         let resume_result = if let Some(history) = history {
-            self.resume_thread_from_history(&thread_id, history.as_slice())
+            self.resume_thread_from_history(history.as_slice())
                 .await
                 .map(|thread_history| (thread_history, None))
         } else if let Some(stored_thread) = stored_thread_from_running_probe {
@@ -3034,14 +3034,13 @@ impl ThreadRequestProcessor {
     #[tracing::instrument(level = "trace", skip_all)]
     async fn resume_thread_from_history(
         &self,
-        thread_id: &str,
         history: &[ResponseItem],
     ) -> Result<InitialHistory, JSONRPCErrorError> {
         if history.is_empty() {
             return Err(invalid_request("history must not be empty"));
         }
         Ok(InitialHistory::Forked(ForkedHistory {
-            parent_id: ThreadId::from_string(thread_id).ok(),
+            parent_id: None,
             history: history
                 .iter()
                 .cloned()
