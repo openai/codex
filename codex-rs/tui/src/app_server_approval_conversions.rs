@@ -66,7 +66,6 @@ mod tests {
     use codex_app_server_protocol::RequestPermissionProfile;
     use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
-    use codex_utils_path_uri::ApiPathString;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -99,12 +98,8 @@ mod tests {
                 enabled: Some(true),
             }),
             file_system: Some(AdditionalFileSystemPermissions {
-                read: Some(vec![ApiPathString::from_abs_path(&absolute_path(
-                    "/tmp/read-only",
-                ))]),
-                write: Some(vec![ApiPathString::from_abs_path(&absolute_path(
-                    "/tmp/write",
-                ))]),
+                read: Some(vec![absolute_path("/tmp/read-only").into()]),
+                write: Some(vec![absolute_path("/tmp/write").into()]),
                 glob_scan_max_depth: None,
                 entries: None,
             }),
@@ -119,25 +114,19 @@ mod tests {
                     enabled: Some(true),
                 }),
                 file_system: Some(AdditionalFileSystemPermissions {
-                    read: Some(vec![ApiPathString::from_abs_path(&absolute_path(
-                        "/tmp/read-only",
-                    ))]),
-                    write: Some(vec![ApiPathString::from_abs_path(&absolute_path(
-                        "/tmp/write",
-                    ))]),
+                    read: Some(vec![absolute_path("/tmp/read-only").into()]),
+                    write: Some(vec![absolute_path("/tmp/write").into()]),
                     glob_scan_max_depth: None,
                     entries: Some(vec![
                         FileSystemSandboxEntry {
                             path: FileSystemPath::Path {
-                                path: ApiPathString::from_abs_path(&absolute_path(
-                                    "/tmp/read-only",
-                                )),
+                                path: absolute_path("/tmp/read-only").into(),
                             },
                             access: FileSystemAccessMode::Read,
                         },
                         FileSystemSandboxEntry {
                             path: FileSystemPath::Path {
-                                path: ApiPathString::from_abs_path(&absolute_path("/tmp/write")),
+                                path: absolute_path("/tmp/write").into(),
                             },
                             access: FileSystemAccessMode::Write,
                         },

@@ -97,7 +97,6 @@ use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::user_input::TextElement;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_path_uri::ApiPathString;
 use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
@@ -2463,12 +2462,8 @@ async fn inactive_thread_exec_approval_preserves_context() {
             enabled: Some(true),
         }),
         file_system: Some(AdditionalFileSystemPermissions {
-            read: Some(vec![ApiPathString::from_abs_path(&test_absolute_path(
-                "/tmp/read-only",
-            ))]),
-            write: Some(vec![ApiPathString::from_abs_path(&test_absolute_path(
-                "/tmp/write",
-            ))]),
+            read: Some(vec![test_absolute_path("/tmp/read-only").into()]),
+            write: Some(vec![test_absolute_path("/tmp/write").into()]),
             glob_scan_max_depth: None,
             entries: None,
         }),
@@ -2505,12 +2500,8 @@ async fn inactive_thread_exec_approval_preserves_context() {
                 enabled: Some(true),
             }),
             file_system: Some(AdditionalFileSystemPermissions {
-                read: Some(vec![ApiPathString::from_abs_path(&test_absolute_path(
-                    "/tmp/read-only",
-                ))]),
-                write: Some(vec![ApiPathString::from_abs_path(&test_absolute_path(
-                    "/tmp/write",
-                ))]),
+                read: Some(vec![test_absolute_path("/tmp/read-only").into()]),
+                write: Some(vec![test_absolute_path("/tmp/write").into()]),
                 glob_scan_max_depth: None,
                 entries: None,
             }),
@@ -2658,12 +2649,8 @@ async fn inactive_thread_permissions_approval_preserves_file_system_permissions(
                     enabled: Some(true),
                 }),
                 file_system: Some(AdditionalFileSystemPermissions {
-                    read: Some(vec![ApiPathString::from_abs_path(&test_absolute_path(
-                        "/tmp/read-only",
-                    ))]),
-                    write: Some(vec![ApiPathString::from_abs_path(&test_absolute_path(
-                        "/tmp/write",
-                    ))]),
+                    read: Some(vec![test_absolute_path("/tmp/read-only").into()]),
+                    write: Some(vec![test_absolute_path("/tmp/write").into()]),
                     glob_scan_max_depth: None,
                     entries: None,
                 }),
