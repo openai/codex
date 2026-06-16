@@ -122,6 +122,7 @@ impl PluginsConfigInput {
 /// Inputs used to select endpoint-backed plugin install candidates.
 pub struct RecommendedPluginCandidatesInput<'a> {
     pub plugins_config: &'a PluginsConfigInput,
+    pub loaded_plugins: &'a PluginLoadOutcome,
     pub auth: Option<&'a CodexAuth>,
     pub disabled_tools: &'a [ToolSuggestDisabledTool],
     pub app_server_client_name: Option<&'a str>,
@@ -1010,7 +1011,7 @@ impl PluginsManager {
         mode
     }
 
-    /// Returns endpoint recommendations that are not already installed or disabled.
+    /// Returns endpoint recommendations eligible for installation in the current client.
     /// `None` selects the legacy discovery workflow.
     pub async fn recommended_plugin_candidates_for_config(
         &self,
@@ -1026,8 +1027,8 @@ impl PluginsManager {
             return Some(Vec::new());
         }
 
-        let plugin_outcome = self.plugins_for_config(input.plugins_config).await;
-        let installed_plugin_ids = plugin_outcome
+        let installed_plugin_ids = input
+            .loaded_plugins
             .plugins()
             .iter()
             .map(|plugin| plugin.config_name.as_str())

@@ -3891,10 +3891,12 @@ remote_plugin = true
     let disabled_tools = [ToolSuggestDisabledTool::plugin(
         "github@openai-curated-remote",
     )];
+    let loaded_plugins = manager.plugins_for_config(&config).await;
 
     let candidates = manager
         .recommended_plugin_candidates_for_config(RecommendedPluginCandidatesInput {
             plugins_config: &config,
+            loaded_plugins: &loaded_plugins,
             auth: Some(&auth),
             disabled_tools: &disabled_tools,
             app_server_client_name: None,

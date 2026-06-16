@@ -1199,6 +1199,7 @@ pub(crate) async fn built_tools(
             .plugins_manager
             .recommended_plugin_candidates_for_config(RecommendedPluginCandidatesInput {
                 plugins_config: &plugins_config,
+                loaded_plugins: &loaded_plugins,
                 auth: auth.as_ref(),
                 disabled_tools: &turn_context.config.tool_suggest.disabled_tools,
                 app_server_client_name: turn_context.app_server_client_name.as_deref(),
