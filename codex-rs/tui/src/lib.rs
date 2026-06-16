@@ -742,13 +742,22 @@ async fn lookup_latest_session_target_with_app_server(
                 lookup_mode,
             ))
             .await?;
-        let target = response
+        let Some(mut target) = response
             .data
             .into_iter()
-            .find_map(session_target_from_app_server_thread);
-        if let Some(target) = target
-            && (uses_remote_workspace || target.path.is_some())
+            .find_map(session_target_from_app_server_thread)
+        else {
+            continue;
+        };
+        if uses_remote_workspace {
+            return Ok(Some(target));
+        }
+        if let Some(path) = target.path.as_deref()
+            && let Some(verified_path) =
+                crate::session_resume::verified_rollout_path_for_thread(path, target.thread_id)
+                    .await
         {
+            target.path = Some(verified_path);
             return Ok(Some(target));
         }
     }
