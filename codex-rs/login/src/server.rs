@@ -744,8 +744,9 @@ pub(crate) async fn exchange_code_for_tokens(
         refresh_token: String,
     }
 
-    let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
-    let client = build_raw_auth_reqwest_client(&token_endpoint, auth_route_config)?;
+    let issuer = issuer.trim_end_matches('/');
+    let token_endpoint = format!("{issuer}/oauth/token");
+    let client = build_raw_auth_reqwest_client(issuer, auth_route_config)?;
     info!(
         issuer = %sanitize_url_for_logging(issuer),
         token_endpoint = %sanitize_url_for_logging(&token_endpoint),

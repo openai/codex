@@ -158,10 +158,8 @@ fn print_device_code_prompt(verification_url: &str, code: &str) {
 
 pub async fn request_device_code(opts: &ServerOptions) -> std::io::Result<DeviceCode> {
     let base_url = opts.issuer.trim_end_matches('/');
+    let client = build_raw_auth_reqwest_client(base_url, opts.auth_route_config.as_ref())?;
     let api_base_url = format!("{base_url}/api/accounts");
-    let user_code_endpoint = format!("{api_base_url}/deviceauth/usercode");
-    let client =
-        build_raw_auth_reqwest_client(&user_code_endpoint, opts.auth_route_config.as_ref())?;
     let uc = request_user_code(&client, &api_base_url, &opts.client_id).await?;
 
     Ok(DeviceCode {
@@ -177,9 +175,8 @@ pub async fn complete_device_code_login(
     device_code: DeviceCode,
 ) -> std::io::Result<()> {
     let base_url = opts.issuer.trim_end_matches('/');
+    let client = build_raw_auth_reqwest_client(base_url, opts.auth_route_config.as_ref())?;
     let api_base_url = format!("{base_url}/api/accounts");
-    let token_endpoint = format!("{api_base_url}/deviceauth/token");
-    let client = build_raw_auth_reqwest_client(&token_endpoint, opts.auth_route_config.as_ref())?;
 
     let code_resp = poll_for_token(
         &client,
