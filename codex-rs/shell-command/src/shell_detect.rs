@@ -37,24 +37,24 @@ impl DetectedShell {
 }
 
 pub fn detect_shell_type(shell_path: impl AsRef<std::path::Path>) -> Option<ShellType> {
-    let shell_path = shell_path.as_ref();
-    match shell_path.as_os_str().to_str() {
-        Some("zsh") => Some(ShellType::Zsh),
-        Some("sh") => Some(ShellType::Sh),
-        Some("cmd") => Some(ShellType::Cmd),
-        Some("bash") => Some(ShellType::Bash),
-        Some("pwsh") => Some(ShellType::PowerShell),
-        Some("powershell") => Some(ShellType::PowerShell),
-        _ => {
-            let shell_name = shell_path.file_stem();
-            if let Some(shell_name) = shell_name {
-                let shell_name_path = std::path::Path::new(shell_name);
-                if shell_name_path != shell_path {
-                    return detect_shell_type(shell_name_path);
-                }
-            }
-            None
+    let shell_name = shell_path.as_ref().file_name()?.to_str()?;
+    detect_shell_name(shell_name)
+}
+
+fn detect_shell_name(shell_name: &str) -> Option<ShellType> {
+    let mut shell_name = shell_name.rsplit(['/', '\\']).next()?;
+    loop {
+        match shell_name.to_ascii_lowercase().as_str() {
+            "zsh" => return Some(ShellType::Zsh),
+            "sh" => return Some(ShellType::Sh),
+            "cmd" => return Some(ShellType::Cmd),
+            "bash" => return Some(ShellType::Bash),
+            "pwsh" | "powershell" => return Some(ShellType::PowerShell),
+            _ => {}
         }
+
+        let (stem, _) = shell_name.rsplit_once('.')?;
+        shell_name = stem;
     }
 }
 
@@ -336,11 +336,9 @@ mod tests {
             Some(ShellType::PowerShell)
         );
         assert_eq!(
-            detect_shell_type(PathBuf::from(if cfg!(windows) {
+            detect_shell_type(PathBuf::from(
                 "C:\\windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
-            } else {
-                "/usr/local/bin/pwsh"
-            })),
+            )),
             Some(ShellType::PowerShell)
         );
         assert_eq!(
@@ -364,5 +362,15 @@ mod tests {
             detect_shell_type(PathBuf::from("cmd.exe")),
             Some(ShellType::Cmd)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detect_shell_type_ignores_a_non_utf8_parent() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = PathBuf::from(OsString::from_vec(b"/non-utf8-\xff/bash".to_vec()));
+        assert_eq!(detect_shell_type(path), Some(ShellType::Bash));
     }
 }
