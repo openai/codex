@@ -1696,6 +1696,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
                     ),
                 }],
                 phase: None,
+                metadata: None,
             }],
         )
         .await;
