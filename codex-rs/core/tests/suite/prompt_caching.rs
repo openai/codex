@@ -36,7 +36,7 @@ use tempfile::TempDir;
 
 fn write_global_instructions(home: &Path) {
     fs::write(home.join("AGENTS.md"), "be consistent and helpful")
-        .unwrap_or_else(|err| panic!("write global instructions: {err}"));
+        .expect("write global instructions");
 }
 
 fn text_user_input(text: String) -> serde_json::Value {

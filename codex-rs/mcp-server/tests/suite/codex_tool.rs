@@ -47,9 +47,9 @@ async fn test_shell_command_approval_triggers_elicitation() {
 
     // Apparently `#[tokio::test]` must return `()`, so we create a helper
     // function that returns `Result` so we can use `?` in favor of `unwrap`.
-    if let Err(err) = shell_command_approval_triggers_elicitation().await {
-        panic!("failure: {err}");
-    }
+    shell_command_approval_triggers_elicitation()
+        .await
+        .expect("shell command approval should trigger elicitation");
 }
 
 async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
@@ -146,7 +146,6 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
         .await?;
 
     // Verify task_complete notification arrives before the tool call completes.
-    #[expect(clippy::expect_used)]
     let _task_complete = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp_process.read_stream_until_legacy_task_complete_notification(),
@@ -225,9 +224,9 @@ async fn test_patch_approval_triggers_elicitation() {
         return;
     }
 
-    if let Err(err) = patch_approval_triggers_elicitation().await {
-        panic!("failure: {err}");
-    }
+    patch_approval_triggers_elicitation()
+        .await
+        .expect("patch approval should trigger elicitation");
 }
 
 async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
@@ -356,13 +355,13 @@ async fn test_codex_tool_passes_base_instructions() {
 
     // Apparently `#[tokio::test]` must return `()`, so we create a helper
     // function that returns `Result` so we can use `?` in favor of `unwrap`.
-    if let Err(err) = codex_tool_passes_base_instructions().await {
-        panic!("failure: {err}");
-    }
+    codex_tool_passes_base_instructions()
+        .await
+        .expect("codex tool should pass base instructions");
 }
 
 async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
-    #![expect(clippy::expect_used, clippy::unwrap_used)]
+    #![expect(clippy::unwrap_used)]
 
     let server =
         create_mock_responses_server(vec![create_final_assistant_message_sse_response("Enjoy!")?])

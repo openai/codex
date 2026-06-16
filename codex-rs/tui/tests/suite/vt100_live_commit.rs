@@ -5,10 +5,8 @@ use ratatui::text::Line;
 #[test]
 fn live_001_commit_on_overflow() {
     let backend = VT100Backend::new(/*width*/ 20, /*height*/ 6);
-    let mut term = match codex_tui::Terminal::with_options(backend) {
-        Ok(t) => t,
-        Err(e) => panic!("failed to construct terminal: {e}"),
-    };
+    let mut term =
+        codex_tui::Terminal::with_options(backend).expect("terminal should be constructed");
     let area = Rect::new(
         /*x*/ 0, /*y*/ 5, /*width*/ 20, /*height*/ 1,
     );

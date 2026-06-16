@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;

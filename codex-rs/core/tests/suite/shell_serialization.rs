@@ -1,5 +1,4 @@
 #![cfg(not(target_os = "windows"))]
-#![allow(clippy::expect_used)]
 
 use anyhow::Result;
 use codex_protocol::models::PermissionProfile;

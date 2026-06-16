@@ -494,7 +494,7 @@ fn create_config_toml(
                 .iter()
                 .find(|spec| spec.id == *feature)
                 .map(|spec| spec.key)
-                .unwrap_or_else(|| panic!("missing feature key for {feature:?}"));
+                .expect("feature should have a config key");
             format!("{key} = {enabled}")
         })
         .collect::<Vec<_>>()

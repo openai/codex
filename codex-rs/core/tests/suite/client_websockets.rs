@@ -1,4 +1,4 @@
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::unwrap_used)]
 use codex_api::WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY;
 use codex_api::WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY;
 use codex_core::CodexResponsesMetadata;
@@ -2241,13 +2241,11 @@ async fn stream_until_complete_with_model_info(
         .expect("websocket stream failed");
 
     while let Some(event) = stream.next().await {
-        match event {
-            Ok(ResponseEvent::Completed { response_id, .. }) => {
-                assert_eq!(response_id, expected_response_id);
-                return;
-            }
-            Ok(_) => {}
-            Err(err) => panic!("websocket stream failed: {err}"),
+        if let ResponseEvent::Completed { response_id, .. } =
+            event.expect("websocket stream failed")
+        {
+            assert_eq!(response_id, expected_response_id);
+            return;
         }
     }
     panic!("websocket stream ended before completion");

@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use std::any::Any;
 use std::fs;
 use std::path::PathBuf;
@@ -35,8 +36,7 @@ fn prompt_all(_: &[String]) -> Decision {
 }
 
 fn absolute_path(path: &str) -> AbsolutePathBuf {
-    AbsolutePathBuf::try_from(path.to_string())
-        .unwrap_or_else(|error| panic!("expected absolute path `{path}`: {error}"))
+    AbsolutePathBuf::try_from(path.to_string()).expect("path should be absolute")
 }
 
 fn host_absolute_path(segments: &[&str]) -> String {

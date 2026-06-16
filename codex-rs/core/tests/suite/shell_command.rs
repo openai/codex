@@ -38,7 +38,6 @@ fn shell_responses_with_timeout(
         "login": login,
     });
 
-    #[allow(clippy::expect_used)]
     let arguments = serde_json::to_string(&args).expect("serialize shell command arguments");
 
     vec![

@@ -1,4 +1,5 @@
 #![cfg(unix)]
+#![allow(clippy::expect_used)]
 
 mod common;
 
@@ -842,10 +843,7 @@ async fn file_system_copy_rejects_standalone_fifo_source(
             /*sandbox*/ None,
         )
         .await;
-    let error = match error {
-        Ok(()) => panic!("copy should fail"),
-        Err(error) => error,
-    };
+    let error = error.expect_err("copying a FIFO should fail");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert_eq!(
         error.to_string(),

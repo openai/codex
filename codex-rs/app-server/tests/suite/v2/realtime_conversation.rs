@@ -389,9 +389,7 @@ impl RealtimeE2eHarness {
                 .wait_for_request(/*connection_index*/ 0, request_index),
         )
         .await
-        .unwrap_or_else(|_| {
-            panic!("timed out waiting for realtime sideband request {request_index}")
-        })
+        .expect("realtime sideband request should arrive before timeout")
         .body_json()
     }
 

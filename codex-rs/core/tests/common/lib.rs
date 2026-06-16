@@ -1,4 +1,4 @@
-#![expect(clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use anyhow::Context as _;
 use anyhow::ensure;
@@ -75,12 +75,10 @@ fn configure_insta_workspace_root_for_snapshot_tests() {
 
 #[track_caller]
 pub fn assert_regex_match<'s>(pattern: &str, actual: &'s str) -> regex_lite::Captures<'s> {
-    let regex = Regex::new(pattern).unwrap_or_else(|err| {
-        panic!("failed to compile regex {pattern:?}: {err}");
-    });
+    let regex = Regex::new(pattern).expect("failed to compile regex");
     regex
         .captures(actual)
-        .unwrap_or_else(|| panic!("regex {pattern:?} did not match {actual:?}"))
+        .expect("regex did not match actual value")
 }
 
 pub fn test_path_buf_with_windows(unix_path: &str, windows_path: Option<&str>) -> PathBuf {

@@ -75,7 +75,6 @@ async fn run_turn_and_measure(test: &TestCodex, prompt: &str) -> anyhow::Result<
     Ok(start.elapsed())
 }
 
-#[allow(clippy::expect_used)]
 async fn build_codex_with_test_tool(server: &wiremock::MockServer) -> anyhow::Result<TestCodex> {
     let mut builder = test_codex().with_model("test-gpt-5.1-codex");
     builder.build(server).await

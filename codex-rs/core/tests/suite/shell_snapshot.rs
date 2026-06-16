@@ -106,12 +106,10 @@ fn command_asserting_policy_after_snapshot() -> String {
     )
 }
 
-#[allow(clippy::expect_used)]
 async fn run_snapshot_command(command: &str) -> Result<SnapshotRun> {
     run_snapshot_command_with_options(command, SnapshotRunOptions::default()).await
 }
 
-#[allow(clippy::expect_used)]
 async fn run_snapshot_command_with_options(
     command: &str,
     options: SnapshotRunOptions,
@@ -211,12 +209,10 @@ async fn run_snapshot_command_with_options(
     })
 }
 
-#[allow(clippy::expect_used)]
 async fn run_shell_command_snapshot(command: &str) -> Result<SnapshotRun> {
     run_shell_command_snapshot_with_options(command, SnapshotRunOptions::default()).await
 }
 
-#[allow(clippy::expect_used)]
 async fn run_shell_command_snapshot_with_options(
     command: &str,
     options: SnapshotRunOptions,
@@ -311,7 +307,6 @@ async fn run_shell_command_snapshot_with_options(
     })
 }
 
-#[allow(clippy::expect_used)]
 async fn run_tool_turn_on_harness(
     harness: &TestCodexHarness,
     prompt: &str,

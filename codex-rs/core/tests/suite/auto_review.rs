@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used)]
-
 use anyhow::Result;
 use codex_features::Feature;
 use codex_login::CodexAuth;

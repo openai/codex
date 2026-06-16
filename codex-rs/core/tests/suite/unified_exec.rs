@@ -68,7 +68,6 @@ struct ParsedUnifiedExecOutput {
     output: String,
 }
 
-#[allow(clippy::expect_used)]
 fn parse_unified_exec_output(raw: &str) -> Result<ParsedUnifiedExecOutput> {
     static OUTPUT_REGEX: OnceLock<Regex> = OnceLock::new();
     let regex = OUTPUT_REGEX.get_or_init(|| {
@@ -249,9 +248,10 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
 
     let builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
-        if let Err(err) = config.features.enable(Feature::UnifiedExec) {
-            panic!("test config should allow feature update: {err}");
-        }
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let harness = TestCodexHarness::with_builder(builder).await?;
 
@@ -908,7 +908,6 @@ async fn unified_exec_short_lived_network_denial_emits_failed_end_event() -> Res
     Ok(())
 }
 
-#[allow(clippy::expect_used)]
 async fn unified_exec_network_denial_test(
     server: &wiremock::MockServer,
 ) -> Result<(TestCodex, PermissionProfile)> {
@@ -999,14 +998,15 @@ async fn wait_for_unified_exec_end(
                 response_mock.requests().len()
             );
         }
-        let event = match tokio::time::timeout(remaining, test.codex.next_event()).await {
-            Ok(Ok(event)) => event.msg,
-            Ok(Err(err)) => panic!("event stream ended unexpectedly: {err}"),
-            Err(_) => panic!(
-                "timed out waiting for network denial end event; observed {observed_events:?}; response requests: {}",
-                response_mock.requests().len()
-            ),
-        };
+        let timeout_message = format!(
+            "timed out waiting for network denial end event; observed {observed_events:?}; response requests: {}",
+            response_mock.requests().len()
+        );
+        let event = tokio::time::timeout(remaining, test.codex.next_event())
+            .await
+            .expect(&timeout_message)
+            .expect("event stream ended unexpectedly")
+            .msg;
         turn_completed |= matches!(event, EventMsg::TurnComplete(_));
         observed_events.push(format!("{event:?}"));
         if let EventMsg::ExecCommandEnd(ev) = event
@@ -2075,9 +2075,10 @@ async fn assert_write_stdin_ctrl_c_interrupts_non_tty_session(
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        if let Err(err) = config.features.enable(Feature::UnifiedExec) {
-            panic!("test config should allow feature update: {err}");
-        }
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
     });
     let test = builder.build_with_remote_env(&server).await?;
 
