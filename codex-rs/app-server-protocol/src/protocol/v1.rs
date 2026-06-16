@@ -52,7 +52,7 @@ pub struct InitializeCapabilities {
     pub request_attestation: bool,
     /// Allow downstream MCP servers to request OpenAI extended form elicitations.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub mcp_server_open_ai_form_elicitation: bool,
+    pub mcp_server_openai_form_elicitation: bool,
     /// Exact notification method names that should be suppressed for this
     /// connection (for example `thread/started`).
     #[ts(optional = nullable)]

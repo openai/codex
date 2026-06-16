@@ -17,7 +17,7 @@ requestAttestation: boolean,
 /**
  * Allow downstream MCP servers to request OpenAI extended form elicitations.
  */
-mcpServerOpenAiFormElicitation?: boolean,
+mcpServerOpenaiFormElicitation?: boolean,
 /**
  * Exact notification method names that should be suppressed for this
  * connection (for example `thread/started`).

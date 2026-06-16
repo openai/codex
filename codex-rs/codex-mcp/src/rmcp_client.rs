@@ -155,7 +155,7 @@ impl AsyncManagedClient {
         runtime_context: McpRuntimeContext,
         runtime_auth_provider: Option<SharedAuthProvider>,
         client_elicitation_capability: ElicitationCapability,
-        open_ai_form_elicitation_capability: OpenAiFormElicitationCapability,
+        openai_form_elicitation_capability: OpenAiFormElicitationCapability,
     ) -> Self {
         let tool_filter = server
             .configured_config()
@@ -209,7 +209,7 @@ impl AsyncManagedClient {
                         elicitation_requests,
                         codex_apps_tools_cache_context,
                         client_elicitation_capability,
-                        open_ai_form_elicitation_capability,
+                        openai_form_elicitation_capability,
                     },
                 )
                 .await
@@ -489,11 +489,11 @@ async fn start_server_task(
         elicitation_requests,
         codex_apps_tools_cache_context,
         client_elicitation_capability,
-        open_ai_form_elicitation_capability,
+        openai_form_elicitation_capability,
     } = params;
     let params = mcp_initialize_request_params(
         client_elicitation_capability,
-        open_ai_form_elicitation_capability,
+        openai_form_elicitation_capability,
     );
 
     let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
@@ -556,11 +556,11 @@ async fn start_server_task(
 
 fn mcp_initialize_request_params(
     client_elicitation_capability: ElicitationCapability,
-    open_ai_form_elicitation_capability: OpenAiFormElicitationCapability,
+    openai_form_elicitation_capability: OpenAiFormElicitationCapability,
 ) -> InitializeRequestParams {
     let mut capabilities = ClientCapabilities::default();
     capabilities.elicitation = Some(client_elicitation_capability);
-    match open_ai_form_elicitation_capability {
+    match openai_form_elicitation_capability {
         OpenAiFormElicitationCapability::Unsupported => {}
         OpenAiFormElicitationCapability::Supported => {
             capabilities.extensions = Some(BTreeMap::from([(
@@ -600,7 +600,7 @@ struct StartServerTaskParams {
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
     client_elicitation_capability: ElicitationCapability,
-    open_ai_form_elicitation_capability: OpenAiFormElicitationCapability,
+    openai_form_elicitation_capability: OpenAiFormElicitationCapability,
 }
 
 async fn make_rmcp_client(

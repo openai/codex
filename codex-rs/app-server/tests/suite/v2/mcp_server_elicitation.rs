@@ -134,7 +134,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
             },
             Some(InitializeCapabilities {
                 experimental_api: true,
-                mcp_server_open_ai_form_elicitation: true,
+                mcp_server_openai_form_elicitation: true,
                 ..Default::default()
             }),
         ),

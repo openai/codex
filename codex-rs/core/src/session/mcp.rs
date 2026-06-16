@@ -345,7 +345,7 @@ impl Session {
             *guard = cancellation_token.clone();
             cancellation_token
         };
-        let open_ai_form_elicitation_capability = self
+        let openai_form_elicitation_capability = self
             .services
             .thread_extension_data
             .get::<codex_mcp::OpenAiFormElicitationCapability>()
@@ -367,7 +367,7 @@ impl Session {
             host_owned_codex_apps_enabled,
             mcp_config.prefix_mcp_tool_names,
             mcp_config.client_elicitation_capability,
-            open_ai_form_elicitation_capability,
+            openai_form_elicitation_capability,
             tool_plugin_provenance,
             auth.as_ref(),
             elicitation_reviewer,

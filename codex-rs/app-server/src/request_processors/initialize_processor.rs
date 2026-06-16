@@ -70,13 +70,13 @@ impl InitializeRequestProcessor {
         let (
             experimental_api_enabled,
             request_attestation,
-            open_ai_form_elicitation_capability,
+            openai_form_elicitation_capability,
             opt_out_notification_methods,
         ) = match params.capabilities {
             Some(capabilities) => (
                 capabilities.experimental_api,
                 capabilities.request_attestation,
-                if capabilities.mcp_server_open_ai_form_elicitation {
+                if capabilities.mcp_server_openai_form_elicitation {
                     codex_mcp::OpenAiFormElicitationCapability::Supported
                 } else {
                     codex_mcp::OpenAiFormElicitationCapability::Unsupported
@@ -115,7 +115,7 @@ impl InitializeRequestProcessor {
                 app_server_client_name: name.clone(),
                 client_version: version,
                 request_attestation,
-                open_ai_form_elicitation_capability,
+                openai_form_elicitation_capability,
             })
             .is_err()
         {

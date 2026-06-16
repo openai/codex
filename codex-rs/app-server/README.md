@@ -88,7 +88,7 @@ Clients must send a single `initialize` request per transport connection before 
 
 Clients that handle OpenAI extended MCP forms, including a fallback for
 unsupported field types, set
-`initialize.params.capabilities.mcpServerOpenAiFormElicitation` to `true`.
+`initialize.params.capabilities.mcpServerOpenaiFormElicitation` to `true`.
 App-server then advertises the downstream `openai/form` MCP extension for
 threads started, resumed, or forked by that connection. Clients that cannot
 handle the request envelope omit the field or set it to `false`.
