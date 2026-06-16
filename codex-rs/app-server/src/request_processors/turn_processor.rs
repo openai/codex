@@ -956,6 +956,7 @@ impl TurnRequestProcessor {
                 codex_response_item_prefix: params.codex_response_item_prefix,
                 model: params.model,
                 output_modality: params.output_modality,
+                include_startup_context: params.include_startup_context.unwrap_or(true),
                 prompt: params.prompt,
                 realtime_session_id: params.realtime_session_id,
                 transport: params.transport.map(|transport| match transport {
