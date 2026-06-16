@@ -190,7 +190,7 @@ fn turn_context_item_filesystem_uses_workspace_roots_instead_of_cwd() {
     let repo_private = repo.join("private");
     let item = TurnContextItem {
         turn_id: None,
-        cwd: test_path_buf("/not-the-workspace"),
+        cwd: PathUri::from_abs_path(&test_abs_path("/not-the-workspace")),
         workspace_roots: Some(vec![repo.clone(), other_repo.clone()]),
         current_date: None,
         timezone: None,
@@ -209,7 +209,9 @@ fn turn_context_item_filesystem_uses_workspace_roots_instead_of_cwd() {
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
     };
 
-    let context = EnvironmentContext::from_turn_context_item(&item, fake_shell_name()).render();
+    let context = EnvironmentContext::from_turn_context_item(&item, fake_shell_name())
+        .expect("turn context should hydrate")
+        .render();
 
     assert!(
         context.contains(&format!(
@@ -231,53 +233,6 @@ fn turn_context_item_filesystem_uses_workspace_roots_instead_of_cwd() {
                 .as_ref()
         ),
         "{context}"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn legacy_projected_windows_cwd_matches_environment_uri() {
-    let item = TurnContextItem {
-        turn_id: None,
-        cwd: PathBuf::from("/C:/windows"),
-        workspace_roots: None,
-        current_date: None,
-        timezone: None,
-        approval_policy: AskForApproval::Never,
-        sandbox_policy: SandboxPolicy::DangerFullAccess,
-        permission_profile: Some(PermissionProfile::Disabled),
-        network: None,
-        file_system_sandbox_policy: None,
-        model: "gpt-5".to_string(),
-        comp_hash: None,
-        personality: None,
-        collaboration_mode: None,
-        multi_agent_version: None,
-        realtime_active: None,
-        effort: None,
-        summary: codex_protocol::config_types::ReasoningSummary::Auto,
-    };
-    let current = EnvironmentContext::new(
-        vec![EnvironmentContextEnvironment {
-            id: "remote".to_string(),
-            cwd: PathUri::parse("file:///C:/windows").expect("Windows cwd URI"),
-            shell: "powershell".to_string(),
-        }],
-        /*current_date*/ None,
-        /*timezone*/ None,
-        /*network*/ None,
-        /*subagents*/ None,
-    );
-
-    assert_eq!(
-        EnvironmentContext::diff_from_turn_context_item(&item, &current),
-        EnvironmentContext::new(
-            Vec::new(),
-            /*current_date*/ None,
-            /*timezone*/ None,
-            /*network*/ None,
-            /*subagents*/ None,
-        )
     );
 }
 

@@ -53,6 +53,7 @@ use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -2988,7 +2989,7 @@ pub struct TurnContextNetworkItem {
 pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
-    pub cwd: PathBuf,
+    pub cwd: PathUri,
     /// Effective workspace roots used to materialize symbolic
     /// `:workspace_roots` filesystem permissions in `permission_profile`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3026,21 +3027,45 @@ pub struct TurnContextItem {
 }
 
 impl TurnContextItem {
-    pub fn permission_profile(&self) -> PermissionProfile {
-        self.permission_profile.clone().unwrap_or_else(|| {
-            let file_system_sandbox_policy =
-                self.file_system_sandbox_policy.clone().unwrap_or_else(|| {
-                    FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                        &self.sandbox_policy,
-                        &self.cwd,
+    pub fn permission_profile(&self) -> std::io::Result<PermissionProfile> {
+        if let Some(permission_profile) = self.permission_profile.clone() {
+            return Ok(permission_profile);
+        }
+        let file_system_sandbox_policy = match self.file_system_sandbox_policy.clone() {
+            Some(file_system_sandbox_policy) => file_system_sandbox_policy,
+            None => {
+                let convention = self.cwd.infer_path_convention().ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "cannot infer a path convention for legacy permission profile cwd {}",
+                            self.cwd
+                        ),
                     )
-                });
+                })?;
+                if convention != PathConvention::native() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "cannot hydrate legacy permission profile for {convention} cwd {} on a {} host",
+                            self.cwd,
+                            PathConvention::native(),
+                        ),
+                    ));
+                }
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+                    &self.sandbox_policy,
+                    self.cwd.to_abs_path()?.as_path(),
+                )
+            }
+        };
+        Ok(
             PermissionProfile::from_runtime_permissions_with_enforcement(
                 SandboxEnforcement::from_legacy_sandbox_policy(&self.sandbox_policy),
                 &file_system_sandbox_policy,
                 NetworkSandboxPolicy::from(&self.sandbox_policy),
-            )
-        })
+            ),
+        )
     }
 }
 
@@ -5301,18 +5326,47 @@ mod tests {
     }
 
     #[test]
-    fn turn_context_item_deserializes_without_network() -> Result<()> {
+    fn turn_context_item_accepts_legacy_cwd_and_serializes_path_uri() -> Result<()> {
+        let legacy_cwd = test_path_buf("/tmp");
         let item: TurnContextItem = serde_json::from_value(json!({
-            "cwd": test_path_buf("/tmp"),
+            "cwd": legacy_cwd,
             "approval_policy": "never",
             "sandbox_policy": { "type": "danger-full-access" },
             "model": "gpt-5",
             "summary": "auto",
         }))?;
 
+        let expected_cwd = PathUri::from_path(legacy_cwd)?;
+        assert_eq!(item.cwd, expected_cwd);
+        assert_eq!(
+            serde_json::to_value(&item)?["cwd"],
+            json!(expected_cwd.to_string())
+        );
         assert_eq!(item.network, None);
         assert_eq!(item.file_system_sandbox_policy, None);
         assert_eq!(item.comp_hash, None);
+        Ok(())
+    }
+
+    #[test]
+    fn turn_context_item_rejects_legacy_policy_hydration_for_foreign_cwd() -> Result<()> {
+        let foreign_cwd = if cfg!(windows) {
+            "file:///tmp"
+        } else {
+            "file:///C:/windows"
+        };
+        let item: TurnContextItem = serde_json::from_value(json!({
+            "cwd": foreign_cwd,
+            "approval_policy": "never",
+            "sandbox_policy": { "type": "workspace-write" },
+            "model": "gpt-5",
+            "summary": "auto",
+        }))?;
+
+        let err = item
+            .permission_profile()
+            .expect_err("foreign cwd should not hydrate a legacy permission profile");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         Ok(())
     }
 
@@ -5353,7 +5407,7 @@ mod tests {
     fn turn_context_item_serializes_network_when_present() -> Result<()> {
         let item = TurnContextItem {
             turn_id: None,
-            cwd: test_path_buf("/tmp"),
+            cwd: PathUri::from_abs_path(&test_path_buf("/tmp").abs()),
             workspace_roots: None,
             current_date: None,
             timezone: None,

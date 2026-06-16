@@ -14,6 +14,7 @@ use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::WarningEvent;
+use codex_utils_path_uri::PathUri;
 use core::time::Duration;
 use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;
@@ -27,7 +28,7 @@ fn resume_history(
     let turn_id = "resume-warning-seed-turn".to_string();
     let turn_ctx = TurnContextItem {
         turn_id: Some(turn_id.clone()),
-        cwd: config.cwd.to_path_buf(),
+        cwd: PathUri::from_abs_path(&config.cwd),
         workspace_roots: None,
         current_date: None,
         timezone: None,

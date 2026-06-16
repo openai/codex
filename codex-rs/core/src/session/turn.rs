@@ -156,8 +156,16 @@ pub(crate) async fn run_turn(
         return None;
     }
 
-    sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
-        .await;
+    if let Err(err) = sess
+        .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+        .await
+    {
+        let error = err.to_codex_protocol_error();
+        sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
+            .await;
+        error!(%err, "failed to hydrate persisted turn context");
+        return None;
+    }
 
     let (injection_items, explicitly_enabled_connectors) =
         build_skills_and_plugins(&sess, turn_context.as_ref(), &input, &cancellation_token).await?;

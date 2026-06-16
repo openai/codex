@@ -1134,7 +1134,8 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
         timestamp: "2025-01-03T13:00:01Z".to_string(),
         item: RolloutItem::TurnContext(TurnContextItem {
             turn_id: Some("turn-1".to_string()),
-            cwd: latest_cwd.clone(),
+            cwd: serde_json::from_value(serde_json::json!(&latest_cwd))
+                .expect("absolute latest cwd"),
             workspace_roots: None,
             current_date: None,
             timezone: None,

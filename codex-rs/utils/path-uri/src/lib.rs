@@ -164,6 +164,19 @@ impl PathUri {
         }
     }
 
+    /// Renders this URI using the native path syntax inferred from its shape.
+    ///
+    /// This is independent of the current host: a Windows URI renders with
+    /// Windows separators on every host. If the convention cannot be inferred
+    /// or the URI cannot be represented using that convention, the canonical
+    /// URI string is returned instead.
+    pub fn inferred_native_path_string(&self) -> String {
+        self.infer_path_convention()
+            .and_then(|convention| ApiPathString::from_path_uri(self, convention).ok())
+            .map(ApiPathString::into_string)
+            .unwrap_or_else(|| self.to_string())
+    }
+
     /// Returns the decoded final URI path segment, or `None` for the URI root
     /// or an opaque fallback URI created by [`Self::from_abs_path`].
     ///

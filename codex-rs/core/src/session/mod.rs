@@ -1619,7 +1619,7 @@ impl Session {
         &self,
         reference_context_item: Option<&TurnContextItem>,
         current_context: &TurnContext,
-    ) -> Vec<ResponseItem> {
+    ) -> CodexResult<Vec<ResponseItem>> {
         // TODO: Make context updates a pure diff of persisted previous/current TurnContextItem
         // state so replay/backtracking is deterministic. Runtime inputs that affect model-visible
         // context (shell, exec policy, feature gates, previous-turn bridge) should be persisted
@@ -1630,13 +1630,15 @@ impl Session {
         };
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
-        crate::context_manager::updates::build_settings_update_items(
-            reference_context_item,
-            previous_turn_settings.as_ref(),
-            current_context,
-            shell.as_ref(),
-            exec_policy.as_ref(),
-            self.features.enabled(Feature::Personality),
+        Ok(
+            crate::context_manager::updates::build_settings_update_items(
+                reference_context_item,
+                previous_turn_settings.as_ref(),
+                current_context,
+                shell.as_ref(),
+                exec_policy.as_ref(),
+                self.features.enabled(Feature::Personality),
+            )?,
         )
     }
 
@@ -3161,7 +3163,7 @@ impl Session {
     pub(crate) async fn record_context_updates_and_set_reference_context_item(
         &self,
         turn_context: &TurnContext,
-    ) {
+    ) -> CodexResult<()> {
         let reference_context_item = {
             let state = self.state.lock().await;
             state.reference_context_item()
@@ -3172,7 +3174,7 @@ impl Session {
         } else {
             // Steady-state path: append only context diffs to minimize token overhead.
             self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
-                .await
+                .await?
         };
         let turn_context_item = turn_context.to_turn_context_item();
         if !context_items.is_empty() {
@@ -3188,6 +3190,7 @@ impl Session {
         // context items. This keeps later runtime diffing aligned with the current turn state.
         let mut state = self.state.lock().await;
         state.set_reference_context_item(Some(turn_context_item));
+        Ok(())
     }
 
     pub(crate) async fn update_token_usage_info(

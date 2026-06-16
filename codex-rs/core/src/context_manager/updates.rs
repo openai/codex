@@ -22,40 +22,44 @@ fn build_environment_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
     shell: &Shell,
-) -> Option<ResponseItem> {
+) -> std::io::Result<Option<ResponseItem>> {
     if !next.config.include_environment_context {
-        return None;
+        return Ok(None);
     }
 
-    let prev = previous?;
-    let prev_context = EnvironmentContext::from_turn_context_item(prev, shell.name().to_string());
+    let Some(prev) = previous else {
+        return Ok(None);
+    };
+    let prev_context = EnvironmentContext::from_turn_context_item(prev, shell.name().to_string())?;
     let next_context = EnvironmentContext::from_turn_context(next, shell);
     if prev_context.equals_except_shell(&next_context) {
-        return None;
+        return Ok(None);
     }
 
-    Some(ContextualUserFragment::into(
-        EnvironmentContext::diff_from_turn_context_item(prev, &next_context),
-    ))
+    Ok(Some(ContextualUserFragment::into(
+        EnvironmentContext::diff_from_turn_context_item(prev, &next_context)?,
+    )))
 }
 
 fn build_permissions_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
     exec_policy: &Policy,
-) -> Option<String> {
+) -> std::io::Result<Option<String>> {
     if !next.config.include_permissions_instructions {
-        return None;
+        return Ok(None);
     }
 
-    let prev = previous?;
-    if prev.permission_profile() == next.permission_profile()
+    let Some(prev) = previous else {
+        return Ok(None);
+    };
+    if prev.permission_profile()? == next.permission_profile()
         && prev.approval_policy == next.approval_policy.value()
     {
-        return None;
+        return Ok(None);
     }
 
-    Some(
+    Ok(Some(
         PermissionsInstructions::from_permission_profile(
             &next.permission_profile,
             next.approval_policy.value(),
@@ -67,7 +71,7 @@ fn build_permissions_update_item(
             next.features.enabled(Feature::RequestPermissionsTool),
         )
         .render(),
-    )
+    ))
 }
 
 fn build_collaboration_mode_update_item(
@@ -214,17 +218,17 @@ pub(crate) fn build_settings_update_items(
     shell: &Shell,
     exec_policy: &Policy,
     personality_feature_enabled: bool,
-) -> Vec<ResponseItem> {
+) -> std::io::Result<Vec<ResponseItem>> {
     // TODO(ccunningham): build_settings_update_items still does not cover every
     // model-visible item emitted by build_initial_context. Persist the remaining
     // inputs or add explicit replay events so fork/resume can diff everything
     // deterministically.
-    let contextual_user_message = build_environment_update_item(previous, next, shell);
+    let contextual_user_message = build_environment_update_item(previous, next, shell)?;
     let developer_update_sections = [
         // Keep model-switch instructions first so model-specific guidance is read before
         // any other context diffs on this turn.
         build_model_instructions_update_item(previous_turn_settings, next),
-        build_permissions_update_item(previous, next, exec_policy),
+        build_permissions_update_item(previous, next, exec_policy)?,
         build_collaboration_mode_update_item(previous, next),
         build_realtime_update_item(previous, previous_turn_settings, next),
         build_personality_update_item(previous, next, personality_feature_enabled),
@@ -240,5 +244,5 @@ pub(crate) fn build_settings_update_items(
     if let Some(contextual_user_message) = contextual_user_message {
         items.push(contextual_user_message);
     }
-    items
+    Ok(items)
 }

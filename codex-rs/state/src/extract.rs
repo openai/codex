@@ -16,10 +16,10 @@ pub fn apply_rollout_item(
     metadata: &mut ThreadMetadata,
     item: &RolloutItem,
     default_provider: &str,
-) {
+) -> std::io::Result<()> {
     match item {
         RolloutItem::SessionMeta(meta_line) => apply_session_meta_from_item(metadata, meta_line),
-        RolloutItem::TurnContext(turn_ctx) => apply_turn_context(metadata, turn_ctx),
+        RolloutItem::TurnContext(turn_ctx) => apply_turn_context(metadata, turn_ctx)?,
         RolloutItem::EventMsg(event) => apply_event_msg(metadata, event),
         RolloutItem::ResponseItem(item) => apply_response_item(metadata, item),
         RolloutItem::InterAgentCommunication(_) => {}
@@ -28,6 +28,7 @@ pub fn apply_rollout_item(
     if metadata.model_provider.is_empty() {
         metadata.model_provider = default_provider.to_string();
     }
+    Ok(())
 }
 
 /// Return whether this rollout item can mutate thread metadata stored in SQLite.
@@ -72,15 +73,21 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
     }
 }
 
-fn apply_turn_context(metadata: &mut ThreadMetadata, turn_ctx: &TurnContextItem) {
-    if metadata.cwd.as_os_str().is_empty() {
-        metadata.cwd = turn_ctx.cwd.clone();
+fn apply_turn_context(
+    metadata: &mut ThreadMetadata,
+    turn_ctx: &TurnContextItem,
+) -> std::io::Result<()> {
+    if metadata.cwd.as_os_str().is_empty()
+        && let Ok(cwd) = turn_ctx.cwd.to_abs_path()
+    {
+        metadata.cwd = cwd.into_path_buf();
     }
     metadata.model = Some(turn_ctx.model.clone());
     metadata.reasoning_effort = turn_ctx.effort.clone();
     metadata.sandbox_policy =
-        serde_json::to_string(&turn_ctx.permission_profile()).unwrap_or_default();
+        serde_json::to_string(&turn_ctx.permission_profile()?).unwrap_or_default();
     metadata.approval_mode = enum_to_string(&turn_ctx.approval_policy);
+    Ok(())
 }
 
 fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
@@ -194,7 +201,8 @@ mod tests {
             metadata: None,
         });
 
-        apply_rollout_item(&mut metadata, &item, "test-provider");
+        apply_rollout_item(&mut metadata, &item, "test-provider")
+            .expect("rollout item should apply");
 
         assert_eq!(metadata.first_user_message, None);
         assert_eq!(metadata.preview, None);
@@ -213,7 +221,8 @@ mod tests {
             ..Default::default()
         }));
 
-        apply_rollout_item(&mut metadata, &item, "test-provider");
+        apply_rollout_item(&mut metadata, &item, "test-provider")
+            .expect("rollout item should apply");
 
         assert_eq!(
             metadata.first_user_message.as_deref(),
@@ -235,7 +244,8 @@ mod tests {
             ..Default::default()
         }));
 
-        apply_rollout_item(&mut metadata, &item, "test-provider");
+        apply_rollout_item(&mut metadata, &item, "test-provider")
+            .expect("rollout item should apply");
 
         assert_eq!(
             metadata.first_user_message.as_deref(),
@@ -260,7 +270,8 @@ mod tests {
             ..Default::default()
         }));
 
-        apply_rollout_item(&mut metadata, &item, "test-provider");
+        apply_rollout_item(&mut metadata, &item, "test-provider")
+            .expect("rollout item should apply");
 
         assert_eq!(metadata.first_user_message, None);
         assert_eq!(metadata.preview, None);
@@ -286,7 +297,8 @@ mod tests {
                 },
             }));
 
-        apply_rollout_item(&mut metadata, &goal_item, "test-provider");
+        apply_rollout_item(&mut metadata, &goal_item, "test-provider")
+            .expect("rollout item should apply");
 
         assert_eq!(metadata.preview.as_deref(), Some("optimize the benchmark"));
         assert_eq!(metadata.first_user_message, None);
@@ -301,7 +313,8 @@ mod tests {
             ..Default::default()
         }));
 
-        apply_rollout_item(&mut metadata, &user_item, "test-provider");
+        apply_rollout_item(&mut metadata, &user_item, "test-provider")
+            .expect("rollout item should apply");
 
         assert_eq!(metadata.preview.as_deref(), Some("optimize the benchmark"));
         assert_eq!(
@@ -344,12 +357,18 @@ mod tests {
                 git: None,
             }),
             "test-provider",
-        );
+        )
+        .expect("rollout item should apply");
         apply_rollout_item(
             &mut metadata,
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
-                cwd: PathBuf::from("/parent/workspace"),
+                cwd: serde_json::from_value(serde_json::json!(
+                    std::env::current_dir()
+                        .expect("current directory")
+                        .join("parent/workspace")
+                ))
+                .expect("absolute parent cwd"),
                 workspace_roots: None,
                 current_date: None,
                 timezone: None,
@@ -368,7 +387,8 @@ mod tests {
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
             }),
             "test-provider",
-        );
+        )
+        .expect("rollout item should apply");
 
         assert_eq!(metadata.cwd, PathBuf::from("/child/worktree"));
         let permission_profile: PermissionProfile = PermissionProfile::Disabled;
@@ -388,7 +408,12 @@ mod tests {
             &mut metadata,
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
-                cwd: PathBuf::from("/workspace"),
+                cwd: serde_json::from_value(serde_json::json!(
+                    std::env::current_dir()
+                        .expect("current directory")
+                        .join("workspace")
+                ))
+                .expect("absolute workspace cwd"),
                 workspace_roots: None,
                 current_date: None,
                 timezone: None,
@@ -407,7 +432,8 @@ mod tests {
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
             }),
             "test-provider",
-        );
+        )
+        .expect("rollout item should apply");
 
         assert_eq!(
             metadata.sandbox_policy,
@@ -419,12 +445,16 @@ mod tests {
     fn turn_context_sets_cwd_when_session_cwd_missing() {
         let mut metadata = metadata_for_test();
         metadata.cwd = PathBuf::new();
+        let fallback_cwd = std::env::current_dir()
+            .expect("current directory")
+            .join("fallback/workspace");
 
         apply_rollout_item(
             &mut metadata,
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
-                cwd: PathBuf::from("/fallback/workspace"),
+                cwd: serde_json::from_value(serde_json::json!(&fallback_cwd))
+                    .expect("absolute fallback cwd"),
                 workspace_roots: None,
                 current_date: None,
                 timezone: None,
@@ -443,9 +473,10 @@ mod tests {
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
             }),
             "test-provider",
-        );
+        )
+        .expect("rollout item should apply");
 
-        assert_eq!(metadata.cwd, PathBuf::from("/fallback/workspace"));
+        assert_eq!(metadata.cwd, fallback_cwd);
     }
 
     #[test]
@@ -456,7 +487,12 @@ mod tests {
             &mut metadata,
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
-                cwd: PathBuf::from("/fallback/workspace"),
+                cwd: serde_json::from_value(serde_json::json!(
+                    std::env::current_dir()
+                        .expect("current directory")
+                        .join("fallback/workspace")
+                ))
+                .expect("absolute fallback cwd"),
                 workspace_roots: None,
                 current_date: None,
                 timezone: None,
@@ -475,7 +511,8 @@ mod tests {
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
             }),
             "test-provider",
-        );
+        )
+        .expect("rollout item should apply");
 
         assert_eq!(metadata.model.as_deref(), Some("gpt-5"));
         assert_eq!(metadata.reasoning_effort, Some(ReasoningEffort::High));
@@ -511,7 +548,8 @@ mod tests {
                 git: None,
             }),
             "test-provider",
-        );
+        )
+        .expect("rollout item should apply");
 
         assert_eq!(metadata.model, None);
         assert_eq!(metadata.reasoning_effort, None);
