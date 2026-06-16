@@ -1049,6 +1049,7 @@ fn record_items_truncates_function_call_output_content() {
         },
         metadata: Some(ResponseItemMetadata {
             turn_id: Some("turn-1".to_string()),
+            ..Default::default()
         }),
     };
 

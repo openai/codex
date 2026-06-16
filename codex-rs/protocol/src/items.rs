@@ -1,3 +1,4 @@
+use crate::AgentPath;
 use crate::mcp::CallToolResult;
 use crate::memory_citation::MemoryCitation;
 use crate::models::ContentItem;
@@ -43,6 +44,7 @@ pub enum TurnItem {
     UserMessage(UserMessageItem),
     HookPrompt(HookPromptItem),
     AgentMessage(AgentMessageItem),
+    InterAgentCommunication(InterAgentCommunicationItem),
     Plan(PlanItem),
     Reasoning(ReasoningItem),
     WebSearch(WebSearchItem),
@@ -112,6 +114,23 @@ pub struct AgentMessageItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub memory_citation: Option<MemoryCitation>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct InterAgentCommunicationItem {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub source_call_id: Option<String>,
+    pub sender: AgentPath,
+    pub receiver: AgentPath,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub other_receivers: Vec<AgentPath>,
+    pub content: String,
+    pub encrypted: bool,
+    pub trigger_turn: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -579,6 +598,7 @@ impl TurnItem {
             TurnItem::UserMessage(item) => item.id.clone(),
             TurnItem::HookPrompt(item) => item.id.clone(),
             TurnItem::AgentMessage(item) => item.id.clone(),
+            TurnItem::InterAgentCommunication(item) => item.id.clone(),
             TurnItem::Plan(item) => item.id.clone(),
             TurnItem::Reasoning(item) => item.id.clone(),
             TurnItem::WebSearch(item) => item.id.clone(),
@@ -596,6 +616,7 @@ impl TurnItem {
             TurnItem::UserMessage(item) => vec![item.as_legacy_event()],
             TurnItem::HookPrompt(_) => Vec::new(),
             TurnItem::AgentMessage(item) => item.as_legacy_events(),
+            TurnItem::InterAgentCommunication(_) => Vec::new(),
             TurnItem::Plan(_) => Vec::new(),
             TurnItem::WebSearch(item) => vec![item.as_legacy_event()],
             TurnItem::ImageView(item) => {

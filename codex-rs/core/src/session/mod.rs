@@ -93,6 +93,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::items::InterAgentCommunicationItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::mcp::CallToolResult;
@@ -2674,6 +2675,26 @@ impl Session {
         communication: InterAgentCommunication,
     ) {
         let response_item = communication.to_model_input_item();
+        let source_call_id = communication
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.source_call_id.clone());
+        let (content, encrypted) = match &communication.encrypted_content {
+            Some(encrypted_content) => (encrypted_content.clone(), true),
+            None => (communication.content.clone(), false),
+        };
+        let communication_item = InterAgentCommunicationItem {
+            id: source_call_id
+                .clone()
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            source_call_id,
+            sender: communication.author.clone(),
+            receiver: communication.recipient.clone(),
+            other_receivers: communication.other_recipients.clone(),
+            content,
+            encrypted,
+            trigger_turn: communication.trigger_turn,
+        };
         let items = self.prepare_conversation_items_for_history(
             turn_context,
             std::slice::from_ref(&response_item),
@@ -2686,6 +2707,11 @@ impl Session {
         self.persist_rollout_items(&[RolloutItem::InterAgentCommunication(communication)])
             .await;
         self.send_raw_response_items(turn_context, items).await;
+        self.emit_turn_item_completed(
+            turn_context,
+            TurnItem::InterAgentCommunication(communication_item),
+        )
+        .await;
     }
 
     async fn maybe_warn_on_server_model_mismatch(

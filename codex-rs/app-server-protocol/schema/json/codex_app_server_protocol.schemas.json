@@ -15424,6 +15424,12 @@
       },
       "ResponseItemMetadata": {
         "properties": {
+          "source_call_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "turn_id": {
             "type": [
               "string",
@@ -17308,6 +17314,59 @@
               "type"
             ],
             "title": "AgentMessageThreadItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "encrypted": {
+                "type": "boolean"
+              },
+              "id": {
+                "type": "string"
+              },
+              "otherReceivers": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "receiver": {
+                "type": "string"
+              },
+              "sender": {
+                "type": "string"
+              },
+              "sourceCallId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "triggerTurn": {
+                "type": "boolean"
+              },
+              "type": {
+                "enum": [
+                  "interAgentCommunication"
+                ],
+                "title": "InterAgentCommunicationThreadItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "content",
+              "encrypted",
+              "id",
+              "otherReceivers",
+              "receiver",
+              "sender",
+              "triggerTurn",
+              "type"
+            ],
+            "title": "InterAgentCommunicationThreadItem",
             "type": "object"
           },
           {

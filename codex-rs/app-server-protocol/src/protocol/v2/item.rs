@@ -237,6 +237,18 @@ pub enum ThreadItem {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
+    InterAgentCommunication {
+        id: String,
+        source_call_id: Option<String>,
+        sender: String,
+        receiver: String,
+        other_receivers: Vec<String>,
+        content: String,
+        encrypted: bool,
+        trigger_turn: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     /// EXPERIMENTAL - proposed plan item content. The completed plan item is
     /// authoritative and may not match the concatenation of `PlanDelta` text.
     Plan { id: String, text: String },
@@ -397,6 +409,7 @@ impl ThreadItem {
             ThreadItem::UserMessage { id, .. }
             | ThreadItem::HookPrompt { id, .. }
             | ThreadItem::AgentMessage { id, .. }
+            | ThreadItem::InterAgentCommunication { id, .. }
             | ThreadItem::Plan { id, .. }
             | ThreadItem::Reasoning { id, .. }
             | ThreadItem::CommandExecution { id, .. }
@@ -825,6 +838,22 @@ impl From<CoreTurnItem> for ThreadItem {
                     text,
                     phase: agent.phase,
                     memory_citation: agent.memory_citation.map(Into::into),
+                }
+            }
+            CoreTurnItem::InterAgentCommunication(communication) => {
+                ThreadItem::InterAgentCommunication {
+                    id: communication.id,
+                    source_call_id: communication.source_call_id,
+                    sender: communication.sender.to_string(),
+                    receiver: communication.receiver.to_string(),
+                    other_receivers: communication
+                        .other_receivers
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                    content: communication.content,
+                    encrypted: communication.encrypted,
+                    trigger_turn: communication.trigger_turn,
                 }
             }
             CoreTurnItem::Plan(plan) => ThreadItem::Plan {

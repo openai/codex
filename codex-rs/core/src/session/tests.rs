@@ -1606,6 +1606,7 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
         phase: None,
         metadata: Some(ResponseItemMetadata {
             turn_id: Some("compact-turn".to_string()),
+            ..Default::default()
         }),
     };
     let replacement_history = vec![
