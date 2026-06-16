@@ -2927,7 +2927,26 @@ mod tests {
             .join("sessions/2025/02/02")
             .join(format!("rollout-2025-02-02T10-00-00-{uuid}.jsonl"));
         std::fs::create_dir_all(rollout_path.parent().expect("rollout parent"))?;
-        std::fs::write(&rollout_path, "")?;
+        let session_meta = codex_protocol::protocol::SessionMeta {
+            id: thread_id,
+            timestamp: "2025-02-02T10:00:00Z".to_string(),
+            cwd: temp_dir.path().to_path_buf(),
+            originator: "codex".to_string(),
+            cli_version: "0.0.0".to_string(),
+            source: codex_protocol::protocol::SessionSource::Cli,
+            model_provider: Some(config.model_provider_id.clone()),
+            ..Default::default()
+        };
+        let session_meta = serde_json::to_value(codex_protocol::protocol::SessionMetaLine {
+            meta: session_meta,
+            git: None,
+        })?;
+        let rollout_line = serde_json::json!({
+            "timestamp": "2025-02-02T10:00:00Z",
+            "type": "session_meta",
+            "payload": session_meta,
+        });
+        std::fs::write(&rollout_path, format!("{rollout_line}\n"))?;
 
         let state_runtime = codex_state::StateRuntime::init(
             config.codex_home.to_path_buf(),
