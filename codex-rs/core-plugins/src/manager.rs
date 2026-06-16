@@ -1,6 +1,6 @@
 use super::PluginLoadOutcome;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
-use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
+use crate::installed_marketplaces::installed_marketplace_roots_with_revisions_from_layer_stack;
 use crate::loader::PluginHookLoadOutcome;
 use crate::loader::configured_curated_plugin_ids_from_codex_home;
 use crate::loader::curated_plugin_cache_version;
@@ -30,18 +30,24 @@ use crate::marketplace::MarketplacePluginSource;
 use crate::marketplace::ResolvedMarketplacePlugin;
 use crate::marketplace::find_installable_marketplace_plugin;
 use crate::marketplace::find_marketplace_plugin;
-use crate::marketplace::list_marketplaces;
+use crate::marketplace::home_dir;
 use crate::marketplace::plugin_interface_with_marketplace_category;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
 use crate::marketplace_upgrade::configured_git_marketplace_names;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
+use crate::plugin_catalog::PluginCatalog;
+use crate::plugin_catalog::PluginCatalogLoadMode;
+use crate::plugin_catalog::PluginCatalogSnapshot;
+use crate::plugin_catalog::PluginCatalogSource;
+use crate::plugin_catalog_revision::PluginCatalogRevision;
 use crate::remote::RemoteInstalledPlugin;
 use crate::remote::RemotePluginCatalogError;
 use crate::remote::RemotePluginServiceConfig;
 use crate::remote_legacy::RemotePluginFetchError;
 use crate::remote_legacy::RemotePluginMutationError;
 use crate::startup_sync::curated_plugins_repo_path;
+use crate::startup_sync::read_curated_plugins_catalog_revision;
 use crate::startup_sync::read_curated_plugins_sha;
 use crate::startup_sync::sync_openai_plugins_repo;
 use crate::store::PluginInstallResult as StorePluginInstallResult;
@@ -344,6 +350,7 @@ pub struct PluginsManager {
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
     enabled_outcome_cache: RwLock<EnabledOutcomeCache>,
     enabled_outcome_load_semaphore: Semaphore,
+    plugin_catalog: PluginCatalog,
     remote_installed_plugins_cache: RwLock<Option<Vec<RemoteInstalledPlugin>>>,
     remote_installed_plugins_cache_refresh_state: RwLock<RemoteInstalledPluginsCacheRefreshState>,
     global_remote_catalog_cache_refresh_state: RwLock<GlobalRemoteCatalogCacheRefreshState>,
@@ -398,6 +405,7 @@ impl PluginsManager {
             non_curated_cache_refresh_state: RwLock::new(NonCuratedCacheRefreshState::default()),
             enabled_outcome_cache: RwLock::new(EnabledOutcomeCache::default()),
             enabled_outcome_load_semaphore: Semaphore::new(/*permits*/ 1),
+            plugin_catalog: PluginCatalog::default(),
             remote_installed_plugins_cache: RwLock::new(None),
             remote_installed_plugins_cache_refresh_state: RwLock::new(
                 RemoteInstalledPluginsCacheRefreshState::default(),
@@ -1060,12 +1068,9 @@ impl PluginsManager {
         }
 
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
-        let mut marketplace_roots = self.marketplace_roots(config, additional_roots);
-        if !include_openai_curated {
-            let curated_repo_root = curated_plugins_repo_path(self.codex_home.as_path());
-            marketplace_roots.retain(|root| root.as_path() != curated_repo_root.as_path());
-        }
-        let marketplace_outcome = list_marketplaces(&marketplace_roots)?;
+        let marketplace_outcome = self
+            .plugin_catalog_snapshot_for_config(config, additional_roots, include_openai_curated)?
+            .marketplace_outcome();
         let mut seen_plugin_keys = HashSet::new();
         let marketplaces = marketplace_outcome
             .marketplaces
@@ -1152,7 +1157,12 @@ impl PluginsManager {
             return Ok(MarketplaceListOutcome::default());
         }
 
-        list_marketplaces(&self.marketplace_roots(config, additional_roots))
+        self.plugin_catalog_snapshot_for_config(
+            config,
+            additional_roots,
+            /*include_openai_curated*/ true,
+        )
+        .map(|snapshot| snapshot.marketplace_outcome())
     }
 
     pub async fn read_plugin_for_config(
@@ -1356,6 +1366,43 @@ impl PluginsManager {
             mcp_server_names,
             details_unavailable_reason: None,
         })
+    }
+
+    fn plugin_catalog_snapshot_for_config(
+        &self,
+        config: &PluginsConfigInput,
+        additional_roots: &[AbsolutePathBuf],
+        include_openai_curated: bool,
+    ) -> Result<PluginCatalogSnapshot, MarketplaceError> {
+        self.plugin_catalog.snapshot(&self.plugin_catalog_sources(
+            config,
+            additional_roots,
+            include_openai_curated,
+        ))
+    }
+
+    fn plugin_catalog_sources(
+        &self,
+        config: &PluginsConfigInput,
+        additional_roots: &[AbsolutePathBuf],
+        include_openai_curated: bool,
+    ) -> Vec<PluginCatalogSource> {
+        let mut sources = Vec::new();
+        if let Some(home) = home_dir().and_then(|home| AbsolutePathBuf::try_from(home).ok()) {
+            sources.push(PluginCatalogSource::home(home));
+        }
+        let curated_repo_root = curated_plugins_repo_path(self.codex_home.as_path());
+        let mut roots = self.marketplace_roots_with_revisions(config, additional_roots);
+        if !include_openai_curated {
+            roots.retain(|(root, _revision)| root.as_path() != curated_repo_root.as_path());
+        }
+        sources.extend(roots.into_iter().map(|(root, revision)| {
+            PluginCatalogSource::filesystem_root(
+                root,
+                PluginCatalogLoadMode::for_revision(revision),
+            )
+        }));
+        sources
     }
 
     pub fn maybe_start_plugin_startup_tasks_for_config(
@@ -1882,15 +1929,19 @@ impl PluginsManager {
         (installed_plugins, enabled_plugins)
     }
 
-    fn marketplace_roots(
+    fn marketplace_roots_with_revisions(
         &self,
         config: &PluginsConfigInput,
         additional_roots: &[AbsolutePathBuf],
-    ) -> Vec<AbsolutePathBuf> {
+    ) -> Vec<(AbsolutePathBuf, Option<PluginCatalogRevision>)> {
         // Treat the curated catalog as an extra marketplace root so plugin listing can surface it
         // without requiring every caller to know where it is stored.
-        let mut roots = additional_roots.to_vec();
-        roots.extend(installed_marketplace_roots_from_layer_stack(
+        let mut roots = additional_roots
+            .iter()
+            .cloned()
+            .map(|root| (root, None))
+            .collect::<Vec<_>>();
+        roots.extend(installed_marketplace_roots_with_revisions_from_layer_stack(
             &config.config_layer_stack,
             self.codex_home.as_path(),
         ));
@@ -1898,11 +1949,25 @@ impl PluginsManager {
         if curated_repo_root.is_dir()
             && let Ok(curated_repo_root) = AbsolutePathBuf::try_from(curated_repo_root)
         {
-            roots.push(curated_repo_root);
+            let revision = read_curated_plugins_catalog_revision(curated_repo_root.as_path());
+            roots.push((curated_repo_root, revision));
         }
-        roots.sort_unstable();
-        roots.dedup();
-        roots
+        roots.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        let mut deduped =
+            Vec::<(AbsolutePathBuf, Option<PluginCatalogRevision>)>::with_capacity(roots.len());
+        for (root, revision) in roots {
+            if let Some((previous_root, previous_revision)) = deduped.last_mut()
+                && *previous_root == root
+            {
+                *previous_revision = match (previous_revision.take(), revision) {
+                    (Some(previous), Some(current)) if previous == current => Some(previous),
+                    _ => None,
+                };
+                continue;
+            }
+            deduped.push((root, revision));
+        }
+        deduped
     }
 }
 

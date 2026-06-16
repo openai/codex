@@ -8,6 +8,8 @@ pub mod marketplace_add;
 pub mod marketplace_remove;
 pub mod marketplace_upgrade;
 mod plugin_bundle_archive;
+mod plugin_catalog;
+mod plugin_catalog_revision;
 mod provider;
 pub mod remote;
 pub mod remote_bundle;

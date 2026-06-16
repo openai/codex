@@ -3,6 +3,7 @@ mod git;
 
 use self::activation::activate_marketplace_root;
 use self::activation::installed_marketplace_metadata_matches;
+pub(crate) use self::activation::installed_marketplace_revision;
 use self::activation::write_installed_marketplace_metadata;
 use self::git::clone_git_source;
 use self::git::git_remote_revision;

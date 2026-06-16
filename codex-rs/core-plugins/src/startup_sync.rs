@@ -8,12 +8,14 @@ use std::time::Duration;
 
 use codex_otel::CURATED_PLUGINS_STARTUP_SYNC_FINAL_METRIC;
 use codex_otel::CURATED_PLUGINS_STARTUP_SYNC_METRIC;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use reqwest::Client;
 use serde::Deserialize;
 use tempfile::TempDir;
 use tracing::warn;
 use zip::ZipArchive;
 
+use crate::plugin_catalog_revision::PluginCatalogRevision;
 use codex_login::default_client::build_reqwest_client;
 
 const GITHUB_API_BASE_URL: &str = "https://api.github.com";
@@ -62,6 +64,14 @@ pub fn curated_plugins_repo_path(codex_home: &Path) -> PathBuf {
 
 pub fn read_curated_plugins_sha(codex_home: &Path) -> Option<String> {
     read_sha_file(curated_plugins_sha_path(codex_home).as_path())
+}
+
+pub(crate) fn read_curated_plugins_catalog_revision(
+    repo_path: &Path,
+) -> Option<PluginCatalogRevision> {
+    let marker_path =
+        AbsolutePathBuf::try_from(curated_plugins_catalog_revision_path(repo_path)).ok()?;
+    PluginCatalogRevision::read(marker_path)
 }
 
 fn curated_plugins_sha_path(codex_home: &Path) -> PathBuf {
