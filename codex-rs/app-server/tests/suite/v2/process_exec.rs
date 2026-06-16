@@ -66,6 +66,57 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
 }
 
 #[tokio::test]
+async fn process_spawn_uses_requested_cwd() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let process_cwd = TempDir::new()?;
+    std::fs::write(
+        process_cwd.path().join("cwd-marker.txt"),
+        "app-server-process-cwd",
+    )?;
+    let (_server, mut mcp) = initialized_mcp(codex_home.path()).await?;
+
+    let process_handle = "requested-cwd-1".to_string();
+    let command = if cfg!(windows) {
+        vec![
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-NonInteractive".to_string(),
+            "-Command".to_string(),
+            "[Console]::Out.Write([IO.File]::ReadAllText('cwd-marker.txt'))".to_string(),
+        ]
+    } else {
+        vec![
+            "sh".to_string(),
+            "-lc".to_string(),
+            "cat cwd-marker.txt".to_string(),
+        ]
+    };
+    let request_id = mcp
+        .send_process_spawn_request(process_spawn_params(
+            process_handle.clone(),
+            process_cwd.path(),
+            command,
+        )?)
+        .await?;
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(request_id))
+        .await?;
+    assert_eq!(response.result, serde_json::json!({}));
+    assert_eq!(
+        read_process_exited(&mut mcp).await?,
+        ProcessExitedNotification {
+            process_handle,
+            exit_code: 0,
+            stdout: "app-server-process-cwd".to_string(),
+            stdout_cap_reached: false,
+            stderr: String::new(),
+            stderr_cap_reached: false,
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn process_spawn_rejects_duplicate_active_handle_without_replacing_original() -> Result<()> {
     let codex_home = TempDir::new()?;
     let (_server, mut mcp) = initialized_mcp(codex_home.path()).await?;
