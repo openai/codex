@@ -83,7 +83,9 @@ pub fn prompt_safe_plugin_description(description: Option<&str>) -> Option<Strin
     )
 }
 
-/// Outcome of loading configured plugins (skills roots, MCP, apps, errors).
+/// Runtime view of loaded plugins and their derived capability summaries.
+///
+/// Callers must apply any runtime capability policies before constructing this outcome.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PluginLoadOutcome<M> {
     plugins: Vec<LoadedPlugin<M>>,

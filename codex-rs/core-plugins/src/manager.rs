@@ -1,3 +1,4 @@
+use super::LoadedPlugin;
 use super::PluginLoadOutcome;
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
@@ -208,23 +209,6 @@ fn featured_plugin_ids_cache_key(
     }
 }
 
-fn project_plugin_load_outcome_for_auth(
-    outcome: PluginLoadOutcome,
-    auth_mode: Option<AuthMode>,
-) -> PluginLoadOutcome {
-    let mut plugins = outcome.plugins().to_vec();
-    for plugin in &mut plugins {
-        let plugin_active = plugin.is_active();
-        apply_app_mcp_routing_policy(
-            &mut plugin.apps,
-            &mut plugin.mcp_servers,
-            auth_mode,
-            plugin_active,
-        );
-    }
-    PluginLoadOutcome::from_plugins(plugins)
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInstallRequest {
     pub plugin_name: String,
@@ -336,8 +320,9 @@ pub struct PluginsManager {
     featured_plugin_ids_cache: RwLock<Option<CachedFeaturedPluginIds>>,
     configured_marketplace_upgrade_state: RwLock<ConfiguredMarketplaceUpgradeState>,
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
-    enabled_outcome_cache: RwLock<EnabledOutcomeCache>,
-    enabled_outcome_load_semaphore: Semaphore,
+    // Keep the cache auth-independent so auth changes only need to resolve capabilities again.
+    loaded_plugins_cache: RwLock<LoadedPluginsCache>,
+    loaded_plugins_load_semaphore: Semaphore,
     remote_installed_plugins_cache: RwLock<Option<Vec<RemoteInstalledPlugin>>>,
     remote_installed_plugins_cache_refresh_state: RwLock<RemoteInstalledPluginsCacheRefreshState>,
     global_remote_catalog_cache_refresh_state: RwLock<GlobalRemoteCatalogCacheRefreshState>,
@@ -347,15 +332,15 @@ pub struct PluginsManager {
 }
 
 #[derive(Clone)]
-struct CachedPluginLoadOutcome {
+struct LoadedPluginsCacheEntry {
     key: PluginLoadCacheKey,
-    outcome: PluginLoadOutcome,
+    plugins: Vec<LoadedPlugin>,
 }
 
 #[derive(Default)]
-struct EnabledOutcomeCache {
+struct LoadedPluginsCache {
     generation: u64,
-    outcome: Option<CachedPluginLoadOutcome>,
+    entry: Option<LoadedPluginsCacheEntry>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -390,8 +375,8 @@ impl PluginsManager {
                 ConfiguredMarketplaceUpgradeState::default(),
             ),
             non_curated_cache_refresh_state: RwLock::new(NonCuratedCacheRefreshState::default()),
-            enabled_outcome_cache: RwLock::new(EnabledOutcomeCache::default()),
-            enabled_outcome_load_semaphore: Semaphore::new(/*permits*/ 1),
+            loaded_plugins_cache: RwLock::new(LoadedPluginsCache::default()),
+            loaded_plugins_load_semaphore: Semaphore::new(/*permits*/ 1),
             remote_installed_plugins_cache: RwLock::new(None),
             remote_installed_plugins_cache_refresh_state: RwLock::new(
                 RemoteInstalledPluginsCacheRefreshState::default(),
@@ -466,19 +451,19 @@ impl PluginsManager {
             skill_config_rules: skill_config_rules_from_stack(&config.config_layer_stack),
             remote_plugin_enabled: config.remote_plugin_enabled,
         };
-        if !force_reload && let Some(outcome) = self.cached_enabled_outcome(&cache_key) {
-            return self.project_plugins_for_auth(outcome);
+        if !force_reload && let Some(plugins) = self.cached_loaded_plugins(&cache_key) {
+            return self.resolve_loaded_plugins_for_auth(plugins);
         }
 
-        let Ok(_load_permit) = self.enabled_outcome_load_semaphore.acquire().await else {
+        let Ok(_load_permit) = self.loaded_plugins_load_semaphore.acquire().await else {
             warn!("plugin load semaphore closed");
             return PluginLoadOutcome::default();
         };
-        if !force_reload && let Some(outcome) = self.cached_enabled_outcome(&cache_key) {
-            return self.project_plugins_for_auth(outcome);
+        if !force_reload && let Some(plugins) = self.cached_loaded_plugins(&cache_key) {
+            return self.resolve_loaded_plugins_for_auth(plugins);
         }
-        let cache_generation = self.enabled_outcome_cache_generation();
-        let outcome = load_plugins_from_layer_stack(
+        let cache_generation = self.loaded_plugins_cache_generation();
+        let plugins = load_plugins_from_layer_stack(
             &config.config_layer_stack,
             self.remote_installed_plugin_configs(),
             &self.store,
@@ -486,17 +471,27 @@ impl PluginsManager {
             config.remote_plugin_enabled,
         )
         .await;
-        log_plugin_load_errors(&outcome);
-        self.cache_enabled_outcome_if_current(cache_generation, cache_key, outcome.clone());
-        self.project_plugins_for_auth(outcome)
+        log_plugin_load_errors(&plugins);
+        self.cache_loaded_plugins_if_current(cache_generation, cache_key, plugins.clone());
+        self.resolve_loaded_plugins_for_auth(plugins)
     }
 
-    fn project_plugins_for_auth(&self, outcome: PluginLoadOutcome) -> PluginLoadOutcome {
-        project_plugin_load_outcome_for_auth(outcome, self.auth_mode())
+    fn resolve_loaded_plugins_for_auth(&self, mut plugins: Vec<LoadedPlugin>) -> PluginLoadOutcome {
+        let auth_mode = self.auth_mode();
+        for plugin in &mut plugins {
+            let plugin_active = plugin.is_active();
+            apply_app_mcp_routing_policy(
+                &mut plugin.apps,
+                &mut plugin.mcp_servers,
+                auth_mode,
+                plugin_active,
+            );
+        }
+        PluginLoadOutcome::from_plugins(plugins)
     }
 
     pub fn clear_cache(&self) {
-        self.clear_enabled_outcome_cache();
+        self.clear_loaded_plugins_cache();
         let mut featured_plugin_ids_cache = match self.featured_plugin_ids_cache.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
@@ -504,13 +499,13 @@ impl PluginsManager {
         *featured_plugin_ids_cache = None;
     }
 
-    fn clear_enabled_outcome_cache(&self) {
-        let mut cache = match self.enabled_outcome_cache.write() {
+    fn clear_loaded_plugins_cache(&self) {
+        let mut cache = match self.loaded_plugins_cache.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
         cache.generation = cache.generation.wrapping_add(1);
-        cache.outcome = None;
+        cache.entry = None;
     }
 
     /// Load plugins for a config layer stack without touching the plugins cache.
@@ -522,7 +517,7 @@ impl PluginsManager {
         if !config.plugins_enabled {
             return PluginLoadOutcome::default();
         }
-        let outcome = load_plugins_from_layer_stack(
+        let plugins = load_plugins_from_layer_stack(
             config_layer_stack,
             self.remote_installed_plugin_configs(),
             &self.store,
@@ -530,7 +525,7 @@ impl PluginsManager {
             config.remote_plugin_enabled,
         )
         .await;
-        self.project_plugins_for_auth(outcome)
+        self.resolve_loaded_plugins_for_auth(plugins)
     }
 
     /// Resolve plugin hooks for a config layer stack without loading other plugin capabilities.
@@ -562,41 +557,41 @@ impl PluginsManager {
             .effective_plugin_skill_roots()
     }
 
-    fn cached_enabled_outcome(&self, key: &PluginLoadCacheKey) -> Option<PluginLoadOutcome> {
-        match self.enabled_outcome_cache.read() {
+    fn cached_loaded_plugins(&self, key: &PluginLoadCacheKey) -> Option<Vec<LoadedPlugin>> {
+        match self.loaded_plugins_cache.read() {
             Ok(cache) => cache
-                .outcome
+                .entry
                 .as_ref()
                 .filter(|cached| cached.key == *key)
-                .map(|cached| cached.outcome.clone()),
+                .map(|cached| cached.plugins.clone()),
             Err(err) => err
                 .into_inner()
-                .outcome
+                .entry
                 .as_ref()
                 .filter(|cached| cached.key == *key)
-                .map(|cached| cached.outcome.clone()),
+                .map(|cached| cached.plugins.clone()),
         }
     }
 
-    fn enabled_outcome_cache_generation(&self) -> u64 {
-        match self.enabled_outcome_cache.read() {
+    fn loaded_plugins_cache_generation(&self) -> u64 {
+        match self.loaded_plugins_cache.read() {
             Ok(cache) => cache.generation,
             Err(err) => err.into_inner().generation,
         }
     }
 
-    fn cache_enabled_outcome_if_current(
+    fn cache_loaded_plugins_if_current(
         &self,
         generation: u64,
         key: PluginLoadCacheKey,
-        outcome: PluginLoadOutcome,
+        plugins: Vec<LoadedPlugin>,
     ) {
-        let mut cache = match self.enabled_outcome_cache.write() {
+        let mut cache = match self.loaded_plugins_cache.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
         if cache.generation == generation {
-            cache.outcome = Some(CachedPluginLoadOutcome { key, outcome });
+            cache.entry = Some(LoadedPluginsCacheEntry { key, plugins });
         }
     }
 
@@ -687,7 +682,7 @@ impl PluginsManager {
         }
         *cache = Some(plugins);
         drop(cache);
-        self.clear_enabled_outcome_cache();
+        self.clear_loaded_plugins_cache();
         true
     }
 
@@ -701,7 +696,7 @@ impl PluginsManager {
         }
         *cache = None;
         drop(cache);
-        self.clear_enabled_outcome_cache();
+        self.clear_loaded_plugins_cache();
         true
     }
 
