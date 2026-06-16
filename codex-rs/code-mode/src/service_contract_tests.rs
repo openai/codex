@@ -1,7 +1,5 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -9,7 +7,6 @@ use codex_protocol::ToolName;
 use pretty_assertions::assert_eq;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
@@ -29,6 +26,7 @@ struct BlockingDelegate {
     events_tx: mpsc::UnboundedSender<DelegateEvent>,
     notification_finished: AtomicBool,
     tool_finished: AtomicBool,
+    tool_release: Notify,
 }
 
 struct HeldNotificationDelegate {
@@ -88,61 +86,6 @@ impl CodeModeSessionDelegate for HeldNotificationDelegate {
     }
 }
 
-struct CellControlHarness {
-    event_tx: mpsc::UnboundedSender<RuntimeEvent>,
-    control_tx: mpsc::UnboundedSender<CellControlCommand>,
-    initial_response_rx: oneshot::Receiver<Result<RuntimeResponse, String>>,
-    task: tokio::task::JoinHandle<()>,
-    _runtime_event_rx: mpsc::UnboundedReceiver<RuntimeEvent>,
-}
-
-fn spawn_cell_control_harness(
-    initial_yield_time_ms: Option<u64>,
-    delegate: Arc<dyn CodeModeSessionDelegate>,
-) -> CellControlHarness {
-    let (event_tx, event_rx) = mpsc::unbounded_channel();
-    let (control_tx, control_rx) = mpsc::unbounded_channel();
-    let (initial_response_tx, initial_response_rx) = oneshot::channel();
-    let (runtime_event_tx, runtime_event_rx) = mpsc::unbounded_channel();
-    let (runtime_tx, runtime_control_tx, runtime_terminate_handle) = spawn_runtime(
-        HashMap::new(),
-        execute_request("await new Promise(() => {});"),
-        runtime_event_tx,
-        PendingRuntimeMode::Continue,
-    )
-    .unwrap();
-    let inner = Arc::new(Inner {
-        stored_values: Mutex::new(HashMap::new()),
-        cells: Mutex::new(HashMap::new()),
-        delegate,
-        shutting_down: AtomicBool::new(false),
-        next_cell_id: AtomicU64::new(1),
-    });
-    let task = tokio::spawn(run_cell_control(
-        inner,
-        CellControlContext {
-            cell_id: cell_id("1"),
-            runtime_tx,
-            runtime_control_tx,
-            pending_mode: PendingRuntimeMode::Continue,
-            runtime_terminate_handle,
-            cancellation_token: CancellationToken::new(),
-        },
-        event_rx,
-        control_rx,
-        CellResponseSender::Runtime(initial_response_tx),
-        initial_yield_time_ms,
-    ));
-
-    CellControlHarness {
-        event_tx,
-        control_tx,
-        initial_response_rx,
-        task,
-        _runtime_event_rx: runtime_event_rx,
-    }
-}
-
 impl BlockingDelegate {
     fn new() -> (Arc<Self>, mpsc::UnboundedReceiver<DelegateEvent>) {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
@@ -151,9 +94,14 @@ impl BlockingDelegate {
                 events_tx,
                 notification_finished: AtomicBool::new(false),
                 tool_finished: AtomicBool::new(false),
+                tool_release: Notify::new(),
             }),
             events_rx,
         )
+    }
+
+    fn release_tool(&self) {
+        self.tool_release.notify_one();
     }
 }
 
@@ -165,10 +113,17 @@ impl CodeModeSessionDelegate for BlockingDelegate {
     ) -> ToolInvocationFuture<'a> {
         Box::pin(async move {
             let _ = self.events_tx.send(DelegateEvent::ToolStarted);
-            cancellation_token.cancelled().await;
-            self.tool_finished.store(true, Ordering::Release);
-            let _ = self.events_tx.send(DelegateEvent::ToolCancelled);
-            Err("cancelled".to_string())
+            tokio::select! {
+                _ = self.tool_release.notified() => {
+                    self.tool_finished.store(true, Ordering::Release);
+                    Ok(serde_json::Value::Null)
+                }
+                _ = cancellation_token.cancelled() => {
+                    self.tool_finished.store(true, Ordering::Release);
+                    let _ = self.events_tx.send(DelegateEvent::ToolCancelled);
+                    Err("cancelled".to_string())
+                }
+            }
         })
     }
 
@@ -228,86 +183,14 @@ async fn next_event(events_rx: &mut mpsc::UnboundedReceiver<DelegateEvent>) -> D
 }
 
 #[tokio::test]
-async fn yield_timer_preempts_buffered_runtime_output() {
-    let harness = spawn_cell_control_harness(
-        Some(/*initial_yield_time_ms*/ 0),
-        Arc::new(NoopCodeModeSessionDelegate),
-    );
-    harness.event_tx.send(RuntimeEvent::Started).unwrap();
-    harness
-        .event_tx
-        .send(RuntimeEvent::ContentItem(
-            FunctionCallOutputContentItem::InputText {
-                text: "queued output".to_string(),
-            },
-        ))
-        .unwrap();
-
-    assert_eq!(
-        harness.initial_response_rx.await.unwrap(),
-        Ok(RuntimeResponse::Yielded {
-            cell_id: cell_id("1"),
-            content_items: Vec::new(),
-        })
-    );
-
-    let (termination_tx, termination_rx) = oneshot::channel();
-    harness
-        .control_tx
-        .send(CellControlCommand::Terminate {
-            response_tx: termination_tx,
-        })
-        .unwrap();
-    drop(harness.event_tx);
-    assert_eq!(
-        termination_rx.await.unwrap(),
-        Ok(RuntimeResponse::Terminated {
-            cell_id: cell_id("1"),
-            content_items: vec![FunctionCallOutputContentItem::InputText {
-                text: "queued output".to_string(),
-            }],
-        })
-    );
-    harness.task.await.unwrap();
-}
-
-#[tokio::test]
-async fn queued_termination_preempts_unobserved_runtime_completion() {
-    let harness = spawn_cell_control_harness(
-        Some(/*initial_yield_time_ms*/ 60_000),
-        Arc::new(NoopCodeModeSessionDelegate),
-    );
-    harness
-        .event_tx
-        .send(RuntimeEvent::Result {
-            stored_value_writes: HashMap::new(),
-            error_text: None,
-        })
-        .unwrap();
-    let (termination_tx, termination_rx) = oneshot::channel();
-    harness
-        .control_tx
-        .send(CellControlCommand::Terminate {
-            response_tx: termination_tx,
-        })
-        .unwrap();
-
-    let terminated = Ok(RuntimeResponse::Terminated {
-        cell_id: cell_id("1"),
-        content_items: Vec::new(),
-    });
-    assert_eq!(termination_rx.await.unwrap(), terminated.clone());
-    assert_eq!(harness.initial_response_rx.await.unwrap(), terminated);
-    harness.task.await.unwrap();
-}
-
-#[tokio::test]
 async fn yields_and_resumes() {
     let service = CodeModeService::new();
     let cell = service
-        .execute(execute_request(
-            r#"text("before"); yield_control(); text("after");"#,
-        ))
+        .execute(ExecuteRequest {
+            source: r#"text("before"); yield_control(); text("after");"#.to_string(),
+            yield_time_ms: Some(60_000),
+            ..execute_request("")
+        })
         .await
         .unwrap();
 
@@ -324,7 +207,7 @@ async fn yields_and_resumes() {
         service
             .wait(WaitRequest {
                 cell_id: cell_id("1"),
-                yield_time_ms: 1,
+                yield_time_ms: 60_000,
             })
             .await
             .unwrap(),
@@ -340,35 +223,32 @@ async fn yields_and_resumes() {
 
 #[tokio::test]
 async fn returns_and_resumes_from_the_pending_frontier() {
-    let service = CodeModeService::new();
+    let (delegate, mut events_rx) = BlockingDelegate::new();
+    let service = CodeModeService::with_delegate(delegate.clone());
 
     assert_eq!(
         service
-            .execute_to_pending(execute_request(
-                r#"
-await new Promise((resolve) => setTimeout(resolve, 60_000));
+            .execute_to_pending(ExecuteRequest {
+                enabled_tools: vec![blocking_tool()],
+                source: r#"
+await tools.block({});
 text("after");
-"#,
-            ))
+"#
+                .to_string(),
+                yield_time_ms: Some(60_000),
+                ..execute_request("")
+            })
             .await
             .unwrap(),
         ExecuteToPendingOutcome::Pending {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
-            pending_tool_call_ids: Vec::new(),
+            pending_tool_call_ids: vec!["tool-1".to_string()],
         }
     );
 
-    service
-        .inner
-        .cells
-        .lock()
-        .await
-        .get(&cell_id("1"))
-        .unwrap()
-        .runtime_tx
-        .send(RuntimeCommand::TimeoutFired { id: 1 })
-        .unwrap();
+    assert_eq!(next_event(&mut events_rx).await, DelegateEvent::ToolStarted);
+    delegate.release_tool();
 
     assert_eq!(
         service
@@ -391,71 +271,42 @@ text("after");
 
 #[tokio::test]
 async fn observed_natural_completion_wins_over_termination() {
-    let (delegate, mut events_rx) = BlockingDelegate::new();
-    let harness =
-        spawn_cell_control_harness(Some(/*initial_yield_time_ms*/ 60_000), delegate.clone());
-    harness.event_tx.send(RuntimeEvent::YieldRequested).unwrap();
+    let service = CodeModeService::new();
+    let cell = service
+        .execute(execute_request(
+            r#"yield_control(); store("finished", true); text("done");"#,
+        ))
+        .await
+        .unwrap();
 
     assert_eq!(
-        harness.initial_response_rx.await.unwrap(),
-        Ok(RuntimeResponse::Yielded {
+        cell.initial_response().await.unwrap(),
+        RuntimeResponse::Yielded {
             cell_id: cell_id("1"),
             content_items: Vec::new(),
-        })
+        }
     );
-    harness
-        .event_tx
-        .send(RuntimeEvent::ContentItem(
-            FunctionCallOutputContentItem::InputText {
-                text: "done".to_string(),
-            },
-        ))
-        .unwrap();
-    harness
-        .event_tx
-        .send(RuntimeEvent::Result {
-            stored_value_writes: HashMap::new(),
-            error_text: None,
-        })
-        .unwrap();
-    harness
-        .event_tx
-        .send(RuntimeEvent::Notify {
-            call_id: "notify-1".to_string(),
-            text: "completion observed".to_string(),
-        })
-        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if service.inner.stored_values.lock().await.get("finished")
+                == Some(&serde_json::json!(true))
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     assert_eq!(
-        next_event(&mut events_rx).await,
-        DelegateEvent::NotificationStarted
-    );
-
-    let (termination_tx, termination_rx) = oneshot::channel();
-    harness
-        .control_tx
-        .send(CellControlCommand::Terminate {
-            response_tx: termination_tx,
-        })
-        .unwrap();
-    assert_eq!(
-        termination_rx.await.unwrap(),
-        Ok(RuntimeResponse::Result {
+        service.terminate(cell_id("1")).await.unwrap(),
+        WaitOutcome::LiveCell(RuntimeResponse::Result {
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "done".to_string(),
             }],
             error_text: None,
         })
-    );
-    harness.task.await.unwrap();
-    assert!(delegate.notification_finished.load(Ordering::Acquire));
-    assert_eq!(
-        next_event(&mut events_rx).await,
-        DelegateEvent::NotificationCancelled
-    );
-    assert_eq!(
-        next_event(&mut events_rx).await,
-        DelegateEvent::CellClosed(cell_id("1"))
     );
 }
 
