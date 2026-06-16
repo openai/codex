@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use crate::AuthProvider;
+use bytes::Bytes;
 use codex_client::build_reqwest_client_with_custom_ca;
+use futures::TryStream;
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_LENGTH;
 use serde::Deserialize;
@@ -79,13 +81,17 @@ pub fn openai_file_uri(file_id: &str) -> String {
     format!("{OPENAI_FILE_URI_PREFIX}{file_id}")
 }
 
-pub async fn upload_openai_file(
+pub async fn upload_openai_file<S, E>(
     base_url: &str,
     auth: &dyn AuthProvider,
     file_name: String,
-    contents: Vec<u8>,
-) -> Result<UploadedOpenAiFile, OpenAiFileError> {
-    let file_size_bytes = u64::try_from(contents.len()).unwrap_or(u64::MAX);
+    file_size_bytes: u64,
+    contents: S,
+) -> Result<UploadedOpenAiFile, OpenAiFileError>
+where
+    S: TryStream<Ok = Bytes, Error = E> + Send + 'static,
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
     if file_size_bytes > OPENAI_FILE_UPLOAD_LIMIT_BYTES {
         return Err(OpenAiFileError::FileTooLarge {
             file_name,
@@ -127,7 +133,7 @@ pub async fn upload_openai_file(
         .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
         .header("x-ms-blob-type", "BlockBlob")
         .header(CONTENT_LENGTH, file_size_bytes)
-        .body(contents)
+        .body(reqwest::Body::wrap_stream(contents))
         .send()
         .await
         .map_err(|source| OpenAiFileError::Request {
@@ -317,11 +323,14 @@ mod tests {
             .await;
 
         let base_url = base_url_for(&server);
+        let contents =
+            futures::stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"hello"))]);
         let uploaded = upload_openai_file(
             &base_url,
             &chatgpt_auth(),
             "hello.txt".to_string(),
-            b"hello".to_vec(),
+            5,
+            contents,
         )
         .await
         .expect("upload succeeds");

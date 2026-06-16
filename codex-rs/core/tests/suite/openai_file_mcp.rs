@@ -37,6 +37,8 @@ use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+const STREAMED_FILE_SIZE: usize = 13 * 1024 * 1024;
+
 fn write_post_tool_use_hook(home: &Path) -> Result<()> {
     let script_path = home.join("post_tool_use_hook.py");
     let log_path = home.join("post_tool_use_hook_log.jsonl");
@@ -86,13 +88,24 @@ fn read_post_tool_use_hook_inputs(home: &Path) -> Result<Vec<Value>> {
         .collect()
 }
 
-async fn mount_file_upload_mocks(server: &MockServer) {
+fn uploaded_file(server: &MockServer, file_size_bytes: u64) -> Value {
+    json!({
+        "download_url": format!("{}/download/file_123", server.uri()),
+        "file_id": "file_123",
+        "mime_type": "text/plain",
+        "file_name": "report.txt",
+        "uri": "sediment://file_123",
+        "file_size_bytes": file_size_bytes,
+    })
+}
+
+async fn mount_file_upload_mocks(server: &MockServer, file_size_bytes: u64) {
     Mock::given(method("POST"))
         .and(path("/files"))
         .and(header("chatgpt-account-id", "account_id"))
         .and(body_json(json!({
             "file_name": "report.txt",
-            "file_size": 11,
+            "file_size": file_size_bytes,
             "use_case": "codex",
         })))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -104,7 +117,7 @@ async fn mount_file_upload_mocks(server: &MockServer) {
         .await;
     Mock::given(method("PUT"))
         .and(path("/upload/file_123"))
-        .and(header("content-length", "11"))
+        .and(header("content-length", file_size_bytes.to_string()))
         .respond_with(ResponseTemplate::new(200))
         .expect(1)
         .mount(server)
@@ -116,7 +129,7 @@ async fn mount_file_upload_mocks(server: &MockServer) {
             "download_url": format!("{}/download/file_123", server.uri()),
             "file_name": "report.txt",
             "mime_type": "text/plain",
-            "file_size_bytes": 11,
+            "file_size_bytes": file_size_bytes,
         })))
         .expect(1)
         .mount(server)
@@ -160,13 +173,17 @@ async fn run_extract_turn(test: &TestCodex, server: &MockServer) -> Result<Respo
 async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() -> Result<()> {
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
-    mount_file_upload_mocks(&server).await;
+    mount_file_upload_mocks(&server, STREAMED_FILE_SIZE as u64).await;
 
     let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone())
         .with_workspace_setup(|cwd, fs| async move {
-            let report_path = PathUri::from_abs_path(&cwd.join("report.txt"))?;
-            fs.write_file(&report_path, b"hello world".to_vec(), /*sandbox*/ None)
-                .await?;
+            let report_path = PathUri::from_abs_path(&cwd.join("report.txt"));
+            fs.write_file(
+                &report_path,
+                vec![b'x'; STREAMED_FILE_SIZE],
+                /*sandbox*/ None,
+            )
+            .await?;
             Ok(())
         });
     let test = builder.build_with_remote_env(&server).await?;
@@ -193,14 +210,7 @@ async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() 
 
     assert_eq!(
         apps_tool_call.pointer("/params/arguments/file"),
-        Some(&json!({
-            "download_url": format!("{}/download/file_123", server.uri()),
-            "file_id": "file_123",
-            "mime_type": "text/plain",
-            "file_name": "report.txt",
-            "uri": "sediment://file_123",
-            "file_size_bytes": 11,
-        }))
+        Some(&uploaded_file(&server, STREAMED_FILE_SIZE as u64))
     );
     assert_eq!(
         apps_tool_call.pointer("/params/_meta/_codex_apps"),
@@ -220,7 +230,7 @@ async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() 
 async fn codex_apps_file_params_pass_uploaded_file_to_post_tool_use_hook() -> Result<()> {
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
-    mount_file_upload_mocks(&server).await;
+    mount_file_upload_mocks(&server, 11).await;
 
     let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone())
         .with_pre_build_hook(move |home| {
@@ -239,14 +249,7 @@ async fn codex_apps_file_params_pass_uploaded_file_to_post_tool_use_hook() -> Re
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(
         hook_inputs[0]["tool_input"]["file"],
-        json!({
-            "download_url": format!("{}/download/file_123", server.uri()),
-            "file_id": "file_123",
-            "mime_type": "text/plain",
-            "file_name": "report.txt",
-            "uri": "sediment://file_123",
-            "file_size_bytes": 11,
-        })
+        uploaded_file(&server, 11)
     );
 
     server.verify().await;

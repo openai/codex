@@ -123,19 +123,10 @@ async fn build_uploaded_argument_value(
         ));
     };
     let resolved_path = turn_environment.cwd().join(file_path);
-    let path_uri = PathUri::from_abs_path(&resolved_path).map_err(|error| {
-        contextualize_error(format!(
-            "unable to resolve `{}`: {error}",
-            resolved_path.display()
-        ))
-    })?;
-    let sandbox = turn_context.file_system_sandbox_context(
-        /*additional_permissions*/ None,
-        turn_environment.cwd_uri(),
-    );
+    let path_uri = PathUri::from_abs_path(&resolved_path);
     let fs = turn_environment.environment.get_filesystem();
     let metadata = fs
-        .get_metadata(&path_uri, Some(&sandbox))
+        .get_metadata(&path_uri, /*sandbox*/ None)
         .await
         .map_err(|error| contextualize_error(error.to_string()))?;
     if !metadata.is_file {
@@ -153,7 +144,7 @@ async fn build_uploaded_argument_value(
         )));
     }
     let contents = fs
-        .read_file(&path_uri, Some(&sandbox))
+        .read_file_stream(&path_uri, /*sandbox*/ None)
         .await
         .map_err(|error| contextualize_error(error.to_string()))?;
     let file_name = resolved_path
@@ -166,6 +157,7 @@ async fn build_uploaded_argument_value(
         turn_context.config.chatgpt_base_url.trim_end_matches('/'),
         upload_auth.as_ref(),
         file_name,
+        metadata.size,
         contents,
     )
     .await
@@ -204,8 +196,7 @@ mod tests {
             Arc::clone(&primary.environment),
             cwd,
             primary.shell.clone(),
-        )
-        .expect("valid environment cwd");
+        );
     }
 
     #[tokio::test]
