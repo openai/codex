@@ -81,6 +81,7 @@ async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
                     call_id: "call-1".to_string(),
                     name: "tool".to_string(),
                     input: "{}".to_string(),
+                    metadata: None,
                 },
             }),
         })
@@ -433,6 +434,7 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
                 is_secret: false,
                 options: None,
             }],
+            auto_resolution_ms: None,
         },
         &cancel_token,
     )
@@ -452,7 +454,7 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
 }
 
 #[tokio::test]
-async fn delegated_mcp_user_reviewer_waits_for_metadata_lookup() {
+async fn delegated_mcp_user_reviewer_returns_none_without_metadata() {
     let (parent_session, parent_ctx, _rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;
     let pending_mcp_invocations = Arc::new(Mutex::new(HashMap::from([(
@@ -464,21 +466,6 @@ async fn delegated_mcp_user_reviewer_waits_for_metadata_lookup() {
         },
     )])));
     let cancel_token = CancellationToken::new();
-    let manager = Arc::clone(&parent_session.services.mcp_connection_manager);
-    let (manager_locked_tx, manager_locked_rx) = std::sync::mpsc::sync_channel(0);
-    let (release_manager_tx, release_manager_rx) = std::sync::mpsc::sync_channel(0);
-    let manager_lock = tokio::task::spawn_blocking(move || {
-        let _manager_guard = manager.blocking_write();
-        manager_locked_tx
-            .send(())
-            .expect("manager lock receiver should remain open");
-        release_manager_rx
-            .recv()
-            .expect("manager lock release sender should remain open");
-    });
-    manager_locked_rx
-        .recv_timeout(Duration::from_secs(1))
-        .expect("manager write lock should be acquired");
 
     let event = RequestUserInputEvent {
         call_id: "call-1".to_string(),
@@ -491,6 +478,7 @@ async fn delegated_mcp_user_reviewer_waits_for_metadata_lookup() {
             is_secret: false,
             options: None,
         }],
+        auto_resolution_ms: None,
     };
     let response = maybe_auto_review_mcp_request_user_input(
         &parent_session,
@@ -498,24 +486,7 @@ async fn delegated_mcp_user_reviewer_waits_for_metadata_lookup() {
         &pending_mcp_invocations,
         &event,
         &cancel_token,
-    );
-    tokio::pin!(response);
-    assert!(
-        timeout(Duration::from_millis(100), &mut response)
-            .await
-            .is_err(),
-        "manual reviewer should wait for MCP metadata"
-    );
-    release_manager_tx
-        .send(())
-        .expect("manager lock holder should remain open");
-    manager_lock
-        .await
-        .expect("manager lock task should not panic");
-    assert_eq!(
-        timeout(Duration::from_secs(1), response)
-            .await
-            .expect("manual reviewer should finish after MCP metadata lookup"),
-        None
-    );
+    )
+    .await;
+    assert_eq!(response, None);
 }

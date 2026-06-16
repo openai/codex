@@ -15,10 +15,9 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 
 impl App {
-    fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
+    pub(super) fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
         let enabled_config_mcp_servers: Vec<String> = self
-            .chat_widget
-            .config_ref()
+            .config
             .mcp_servers
             .get()
             .iter()
@@ -81,30 +80,48 @@ impl App {
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {
+                let has_codex_backend_auth = matches!(
+                    notification.auth_mode,
+                    Some(
+                        AuthMode::Chatgpt
+                            | AuthMode::ChatgptAuthTokens
+                            | AuthMode::AgentIdentity
+                            | AuthMode::PersonalAccessToken
+                    )
+                );
                 self.chat_widget.update_account_state(
                     status_account_display_from_auth_mode(
                         notification.auth_mode,
                         notification.plan_type,
                     ),
                     notification.plan_type,
-                    matches!(
-                        notification.auth_mode,
-                        Some(AuthMode::Chatgpt) | Some(AuthMode::ChatgptAuthTokens)
-                    ),
+                    notification
+                        .auth_mode
+                        .is_some_and(AuthMode::has_chatgpt_account),
+                    has_codex_backend_auth,
                 );
                 return;
             }
             ServerNotification::ExternalAgentConfigImportCompleted(_) => {
-                let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
+                let should_report_completion =
+                    app_server_client.consume_external_agent_config_import_completion();
                 if let Err(err) = self.refresh_in_memory_config_from_disk().await {
                     tracing::warn!(
                         error = %err,
                         "failed to refresh config after external agent config import"
                     );
                 }
+                let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
                 self.chat_widget.refresh_plugin_mentions();
                 self.chat_widget.submit_op(AppCommand::reload_user_config());
                 self.fetch_plugins_list(app_server_client, cwd);
+                if should_report_completion {
+                    self.chat_widget.add_info_message(
+                        crate::external_agent_config_migration_flow::EXTERNAL_AGENT_CONFIG_MIGRATION_FINISHED_MESSAGE
+                            .to_string(),
+                        /*hint*/ None,
+                    );
+                }
                 return;
             }
             ServerNotification::AppListUpdated(notification) => {
@@ -139,6 +156,12 @@ impl App {
                 tracing::warn!(
                     thread_id,
                     "ignoring app-server notification with invalid thread_id"
+                );
+                return;
+            }
+            ServerNotificationThreadTarget::AppScoped => {
+                tracing::debug!(
+                    "ignoring app-scoped MCP startup notification without a TUI app-level target"
                 );
                 return;
             }

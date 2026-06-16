@@ -124,7 +124,6 @@ impl From<ShellCommandBackendConfig> for ShellCommandHandler {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("shell_command")
@@ -141,7 +140,13 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
         true
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl ShellCommandHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
@@ -179,10 +184,10 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
             &params,
             session.as_ref(),
             turn.as_ref(),
-            session.conversation_id,
+            session.thread_id,
             turn.config.permissions.allow_login_shell,
         )?;
-        let shell_type = Some(session.user_shell().shell_type.clone());
+        let shell_type = Some(session.user_shell().shell_type);
         run_exec_like(RunExecLikeArgs {
             tool_name,
             exec_params,

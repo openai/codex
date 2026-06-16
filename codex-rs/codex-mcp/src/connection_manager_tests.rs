@@ -12,14 +12,19 @@ use crate::elicitation::elicitation_is_rejected_by_policy;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::StartupOutcomeError;
+use crate::server::EffectiveMcpServer;
+use crate::server::McpServerMetadata;
 use crate::server::McpServerOrigin;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
 use crate::tools::normalize_tools_for_model_with_prefix;
 use crate::tools::tool_with_model_visible_input_schema;
+use codex_config::AppToolApproval;
 use codex_config::Constrained;
 use codex_config::McpServerConfig;
+use codex_config::McpServerToolConfig;
+use codex_config::types::AuthKeyringBackendKind;
 use codex_exec_server::EnvironmentManager;
 use codex_protocol::ToolName;
 use codex_protocol::mcp::McpServerInfo;
@@ -981,6 +986,48 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_
 }
 
 #[tokio::test]
+async fn shutdown_cancels_pending_tool_listing() {
+    let cancel_token = CancellationToken::new();
+    let cancel_token_for_startup = cancel_token.clone();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let pending_client = async move {
+        let _ = started_tx.send(());
+        cancel_token_for_startup.cancelled().await;
+        Err(StartupOutcomeError::Cancelled)
+    }
+    .boxed()
+    .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.clients.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            cached_tool_info_snapshot: None,
+            cached_server_info: None,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token,
+        },
+    );
+    let manager = Arc::new(manager);
+    let manager_for_list = Arc::clone(&manager);
+    let list_task = tokio::spawn(async move { manager_for_list.list_all_tools().await });
+
+    started_rx.await.expect("tool listing should start");
+    tokio::time::timeout(Duration::from_secs(1), manager.shutdown())
+        .await
+        .expect("shutdown should cancel speculative tool listing");
+    let tools = list_task.await.expect("tool listing task should not panic");
+    assert!(tools.is_empty());
+}
+
+#[tokio::test]
 async fn list_all_tools_does_not_block_when_cached_tool_info_snapshot_is_empty() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
@@ -1085,6 +1132,8 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
                 "https://docs.example".to_string(),
             )),
             supports_parallel_tool_calls: true,
+            default_tools_approval_mode: None,
+            tool_approval_modes: HashMap::new(),
         },
     );
     manager.clients.insert(
@@ -1105,6 +1154,28 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
     assert_eq!(tool.server_name, server_name);
     assert!(tool.supports_parallel_tool_calls);
     assert_eq!(tool.server_origin.as_deref(), Some("https://docs.example"));
+}
+
+#[test]
+fn server_metadata_preserves_tool_approval_policy() {
+    let mut config = crate::codex_apps_mcp_server_config(
+        "https://docs.example",
+        /*apps_mcp_product_sku*/ None,
+    );
+    config.default_tools_approval_mode = Some(AppToolApproval::Prompt);
+    config.tools.insert(
+        "search".to_string(),
+        McpServerToolConfig {
+            approval_mode: Some(AppToolApproval::Approve),
+        },
+    );
+    let metadata = McpServerMetadata::from(&EffectiveMcpServer::configured(config));
+
+    assert_eq!(metadata.tool_approval_mode("read"), AppToolApproval::Prompt);
+    assert_eq!(
+        metadata.tool_approval_mode("search"),
+        AppToolApproval::Approve
+    );
 }
 
 #[tokio::test]
@@ -1167,13 +1238,16 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         ),
     ]);
 
-    let (manager, cancel_token) = McpConnectionManager::new(
+    let cancel_token = CancellationToken::new();
+    let manager = McpConnectionManager::new(
         &mcp_servers,
         OAuthCredentialsStoreMode::default(),
+        AuthKeyringBackendKind::default(),
         HashMap::new(),
         &approval_policy,
         String::new(),
         tx_event,
+        cancel_token.clone(),
         PermissionProfile::default(),
         McpRuntimeContext::new(
             Arc::new(EnvironmentManager::without_environments()),
@@ -1201,13 +1275,18 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
             .wait_for_server_ready("stdio", Duration::from_millis(10))
             .await
     );
-    let failures = manager
-        .required_startup_failures(&["stdio".to_string()])
-        .await;
-    assert_eq!(failures.len(), 1);
-    assert_eq!(failures[0].server, "stdio");
+    let error = match manager
+        .clients
+        .get("stdio")
+        .expect("stdio client")
+        .client()
+        .await
+    {
+        Ok(_) => panic!("local stdio MCP startup should fail"),
+        Err(error) => error,
+    };
     assert_eq!(
-        failures[0].error,
+        startup_outcome_error_message(error),
         "local stdio MCP server `stdio` requires a local environment"
     );
     cancel_token.cancel();

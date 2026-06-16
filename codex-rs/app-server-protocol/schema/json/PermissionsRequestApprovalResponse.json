@@ -1,10 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "AbsolutePathBuf": {
-      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
-      "type": "string"
-    },
     "AdditionalFileSystemPermissions": {
       "properties": {
         "entries": {
@@ -27,7 +23,7 @@
         "read": {
           "description": "This will be removed in favor of `entries`.",
           "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
+            "$ref": "#/definitions/ApiPathString"
           },
           "type": [
             "array",
@@ -37,7 +33,7 @@
         "write": {
           "description": "This will be removed in favor of `entries`.",
           "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
+            "$ref": "#/definitions/ApiPathString"
           },
           "type": [
             "array",
@@ -58,6 +54,9 @@
       },
       "type": "object"
     },
+    "ApiPathString": {
+      "type": "string"
+    },
     "FileSystemAccessMode": {
       "enum": [
         "read",
@@ -71,7 +70,7 @@
         {
           "properties": {
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "$ref": "#/definitions/ApiPathString"
             },
             "type": {
               "enum": [

@@ -22,6 +22,7 @@ pub fn apply_rollout_item(
         RolloutItem::TurnContext(turn_ctx) => apply_turn_context(metadata, turn_ctx),
         RolloutItem::EventMsg(event) => apply_event_msg(metadata, event),
         RolloutItem::ResponseItem(item) => apply_response_item(metadata, item),
+        RolloutItem::InterAgentCommunication(_) => {}
         RolloutItem::Compacted(_) => {}
     }
     if metadata.model_provider.is_empty() {
@@ -36,9 +37,10 @@ pub fn rollout_item_affects_thread_metadata(item: &RolloutItem) -> bool {
         RolloutItem::EventMsg(
             EventMsg::TokenCount(_) | EventMsg::UserMessage(_) | EventMsg::ThreadGoalUpdated(_),
         ) => true,
-        RolloutItem::EventMsg(_) | RolloutItem::ResponseItem(_) | RolloutItem::Compacted(_) => {
-            false
-        }
+        RolloutItem::EventMsg(_)
+        | RolloutItem::ResponseItem(_)
+        | RolloutItem::InterAgentCommunication(_)
+        | RolloutItem::Compacted(_) => false,
     }
 }
 
@@ -50,7 +52,7 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
     }
     metadata.id = meta_line.meta.id;
     metadata.source = enum_to_string(&meta_line.meta.source);
-    metadata.thread_source = meta_line.meta.thread_source;
+    metadata.thread_source = meta_line.meta.thread_source.clone();
     metadata.agent_nickname = meta_line.meta.agent_nickname.clone();
     metadata.agent_role = meta_line.meta.agent_role.clone();
     metadata.agent_path = meta_line.meta.agent_path.clone();
@@ -75,7 +77,7 @@ fn apply_turn_context(metadata: &mut ThreadMetadata, turn_ctx: &TurnContextItem)
         metadata.cwd = turn_ctx.cwd.clone();
     }
     metadata.model = Some(turn_ctx.model.clone());
-    metadata.reasoning_effort = turn_ctx.effort;
+    metadata.reasoning_effort = turn_ctx.effort.clone();
     metadata.sandbox_policy =
         serde_json::to_string(&turn_ctx.permission_profile()).unwrap_or_default();
     metadata.approval_mode = enum_to_string(&turn_ctx.approval_policy);
@@ -189,6 +191,7 @@ mod tests {
                 text: "hello from response item".to_string(),
             }],
             phase: None,
+            metadata: None,
         });
 
         apply_rollout_item(&mut metadata, &item, "test-provider");
@@ -356,6 +359,7 @@ mod tests {
                 network: None,
                 file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
+                comp_hash: None,
                 personality: None,
                 collaboration_mode: None,
                 multi_agent_version: None,
@@ -367,10 +371,10 @@ mod tests {
         );
 
         assert_eq!(metadata.cwd, PathBuf::from("/child/worktree"));
+        let permission_profile: PermissionProfile = PermissionProfile::Disabled;
         assert_eq!(
             metadata.sandbox_policy,
-            serde_json::to_string(&PermissionProfile::Disabled)
-                .expect("serialize permission profile")
+            serde_json::to_string(&permission_profile).expect("serialize permission profile")
         );
         assert_eq!(metadata.approval_mode, "never");
     }
@@ -394,6 +398,7 @@ mod tests {
                 network: None,
                 file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
+                comp_hash: None,
                 personality: None,
                 collaboration_mode: None,
                 multi_agent_version: None,
@@ -429,6 +434,7 @@ mod tests {
                 network: None,
                 file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
+                comp_hash: None,
                 personality: None,
                 collaboration_mode: None,
                 multi_agent_version: None,
@@ -460,6 +466,7 @@ mod tests {
                 network: None,
                 file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
+                comp_hash: None,
                 personality: None,
                 collaboration_mode: None,
                 multi_agent_version: None,

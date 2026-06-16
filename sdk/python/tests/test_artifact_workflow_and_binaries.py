@@ -108,7 +108,9 @@ def test_root_fmt_recipes_use_shared_formatter_driver() -> None:
     }
     expected = {
         "working_directory": 'set working-directory := "codex-rs"',
-        "fmt_comment": "# Format the justfile, Rust, Python SDK code, and Python scripts.",
+        "fmt_comment": (
+            "# Format the justfile, Rust, Bazel/Starlark, Python SDK code, and Python scripts."
+        ),
         "fmt_commands": ["{{ python }} ../scripts/format.py"],
         "fmt_check_comment": "# Check formatting without modifying files.",
         "fmt_check_commands": ["{{ python }} ../scripts/format.py --check"],
@@ -122,20 +124,38 @@ def test_root_fmt_recipes_use_shared_formatter_driver() -> None:
     )
 
 
-def test_root_format_driver_covers_all_formatter_groups() -> None:
+def test_root_format_driver_covers_all_formatter_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The shared driver should retain every formatter in both modes."""
     script = _load_root_format_script_module()
+    git_ls_files_args = [
+        "git",
+        "ls-files",
+        "-z",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+    ]
+
+    def fake_check_output(args, *, cwd):
+        assert args == git_ls_files_args
+        assert cwd == script.REPO_ROOT
+        return b"MODULE.bazel\0README.md\0third_party/v8/libcxx.BUILD.bazel\0"
+
+    monkeypatch.setattr(script.subprocess, "check_output", fake_check_output)
     formatters = script.formatter_groups(check=False)
     checks = script.formatter_groups(check=True)
 
     assert [group.name for group in formatters] == [
         "Just",
         "Rust",
+        "Bazel/Starlark",
         "Python SDK",
         "Python scripts",
     ]
     assert [group.name for group in checks] == [group.name for group in formatters]
-    assert [len(group.commands) for group in formatters] == [1, 1, 2, 1]
+    assert [len(group.commands) for group in formatters] == [1, 1, 1, 2, 1]
     assert [len(group.commands) for group in checks] == [
         len(group.commands) for group in formatters
     ]
@@ -145,9 +165,8 @@ def test_root_format_driver_covers_all_formatter_groups() -> None:
         "--frozen",
         "--project",
         "sdk/python",
-        "--no-sync",
-        "--with",
-        "ruff",
+        "--only-group",
+        "format",
     )
     scripts_uv_run_args = (
         "uv",
@@ -155,28 +174,25 @@ def test_root_format_driver_covers_all_formatter_groups() -> None:
         "--frozen",
         "--project",
         "scripts",
-        "--no-sync",
-        "--with",
-        "ruff",
     )
     assert all(
         command.args[: len(sdk_uv_run_args)] == sdk_uv_run_args
-        for group in (formatters[2], checks[2])
+        for group in (formatters[3], checks[3])
         for command in group.commands
     )
     assert all(
         command.args[: len(scripts_uv_run_args)] == scripts_uv_run_args
-        for group in (formatters[3], checks[3])
+        for group in (formatters[4], checks[4])
         for command in group.commands
     )
-    assert formatters[2].commands[0].args[-5:] == (
+    assert formatters[3].commands[0].args[-5:] == (
         "ruff",
         "check",
         "--fix",
         "--fix-only",
         "sdk/python",
     )
-    assert checks[2].commands[0].args[-4:] == (
+    assert checks[3].commands[0].args[-4:] == (
         "ruff",
         "check",
         "--diff",
@@ -199,11 +215,30 @@ def test_root_format_driver_covers_all_formatter_groups() -> None:
         "imports_granularity=Item",
         "--check",
     )
-    assert [group.commands[-1].args[-3:] for group in formatters[2:]] == [
+    format_buildifier_args = formatters[2].commands[-1].args
+    check_buildifier_args = checks[2].commands[-1].args
+    assert format_buildifier_args[:4] == (
+        "dotslash",
+        str(script.REPO_ROOT / "tools" / "buildifier"),
+        "-mode=fix",
+        "-lint=off",
+    )
+    assert check_buildifier_args[:4] == (
+        "dotslash",
+        str(script.REPO_ROOT / "tools" / "buildifier"),
+        "-mode=check",
+        "-lint=off",
+    )
+    assert format_buildifier_args[4:] == check_buildifier_args[4:]
+    assert format_buildifier_args[4:] == (
+        "MODULE.bazel",
+        "third_party/v8/libcxx.BUILD.bazel",
+    )
+    assert [group.commands[-1].args[-3:] for group in formatters[3:]] == [
         ("ruff", "format", "sdk/python"),
         ("ruff", "format", "scripts"),
     ]
-    assert [group.commands[-1].args[-4:] for group in checks[2:]] == [
+    assert [group.commands[-1].args[-4:] for group in checks[3:]] == [
         ("ruff", "format", "--check", "sdk/python"),
         ("ruff", "format", "--check", "scripts"),
     ]
@@ -261,13 +296,13 @@ def test_schema_normalization_only_flattens_string_literal_oneofs(
     assert flattened == [
         "MessagePhase",
         "TurnItemsView",
-        "PluginAvailability",
         "AuthMode",
+        "PluginAvailability",
         "InputModality",
         "ExperimentalFeatureStage",
-        "AutoCompactTokenLimitScope",
-        "CommandExecOutputStream",
         "ProcessOutputStream",
+        "CommandExecOutputStream",
+        "AutoCompactTokenLimitScope",
     ]
 
 
@@ -358,16 +393,16 @@ def test_source_sdk_template_pins_published_runtime() -> None:
         "dependencies": pyproject["project"]["dependencies"],
     } == {
         "sdk_template_version": "0.0.0-dev",
-        "runtime_pin": "0.136.0",
+        "runtime_pin": "0.137.0a4",
         "dependencies": [
             "pydantic>=2.12",
-            "openai-codex-cli-bin==0.136.0",
+            "openai-codex-cli-bin==0.137.0a4",
         ],
     }
 
 
-def test_source_sdk_package_declares_beta_documentation_and_release_files() -> None:
-    """Public package metadata should link beta docs and ship package metadata."""
+def test_source_sdk_package_declares_beta_documentation() -> None:
+    """Public package metadata should link beta docs."""
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
     readme = (ROOT / "README.md").read_text()
 
@@ -376,7 +411,6 @@ def test_source_sdk_package_declares_beta_documentation_and_release_files() -> N
         "is_beta": "Development Status :: 4 - Beta" in pyproject["project"]["classifiers"],
         "license": pyproject["project"]["license"],
         "documentation": pyproject["project"]["urls"]["Documentation"],
-        "sdist_include": pyproject["tool"]["hatch"]["build"]["targets"]["sdist"]["include"],
         "readme_is_beta": "# OpenAI Codex Python SDK (Beta)" in readme,
         "local_license_file": (ROOT / "LICENSE").exists(),
     } == {
@@ -384,11 +418,6 @@ def test_source_sdk_package_declares_beta_documentation_and_release_files() -> N
         "is_beta": True,
         "license": "Apache-2.0",
         "documentation": "https://github.com/openai/codex/tree/main/sdk/python/docs",
-        "sdist_include": [
-            "src/openai_codex/**",
-            "README.md",
-            "pyproject.toml",
-        ],
         "readme_is_beta": True,
         "local_license_file": False,
     }
@@ -436,7 +465,7 @@ def test_runtime_setup_reads_independent_runtime_pin_and_release_tags() -> None:
     } == {
         "package_name": "openai-codex-cli-bin",
         "sdk_template_version": "0.0.0-dev",
-        "runtime_pin": "0.136.0",
+        "runtime_pin": "0.137.0a4",
         "normalized_release_version": "0.116.0a1",
         "release_tag": "rust-v0.116.0-alpha.1",
     }
@@ -651,7 +680,7 @@ def test_stage_sdk_release_preserves_reviewed_runtime_pin(tmp_path: Path) -> Non
         "version": "0.1.0b1",
         "dependencies": [
             "pydantic>=2.12",
-            "openai-codex-cli-bin==0.136.0",
+            "openai-codex-cli-bin==0.137.0a4",
         ],
     }
     assert (
@@ -688,7 +717,7 @@ def test_sdk_beta_release_can_pin_stable_runtime(tmp_path: Path) -> None:
     )
     runtime_stage = script.stage_python_runtime_package(
         tmp_path / "runtime-stage",
-        "0.136.0",
+        "0.137.0a4",
         package_archive,
     )
 
@@ -701,10 +730,10 @@ def test_sdk_beta_release_can_pin_stable_runtime(tmp_path: Path) -> None:
         "sdk_dependencies": sdk_pyproject["project"]["dependencies"],
     } == {
         "sdk_version": "0.1.0b1",
-        "runtime_version": "0.136.0",
+        "runtime_version": "0.137.0a4",
         "sdk_dependencies": [
             "pydantic>=2.12",
-            "openai-codex-cli-bin==0.136.0",
+            "openai-codex-cli-bin==0.137.0a4",
         ],
     }
 

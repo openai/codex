@@ -30,6 +30,7 @@ pub static CODEX_ALIASES_TEMP_DIR: Option<TestBinaryDispatchGuard> = {
 #[cfg(not(target_os = "windows"))]
 mod abort_tasks;
 mod additional_context;
+mod agent_execution;
 mod agent_jobs;
 mod agent_websocket;
 mod agents_md;
@@ -50,6 +51,8 @@ mod compact_resume_fork;
 mod deprecation_notice;
 mod exec;
 mod exec_policy;
+#[cfg(not(target_os = "windows"))]
+mod extension_sandbox;
 mod fork_thread;
 #[cfg(not(target_os = "windows"))]
 mod guardian_review;
@@ -91,6 +94,7 @@ mod request_permissions_tool;
 mod request_plugin_install;
 mod request_user_input;
 mod responses_api_proxy_headers;
+mod responses_lite;
 mod resume;
 mod resume_warning;
 mod review;
@@ -108,12 +112,15 @@ mod sqlite_state;
 mod stream_error_allows_next_turn;
 mod stream_no_completed;
 mod subagent_notifications;
+mod token_budget;
 mod tool_harness;
 mod tool_parallelism;
 mod tools;
 mod truncation;
 mod turn_state;
 mod unified_exec;
+#[cfg(unix)]
+mod unified_exec_zsh_fork_approvals;
 mod unstable_features_warning;
 mod user_notification;
 mod user_shell_cmd;

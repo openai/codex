@@ -21,11 +21,14 @@ codex-config = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-protocol = { workspace = true }
+codex-secrets = { workspace = true }
+codex-utils-path-uri = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true, default-features = false, features = ["std"] }
 keyring = { workspace = true, features = ["crypto-rust"] }
+memchr = { workspace = true }
 oauth2 = "5"
 reqwest = { version = "0.13", default-features = false, features = [
     "json",
@@ -69,6 +72,7 @@ codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
+wiremock = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { workspace = true, features = ["linux-native-async-persistent"] }
 

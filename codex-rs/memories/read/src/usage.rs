@@ -1,6 +1,7 @@
 use codex_protocol::parse_command::ParsedCommand;
+use codex_shell_command::bash::parse_shell_script_into_commands;
 use codex_shell_command::is_safe_command::is_known_safe_command;
-use codex_shell_command::parse_command::parse_command;
+use codex_shell_command::parse_command::parse_shell_script;
 
 pub use crate::metrics::MEMORIES_USAGE_METRIC;
 
@@ -25,12 +26,18 @@ impl MemoriesUsageKind {
     }
 }
 
-pub fn memories_usage_kinds_from_command(command: &[String]) -> Vec<MemoriesUsageKind> {
-    if !is_known_safe_command(command) {
+pub fn memories_usage_kinds_from_command(command: &str) -> Vec<MemoriesUsageKind> {
+    let Some(commands) = parse_shell_script_into_commands(command) else {
+        return Vec::new();
+    };
+    if !commands
+        .iter()
+        .all(|command| is_known_safe_command(command))
+    {
         return Vec::new();
     }
 
-    parse_command(command)
+    parse_shell_script(command)
         .into_iter()
         .filter_map(|command| match command {
             ParsedCommand::Read { path, .. } => get_memory_kind(path.display().to_string()),

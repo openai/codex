@@ -39,8 +39,11 @@ use ts_rs::TS;
 pub(crate) const GENERATED_TS_HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
 const IGNORED_DEFINITIONS: &[&str] = &["Option<()>"];
 const JSON_V1_ALLOWLIST: &[&str] = &["InitializeParams", "InitializeResponse"];
-const EXPERIMENTAL_CLIENT_METHOD_DEPENDENCY_TYPES: &[&str] =
-    &["RemoteControlClient", "RemoteControlClientsListOrder"];
+const EXPERIMENTAL_CLIENT_METHOD_DEPENDENCY_TYPES: &[&str] = &[
+    "RemoteControlClient",
+    "RemoteControlClientsListOrder",
+    "ThreadBackgroundTerminal",
+];
 const SPECIAL_DEFINITIONS: &[&str] = &[
     "ClientNotification",
     "ClientRequest",
@@ -2963,11 +2966,14 @@ permissionProfile?: string | null};
 
         let client_request_json = fs::read_to_string(output_dir.join("ClientRequest.json"))?;
         assert!(client_request_json.contains("remoteControl/pairing/start"));
+        assert!(client_request_json.contains("remoteControl/pairing/status"));
         assert!(client_request_json.contains("remoteControl/client/list"));
         assert!(client_request_json.contains("remoteControl/client/revoke"));
         for schema in [
             "RemoteControlPairingStartParams.json",
             "RemoteControlPairingStartResponse.json",
+            "RemoteControlPairingStatusParams.json",
+            "RemoteControlPairingStatusResponse.json",
             "RemoteControlClientsListParams.json",
             "RemoteControlClientsListResponse.json",
             "RemoteControlClientsRevokeParams.json",

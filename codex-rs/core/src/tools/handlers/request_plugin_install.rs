@@ -48,7 +48,6 @@ impl RequestPluginInstallHandler {
     }
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(REQUEST_PLUGIN_INSTALL_TOOL_NAME)
@@ -62,7 +61,13 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
         true
     }
 
-    async fn handle(
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(self.handle_call(invocation))
+    }
+}
+
+impl RequestPluginInstallHandler {
+    async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
@@ -121,7 +126,7 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
         let request_id = RequestId::String(format!("request_plugin_install_{call_id}").into());
         let params = build_request_plugin_install_elicitation_request(
             CODEX_APPS_MCP_SERVER_NAME,
-            session.conversation_id.to_string(),
+            session.thread_id.to_string(),
             turn.sub_id.clone(),
             &args,
             suggest_reason,
@@ -304,10 +309,6 @@ fn is_remote_plugin_install_suggestion(plugin_id: &str) -> bool {
         .is_some_and(|(_, marketplace_name)| marketplace_name == REMOTE_GLOBAL_MARKETPLACE_NAME)
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "connector cache refresh reads through the session-owned manager guard"
-)]
 async fn refresh_missing_requested_connectors(
     session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,
@@ -319,7 +320,7 @@ async fn refresh_missing_requested_connectors(
         return Some(Vec::new());
     }
 
-    let manager = session.services.mcp_connection_manager.read().await;
+    let manager = session.services.mcp_connection_manager.load_full();
     let mcp_tools = manager.list_all_tools().await;
     let accessible_connectors = connectors::with_app_enabled_state(
         connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
@@ -358,7 +359,7 @@ fn verified_plugin_install_completed(
 ) -> bool {
     let plugins_input = config.plugins_config_input();
     plugins_manager
-        .list_marketplaces_for_config(&plugins_input, &[])
+        .list_marketplaces_for_config(&plugins_input, &[], /*include_openai_curated*/ true)
         .ok()
         .into_iter()
         .flat_map(|outcome| outcome.marketplaces)
