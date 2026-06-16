@@ -30,6 +30,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
+use crate::context::RecommendedPluginsInstructions;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::ExecPolicyManager;
@@ -325,6 +326,7 @@ use crate::turn_timing::record_turn_ttfm_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core_plugins::PluginsManager;
+use codex_core_plugins::RecommendedPluginCandidatesInput;
 use codex_git_utils::get_git_repo_root;
 use codex_mcp::McpConfig;
 use codex_mcp::compute_auth_statuses;
@@ -2975,6 +2977,29 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&turn_context.config.plugins_config_input())
             .await;
+        let recommended_plugin_candidates =
+            if crate::tools::spec_plan::tool_suggest_enabled(turn_context) {
+                let auth = self.services.auth_manager.auth().await;
+                let plugins_config = turn_context.config.plugins_config_input();
+                self.services
+                    .plugins_manager
+                    .recommended_plugin_candidates_for_config(RecommendedPluginCandidatesInput {
+                        plugins_config: &plugins_config,
+                        loaded_plugins: &loaded_plugins,
+                        auth: auth.as_ref(),
+                        disabled_tools: &turn_context.config.tool_suggest.disabled_tools,
+                        app_server_client_name: turn_context.app_server_client_name.as_deref(),
+                    })
+                    .await
+            } else {
+                None
+            };
+        if let Some(recommended_plugins) = recommended_plugin_candidates
+            .as_deref()
+            .and_then(RecommendedPluginsInstructions::from_plugins)
+        {
+            contextual_user_sections.push(recommended_plugins.render());
+        }
         if let Some(plugin_instructions) =
             AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
         {

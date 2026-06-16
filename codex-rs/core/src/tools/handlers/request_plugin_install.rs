@@ -130,8 +130,8 @@ impl RequestPluginInstallHandler {
                     ToolSuggestPresentation::ListTool => format!(
                         "the discoverable tools returned by {LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}"
                     ),
-                    ToolSuggestPresentation::DeveloperContext => {
-                        "the developer recommendations".to_string()
+                    ToolSuggestPresentation::RecommendationContext => {
+                        "the <recommended_plugins> list".to_string()
                     }
                 };
                 FunctionCallError::RespondToModel(format!(

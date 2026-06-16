@@ -3845,6 +3845,79 @@ remote_plugin = true
 }
 
 #[tokio::test]
+async fn recommended_plugin_candidates_filter_installed_and_disabled_plugins() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = true
+"#,
+    );
+    write_cached_plugin(tmp.path(), REMOTE_GLOBAL_MARKETPLACE_NAME, "linear");
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/ps/plugins/suggested"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "enabled": true,
+            "plugins": [
+                {
+                    "id": "plugin_linear",
+                    "name": "linear",
+                    "release": {"display_name": "Linear"}
+                },
+                {
+                    "id": "plugin_github",
+                    "name": "github",
+                    "release": {"display_name": "GitHub"}
+                },
+                {
+                    "id": "plugin_slack",
+                    "name": "slack",
+                    "release": {"display_name": "Slack"}
+                }
+            ]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut config = load_config(tmp.path(), tmp.path()).await;
+    config.chatgpt_base_url = server.uri();
+    let manager = PluginsManager::new(tmp.path().to_path_buf());
+    manager.write_remote_installed_plugins_cache(vec![remote_installed_plugin("linear")]);
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let disabled_tools = [ToolSuggestDisabledTool::plugin(
+        "github@openai-curated-remote",
+    )];
+    let loaded_plugins = manager.plugins_for_config(&config).await;
+
+    let candidates = manager
+        .recommended_plugin_candidates_for_config(RecommendedPluginCandidatesInput {
+            plugins_config: &config,
+            loaded_plugins: &loaded_plugins,
+            auth: Some(&auth),
+            disabled_tools: &disabled_tools,
+            app_server_client_name: None,
+        })
+        .await;
+
+    assert_eq!(
+        candidates,
+        Some(vec![DiscoverableTool::from(DiscoverablePluginInfo {
+            id: "slack@openai-curated-remote".to_string(),
+            remote_plugin_id: Some("plugin_slack".to_string()),
+            name: "Slack".to_string(),
+            description: None,
+            has_skills: false,
+            mcp_server_names: Vec::new(),
+            app_connector_ids: Vec::new(),
+        })])
+    );
+}
+
+#[tokio::test]
 async fn recommended_plugins_mode_caches_explicit_false() {
     let tmp = tempfile::tempdir().unwrap();
     write_file(
