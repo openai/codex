@@ -40,16 +40,6 @@ pub struct WineTestProcess {
     processes: Option<WineProcesses>,
 }
 
-/// Ambient context for launching another Windows process in an active test prefix.
-///
-/// Applying this context to a host command does not transfer ownership of the
-/// prefix. The command must finish before the [`WineTestProcess`] that created
-/// this context is shut down.
-#[derive(Clone, Debug)]
-pub struct WineTestCommandContext {
-    prefix: PathBuf,
-}
-
 /// Captured output and exit status from a Wine test command.
 #[derive(Debug, PartialEq, Eq)]
 pub struct WineCommandOutput {
@@ -184,6 +174,16 @@ impl WineTestProcess {
         self.processes.take();
         result
     }
+}
+
+/// Ambient context for launching another Windows process in an active test prefix.
+///
+/// Applying this context to a host command does not transfer ownership of the
+/// prefix. The command must finish before the [`WineTestProcess`] that created
+/// this context is shut down.
+#[derive(Clone, Debug)]
+pub struct WineTestCommandContext {
+    prefix: PathBuf,
 }
 
 impl WineTestCommandContext {
