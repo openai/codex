@@ -44,8 +44,13 @@ codex_rust_crate(
     ],
     test_shard_counts = {
         "core-all-test": 16,
-        "core-all-test-windows-cross": 32,
+        "core-all-test-windows-cross": 8,
         "core-unit-tests": 16,
+        "core-unit-tests-windows-cross": 8,
+    },
+    test_sizes = {
+        "core-all-test-windows-cross": "medium",
+        "core-unit-tests-windows-cross": "medium",
     },
     test_tags = ["no-sandbox"],
 )

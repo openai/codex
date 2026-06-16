@@ -5,5 +5,9 @@ codex_rust_crate(
     crate_name = "codex_utils_image",
     test_shard_counts = {
         "image-unit-tests": 4,
+        "image-unit-tests-windows-cross": 1,
+    },
+    test_sizes = {
+        "image-unit-tests-windows-cross": "medium",
     },
 )
