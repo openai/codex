@@ -1068,6 +1068,11 @@ impl Session {
                     /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
                     attestation_provider,
                 )
+                .with_agent_identity_policy(if config.features.enabled(Feature::UseAgentIdentity) {
+                    codex_login::auth::AgentIdentityAuthPolicy::ChatGptAuth
+                } else {
+                    codex_login::auth::AgentIdentityAuthPolicy::JwtOnly
+                })
                 .with_prompt_cache_key_override(
                     crate::guardian::prompt_cache_key_override_for_review_session(
                         &session_configuration.session_source,
