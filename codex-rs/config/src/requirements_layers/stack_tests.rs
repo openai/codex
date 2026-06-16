@@ -3,6 +3,7 @@ use super::super::hooks::HookDirectoryField;
 use super::RequirementsCompositionError;
 use super::compose_requirements_for_hostname;
 use super::compose_requirements_for_hostname_and_hook_directory;
+use super::compose_requirements_with_hostname_resolver;
 use crate::ConfigRequirementsToml;
 use crate::ConfigRequirementsWithSources;
 use crate::RequirementSource;
@@ -10,6 +11,7 @@ use crate::Sourced;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use std::cell::Cell;
 use std::collections::BTreeMap;
 
 fn layer(id: &str, name: &str, contents: &str) -> RequirementsLayerEntry {
@@ -547,6 +549,81 @@ allowed_sandbox_modes = ["workspace-write"]
         expected_requirements(
             r#"
 allowed_sandbox_modes = ["read-only"]
+"#
+        )
+    );
+}
+
+#[test]
+fn hostname_resolver_is_not_called_without_remote_sandbox_config() {
+    let calls = Cell::<usize>::default();
+    let composed = compose_requirements_with_hostname_resolver(
+        vec![layer(
+            "req",
+            "No remote selector",
+            r#"
+allowed_sandbox_modes = ["read-only"]
+"#,
+        )],
+        || {
+            calls.set(calls.get() + 1);
+            Some("build-01.example.com".to_string())
+        },
+    )
+    .expect("compose requirements")
+    .expect("requirements present")
+    .into_toml();
+
+    assert_eq!(calls.get(), 0);
+    assert_eq!(
+        composed,
+        expected_requirements(
+            r#"
+allowed_sandbox_modes = ["read-only"]
+"#
+        )
+    );
+}
+
+#[test]
+fn hostname_resolver_is_called_once_for_multiple_remote_sandbox_layers() {
+    let calls = Cell::<usize>::default();
+    let composed = compose_requirements_with_hostname_resolver(
+        vec![
+            layer(
+                "req_low",
+                "Low",
+                r#"
+[[remote_sandbox_config]]
+hostname_patterns = ["build-*.example.com"]
+allowed_sandbox_modes = ["read-only"]
+"#,
+            ),
+            layer(
+                "req_high",
+                "High",
+                r#"
+[[remote_sandbox_config]]
+hostname_patterns = ["build-*.example.com"]
+allowed_sandbox_modes = ["workspace-write"]
+"#,
+            ),
+        ],
+        || {
+            calls.set(calls.get() + 1);
+            Some("build-01.example.com".to_string())
+        },
+    )
+    .expect("compose requirements")
+    .expect("requirements present")
+    .into_toml();
+
+    assert_eq!(calls.get(), 1);
+    assert_eq!(
+        composed,
+        expected_requirements(
+            r#"
+allowed_sandbox_modes = ["workspace-write"]
 "#
         )
     );
