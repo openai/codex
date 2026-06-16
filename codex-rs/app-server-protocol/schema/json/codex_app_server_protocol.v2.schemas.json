@@ -3118,6 +3118,29 @@
             },
             "method": {
               "enum": [
+                "externalAgentConfig/import/readHistories"
+              ],
+              "title": "ExternalAgentConfig/import/readHistoriesRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "ExternalAgentConfig/import/readHistoriesRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "config/value/write"
               ],
               "title": "Config/value/writeRequestMethod",
@@ -5400,6 +5423,52 @@
         "itemTypeResults"
       ],
       "title": "ExternalAgentConfigImportCompletedNotification",
+      "type": "object"
+    },
+    "ExternalAgentConfigImportHistoriesReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "histories": {
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportHistory"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "histories"
+      ],
+      "title": "ExternalAgentConfigImportHistoriesReadResponse",
+      "type": "object"
+    },
+    "ExternalAgentConfigImportHistory": {
+      "properties": {
+        "completedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "failures": {
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportItemTypeFailure"
+          },
+          "type": "array"
+        },
+        "importId": {
+          "type": "string"
+        },
+        "successes": {
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportItemTypeSuccess"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "completedAtMs",
+        "failures",
+        "importId",
+        "successes"
+      ],
       "type": "object"
     },
     "ExternalAgentConfigImportItemTypeFailure": {

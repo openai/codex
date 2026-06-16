@@ -19,6 +19,8 @@ use codex_app_server_protocol::CommandMigration;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
+use codex_app_server_protocol::ExternalAgentConfigImportHistoriesReadResponse;
+use codex_app_server_protocol::ExternalAgentConfigImportHistory;
 use codex_app_server_protocol::ExternalAgentConfigImportItemTypeFailure as ProtocolImportFailure;
 use codex_app_server_protocol::ExternalAgentConfigImportItemTypeSuccess as ProtocolImportSuccess;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
@@ -331,6 +333,24 @@ impl ExternalAgentConfigRequestProcessor {
         Ok(())
     }
 
+    pub(crate) async fn read_import_histories(
+        &self,
+    ) -> Result<ExternalAgentConfigImportHistoriesReadResponse, JSONRPCErrorError> {
+        let state_db = self
+            .state_db
+            .as_ref()
+            .ok_or_else(|| internal_error("state database is unavailable"))?;
+        let histories = state_db
+            .external_agent_config_import_history_records()
+            .await
+            .map_err(|err| internal_error(format!("failed to read import histories: {err}")))?
+            .into_iter()
+            .map(protocol_import_history)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(ExternalAgentConfigImportHistoriesReadResponse { histories })
+    }
+
     fn validate_pending_session_imports(
         &self,
         params: &ExternalAgentConfigImportParams,
@@ -594,6 +614,61 @@ async fn record_completed_import_notification(
             &failures,
         )
         .await
+}
+
+fn protocol_import_history(
+    record: codex_state::ExternalAgentConfigImportHistoryRecord,
+) -> Result<ExternalAgentConfigImportHistory, JSONRPCErrorError> {
+    let successes = record
+        .successes
+        .into_iter()
+        .map(protocol_import_success_record)
+        .collect::<Result<Vec<_>, _>>()?;
+    let failures = record
+        .failures
+        .into_iter()
+        .map(protocol_import_failure_record)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(ExternalAgentConfigImportHistory {
+        import_id: record.import_id,
+        completed_at_ms: record.completed_at_ms,
+        successes,
+        failures,
+    })
+}
+
+fn protocol_import_success_record(
+    record: ExternalAgentConfigImportSuccessRecord,
+) -> Result<ProtocolImportSuccess, JSONRPCErrorError> {
+    Ok(ProtocolImportSuccess {
+        item_type: protocol_import_record_item_type(record.item_type)?,
+        cwd: record.cwd,
+        source: record.source,
+        target: record.target,
+    })
+}
+
+fn protocol_import_failure_record(
+    record: ExternalAgentConfigImportFailureRecord,
+) -> Result<ProtocolImportFailure, JSONRPCErrorError> {
+    Ok(ProtocolImportFailure {
+        item_type: protocol_import_record_item_type(record.item_type)?,
+        failure_stage: record.failure_stage,
+        message: record.message,
+        cwd: record.cwd,
+        source: record.source,
+    })
+}
+
+fn protocol_import_record_item_type(
+    item_type: String,
+) -> Result<ExternalAgentConfigMigrationItemType, JSONRPCErrorError> {
+    serde_json::from_value(serde_json::Value::String(item_type.clone())).map_err(|err| {
+        internal_error(format!(
+            "failed to decode import item type {item_type}: {err}"
+        ))
+    })
 }
 
 fn completed_notification(

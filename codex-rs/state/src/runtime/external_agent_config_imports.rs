@@ -29,6 +29,14 @@ pub struct ExternalAgentConfigImportDetailsRecord {
     pub failures: Vec<ExternalAgentConfigImportFailureRecord>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalAgentConfigImportHistoryRecord {
+    pub import_id: String,
+    pub completed_at_ms: i64,
+    pub successes: Vec<ExternalAgentConfigImportSuccessRecord>,
+    pub failures: Vec<ExternalAgentConfigImportFailureRecord>,
+}
+
 impl StateRuntime {
     pub async fn record_external_agent_config_import_completed(
         &self,
@@ -86,6 +94,39 @@ WHERE import_id = ?
             })
         })
         .transpose()
+    }
+
+    pub async fn external_agent_config_import_history_records(
+        &self,
+    ) -> anyhow::Result<Vec<ExternalAgentConfigImportHistoryRecord>> {
+        let rows = sqlx::query(
+            r#"
+SELECT
+    import_id,
+    completed_at_ms,
+    successes,
+    failures
+FROM external_agent_config_imports
+ORDER BY completed_at_ms DESC, import_id ASC
+"#,
+        )
+        .fetch_all(self.pool.as_ref())
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                let import_id: String = row.try_get("import_id")?;
+                let completed_at_ms: i64 = row.try_get("completed_at_ms")?;
+                let successes: String = row.try_get("successes")?;
+                let failures: String = row.try_get("failures")?;
+                Ok(ExternalAgentConfigImportHistoryRecord {
+                    import_id,
+                    completed_at_ms,
+                    successes: serde_json::from_str(&successes)?,
+                    failures: serde_json::from_str(&failures)?,
+                })
+            })
+            .collect()
     }
 }
 

@@ -7,6 +7,7 @@ use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
+use codex_app_server_protocol::ExternalAgentConfigImportHistoriesReadResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportProgressNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
@@ -123,6 +124,30 @@ async fn external_agent_config_import_sends_completion_notification_for_sync_onl
     );
     assert_eq!(
         serde_json::to_value(&details_record.failures)?,
+        serde_json::to_value(&expected_failures)?
+    );
+
+    let request_id = mcp
+        .send_raw_request("externalAgentConfig/import/readHistories", None)
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ExternalAgentConfigImportHistoriesReadResponse = to_response(response)?;
+    let entry = response
+        .histories
+        .iter()
+        .find(|entry| entry.import_id == import_id)
+        .expect("import history entry should be available");
+    assert!(entry.completed_at_ms > 0);
+    assert_eq!(
+        serde_json::to_value(&entry.successes)?,
+        serde_json::to_value(&expected_successes)?
+    );
+    assert_eq!(
+        serde_json::to_value(&entry.failures)?,
         serde_json::to_value(&expected_failures)?
     );
 

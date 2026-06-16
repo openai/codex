@@ -950,6 +950,11 @@ impl MessageProcessor {
                 .import(request_id.clone(), params)
                 .await
                 .map(|()| None),
+            ClientRequest::ExternalAgentConfigImportHistoriesRead { .. } => self
+                .external_agent_config_processor
+                .read_import_histories()
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::ConfigValueWrite { params, .. } => {
                 self.config_processor.value_write(params).await.map(Some)
             }

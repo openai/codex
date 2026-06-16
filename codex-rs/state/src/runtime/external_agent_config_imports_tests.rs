@@ -73,6 +73,44 @@ async fn records_completion_by_import_id() -> anyhow::Result<()> {
             }],
         })
     );
+    assert_eq!(
+        runtime
+            .external_agent_config_import_history_records()
+            .await?
+            .into_iter()
+            .map(|record| (
+                record.import_id,
+                record.successes,
+                record.failures,
+                record.completed_at_ms > 0
+            ))
+            .collect::<Vec<_>>(),
+        vec![(
+            "import-1".to_string(),
+            vec![
+                ExternalAgentConfigImportSuccessRecord {
+                    item_type: "CONFIG".to_string(),
+                    cwd: None,
+                    source: Some("settings.json".to_string()),
+                    target: Some("config.toml".to_string()),
+                },
+                ExternalAgentConfigImportSuccessRecord {
+                    item_type: "MCP_SERVER_CONFIG".to_string(),
+                    cwd: None,
+                    source: Some("github".to_string()),
+                    target: Some("github".to_string()),
+                }
+            ],
+            vec![ExternalAgentConfigImportFailureRecord {
+                item_type: "MCP_SERVER_CONFIG".to_string(),
+                failure_stage: "import".to_string(),
+                message: "failed".to_string(),
+                cwd: None,
+                source: Some("broken".to_string()),
+            }],
+            true
+        )]
+    );
 
     Ok(())
 }
