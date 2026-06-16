@@ -9325,7 +9325,7 @@ async fn windows_computer_use_requirement_pins_computer_use() -> std::io::Result
         let config = ConfigBuilder::without_managed_config_for_tests()
             .codex_home(codex_home.path().to_path_buf())
             .cloud_config_bundle(
-                CloudConfigBundleFixture::loader_with_enterprise_requirement(&format!(
+                CloudConfigBundleFixture::loader_with_enterprise_requirement(format!(
                     r#"
 [features]
 windows_computer_use = {enabled}
