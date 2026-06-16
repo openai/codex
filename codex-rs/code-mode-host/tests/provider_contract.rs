@@ -3,23 +3,22 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use codex_code_mode::CellId;
-use codex_code_mode::CellOutcome;
-use codex_code_mode::CodeModeNestedToolCall;
-use codex_code_mode::CodeModeSession;
-use codex_code_mode::CodeModeSessionDelegate;
-use codex_code_mode::CodeModeSessionProvider;
-use codex_code_mode::CodeModeToolKind;
-use codex_code_mode::CreateCellRequest;
-use codex_code_mode::FunctionCallOutputContentItem;
-use codex_code_mode::InProcessCodeModeSessionProvider;
-use codex_code_mode::NotificationFuture;
-use codex_code_mode::ObserveRequest;
-use codex_code_mode::RuntimeResponse;
-use codex_code_mode::ToolDefinition;
-use codex_code_mode::ToolInvocationFuture;
 use codex_code_mode_client::CodeModeHostCommand;
 use codex_code_mode_client::StdioCodeModeSessionProvider;
+use codex_code_mode_protocol::CellId;
+use codex_code_mode_protocol::CellOutcome;
+use codex_code_mode_protocol::CodeModeNestedToolCall;
+use codex_code_mode_protocol::CodeModeSession;
+use codex_code_mode_protocol::CodeModeSessionDelegate;
+use codex_code_mode_protocol::CodeModeSessionProvider;
+use codex_code_mode_protocol::CodeModeToolKind;
+use codex_code_mode_protocol::CreateCellRequest;
+use codex_code_mode_protocol::FunctionCallOutputContentItem;
+use codex_code_mode_protocol::NotificationFuture;
+use codex_code_mode_protocol::ObserveRequest;
+use codex_code_mode_protocol::RuntimeResponse;
+use codex_code_mode_protocol::ToolDefinition;
+use codex_code_mode_protocol::ToolInvocationFuture;
 use codex_protocol::ToolName;
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc;
@@ -33,19 +32,13 @@ struct ProviderCase {
 fn provider_cases() -> Vec<ProviderCase> {
     let host_program =
         codex_utils_cargo_bin::cargo_bin("codex-code-mode-host").expect("resolve host binary");
-    vec![
-        ProviderCase {
-            name: "in-process",
-            provider: Arc::new(InProcessCodeModeSessionProvider),
-        },
-        ProviderCase {
-            name: "stdio",
-            provider: Arc::new(StdioCodeModeSessionProvider::new(CodeModeHostCommand {
-                program: host_program,
-                args: Vec::new(),
-            })),
-        },
-    ]
+    vec![ProviderCase {
+        name: "stdio",
+        provider: Arc::new(StdioCodeModeSessionProvider::new(CodeModeHostCommand {
+            program: host_program,
+            args: Vec::new(),
+        })),
+    }]
 }
 
 #[derive(Debug, PartialEq)]

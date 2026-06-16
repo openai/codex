@@ -737,6 +737,9 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         thread_store,
         attestation_provider: None,
         external_time_provider: None,
+        code_mode_session_provider: Arc::new(
+            codex_code_mode_client::StdioCodeModeSessionProvider::default(),
+        ),
         inherited_multi_agent_version: None,
         initial_multi_agent_mode: None,
     })

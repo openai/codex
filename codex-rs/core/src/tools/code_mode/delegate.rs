@@ -1,12 +1,13 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use codex_code_mode::CellId;
-use codex_code_mode::CodeModeNestedToolCall;
-use codex_code_mode::CodeModeSessionDelegate;
-use codex_code_mode::NotificationFuture;
-use codex_code_mode::ToolInvocationFuture;
+use codex_code_mode_protocol::CellId;
+use codex_code_mode_protocol::CodeModeNestedToolCall;
+use codex_code_mode_protocol::CodeModeSessionDelegate;
+use codex_code_mode_protocol::NotificationFuture;
+use codex_code_mode_protocol::ToolInvocationFuture;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use serde_json::Value as JsonValue;
@@ -24,7 +25,13 @@ use crate::tools::parallel::ToolCallRuntime;
 pub(super) struct CodeModeDispatchBroker {
     dispatch_tx: async_channel::Sender<DispatchMessage>,
     dispatch_rx: async_channel::Receiver<DispatchMessage>,
-    dispatch_gates: Arc<Mutex<HashMap<CellId, watch::Sender<bool>>>>,
+    dispatch_gates: Arc<Mutex<DispatchGateState>>,
+}
+
+#[derive(Default)]
+struct DispatchGateState {
+    gates: HashMap<CellId, watch::Sender<bool>>,
+    terminal_before_ready: HashSet<CellId>,
 }
 
 impl CodeModeDispatchBroker {
@@ -33,16 +40,20 @@ impl CodeModeDispatchBroker {
         Self {
             dispatch_tx,
             dispatch_rx,
-            dispatch_gates: Arc::new(Mutex::new(HashMap::new())),
+            dispatch_gates: Arc::new(Mutex::new(DispatchGateState::default())),
         }
     }
 
     pub(super) fn mark_cell_ready_for_dispatch(&self, cell_id: &CellId) {
-        dispatch_gate(&self.dispatch_gates, cell_id).send_replace(true);
+        mark_dispatch_gate_ready(&self.dispatch_gates, cell_id);
     }
 
     pub(super) fn close_cell(&self, cell_id: &CellId) {
         remove_dispatch_gate(&self.dispatch_gates, cell_id);
+    }
+
+    fn record_cell_closed(&self, cell_id: &CellId) {
+        record_terminal_dispatch_gate(&self.dispatch_gates, cell_id);
     }
 
     pub(super) fn start_turn_worker(
@@ -130,39 +141,74 @@ impl CodeModeDispatchBroker {
 }
 
 fn dispatch_gate(
-    dispatch_gates: &Mutex<HashMap<CellId, watch::Sender<bool>>>,
+    dispatch_gates: &Mutex<DispatchGateState>,
     cell_id: &CellId,
-) -> watch::Sender<bool> {
+) -> Option<watch::Sender<bool>> {
     let mut dispatch_gates = match dispatch_gates.lock() {
         Ok(dispatch_gates) => dispatch_gates,
         Err(poisoned) => poisoned.into_inner(),
     };
-    dispatch_gates
-        .entry(cell_id.clone())
-        .or_insert_with(|| watch::channel(false).0)
-        .clone()
+    if dispatch_gates.terminal_before_ready.contains(cell_id) {
+        return None;
+    }
+    Some(
+        dispatch_gates
+            .gates
+            .entry(cell_id.clone())
+            .or_insert_with(|| watch::channel(false).0)
+            .clone(),
+    )
 }
 
-fn remove_dispatch_gate(
-    dispatch_gates: &Mutex<HashMap<CellId, watch::Sender<bool>>>,
-    cell_id: &CellId,
-) {
+fn mark_dispatch_gate_ready(dispatch_gates: &Mutex<DispatchGateState>, cell_id: &CellId) {
     let mut dispatch_gates = match dispatch_gates.lock() {
         Ok(dispatch_gates) => dispatch_gates,
         Err(poisoned) => poisoned.into_inner(),
     };
-    dispatch_gates.remove(cell_id);
+    if dispatch_gates.terminal_before_ready.remove(cell_id) {
+        return;
+    }
+    dispatch_gates
+        .gates
+        .entry(cell_id.clone())
+        .or_insert_with(|| watch::channel(false).0)
+        .send_replace(true);
+}
+
+fn remove_dispatch_gate(dispatch_gates: &Mutex<DispatchGateState>, cell_id: &CellId) {
+    let mut dispatch_gates = match dispatch_gates.lock() {
+        Ok(dispatch_gates) => dispatch_gates,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    dispatch_gates.gates.remove(cell_id);
+}
+
+fn record_terminal_dispatch_gate(dispatch_gates: &Mutex<DispatchGateState>, cell_id: &CellId) {
+    let mut dispatch_gates = match dispatch_gates.lock() {
+        Ok(dispatch_gates) => dispatch_gates,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let ready = dispatch_gates
+        .gates
+        .remove(cell_id)
+        .is_some_and(|gate| *gate.borrow());
+    if !ready {
+        dispatch_gates.terminal_before_ready.insert(cell_id.clone());
+    }
 }
 
 async fn wait_until_cell_ready_for_dispatch(
-    dispatch_gates: &Mutex<HashMap<CellId, watch::Sender<bool>>>,
+    dispatch_gates: &Mutex<DispatchGateState>,
     cell_id: &CellId,
     cancellation_token: &CancellationToken,
 ) -> bool {
     if cancellation_token.is_cancelled() {
         return false;
     }
-    let mut ready_rx = dispatch_gate(dispatch_gates, cell_id).subscribe();
+    let Some(dispatch_gate) = dispatch_gate(dispatch_gates, cell_id) else {
+        return false;
+    };
+    let mut ready_rx = dispatch_gate.subscribe();
     loop {
         if *ready_rx.borrow_and_update() {
             return true;
@@ -240,7 +286,7 @@ impl CodeModeSessionDelegate for CodeModeDispatchBroker {
     }
 
     fn cell_closed(&self, cell_id: &CellId) {
-        self.close_cell(cell_id);
+        self.record_cell_closed(cell_id);
     }
 }
 

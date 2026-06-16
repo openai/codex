@@ -4924,6 +4924,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
+        Arc::new(codex_code_mode_client::StdioCodeModeSessionProvider::default()),
         Some(config.multi_agent_version_from_features()),
     )
     .await;
@@ -5104,7 +5105,12 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
             /*attestation_provider*/ None,
         ),
-        code_mode_service: crate::tools::code_mode::CodeModeService::new(),
+        code_mode_service: crate::tools::code_mode::CodeModeService::new(Arc::new(
+            codex_code_mode_client::StdioCodeModeSessionProvider::default(),
+        )),
+        code_mode_session_provider: Arc::new(
+            codex_code_mode_client::StdioCodeModeSessionProvider::default(),
+        ),
         tool_search_handler_cache: Default::default(),
         turn_environments: Arc::clone(&turn_environments),
     };
@@ -5284,6 +5290,7 @@ async fn make_session_with_config_and_rx(
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
+        Arc::new(codex_code_mode_client::StdioCodeModeSessionProvider::default()),
         Some(config.multi_agent_version_from_features()),
     )
     .await?;
@@ -5398,6 +5405,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
+        Arc::new(codex_code_mode_client::StdioCodeModeSessionProvider::default()),
         Some(config.multi_agent_version_from_features()),
     )
     .await?;
@@ -7163,7 +7171,12 @@ where
             /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
             /*attestation_provider*/ None,
         ),
-        code_mode_service: crate::tools::code_mode::CodeModeService::new(),
+        code_mode_service: crate::tools::code_mode::CodeModeService::new(Arc::new(
+            codex_code_mode_client::StdioCodeModeSessionProvider::default(),
+        )),
+        code_mode_session_provider: Arc::new(
+            codex_code_mode_client::StdioCodeModeSessionProvider::default(),
+        ),
         tool_search_handler_cache: Default::default(),
         turn_environments: Arc::clone(&turn_environments),
     };

@@ -444,6 +444,8 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
     pub(crate) external_time_provider: Option<Arc<dyn TimeProvider>>,
+    pub(crate) code_mode_session_provider:
+        Arc<dyn codex_code_mode_protocol::CodeModeSessionProvider>,
     pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
     pub(crate) initial_multi_agent_mode: Option<MultiAgentMode>,
 }
@@ -529,6 +531,7 @@ impl Codex {
             thread_store,
             attestation_provider,
             external_time_provider,
+            code_mode_session_provider,
             inherited_multi_agent_version,
             initial_multi_agent_mode,
         } = args;
@@ -680,6 +683,7 @@ impl Codex {
             parent_rollout_thread_trace,
             attestation_provider,
             external_time_provider,
+            code_mode_session_provider,
             multi_agent_version,
         ))
         .await

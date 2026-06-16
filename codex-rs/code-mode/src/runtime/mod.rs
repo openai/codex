@@ -318,7 +318,7 @@ mod tests {
     use super::RuntimeControlCommand;
     use super::RuntimeEvent;
     use super::spawn_runtime;
-    use crate::FunctionCallOutputContentItem;
+    use codex_code_mode_protocol::FunctionCallOutputContentItem;
 
     fn execute_request(source: &str) -> CreateCellRequest {
         CreateCellRequest {

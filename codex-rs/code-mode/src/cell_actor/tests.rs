@@ -119,7 +119,6 @@ fn spawn_cell_actor_harness_with_host<H: CellHost>(host: Arc<H>) -> CellActorHar
             source: "await new Promise(() => {});".to_string(),
         },
         runtime_event_tx,
-        PendingRuntimeMode::PauseUntilResumed,
     )
     .unwrap();
     let (runtime_control_tx, runtime_control_rx) = std_mpsc::channel();
@@ -1101,4 +1100,39 @@ fn dropped_pending_observation_preserves_the_initial_yield_boundary() {
         ObservationDelivery::Delivered
     ));
     assert_eq!(response_rx.try_recv(), Ok(Ok(completion)));
+}
+
+#[tokio::test]
+async fn repeated_termination_is_rejected_before_the_first_response() {
+    let harness = spawn_cell_actor_harness();
+    let initial_observation = harness
+        .handle
+        .observe(ObserveMode::YieldAfter(Duration::from_secs(60)));
+    assert_eq!(
+        harness
+            .handle
+            .observe(ObserveMode::YieldAfter(Duration::from_secs(60)))
+            .await,
+        Err(CellError::Busy)
+    );
+    let first_termination = harness.handle.terminate();
+
+    assert_eq!(
+        harness.handle.terminate().await,
+        Err(CellError::AlreadyTerminating)
+    );
+
+    harness
+        .event_tx
+        .send(RuntimeEvent::Result {
+            stored_value_writes: HashMap::new(),
+            error_text: None,
+        })
+        .unwrap();
+    let terminated = Ok(CellEvent::Terminated {
+        content_items: Vec::new(),
+    });
+    assert_eq!(first_termination.await, terminated.clone());
+    assert_eq!(initial_observation.await, terminated);
+    harness.task.await.unwrap();
 }

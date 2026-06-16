@@ -69,7 +69,7 @@ declare const tools: { lookup_order(args: { order_id: string; }): Promise<{ ok: 
 fn augment_tool_spec_for_code_mode_preserves_exec_tool_description() {
     assert_eq!(
         augment_tool_spec_for_code_mode(ToolSpec::Freeform(FreeformTool {
-            name: codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
+            name: codex_code_mode_protocol::PUBLIC_TOOL_NAME.to_string(),
             description: "Run code".to_string(),
             format: FreeformToolFormat {
                 r#type: "grammar".to_string(),
@@ -78,7 +78,7 @@ fn augment_tool_spec_for_code_mode_preserves_exec_tool_description() {
             },
         })),
         ToolSpec::Freeform(FreeformTool {
-            name: codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
+            name: codex_code_mode_protocol::PUBLIC_TOOL_NAME.to_string(),
             description: "Run code".to_string(),
             format: FreeformToolFormat {
                 r#type: "grammar".to_string(),
@@ -103,7 +103,7 @@ fn tool_spec_to_code_mode_tool_definition_returns_augmented_nested_tools() {
 
     assert_eq!(
         tool_spec_to_code_mode_tool_definition(&spec),
-        Some(codex_code_mode::ToolDefinition {
+        Some(codex_code_mode_protocol::ToolDefinition {
             name: "apply_patch".to_string(),
             tool_name: ToolName::plain("apply_patch"),
             description: r#"Apply a patch
@@ -113,7 +113,7 @@ exec tool declaration:
 declare const tools: { apply_patch(input: string): Promise<unknown>; };
 ```"#
                 .to_string(),
-            kind: codex_code_mode::CodeModeToolKind::Freeform,
+            kind: codex_code_mode_protocol::CodeModeToolKind::Freeform,
             input_schema: None,
             output_schema: None,
         })

@@ -54,6 +54,13 @@ def main() -> int:
         check=True,
         env=env,
     )
+    target_dir = Path(env.get("CARGO_TARGET_DIR", CODEX_RS_ROOT / "target"))
+    if not target_dir.is_absolute():
+        target_dir = CODEX_RS_ROOT / target_dir
+    host_name = (
+        "codex-code-mode-host.exe" if os.name == "nt" else "codex-code-mode-host"
+    )
+    env["CODEX_CODE_MODE_HOST_PATH"] = str(target_dir / "debug" / host_name)
     return subprocess.run(
         [cargo, "nextest", "run", "--no-fail-fast", *sys.argv[1:]],
         cwd=CODEX_RS_ROOT,

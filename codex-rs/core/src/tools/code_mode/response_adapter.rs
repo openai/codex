@@ -1,4 +1,4 @@
-use codex_code_mode::ImageDetail as CodeModeImageDetail;
+use codex_code_mode_protocol::ImageDetail as CodeModeImageDetail;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageDetail;
@@ -8,7 +8,7 @@ trait IntoProtocol<T> {
 }
 
 pub(super) fn into_function_call_output_content_items(
-    items: Vec<codex_code_mode::FunctionCallOutputContentItem>,
+    items: Vec<codex_code_mode_protocol::FunctionCallOutputContentItem>,
 ) -> Vec<FunctionCallOutputContentItem> {
     items.into_iter().map(IntoProtocol::into_protocol).collect()
 }
@@ -26,22 +26,23 @@ impl IntoProtocol<ImageDetail> for CodeModeImageDetail {
 }
 
 impl IntoProtocol<FunctionCallOutputContentItem>
-    for codex_code_mode::FunctionCallOutputContentItem
+    for codex_code_mode_protocol::FunctionCallOutputContentItem
 {
     fn into_protocol(self) -> FunctionCallOutputContentItem {
         let value = self;
         match value {
-            codex_code_mode::FunctionCallOutputContentItem::InputText { text } => {
+            codex_code_mode_protocol::FunctionCallOutputContentItem::InputText { text } => {
                 FunctionCallOutputContentItem::InputText { text }
             }
-            codex_code_mode::FunctionCallOutputContentItem::InputImage { image_url, detail } => {
-                FunctionCallOutputContentItem::InputImage {
-                    image_url,
-                    detail: detail
-                        .map(IntoProtocol::into_protocol)
-                        .or(Some(DEFAULT_IMAGE_DETAIL)),
-                }
-            }
+            codex_code_mode_protocol::FunctionCallOutputContentItem::InputImage {
+                image_url,
+                detail,
+            } => FunctionCallOutputContentItem::InputImage {
+                image_url,
+                detail: detail
+                    .map(IntoProtocol::into_protocol)
+                    .or(Some(DEFAULT_IMAGE_DETAIL)),
+            },
         }
     }
 }

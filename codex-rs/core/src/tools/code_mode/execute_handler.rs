@@ -34,8 +34,8 @@ impl CodeModeExecuteHandler {
         call_id: String,
         code: String,
     ) -> Result<FunctionToolOutput, FunctionCallError> {
-        let args =
-            codex_code_mode::parse_exec_source(&code).map_err(FunctionCallError::RespondToModel)?;
+        let args = codex_code_mode_protocol::parse_exec_source(&code)
+            .map_err(FunctionCallError::RespondToModel)?;
         let exec = ExecContext { session, turn };
         let enabled_tools =
             codex_tools::collect_code_mode_tool_definitions(&self.nested_tool_specs);
@@ -44,7 +44,7 @@ impl CodeModeExecuteHandler {
             .session
             .services
             .code_mode_service
-            .create_cell(codex_code_mode::CreateCellRequest {
+            .create_cell(codex_code_mode_protocol::CreateCellRequest {
                 tool_call_id: call_id.clone(),
                 enabled_tools,
                 source: args.code.clone(),
@@ -67,6 +67,7 @@ impl CodeModeExecuteHandler {
             cell_id.clone(),
             code_cell_trace.clone(),
         )
+        .await
         .map_err(FunctionCallError::RespondToModel)?;
         exec.session
             .services
@@ -76,14 +77,14 @@ impl CodeModeExecuteHandler {
             .session
             .services
             .code_mode_service
-            .observe(codex_code_mode::ObserveRequest {
+            .observe(codex_code_mode_protocol::ObserveRequest {
                 cell_id: cell_id.clone(),
                 yield_time_ms: args
                     .yield_time_ms
-                    .unwrap_or(codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS),
+                    .unwrap_or(codex_code_mode_protocol::DEFAULT_EXEC_YIELD_TIME_MS),
             })
             .await;
-        let response: codex_code_mode::RuntimeResponse = match observed {
+        let response: codex_code_mode_protocol::RuntimeResponse = match observed {
             Ok(outcome) => outcome.into(),
             Err(error) => {
                 initial_observation_guard.finish_with_error(&error);
@@ -96,7 +97,10 @@ impl CodeModeExecuteHandler {
         code_cell_trace.record_initial_response(&response);
         // Yielded cells keep running, so terminal lifecycle is only emitted
         // here when the first response also ended the runtime.
-        if !matches!(response, codex_code_mode::RuntimeResponse::Yielded { .. }) {
+        if !matches!(
+            response,
+            codex_code_mode_protocol::RuntimeResponse::Yielded { .. }
+        ) {
             code_cell_trace.record_ended(&response);
             exec.session
                 .services

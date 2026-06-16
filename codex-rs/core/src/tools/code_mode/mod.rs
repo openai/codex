@@ -6,15 +6,21 @@ mod wait_handler;
 pub(crate) mod wait_spec;
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use codex_code_mode::CellId;
-use codex_code_mode::CodeModeNestedToolCall;
-use codex_code_mode::CodeModeSession;
-use codex_code_mode::CodeModeToolKind;
-use codex_code_mode::RuntimeResponse;
+use codex_code_mode_protocol::CellId;
+use codex_code_mode_protocol::CellOutcome;
+use codex_code_mode_protocol::CodeModeNestedToolCall;
+use codex_code_mode_protocol::CodeModeSession;
+use codex_code_mode_protocol::CodeModeSessionProvider;
+use codex_code_mode_protocol::CodeModeToolKind;
+use codex_code_mode_protocol::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use serde_json::Value as JsonValue;
+use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use crate::function_tool::FunctionCallError;
@@ -43,9 +49,10 @@ pub(crate) use execute_handler::CodeModeExecuteHandler;
 use response_adapter::into_function_call_output_content_items;
 pub(crate) use wait_handler::CodeModeWaitHandler;
 
-pub(crate) const PUBLIC_TOOL_NAME: &str = codex_code_mode::PUBLIC_TOOL_NAME;
-pub(crate) const WAIT_TOOL_NAME: &str = codex_code_mode::WAIT_TOOL_NAME;
-pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 = codex_code_mode::DEFAULT_WAIT_YIELD_TIME_MS;
+pub(crate) const PUBLIC_TOOL_NAME: &str = codex_code_mode_protocol::PUBLIC_TOOL_NAME;
+pub(crate) const WAIT_TOOL_NAME: &str = codex_code_mode_protocol::WAIT_TOOL_NAME;
+pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 =
+    codex_code_mode_protocol::DEFAULT_WAIT_YIELD_TIME_MS;
 
 /// Returns true for the un-namespaced code-mode `exec` tool.
 pub(crate) fn is_exec_tool_name(tool_name: &ToolName) -> bool {
@@ -59,8 +66,11 @@ pub(crate) struct ExecContext {
 }
 
 pub(crate) struct CodeModeService {
-    session: Option<Arc<dyn CodeModeSession>>,
+    session: Mutex<Option<Arc<dyn CodeModeSession>>>,
+    provider: Arc<dyn CodeModeSessionProvider>,
     dispatch_broker: Arc<CodeModeDispatchBroker>,
+    session_init_permit: Semaphore,
+    shutting_down: AtomicBool,
 }
 
 struct InitialObservationGuard {
@@ -71,13 +81,19 @@ struct InitialObservationGuard {
 }
 
 impl InitialObservationGuard {
-    fn new(
+    async fn new(
         service: &CodeModeService,
         cell_id: CellId,
         code_cell_trace: codex_rollout_trace::CodeCellTraceContext,
     ) -> Result<Self, String> {
+        let session = service
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "code mode is unavailable".to_string())?;
         Ok(Self {
-            session: Arc::clone(service.session()?),
+            session,
             dispatch_broker: Arc::clone(&service.dispatch_broker),
             cell_id: Some(cell_id),
             code_cell_trace,
@@ -95,10 +111,10 @@ impl InitialObservationGuard {
         };
         self.code_cell_trace.record_initial_response(&response);
         self.code_cell_trace.record_ended(&response);
-        self.dispatch_broker.close_cell(&cell_id);
-
         let session = Arc::clone(&self.session);
+        let dispatch_broker = Arc::clone(&self.dispatch_broker);
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            dispatch_broker.close_cell(&cell_id);
             tracing::warn!("unable to terminate code-mode cell {cell_id}: no Tokio runtime");
             return;
         };
@@ -106,6 +122,7 @@ impl InitialObservationGuard {
             if let Err(error) = session.terminate(cell_id.clone()).await {
                 tracing::warn!("failed to terminate code-mode cell {cell_id}: {error}");
             }
+            dispatch_broker.close_cell(&cell_id);
         });
     }
 
@@ -121,45 +138,56 @@ impl Drop for InitialObservationGuard {
 }
 
 impl CodeModeService {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(provider: Arc<dyn CodeModeSessionProvider>) -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
         Self {
-            session: Some(Arc::new(codex_code_mode::CodeModeService::with_delegate(
-                dispatch_broker.clone(),
-            ))),
+            session: Mutex::new(None),
+            provider,
             dispatch_broker,
+            session_init_permit: Semaphore::new(/*permits*/ 1),
+            shutting_down: AtomicBool::new(false),
         }
     }
 
     pub(crate) async fn create_cell(
         &self,
-        request: codex_code_mode::CreateCellRequest,
+        request: codex_code_mode_protocol::CreateCellRequest,
     ) -> Result<CellId, String> {
-        self.session()?.create_cell(request).await
+        self.session_for_create().await?.create_cell(request).await
     }
 
     pub(crate) async fn observe(
         &self,
-        request: codex_code_mode::ObserveRequest,
-    ) -> Result<codex_code_mode::CellOutcome, String> {
-        self.session()?.observe(request).await
+        request: codex_code_mode_protocol::ObserveRequest,
+    ) -> Result<CellOutcome, String> {
+        match self.current_session().await {
+            Some(session) => session.observe(request).await,
+            None => Ok(missing_cell_outcome(request.cell_id)),
+        }
     }
 
-    pub(crate) async fn terminate(
-        &self,
-        cell_id: CellId,
-    ) -> Result<codex_code_mode::CellOutcome, String> {
-        self.session()?.terminate(cell_id).await
+    pub(crate) async fn terminate(&self, cell_id: CellId) -> Result<CellOutcome, String> {
+        match self.current_session().await {
+            Some(session) => session.terminate(cell_id).await,
+            None => Ok(missing_cell_outcome(cell_id)),
+        }
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), String> {
-        match &self.session {
+        self.shutting_down.store(true, Ordering::Release);
+        let _permit = self
+            .session_init_permit
+            .acquire()
+            .await
+            .map_err(|_| "code mode session initializer closed".to_string())?;
+        let session = self.session.lock().await.clone();
+        match session {
             Some(session) => session.shutdown().await,
             None => Ok(()),
         }
     }
 
-    pub(crate) fn mark_cell_ready_for_dispatch(&self, cell_id: &codex_code_mode::CellId) {
+    pub(crate) fn mark_cell_ready_for_dispatch(&self, cell_id: &CellId) {
         self.dispatch_broker.mark_cell_ready_for_dispatch(cell_id);
     }
 
@@ -175,9 +203,7 @@ impl CodeModeService {
         tracker: SharedTurnDiffTracker,
     ) -> Option<CodeModeDispatchWorker> {
         let tool_mode = effective_tool_mode(turn);
-        if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
-            || self.session.is_none()
-        {
+        if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
             return None;
         }
 
@@ -191,10 +217,43 @@ impl CodeModeService {
         )
     }
 
-    fn session(&self) -> Result<&Arc<dyn CodeModeSession>, String> {
+    async fn session_for_create(&self) -> Result<Arc<dyn CodeModeSession>, String> {
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err("code mode session is shutting down".to_string());
+        }
+        if let Some(session) = self.current_session().await {
+            return Ok(session);
+        }
+        let _permit = self
+            .session_init_permit
+            .acquire()
+            .await
+            .map_err(|_| "code mode session initializer closed".to_string())?;
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err("code mode session is shutting down".to_string());
+        }
+        if let Some(session) = self.current_session().await {
+            return Ok(session);
+        }
+        let session = self
+            .provider
+            .create_session(self.dispatch_broker.clone())
+            .await?;
+        if self.shutting_down.load(Ordering::Acquire) {
+            let _ = session.shutdown().await;
+            return Err("code mode session is shutting down".to_string());
+        }
+        *self.session.lock().await = Some(Arc::clone(&session));
+        Ok(session)
+    }
+
+    async fn current_session(&self) -> Option<Arc<dyn CodeModeSession>> {
         self.session
+            .lock()
+            .await
             .as_ref()
-            .ok_or_else(|| "code mode is unavailable".to_string())
+            .filter(|session| session.is_alive())
+            .cloned()
     }
 }
 
@@ -367,6 +426,14 @@ fn serialize_function_tool_arguments(
     }
 }
 
+fn missing_cell_outcome(cell_id: CellId) -> CellOutcome {
+    CellOutcome::MissingCell(RuntimeResponse::Result {
+        error_text: Some(format!("exec cell {cell_id} not found")),
+        cell_id,
+        content_items: Vec::new(),
+    })
+}
+
 fn build_freeform_tool_payload(
     tool_name: &ToolName,
     input: Option<JsonValue>,
@@ -379,24 +446,33 @@ fn build_freeform_tool_payload(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
     use super::CodeModeDispatchBroker;
+    use super::CodeModeService;
     use super::InitialObservationGuard;
     use super::build_nested_tool_payload;
     use super::truncate_code_mode_result;
     use crate::tools::context::ToolPayload;
-    use codex_code_mode::CellId;
-    use codex_code_mode::CellOutcome;
-    use codex_code_mode::CodeModeSession;
-    use codex_code_mode::CodeModeSessionResultFuture;
-    use codex_code_mode::CodeModeToolKind;
-    use codex_code_mode::CreateCellRequest;
-    use codex_code_mode::ObserveRequest;
-    use codex_code_mode::RuntimeResponse;
+    use codex_code_mode_protocol::CellId;
+    use codex_code_mode_protocol::CellOutcome;
+    use codex_code_mode_protocol::CodeModeSession;
+    use codex_code_mode_protocol::CodeModeSessionDelegate;
+    use codex_code_mode_protocol::CodeModeSessionProvider;
+    use codex_code_mode_protocol::CodeModeSessionProviderFuture;
+    use codex_code_mode_protocol::CodeModeSessionResultFuture;
+    use codex_code_mode_protocol::CodeModeToolKind;
+    use codex_code_mode_protocol::CreateCellRequest;
+    use codex_code_mode_protocol::ObserveRequest;
+    use codex_code_mode_protocol::RuntimeResponse;
     use codex_protocol::models::FunctionCallOutputContentItem;
     use codex_tools::ToolName;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
-    use std::sync::Arc;
-    use std::sync::Mutex;
 
     struct RecordingCodeModeSession {
         terminated_cells: Mutex<Vec<CellId>>,
@@ -531,5 +607,142 @@ mod tests {
                 .expect("terminated-cell lock should not be poisoned"),
             vec![cell_id]
         );
+    }
+
+    struct RecoveringSessionProvider {
+        sessions_created: AtomicUsize,
+    }
+
+    impl CodeModeSessionProvider for RecoveringSessionProvider {
+        fn create_session<'a>(
+            &'a self,
+            _delegate: Arc<dyn CodeModeSessionDelegate>,
+        ) -> CodeModeSessionProviderFuture<'a> {
+            let generation = self.sessions_created.fetch_add(1, Ordering::Relaxed) + 1;
+            Box::pin(async move {
+                let session: Arc<dyn CodeModeSession> = Arc::new(RecoveringSession {
+                    generation,
+                    alive: AtomicBool::new(true),
+                });
+                Ok(session)
+            })
+        }
+    }
+
+    struct RecoveringSession {
+        generation: usize,
+        alive: AtomicBool,
+    }
+
+    impl CodeModeSession for RecoveringSession {
+        fn is_alive(&self) -> bool {
+            self.alive.load(Ordering::Acquire)
+        }
+
+        fn create_cell<'a>(
+            &'a self,
+            _request: CreateCellRequest,
+        ) -> CodeModeSessionResultFuture<'a, CellId> {
+            Box::pin(async move {
+                if self.generation == 1 {
+                    self.alive.store(false, Ordering::Release);
+                    return Err("host crashed".to_string());
+                }
+                Ok(CellId::new(format!("cell-{}", self.generation)))
+            })
+        }
+
+        fn observe<'a>(
+            &'a self,
+            request: ObserveRequest,
+        ) -> CodeModeSessionResultFuture<'a, CellOutcome> {
+            Box::pin(async move {
+                Ok(CellOutcome::LiveCell(RuntimeResponse::Result {
+                    cell_id: request.cell_id,
+                    content_items: Vec::new(),
+                    error_text: None,
+                }))
+            })
+        }
+
+        fn terminate<'a>(
+            &'a self,
+            _cell_id: CellId,
+        ) -> CodeModeSessionResultFuture<'a, CellOutcome> {
+            Box::pin(async { panic!("terminate should not be sent to a failed session") })
+        }
+
+        fn shutdown<'a>(&'a self) -> CodeModeSessionResultFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    fn create_cell_request() -> CreateCellRequest {
+        CreateCellRequest {
+            tool_call_id: "call-1".to_string(),
+            enabled_tools: Vec::new(),
+            source: "text('hello')".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_replaces_failed_session_but_observe_does_not() {
+        let provider = Arc::new(RecoveringSessionProvider {
+            sessions_created: AtomicUsize::new(0),
+        });
+        let provider_trait: Arc<dyn CodeModeSessionProvider> = provider.clone();
+        let service = CodeModeService::new(provider_trait);
+
+        assert_eq!(
+            service
+                .create_cell(create_cell_request())
+                .await
+                .err()
+                .as_deref(),
+            Some("host crashed")
+        );
+        assert_eq!(provider.sessions_created.load(Ordering::Relaxed), 1);
+
+        assert_eq!(
+            service
+                .observe(ObserveRequest {
+                    cell_id: CellId::new("1".to_string()),
+                    yield_time_ms: 1,
+                })
+                .await,
+            Ok(CellOutcome::MissingCell(RuntimeResponse::Result {
+                cell_id: CellId::new("1".to_string()),
+                content_items: Vec::new(),
+                error_text: Some("exec cell 1 not found".to_string()),
+            }))
+        );
+        assert_eq!(provider.sessions_created.load(Ordering::Relaxed), 1);
+
+        assert_eq!(
+            service.terminate(CellId::new("1".to_string())).await,
+            Ok(CellOutcome::MissingCell(RuntimeResponse::Result {
+                cell_id: CellId::new("1".to_string()),
+                content_items: Vec::new(),
+                error_text: Some("exec cell 1 not found".to_string()),
+            }))
+        );
+        assert_eq!(provider.sessions_created.load(Ordering::Relaxed), 1);
+
+        let cell_id = service.create_cell(create_cell_request()).await.unwrap();
+        assert_eq!(cell_id, CellId::new("cell-2".to_string()));
+        assert_eq!(
+            service
+                .observe(ObserveRequest {
+                    cell_id: cell_id.clone(),
+                    yield_time_ms: 1,
+                })
+                .await,
+            Ok(CellOutcome::LiveCell(RuntimeResponse::Result {
+                cell_id,
+                content_items: Vec::new(),
+                error_text: None,
+            }))
+        );
+        assert_eq!(provider.sessions_created.load(Ordering::Relaxed), 2);
     }
 }

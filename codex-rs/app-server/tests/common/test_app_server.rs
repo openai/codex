@@ -224,6 +224,9 @@ impl TestAppServer {
         cmd.current_dir(codex_home);
         cmd.env("CODEX_HOME", codex_home);
         cmd.env("RUST_LOG", "warn");
+        let code_mode_host = codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")
+            .context("should find binary for codex-code-mode-host")?;
+        cmd.env("CODEX_CODE_MODE_HOST_PATH", code_mode_host);
         // Keep integration tests isolated from host managed configuration.
         cmd.env(
             "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",

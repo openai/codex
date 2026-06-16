@@ -121,6 +121,7 @@ pub(crate) async fn run_codex_thread_interactive(
         thread_store: Arc::clone(&parent_session.services.thread_store),
         attestation_provider: parent_session.services.attestation_provider.clone(),
         external_time_provider: Some(Arc::clone(&parent_session.services.time_provider)),
+        code_mode_session_provider: Arc::clone(&parent_session.services.code_mode_session_provider),
         inherited_multi_agent_version: Some(MultiAgentVersion::Disabled),
         initial_multi_agent_mode: None,
     }))

@@ -58,18 +58,11 @@ struct Inner<D: SessionRuntimeDelegate> {
 
 enum CellIdNamespace {
     Runtime(uuid::Uuid),
-    #[cfg(test)]
-    Unscoped,
 }
 
 impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
     pub fn new(delegate: Arc<D>) -> Self {
         Self::with_cell_id_namespace(delegate, CellIdNamespace::Runtime(uuid::Uuid::new_v4()))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn new_for_test(delegate: Arc<D>) -> Self {
-        Self::with_cell_id_namespace(delegate, CellIdNamespace::Unscoped)
     }
 
     fn with_cell_id_namespace(delegate: Arc<D>, cell_id_namespace: CellIdNamespace) -> Self {
@@ -167,8 +160,6 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
                 }
                 encoded
             }
-            #[cfg(test)]
-            CellIdNamespace::Unscoped => sequence.to_string(),
         };
         CellId::new(value)
     }
