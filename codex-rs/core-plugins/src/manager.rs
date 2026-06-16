@@ -1,5 +1,4 @@
 use super::PluginLoadOutcome;
-use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
 use crate::is_openai_curated_marketplace_name;
