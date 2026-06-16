@@ -69,7 +69,8 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
 
     let builder = builder_from_session_meta(&session_meta_line, path.as_path()).expect("builder");
     let mut expected = builder.build("openai");
-    apply_rollout_item(&mut expected, &rollout_line.item, "openai");
+    apply_rollout_item(&mut expected, &rollout_line.item, "openai")
+        .expect("rollout item should apply");
     expected.updated_at = file_modified_time_utc(&path).await.expect("mtime");
 
     assert_eq!(outcome.metadata, expected);

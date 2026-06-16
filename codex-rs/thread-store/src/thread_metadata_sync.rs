@@ -18,6 +18,8 @@ use crate::CreateThreadParams;
 use crate::GitInfoPatch;
 use crate::ResumeThreadParams;
 use crate::ThreadMetadataPatch;
+use crate::ThreadStoreError;
+use crate::ThreadStoreResult;
 
 const IMAGE_ONLY_USER_MESSAGE_PLACEHOLDER: &str = "[Image]";
 #[cfg(not(test))]
@@ -90,7 +92,7 @@ impl ThreadMetadataSync {
         }
     }
 
-    pub(crate) fn for_resume(params: &ResumeThreadParams) -> Self {
+    pub(crate) fn for_resume(params: &ResumeThreadParams) -> ThreadStoreResult<Self> {
         let mut sync = Self {
             thread_id: params.thread_id,
             cwd_seen: params
@@ -108,11 +110,11 @@ impl ThreadMetadataSync {
             defer_resume_update_until_append: false,
         };
         if let Some(history) = params.history.as_deref() {
-            let update = sync.observe_resume_history(history);
+            let update = sync.observe_resume_history(history)?;
             sync.merge_pending_update(update);
             sync.defer_resume_update_until_append = sync.pending_update.is_some();
         }
-        sync
+        Ok(sync)
     }
 
     pub(crate) fn take_pending_update(&self) -> Option<PendingThreadMetadataPatch> {
@@ -148,7 +150,7 @@ impl ThreadMetadataSync {
     pub(crate) fn observe_appended_items(
         &mut self,
         items: &[RolloutItem],
-    ) -> Option<PendingThreadMetadataPatch> {
+    ) -> ThreadStoreResult<Option<PendingThreadMetadataPatch>> {
         self.defer_create_update_until_history_exists = false;
         self.defer_resume_update_until_append = false;
         let affects_metadata = items
@@ -157,7 +159,10 @@ impl ThreadMetadataSync {
         let update = if affects_metadata {
             self.observe_items(items)?
         } else {
-            thread_updated_at_touch()
+            Some(thread_updated_at_touch())
+        };
+        let Some(update) = update else {
+            return Ok(None);
         };
         self.merge_pending_update(Some(update));
         if !affects_metadata
@@ -169,12 +174,15 @@ impl ThreadMetadataSync {
                 Instant::now().duration_since(last_touch) < THREAD_UPDATED_AT_TOUCH_INTERVAL
             })
         {
-            return None;
+            return Ok(None);
         }
-        self.take_pending_update()
+        Ok(self.take_pending_update())
     }
 
-    fn observe_items(&mut self, items: &[RolloutItem]) -> Option<ThreadMetadataPatch> {
+    fn observe_items(
+        &mut self,
+        items: &[RolloutItem],
+    ) -> ThreadStoreResult<Option<ThreadMetadataPatch>> {
         self.observe_items_with_update(
             items,
             ThreadMetadataPatch {
@@ -184,7 +192,10 @@ impl ThreadMetadataSync {
         )
     }
 
-    fn observe_resume_history(&mut self, items: &[RolloutItem]) -> Option<ThreadMetadataPatch> {
+    fn observe_resume_history(
+        &mut self,
+        items: &[RolloutItem],
+    ) -> ThreadStoreResult<Option<ThreadMetadataPatch>> {
         self.observe_items_with_update(items, ThreadMetadataPatch::default())
     }
 
@@ -192,9 +203,9 @@ impl ThreadMetadataSync {
         &mut self,
         items: &[RolloutItem],
         mut update: ThreadMetadataPatch,
-    ) -> Option<ThreadMetadataPatch> {
+    ) -> ThreadStoreResult<Option<ThreadMetadataPatch>> {
         if items.is_empty() {
-            return None;
+            return Ok(None);
         }
         for item in items {
             match item {
@@ -227,14 +238,23 @@ impl ThreadMetadataSync {
                     }
                 }
                 RolloutItem::TurnContext(turn_ctx) => {
-                    if !self.cwd_seen && !turn_ctx.cwd.as_os_str().is_empty() {
+                    if !self.cwd_seen
+                        && let Ok(cwd) = turn_ctx.cwd.to_abs_path()
+                    {
                         self.cwd_seen = true;
-                        update.cwd = Some(turn_ctx.cwd.clone());
+                        update.cwd = Some(cwd.into_path_buf());
                     }
                     update.model = Some(turn_ctx.model.clone());
                     update.reasoning_effort = turn_ctx.effort.clone();
                     update.approval_mode = Some(turn_ctx.approval_policy);
-                    update.permission_profile = Some(turn_ctx.permission_profile());
+                    update.permission_profile =
+                        Some(turn_ctx.permission_profile().map_err(|err| {
+                            ThreadStoreError::Internal {
+                                message: format!(
+                                    "failed to hydrate turn permission profile: {err}"
+                                ),
+                            }
+                        })?);
                 }
                 RolloutItem::EventMsg(EventMsg::UserMessage(user)) => {
                     if let Some(preview) = user_message_preview(user) {
@@ -276,7 +296,7 @@ impl ThreadMetadataSync {
                 | RolloutItem::Compacted(_) => {}
             }
         }
-        Some(update)
+        Ok(Some(update))
     }
 
     fn merge_pending_update(&mut self, update: Option<ThreadMetadataPatch>) {
@@ -394,7 +414,8 @@ mod tests {
                 RolloutItem::SessionMeta(session_meta(thread_id)),
                 RolloutItem::EventMsg(EventMsg::UserMessage(user_message("hello metadata"))),
             ],
-        ));
+        ))
+        .expect("resume metadata should hydrate");
 
         let update = sync.take_pending_update().expect("pending metadata update");
         assert_eq!(
@@ -433,7 +454,8 @@ mod tests {
                 ))),
                 RolloutItem::EventMsg(EventMsg::UserMessage(user_message("first user text"))),
             ],
-        ));
+        ))
+        .expect("resume metadata should hydrate");
 
         let update = sync.take_pending_update().expect("pending metadata update");
         assert_eq!(update.patch.preview.as_deref(), Some("ship the refactor"));
@@ -452,7 +474,8 @@ mod tests {
             vec![RolloutItem::EventMsg(EventMsg::UserMessage(user_message(
                 "first user text",
             )))],
-        ));
+        ))
+        .expect("resume metadata should hydrate");
         let pending = sync.take_pending_update().expect("pending resume metadata");
         sync.mark_pending_update_applied(&pending);
 
@@ -460,6 +483,7 @@ mod tests {
             .observe_appended_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(user_message(
                 "later user text",
             )))])
+            .expect("appended metadata should hydrate")
             .expect("updated_at touch");
 
         assert_eq!(update.patch.preview, None);
@@ -471,7 +495,8 @@ mod tests {
     #[test]
     fn metadata_irrelevant_items_coalesce_updated_at_touches() {
         let thread_id = ThreadId::new();
-        let mut sync = ThreadMetadataSync::for_resume(&resume_params(thread_id, Vec::new()));
+        let mut sync = ThreadMetadataSync::for_resume(&resume_params(thread_id, Vec::new()))
+            .expect("resume metadata should hydrate");
         let item = RolloutItem::Compacted(CompactedItem {
             message: "compacted".to_string(),
             replacement_history: None,
@@ -480,12 +505,14 @@ mod tests {
 
         let first = sync
             .observe_appended_items(std::slice::from_ref(&item))
+            .expect("appended metadata should hydrate")
             .expect("first touch should apply immediately");
         assert!(first.patch.updated_at.is_some());
         sync.mark_pending_update_applied(&first);
 
         assert!(
             sync.observe_appended_items(std::slice::from_ref(&item))
+                .expect("appended metadata should hydrate")
                 .is_none(),
             "second touch inside the coalescing window should wait for a barrier"
         );
@@ -504,7 +531,8 @@ mod tests {
                 RolloutItem::SessionMeta(session_meta(thread_id)),
                 RolloutItem::EventMsg(EventMsg::UserMessage(user_message("hello metadata"))),
             ],
-        ));
+        ))
+        .expect("resume metadata should hydrate");
 
         assert!(
             sync.take_pending_update_for_existing_history().is_none(),
@@ -514,6 +542,7 @@ mod tests {
             sync.observe_appended_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
                 user_message("new append"),
             ))])
+            .expect("appended metadata should hydrate")
             .is_some(),
             "the first append should flush resume metadata together with append metadata"
         );

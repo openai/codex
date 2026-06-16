@@ -100,6 +100,28 @@ fn drive_shaped_posix_uri_is_intentionally_inferred_as_windows() {
     assert_eq!(path.infer_path_convention(), Some(PathConvention::Windows));
 }
 
+#[test]
+fn inferred_native_path_string_uses_the_inferred_convention() {
+    for (uri, expected) in [
+        ("file:///home/alice/a%20file.rs", "/home/alice/a file.rs"),
+        (
+            "file:///C:/Users/Alice%20Smith/main.rs",
+            r"C:\Users\Alice Smith\main.rs",
+        ),
+        ("file://server/share/main.rs", r"\\server\share\main.rs"),
+        ("file://server/", "file://server/"),
+        ("file:///%00/bad/path/YQ", "file:///%00/bad/path/YQ"),
+    ] {
+        let path = PathUri::parse(uri).expect("valid path URI");
+
+        assert_eq!(
+            path.inferred_native_path_string(),
+            expected,
+            "rendering {uri}"
+        );
+    }
+}
+
 #[cfg(windows)]
 #[test]
 fn file_uri_falls_back_for_windows_prefixes_without_a_uri_representation() {

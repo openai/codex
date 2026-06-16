@@ -23,13 +23,13 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnContextItem;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
+use codex_utils_path_uri::PathUri;
 use image::ImageBuffer;
 use image::ImageFormat;
 use image::Luma;
 use image::Rgba;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
-use std::path::PathBuf;
 
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
@@ -127,7 +127,12 @@ fn developer_msg_with_fragments(texts: &[&str]) -> ResponseItem {
 fn reference_context_item() -> TurnContextItem {
     TurnContextItem {
         turn_id: Some("reference-turn".to_string()),
-        cwd: PathBuf::from("/tmp/reference-cwd"),
+        cwd: PathUri::from_path(
+            std::env::current_dir()
+                .expect("current directory")
+                .join("reference-cwd"),
+        )
+        .expect("absolute reference cwd"),
         workspace_roots: None,
         current_date: Some("2026-03-23".to_string()),
         timezone: Some("America/Los_Angeles".to_string()),

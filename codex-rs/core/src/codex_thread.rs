@@ -458,7 +458,7 @@ impl CodexThread {
             self.codex
                 .session
                 .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
-                .await;
+                .await?;
         }
         self.codex
             .session
