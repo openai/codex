@@ -114,6 +114,8 @@ pub enum Feature {
     /// Allow the model to request web searches that fetch cached content.
     /// Takes precedence over `WebSearchRequest`.
     WebSearchCached,
+    /// Interpret live web search configuration as semi-offline web search.
+    SemiOfflineWebSearch,
     /// Expose the extension-backed standalone web search tool.
     StandaloneWebSearch,
     /// Use the legacy Landlock Linux sandbox fallback instead of the default
@@ -584,7 +586,7 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
 }
 
 fn web_search_details() -> &'static str {
-    "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml if you want to override it."
+    "Set `web_search` to `\"live\"`, `\"semi_offline\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml if you want to override it."
 }
 
 /// Keys accepted in `[features]` tables.
@@ -825,6 +827,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::WebSearchCached,
         key: "web_search_cached",
         stage: Stage::Deprecated,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SemiOfflineWebSearch,
+        key: "semi_offline_web_search",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

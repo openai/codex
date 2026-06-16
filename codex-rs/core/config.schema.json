@@ -602,6 +602,9 @@
             "secret_auth_storage": {
               "type": "boolean"
             },
+            "semi_offline_web_search": {
+              "type": "boolean"
+            },
             "shell_snapshot": {
               "type": "boolean"
             },
@@ -4323,6 +4326,7 @@
       "enum": [
         "disabled",
         "cached",
+        "semi_offline",
         "live"
       ],
       "type": "string"
@@ -4758,6 +4762,9 @@
           "type": "boolean"
         },
         "secret_auth_storage": {
+          "type": "boolean"
+        },
+        "semi_offline_web_search": {
           "type": "boolean"
         },
         "shell_snapshot": {
@@ -5266,7 +5273,7 @@
           "$ref": "#/definitions/WebSearchMode"
         }
       ],
-      "description": "Controls the web search tool mode: disabled, cached, or live."
+      "description": "Controls the web search tool mode: disabled, cached, semi-offline, or live."
     },
     "windows": {
       "allOf": [

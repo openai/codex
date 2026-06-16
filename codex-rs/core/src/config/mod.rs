@@ -2363,6 +2363,11 @@ pub fn resolve_oss_provider(
 
 /// Resolve the web search mode from explicit config and feature flags.
 fn resolve_web_search_mode(config_toml: &ConfigToml, features: &Features) -> Option<WebSearchMode> {
+    if features.enabled(Feature::SemiOfflineWebSearch)
+        && matches!(config_toml.web_search, None | Some(WebSearchMode::Live))
+    {
+        return Some(WebSearchMode::SemiOffline);
+    }
     if let Some(mode) = config_toml.web_search {
         return Some(mode);
     }
@@ -2515,8 +2520,14 @@ pub(crate) fn resolve_web_search_mode_for_turn(
     if matches!(permission_profile, PermissionProfile::Disabled)
         && preferred != WebSearchMode::Disabled
     {
+        if preferred == WebSearchMode::SemiOffline
+            && web_search_mode.can_set(&WebSearchMode::SemiOffline).is_ok()
+        {
+            return WebSearchMode::SemiOffline;
+        }
         for mode in [
             WebSearchMode::Live,
+            WebSearchMode::SemiOffline,
             WebSearchMode::Cached,
             WebSearchMode::Disabled,
         ] {
@@ -2530,6 +2541,7 @@ pub(crate) fn resolve_web_search_mode_for_turn(
         }
         for mode in [
             WebSearchMode::Cached,
+            WebSearchMode::SemiOffline,
             WebSearchMode::Live,
             WebSearchMode::Disabled,
         ] {

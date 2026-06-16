@@ -231,7 +231,7 @@ async fn web_search_tool_config_from_config_toml_is_forwarded_to_request() {
     let home = Arc::new(tempfile::TempDir::new().expect("create codex home"));
     std::fs::write(
         home.path().join("config.toml"),
-        r#"web_search = "live"
+        r#"web_search = "semi_offline"
 
 [tools.web_search]
 context_size = "high"
@@ -261,6 +261,7 @@ location = { country = "US", city = "New York", timezone = "America/New_York" }
         &json!({
             "type": "web_search",
             "external_web_access": true,
+            "semi_offline_web_access": true,
             "search_context_size": "high",
             "filters": {
                 "allowed_domains": ["example.com"],

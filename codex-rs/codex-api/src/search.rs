@@ -225,6 +225,8 @@ pub struct SearchSettings {
     pub allowed_callers: Option<Vec<AllowedCaller>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_web_access: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semi_offline_web_access: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

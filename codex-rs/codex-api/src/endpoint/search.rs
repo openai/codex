@@ -194,6 +194,7 @@ mod tests {
                         }),
                         allowed_callers: Some(vec![AllowedCaller::Direct]),
                         external_web_access: Some(true),
+                        semi_offline_web_access: None,
                     }),
                     max_output_tokens: Some(2500),
                 },

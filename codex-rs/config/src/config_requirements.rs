@@ -665,10 +665,11 @@ fn is_glob_metacharacter(ch: char) -> bool {
 }
 
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum WebSearchModeRequirement {
     Disabled,
     Cached,
+    SemiOffline,
     Live,
 }
 
@@ -677,6 +678,7 @@ impl From<WebSearchMode> for WebSearchModeRequirement {
         match mode {
             WebSearchMode::Disabled => WebSearchModeRequirement::Disabled,
             WebSearchMode::Cached => WebSearchModeRequirement::Cached,
+            WebSearchMode::SemiOffline => WebSearchModeRequirement::SemiOffline,
             WebSearchMode::Live => WebSearchModeRequirement::Live,
         }
     }
@@ -687,6 +689,7 @@ impl From<WebSearchModeRequirement> for WebSearchMode {
         match mode {
             WebSearchModeRequirement::Disabled => WebSearchMode::Disabled,
             WebSearchModeRequirement::Cached => WebSearchMode::Cached,
+            WebSearchModeRequirement::SemiOffline => WebSearchMode::SemiOffline,
             WebSearchModeRequirement::Live => WebSearchMode::Live,
         }
     }
@@ -697,6 +700,7 @@ impl fmt::Display for WebSearchModeRequirement {
         match self {
             WebSearchModeRequirement::Disabled => write!(f, "disabled"),
             WebSearchModeRequirement::Cached => write!(f, "cached"),
+            WebSearchModeRequirement::SemiOffline => write!(f, "semi_offline"),
             WebSearchModeRequirement::Live => write!(f, "live"),
         }
     }
@@ -1345,6 +1349,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
 
                 let initial_value = if accepted.contains(&WebSearchModeRequirement::Cached) {
                     WebSearchMode::Cached
+                } else if accepted.contains(&WebSearchModeRequirement::SemiOffline) {
+                    WebSearchMode::SemiOffline
                 } else if accepted.contains(&WebSearchModeRequirement::Live) {
                     WebSearchMode::Live
                 } else {

@@ -299,12 +299,13 @@ pub enum Personality {
 #[derive(
     Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS, Default,
 )]
-#[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum WebSearchMode {
     Disabled,
     #[default]
     Cached,
+    SemiOffline,
     Live,
 }
 

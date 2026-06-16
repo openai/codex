@@ -21,7 +21,7 @@ fn image_generation_tool_matches_expected_spec() {
 fn web_search_tool_preserves_configured_options() {
     assert_eq!(
         create_web_search_tool(WebSearchToolOptions {
-            web_search_mode: Some(WebSearchMode::Live),
+            web_search_mode: Some(WebSearchMode::SemiOffline),
             web_search_config: Some(&WebSearchConfig {
                 filters: Some(WebSearchFilters {
                     allowed_domains: Some(vec!["example.com".to_string()]),
@@ -39,6 +39,7 @@ fn web_search_tool_preserves_configured_options() {
         }),
         Some(ToolSpec::WebSearch {
             external_web_access: Some(true),
+            semi_offline_web_access: Some(true),
             filters: Some(ResponsesApiWebSearchFilters {
                 allowed_domains: Some(vec!["example.com".to_string()]),
             }),

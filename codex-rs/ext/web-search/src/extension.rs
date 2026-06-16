@@ -74,9 +74,10 @@ fn search_settings(config: &Config, web_search_mode: WebSearchMode) -> SearchSet
             }),
         allowed_callers: Some(vec![AllowedCaller::Direct]),
         external_web_access: Some(match web_search_mode {
-            WebSearchMode::Live => true,
+            WebSearchMode::SemiOffline | WebSearchMode::Live => true,
             WebSearchMode::Cached | WebSearchMode::Disabled => false,
         }),
+        semi_offline_web_access: (web_search_mode == WebSearchMode::SemiOffline).then_some(true),
         ..Default::default()
     }
 }
