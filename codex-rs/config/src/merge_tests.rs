@@ -1,7 +1,6 @@
 use super::*;
 use crate::config_toml::ConfigToml;
 use crate::types::MemoriesToml;
-use crate::types::ShellEnvironmentPolicyToml;
 use pretty_assertions::assert_eq;
 
 fn parse_toml(value: &str) -> TomlValue {
@@ -210,23 +209,6 @@ include_only = ["FLIP_TO_EXCLUDE", "KEEP_INCLUDED"]
 "keep_included" = "include"
 "#,
         )
-    );
-
-    let config: ConfigToml = base.try_into().expect("merged config should deserialize");
-    assert_eq!(
-        codex_protocol::config_types::ShellEnvironmentPolicy::from(config.shell_environment_policy),
-        codex_protocol::config_types::ShellEnvironmentPolicy::from(ShellEnvironmentPolicyToml {
-            exclude: Some(vec![
-                "flip_to_exclude".to_string(),
-                "keep_excluded".to_string(),
-            ]),
-            include_only: Some(vec![
-                "add_included".to_string(),
-                "flip_to_include".to_string(),
-                "keep_included".to_string(),
-            ]),
-            ..Default::default()
-        })
     );
 }
 

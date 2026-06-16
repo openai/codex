@@ -380,7 +380,7 @@ unknown_key = true"#;
 }
 
 #[tokio::test]
-async fn non_strict_config_rejects_mixed_shell_environment_policy_forms_per_layer() {
+async fn non_strict_config_rejects_mixed_shell_environment_policy_before_higher_layer_merge() {
     let tmp = tempdir().expect("tempdir");
     let contents = r#"
 [shell_environment_policy]
