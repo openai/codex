@@ -10928,3 +10928,18 @@ sandbox_private_desktop = false
     }));
     Ok(())
 }
+
+#[tokio::test]
+async fn absent_allow_login_shell_does_not_report_an_override() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = load_with_enterprise_requirement(&codex_home, "allow_login_shell = false").await?;
+
+    assert!(!config.permissions.allow_login_shell);
+    assert!(
+        config
+            .startup_warnings
+            .iter()
+            .all(|warning| !warning.contains("allow_login_shell"))
+    );
+    Ok(())
+}

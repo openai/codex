@@ -142,7 +142,7 @@ pub(crate) async fn execute_user_shell_command(
     // Execute the user's script under the environment's shell; this
     // allows commands that use shell features (pipes, &&, redirects, etc.).
     // We do not source rc files or otherwise reformat the script.
-    let use_login_shell = true;
+    let use_login_shell = turn_context.config.permissions.allow_login_shell;
     let display_command = environment_shell.derive_exec_args(&command, use_login_shell);
     let shell_snapshot_location = turn_environment.shell_snapshot(turn_environment.cwd());
     let mut exec_env_map = create_env(
