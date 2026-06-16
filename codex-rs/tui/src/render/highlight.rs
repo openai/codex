@@ -526,8 +526,10 @@ fn find_syntax(lang: &str) -> Option<&'static SyntaxReference> {
     let ss = syntax_set();
 
     // Aliases that two-face does not resolve on its own.
-    let patched = match lang {
+    let normalized = lang.to_ascii_lowercase();
+    let patched = match normalized.as_str() {
         "csharp" | "c-sharp" => "c#",
+        "cppm" | "cxxm" | "ixx" => "cpp",
         "golang" => "go",
         "python3" => "python",
         "shell" => "bash",
@@ -1203,7 +1205,10 @@ mod tests {
             );
         }
         // Patched aliases that two-face cannot resolve on its own.
-        for alias in ["csharp", "c-sharp", "golang", "python3", "shell"] {
+        for alias in [
+            "csharp", "c-sharp", "cppm", "CPPM", "cxxm", "CxXm", "ixx", "IXX", "golang", "python3",
+            "shell",
+        ] {
             assert!(
                 find_syntax(alias).is_some(),
                 "find_syntax({alias:?}) returned None — patched alias broken"
