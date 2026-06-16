@@ -38,7 +38,6 @@ use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
 use crate::marketplace_upgrade::configured_git_marketplace_names;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
-use crate::remote::RecommendedPlugin;
 use crate::remote::RecommendedPluginsMode;
 use crate::remote::RemoteInstalledPlugin;
 use crate::remote::RemotePluginCatalogError;
@@ -58,6 +57,8 @@ use codex_config::ConfigLayerStack;
 use codex_config::clear_user_plugin;
 use codex_config::set_user_plugin_enabled;
 use codex_config::types::PluginConfig;
+use codex_config::types::ToolSuggestDisabledTool;
+use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_skills::SkillMetadata;
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_core_skills::config_rules::skill_config_rules_from_stack;
@@ -72,6 +73,9 @@ use codex_plugin::app_connector_ids_from_declarations;
 use codex_plugin::prompt_safe_plugin_description;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
+use codex_tools::DiscoverablePluginInfo;
+use codex_tools::DiscoverableTool;
+use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::PluginSkillRoot;
 use std::collections::HashMap;
@@ -113,6 +117,14 @@ impl PluginsConfigInput {
             chatgpt_base_url,
         }
     }
+}
+
+/// Inputs used to select endpoint-backed plugin install candidates.
+pub struct RecommendedPluginCandidatesInput<'a> {
+    pub plugins_config: &'a PluginsConfigInput,
+    pub auth: Option<&'a CodexAuth>,
+    pub disabled_tools: &'a [ToolSuggestDisabledTool],
+    pub app_server_client_name: Option<&'a str>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -1002,12 +1014,11 @@ impl PluginsManager {
     /// `None` selects the legacy discovery workflow.
     pub async fn recommended_plugin_candidates_for_config(
         &self,
-        config: &PluginsConfigInput,
-        auth: Option<&CodexAuth>,
-        disabled_plugin_ids: &[String],
-    ) -> Option<Vec<RecommendedPlugin>> {
-        let RecommendedPluginsMode::Endpoint { plugins } =
-            self.recommended_plugins_mode_for_config(config, auth).await
+        input: RecommendedPluginCandidatesInput<'_>,
+    ) -> Option<Vec<DiscoverableTool>> {
+        let RecommendedPluginsMode::Endpoint { plugins } = self
+            .recommended_plugins_mode_for_config(input.plugins_config, input.auth)
+            .await
         else {
             return None;
         };
@@ -1015,26 +1026,41 @@ impl PluginsManager {
             return Some(Vec::new());
         }
 
-        let plugin_outcome = self.plugins_for_config(config).await;
+        let plugin_outcome = self.plugins_for_config(input.plugins_config).await;
         let installed_plugin_ids = plugin_outcome
             .plugins()
             .iter()
             .map(|plugin| plugin.config_name.as_str())
             .collect::<HashSet<_>>();
-        let disabled_plugin_ids = disabled_plugin_ids
+        let disabled_plugin_ids = input
+            .disabled_tools
             .iter()
-            .map(String::as_str)
+            .filter(|tool| tool.kind == ToolSuggestDiscoverableType::Plugin)
+            .map(|tool| tool.id.as_str())
             .collect::<HashSet<_>>();
 
-        Some(
-            plugins
-                .into_iter()
-                .filter(|plugin| {
-                    !installed_plugin_ids.contains(plugin.config_id.as_str())
-                        && !disabled_plugin_ids.contains(plugin.config_id.as_str())
+        let candidates = plugins
+            .into_iter()
+            .filter(|plugin| {
+                !installed_plugin_ids.contains(plugin.config_id.as_str())
+                    && !disabled_plugin_ids.contains(plugin.config_id.as_str())
+            })
+            .map(|plugin| {
+                DiscoverableTool::from(DiscoverablePluginInfo {
+                    id: plugin.config_id,
+                    remote_plugin_id: Some(plugin.remote_plugin_id),
+                    name: plugin.display_name,
+                    description: None,
+                    has_skills: false,
+                    mcp_server_names: Vec::new(),
+                    app_connector_ids: plugin.app_connector_ids,
                 })
-                .collect(),
-        )
+            })
+            .collect();
+        Some(filter_request_plugin_install_discoverable_tools_for_client(
+            candidates,
+            input.app_server_client_name,
+        ))
     }
 
     fn cached_recommended_plugins_mode(

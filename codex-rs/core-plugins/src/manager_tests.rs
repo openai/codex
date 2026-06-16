@@ -3888,23 +3888,30 @@ remote_plugin = true
     let manager = PluginsManager::new(tmp.path().to_path_buf());
     manager.write_remote_installed_plugins_cache(vec![remote_installed_plugin("linear")]);
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let disabled_tools = [ToolSuggestDisabledTool::plugin(
+        "github@openai-curated-remote",
+    )];
 
     let candidates = manager
-        .recommended_plugin_candidates_for_config(
-            &config,
-            Some(&auth),
-            &["github@openai-curated-remote".to_string()],
-        )
+        .recommended_plugin_candidates_for_config(RecommendedPluginCandidatesInput {
+            plugins_config: &config,
+            auth: Some(&auth),
+            disabled_tools: &disabled_tools,
+            app_server_client_name: None,
+        })
         .await;
 
     assert_eq!(
         candidates,
-        Some(vec![RecommendedPlugin {
-            config_id: "slack@openai-curated-remote".to_string(),
-            remote_plugin_id: "plugin_slack".to_string(),
-            display_name: "Slack".to_string(),
+        Some(vec![DiscoverableTool::from(DiscoverablePluginInfo {
+            id: "slack@openai-curated-remote".to_string(),
+            remote_plugin_id: Some("plugin_slack".to_string()),
+            name: "Slack".to_string(),
+            description: None,
+            has_skills: false,
+            mcp_server_names: Vec::new(),
             app_connector_ids: Vec::new(),
-        }])
+        })])
     );
 }
 
