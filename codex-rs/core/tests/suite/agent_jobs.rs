@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use anyhow::Result;
 use codex_features::Feature;
 use core_test_support::responses::ev_completed;

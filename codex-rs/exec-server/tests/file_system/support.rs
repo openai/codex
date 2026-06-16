@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use std::fmt;
 use std::sync::Arc;
 

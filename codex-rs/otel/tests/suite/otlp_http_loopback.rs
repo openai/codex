@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
 use codex_otel::OtelExporter;

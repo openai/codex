@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_core::compact::SUMMARIZATION_PROMPT;

@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use std::future::Future;
 use std::io::ErrorKind;
 use std::mem::swap;

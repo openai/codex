@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
 use core_test_support::test_codex::local_selections;
@@ -86,7 +85,6 @@ async fn request_user_input_round_trip_for_mode(
     let server = start_mock_server().await;
 
     let builder = test_codex();
-    #[allow(clippy::expect_used)]
     let TestCodex {
         codex,
         cwd,

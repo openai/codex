@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used)]
-
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::types::ApprovalsReviewer;

@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use anyhow::Context;
 use anyhow::Result;
 use chrono::Utc;

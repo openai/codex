@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerStack;
 use codex_config::TomlValue;

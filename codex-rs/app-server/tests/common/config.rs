@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use codex_features::FEATURES;
 use codex_features::Feature;
 use std::collections::BTreeMap;

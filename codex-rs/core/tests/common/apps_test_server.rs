@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use crate::test_codex::TestCodexBuilder;
 use crate::test_codex::test_codex;
 use anyhow::Result;

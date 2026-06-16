@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 #![cfg(not(windows))]
 //
 // Running these tests with the patched zsh fork:

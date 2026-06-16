@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used)]
-
 use super::compact::COMPACT_WARNING_MESSAGE;
 use anyhow::Result;
 use codex_core::CodexThread;

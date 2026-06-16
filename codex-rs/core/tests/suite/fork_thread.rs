@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used)]
-
 use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::parse_turn_item;

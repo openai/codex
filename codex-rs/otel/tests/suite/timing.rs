@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use crate::harness::attributes_to_map;
 use crate::harness::build_metrics_with_defaults;
 use crate::harness::histogram_data;

@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use codex_otel::AuthEnvTelemetryMetadata;
 use codex_otel::OtelProvider;
 use codex_otel::SessionTelemetry;
