@@ -36,6 +36,7 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::image_preparation::prepare_response_items;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
+use crate::session::turn_context::TurnEnvironment;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
@@ -1504,10 +1505,11 @@ impl Session {
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         self.services.skills_manager.clear_cache();
         self.services.plugins_manager.clear_cache();
+        let environments = self.services.turn_environments.snapshot().await;
         let hooks = build_hooks_for_config(
             config.as_ref(),
             self.services.plugins_manager.as_ref(),
-            self.services.user_shell.as_ref(),
+            environments.single_local_environment(),
         )
         .await;
 
@@ -3528,11 +3530,17 @@ pub(crate) fn emit_subagent_session_started(
 async fn build_hooks_for_config(
     config: &Config,
     plugins_manager: &PluginsManager,
-    user_shell: &crate::shell::Shell,
+    environment: Option<&TurnEnvironment>,
 ) -> Hooks {
-    let mut hook_shell_argv = user_shell.derive_exec_args("", /*use_login_shell*/ false);
-    let hook_shell_program = hook_shell_argv.remove(0);
-    let _ = hook_shell_argv.pop();
+    let (hook_shell_program, hook_shell_argv) = environment
+        .and_then(|environment| environment.shell.as_ref())
+        .map(|shell| {
+            let mut argv = shell.derive_exec_args("", /*use_login_shell*/ false);
+            let program = argv.remove(0);
+            let _ = argv.pop();
+            (Some(program), argv)
+        })
+        .unwrap_or_default();
     let plugins_input = config.plugins_config_input();
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let plugin_hook_sources = plugin_outcome.effective_plugin_hook_sources();
@@ -3544,7 +3552,7 @@ async fn build_hooks_for_config(
         config_layer_stack: Some(config.config_layer_stack.clone()),
         plugin_hook_sources,
         plugin_hook_load_warnings,
-        shell_program: Some(hook_shell_program),
+        shell_program: hook_shell_program,
         shell_args: hook_shell_argv,
     })
 }

@@ -194,6 +194,12 @@ impl TurnEnvironmentSnapshot {
         self.turn_environments.first()
     }
 
+    pub(crate) fn local(&self) -> Option<&TurnEnvironment> {
+        self.turn_environments
+            .iter()
+            .find(|environment| !environment.environment.is_remote())
+    }
+
     #[cfg(test)]
     pub(crate) fn primary_environment(&self) -> Option<Arc<codex_exec_server::Environment>> {
         self.primary()
