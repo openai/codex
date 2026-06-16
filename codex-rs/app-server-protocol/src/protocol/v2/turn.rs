@@ -39,7 +39,6 @@ pub enum TurnStatus {
 #[ts(export_to = "v2/")]
 pub struct TurnEnvironmentParams {
     pub environment_id: String,
-    /// Absolute cwd rendered using the selected environment's path convention.
     pub cwd: ApiPathString,
 }
 
