@@ -1,4 +1,4 @@
-export type ApprovalMode = "never" | "on-request" | "on-failure" | "untrusted";
+export type ApprovalMode = "never" | "on-request" | "untrusted";
 
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 
