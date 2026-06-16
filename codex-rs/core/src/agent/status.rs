@@ -20,18 +20,6 @@ pub(crate) fn agent_status_from_event(msg: &EventMsg) -> Option<AgentStatus> {
     }
 }
 
-pub(crate) fn agent_status_after_event(
-    current: &AgentStatus,
-    msg: &EventMsg,
-) -> Option<AgentStatus> {
-    let next = agent_status_from_event(msg)?;
-    if matches!(current, AgentStatus::Errored(_)) && matches!(&next, AgentStatus::Completed(_)) {
-        Some(current.clone())
-    } else {
-        Some(next)
-    }
-}
-
 pub(crate) fn is_final(status: &AgentStatus) -> bool {
     !matches!(
         status,

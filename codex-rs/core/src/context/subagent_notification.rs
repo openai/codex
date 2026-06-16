@@ -4,8 +4,11 @@ use codex_utils_output_truncation::truncate_text;
 
 use super::ContextualUserFragment;
 
-const ERROR_MAX_TOKENS: usize = 1_000;
-const ERROR_NEXT_ACTION: &str = "This agent's turn failed. If you still need this agent, use `followup_task` to give it another task.";
+const NOTIFICATION_MAX_TOKENS: usize = 1_000;
+// Leave room for the JSON envelope, fragment markers, agent path, and recovery instruction.
+const NOTIFICATION_ENVELOPE_TOKEN_RESERVE: usize = 100;
+const ERROR_MAX_TOKENS: usize = NOTIFICATION_MAX_TOKENS - NOTIFICATION_ENVELOPE_TOKEN_RESERVE;
+const ERROR_NEXT_ACTION: &str = "This agent's turn failed. If you still need this agent, use the available collaboration tools to give it another task.";
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SubagentNotification {
@@ -60,3 +63,7 @@ impl ContextualUserFragment for SubagentNotification {
         format!("\n{body}\n")
     }
 }
+
+#[cfg(test)]
+#[path = "subagent_notification_tests.rs"]
+mod tests;

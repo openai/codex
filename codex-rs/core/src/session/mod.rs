@@ -12,7 +12,7 @@ use std::time::UNIX_EPOCH;
 
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
-use crate::agent::status::agent_status_after_event;
+use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
 use crate::agents_md::LoadedAgentsMd;
 use crate::attestation::AttestationProvider;
@@ -1707,6 +1707,13 @@ impl Session {
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
+        if let EventMsg::Error(error) = &legacy_source {
+            turn_context
+                .terminal_error
+                .lock()
+                .await
+                .replace(error.message.clone());
+        }
         self.services
             .rollout_thread_trace
             .record_codex_turn_event(&turn_context.sub_id, &legacy_source);
@@ -1758,7 +1765,15 @@ impl Session {
             return;
         };
 
-        let status = self.agent_status.borrow().clone();
+        let status = match turn_context.terminal_error.lock().await.take() {
+            Some(error) => AgentStatus::Errored(error),
+            None => {
+                let Some(status) = agent_status_from_event(msg) else {
+                    return;
+                };
+                status
+            }
+        };
         if !is_final(&status) {
             return;
         }
@@ -1861,8 +1876,7 @@ impl Session {
 
     async fn deliver_event_raw(&self, event: Event) {
         // Record the last known agent status.
-        let current_status = self.agent_status.borrow().clone();
-        if let Some(status) = agent_status_after_event(&current_status, &event.msg) {
+        if let Some(status) = agent_status_from_event(&event.msg) {
             self.agent_status.send_replace(status);
         }
         if let Err(e) = self.tx_event.send(event).await {
