@@ -225,6 +225,7 @@ fn fallback_transcript_cell(item: &ThreadItem) -> Option<PlainHistoryCell> {
         }
         ThreadItem::UserMessage { .. }
         | ThreadItem::AgentMessage { .. }
+        | ThreadItem::InterAgentCommunication { .. }
         | ThreadItem::Plan { .. }
         | ThreadItem::Reasoning { .. }
         | ThreadItem::Sleep { .. } => return None,

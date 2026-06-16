@@ -61,6 +61,64 @@ fn agent_status_uses_bounded_buffered_activity() {
 }
 
 #[test]
+fn agent_status_summarizes_inter_agent_communications() {
+    let mut store = ThreadEventStore::new(/*capacity*/ 8);
+    store.push_notification(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
+            item: ThreadItem::InterAgentCommunication {
+                id: "message-1".to_string(),
+                source_call_id: Some("call-1".to_string()),
+                sender: "/root".to_string(),
+                receiver: "/root/reviewer".to_string(),
+                other_receivers: Vec::new(),
+                content: "Please check the schema output.".to_string(),
+                encrypted: false,
+                trigger_turn: true,
+            },
+            thread_id: "thread-child".to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 1,
+        },
+    ));
+    store.push_notification(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
+            item: ThreadItem::InterAgentCommunication {
+                id: "message-2".to_string(),
+                source_call_id: Some("call-2".to_string()),
+                sender: "/root/other".to_string(),
+                receiver: "/root/reviewer".to_string(),
+                other_receivers: Vec::new(),
+                content: "opaque-ciphertext".to_string(),
+                encrypted: true,
+                trigger_turn: false,
+            },
+            thread_id: "thread-child".to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 2,
+        },
+    ));
+
+    let preview = AgentStatusThreadPreview::from_store("/root/reviewer".to_string(), &store);
+    let cell = AgentStatusHistoryCell::new(vec![preview]);
+    let rendered = cell
+        .display_lines(/*width*/ 80)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    insta::assert_snapshot!(rendered, @r###"
+    /agent
+    Sub-agents running
+
+      • `/root/reviewer`
+        Message from /root: Please check the schema output.
+        Encrypted message from /root/other
+    "###);
+    assert!(!rendered.contains("opaque-ciphertext"));
+}
+
+#[test]
 fn agent_status_uses_reasoning_summaries_only() {
     let mut store = ThreadEventStore::new(/*capacity*/ 8);
     store.push_notification(ServerNotification::ItemCompleted(
