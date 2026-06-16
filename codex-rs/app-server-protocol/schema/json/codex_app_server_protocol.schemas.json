@@ -2137,12 +2137,13 @@
               "type": "string"
             },
             "params": {
-              "type": "null"
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportHistoriesReadParams"
             }
           },
           "required": [
             "id",
-            "method"
+            "method",
+            "params"
           ],
           "title": "ExternalAgentConfig/import/readHistoriesRequest",
           "type": "object"
@@ -9132,18 +9133,45 @@
         "title": "ExternalAgentConfigImportCompletedNotification",
         "type": "object"
       },
+      "ExternalAgentConfigImportHistoriesReadParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "ExternalAgentConfigImportHistoriesReadParams",
+        "type": "object"
+      },
       "ExternalAgentConfigImportHistoriesReadResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
-          "histories": {
+          "data": {
             "items": {
               "$ref": "#/definitions/v2/ExternalAgentConfigImportHistory"
             },
             "type": "array"
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
-          "histories"
+          "data"
         ],
         "title": "ExternalAgentConfigImportHistoriesReadResponse",
         "type": "object"

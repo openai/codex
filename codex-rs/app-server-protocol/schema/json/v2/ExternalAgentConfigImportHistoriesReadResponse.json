@@ -113,15 +113,21 @@
     }
   },
   "properties": {
-    "histories": {
+    "data": {
       "items": {
         "$ref": "#/definitions/ExternalAgentConfigImportHistory"
       },
       "type": "array"
+    },
+    "nextCursor": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [
-    "histories"
+    "data"
   ],
   "title": "ExternalAgentConfigImportHistoriesReadResponse",
   "type": "object"

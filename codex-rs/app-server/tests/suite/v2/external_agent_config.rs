@@ -128,7 +128,10 @@ async fn external_agent_config_import_sends_completion_notification_for_sync_onl
     );
 
     let request_id = mcp
-        .send_raw_request("externalAgentConfig/import/readHistories", None)
+        .send_raw_request(
+            "externalAgentConfig/import/readHistories",
+            Some(serde_json::json!({ "limit": 50 })),
+        )
         .await?;
     let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
@@ -136,8 +139,9 @@ async fn external_agent_config_import_sends_completion_notification_for_sync_onl
     )
     .await??;
     let response: ExternalAgentConfigImportHistoriesReadResponse = to_response(response)?;
+    assert_eq!(response.next_cursor, None);
     let entry = response
-        .histories
+        .data
         .iter()
         .find(|entry| entry.import_id == import_id)
         .expect("import history entry should be available");
