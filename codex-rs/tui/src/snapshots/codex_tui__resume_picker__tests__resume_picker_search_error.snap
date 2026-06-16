@@ -2,4 +2,4 @@
 source: tui/src/resume_picker.rs
 expression: snapshot
 ---
-Failed to read session metadata from /tmp/missing.jsonl
+Could not refresh sessions; showing the first page of indexed results

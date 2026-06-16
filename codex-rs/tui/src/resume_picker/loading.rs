@@ -1,4 +1,4 @@
-//! Session picker loading and background event handling.
+//! Session picker loading, State DB seeding, and authoritative reconciliation.
 
 use std::future::Future;
 use std::io;
@@ -6,7 +6,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use chrono::Utc;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
@@ -34,6 +33,8 @@ use super::SessionTranscriptState;
 use super::TranscriptCells;
 use super::TranscriptPreviewLine;
 use super::TranscriptPreviewState;
+#[cfg(test)]
+use super::parse_timestamp_str;
 use super::transcript_preview_lines;
 use crate::thread_transcript::thread_to_transcript_cells;
 
@@ -49,6 +50,7 @@ pub(super) struct PageLoadRequest {
     pub(super) cwd_filter: Option<PathBuf>,
     pub(super) provider_filter: ProviderFilter,
     pub(super) sort_key: ThreadSortKey,
+    pub(super) seed_from_state_db: bool,
 }
 
 pub(super) enum PickerLoadRequest {
@@ -60,6 +62,10 @@ pub(super) enum PickerLoadRequest {
 pub(super) type PickerLoader = Arc<dyn Fn(PickerLoadRequest) + Send + Sync>;
 
 pub(super) enum BackgroundEvent {
+    SeedPage {
+        request_token: usize,
+        page: PickerPage,
+    },
     Page {
         request_token: usize,
         search_token: Option<usize>,
@@ -85,6 +91,46 @@ pub(super) struct PickerPage {
     pub(super) next_cursor: Option<PageCursor>,
     pub(super) num_scanned_files: usize,
     pub(super) reached_scan_cap: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum InitialPageLoad {
+    #[default]
+    Authoritative,
+    SeedPending,
+    Provisional,
+}
+
+impl InitialPageLoad {
+    pub(super) fn state_db_first() -> Self {
+        Self::SeedPending
+    }
+
+    pub(super) fn begin_load(&mut self) -> bool {
+        let seed_from_state_db = *self == Self::SeedPending;
+        *self = Self::Authoritative;
+        seed_from_state_db
+    }
+
+    fn mark_seeded(&mut self) {
+        *self = Self::Provisional;
+    }
+
+    fn finish_reconciliation(&mut self) -> bool {
+        let was_provisional = *self == Self::Provisional;
+        *self = Self::Authoritative;
+        was_provisional
+    }
+
+    pub(super) fn is_provisional(self) -> bool {
+        self == Self::Provisional
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ThreadListLookupMode {
+    StateDbOnly,
+    ScanAndRepair,
 }
 
 pub(super) fn spawn_app_server_page_loader(
@@ -252,6 +298,33 @@ async fn handle_picker_load_request(
 ) {
     match request {
         PickerLoadRequest::Page(request) => {
+            if request.seed_from_state_db {
+                match load_app_server_page(
+                    &request_handle,
+                    /*cursor*/ None,
+                    request.cwd_filter.as_deref(),
+                    request.provider_filter.clone(),
+                    request.sort_key,
+                    include_non_interactive,
+                    ThreadListLookupMode::StateDbOnly,
+                )
+                .await
+                {
+                    Ok(page) => {
+                        let _ = bg_tx.send(BackgroundEvent::SeedPage {
+                            request_token: request.request_token,
+                            page,
+                        });
+                    }
+                    Err(err) => {
+                        warn!(
+                            %err,
+                            "State DB picker lookup failed; falling back to scan-and-repair"
+                        );
+                    }
+                }
+            }
+
             let cursor = request.cursor.map(|PageCursor::AppServer(cursor)| cursor);
             let page = load_app_server_page(
                 &request_handle,
@@ -260,6 +333,7 @@ async fn handle_picker_load_request(
                 request.provider_filter,
                 request.sort_key,
                 include_non_interactive,
+                ThreadListLookupMode::ScanAndRepair,
             )
             .await;
             let _ = bg_tx.send(BackgroundEvent::Page {
@@ -293,6 +367,7 @@ async fn load_app_server_page(
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
     include_non_interactive: bool,
+    lookup_mode: ThreadListLookupMode,
 ) -> io::Result<PickerPage> {
     let response: ThreadListResponse = request_handle
         .request_typed(ClientRequest::ThreadList {
@@ -303,6 +378,7 @@ async fn load_app_server_page(
                 provider_filter,
                 sort_key,
                 include_non_interactive,
+                lookup_mode,
             ),
         })
         .await
@@ -346,23 +422,32 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
             return None;
         }
     };
-    let preview = thread.preview.trim();
-    Some(Row {
-        path: thread.path,
-        preview: if preview.is_empty() {
-            String::from("(no message yet)")
-        } else {
-            preview.to_string()
-        },
-        thread_id: Some(thread_id),
-        thread_name: thread.name,
-        created_at: chrono::DateTime::from_timestamp(thread.created_at, 0)
-            .map(|dt| dt.with_timezone(&Utc)),
-        updated_at: chrono::DateTime::from_timestamp(thread.updated_at, 0)
-            .map(|dt| dt.with_timezone(&Utc)),
-        cwd: Some(thread.cwd.to_path_buf()),
-        git_branch: thread.git_info.and_then(|git_info| git_info.branch),
-    })
+    Some(Row::from_app_server_thread(&thread, thread_id))
+}
+
+impl Row {
+    fn from_app_server_thread(thread: &Thread, thread_id: ThreadId) -> Self {
+        let preview = thread.preview.trim();
+        Self {
+            path: thread.path.clone(),
+            preview: if preview.is_empty() {
+                String::from("(no message yet)")
+            } else {
+                preview.to_string()
+            },
+            thread_id: Some(thread_id),
+            thread_name: thread.name.clone(),
+            created_at: chrono::DateTime::from_timestamp(thread.created_at, 0)
+                .map(|dt| dt.with_timezone(&chrono::Utc)),
+            updated_at: chrono::DateTime::from_timestamp(thread.updated_at, 0)
+                .map(|dt| dt.with_timezone(&chrono::Utc)),
+            cwd: Some(thread.cwd.to_path_buf()),
+            git_branch: thread
+                .git_info
+                .as_ref()
+                .and_then(|git_info| git_info.branch.clone()),
+        }
+    }
 }
 
 fn thread_list_params(
@@ -371,6 +456,7 @@ fn thread_list_params(
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
     include_non_interactive: bool,
+    lookup_mode: ThreadListLookupMode,
 ) -> ThreadListParams {
     ThreadListParams {
         cursor,
@@ -385,7 +471,7 @@ fn thread_list_params(
         archived: Some(false),
         parent_thread_id: None,
         cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().into_owned())),
-        use_state_db_only: false,
+        use_state_db_only: lookup_mode == ThreadListLookupMode::StateDbOnly,
         search_term: None,
     }
 }
@@ -396,6 +482,19 @@ impl PickerState {
         event: BackgroundEvent,
     ) -> color_eyre::eyre::Result<()> {
         match event {
+            BackgroundEvent::SeedPage {
+                request_token,
+                page,
+            } => {
+                let LoadingState::Pending(pending) = self.pagination.loading else {
+                    return Ok(());
+                };
+                if pending.request_token != request_token {
+                    return Ok(());
+                }
+                self.initial_page_load.mark_seeded();
+                self.replace_with_page(page);
+            }
             BackgroundEvent::Page {
                 request_token,
                 search_token,
@@ -409,11 +508,38 @@ impl PickerState {
                     return Ok(());
                 }
                 self.pagination.loading = LoadingState::Idle;
-                let page = page.map_err(color_eyre::Report::from)?;
-                self.ingest_page(page);
-                self.complete_pending_page_down();
-                let completed_token = pending.search_token.or(search_token);
-                self.continue_search_if_token_matches(completed_token);
+                match page {
+                    Ok(page) if self.initial_page_load.finish_reconciliation() => {
+                        self.replace_with_page(page);
+                        self.complete_pending_page_down();
+                        self.reevaluate_search();
+                    }
+                    Ok(page) => {
+                        self.ingest_page(page);
+                        self.complete_pending_page_down();
+                        let completed_token = pending.search_token.or(search_token);
+                        self.continue_search_if_token_matches(completed_token);
+                    }
+                    Err(err) if self.initial_page_load.is_provisional() => {
+                        warn!(
+                            %err,
+                            "Session picker reconciliation failed; keeping State DB results"
+                        );
+                        let cached_results_are_truncated = self.pagination.next_cursor.is_some();
+                        self.pagination.next_cursor = None;
+                        self.inline_error = Some(if cached_results_are_truncated {
+                            String::from(
+                                "Could not refresh sessions; showing the first page of indexed results",
+                            )
+                        } else {
+                            String::from("Could not refresh sessions; showing indexed results")
+                        });
+                        self.complete_pending_page_down();
+                        self.reevaluate_search();
+                        self.request_frame();
+                    }
+                    Err(err) => return Err(color_eyre::Report::from(err)),
+                }
             }
             BackgroundEvent::Preview { thread_id, preview } => {
                 self.transcript_previews.insert(
@@ -451,6 +577,51 @@ impl PickerState {
             },
         }
         Ok(())
+    }
+
+    /// Replaces the current result set with a new first page while preserving
+    /// the selected thread when it is still present.
+    fn replace_with_page(&mut self, page: PickerPage) {
+        let selected_row = self.filtered_rows.get(self.selected);
+        let selected_thread_id = selected_row.and_then(|row| row.thread_id);
+        let selected_key = selected_row.and_then(Row::seen_key);
+        let selected_index = self.selected;
+
+        self.pagination.next_cursor = page.next_cursor;
+        self.pagination.num_scanned_files = page.num_scanned_files;
+        self.pagination.reached_scan_cap = page.reached_scan_cap;
+        self.frozen_footer_percent = None;
+        self.all_rows.clear();
+        self.filtered_rows.clear();
+        self.seen_rows.clear();
+
+        for row in page.rows {
+            if let Some(seen_key) = row.seen_key() {
+                if self.seen_rows.insert(seen_key) {
+                    self.all_rows.push(row);
+                }
+            } else {
+                self.all_rows.push(row);
+            }
+        }
+
+        self.apply_filter();
+        self.selected = selected_thread_id
+            .and_then(|selected_thread_id| {
+                self.filtered_rows
+                    .iter()
+                    .position(|row| row.thread_id == Some(selected_thread_id))
+            })
+            .or_else(|| {
+                selected_key.and_then(|selected_key| {
+                    self.filtered_rows
+                        .iter()
+                        .position(|row| row.seen_key().as_ref() == Some(&selected_key))
+                })
+            })
+            .unwrap_or_else(|| selected_index.min(self.filtered_rows.len().saturating_sub(1)));
+        self.ensure_selected_visible();
+        self.request_frame();
     }
 }
 
