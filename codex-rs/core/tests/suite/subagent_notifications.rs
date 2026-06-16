@@ -40,6 +40,7 @@ use serde_json::json;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
+use test_case::test_case;
 use tokio::time::Instant;
 use tokio::time::sleep;
 use wiremock::MockServer;
@@ -1103,8 +1104,18 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum CompletionScenario {
+    Completed,
+    TerminalError,
+}
+
+#[test_case(CompletionScenario::Completed ; "completed")]
+#[test_case(CompletionScenario::TerminalError ; "terminal_error")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn plaintext_multi_agent_v2_completion_sends_agent_message() -> Result<()> {
+async fn plaintext_multi_agent_v2_completion_sends_agent_message(
+    scenario: CompletionScenario,
+) -> Result<()> {
     let server = start_mock_server().await;
     let spawn_args = serde_json::to_string(&json!({
         "message": "opaque-encrypted-message",
@@ -1120,15 +1131,18 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message() -> Result<()>
         ]),
     )
     .await;
-    let child_request = mount_response_once_match(
-        &server,
-        |req: &wiremock::Request| body_contains(req, "\"type\":\"agent_message\""),
-        sse_response(sse(vec![
+    let child_events = match scenario {
+        CompletionScenario::Completed => vec![
             ev_response_created("resp-child-1"),
             ev_assistant_message("msg-child-1", "child done"),
             ev_completed("resp-child-1"),
-        ]))
-        .set_delay(Duration::from_secs(1)),
+        ],
+        CompletionScenario::TerminalError => vec![ev_response_created("resp-child-1")],
+    };
+    let child_request = mount_response_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, "\"type\":\"agent_message\""),
+        sse_response(sse(child_events)).set_delay(Duration::from_secs(1)),
     )
     .await;
     mount_sse_once_match(
@@ -1143,8 +1157,19 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message() -> Result<()>
         ]),
     )
     .await;
-    let notification =
-        "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\nchild done";
+    let error = "stream disconnected before completion: stream closed before response.completed";
+    let (payload, expected_text) = match scenario {
+        CompletionScenario::Completed => ("child done".to_string(), "child done"),
+        CompletionScenario::TerminalError => (
+            format!(
+                "Agent errored: {error}\n\nThis agent's turn failed. If you still need this agent, use the available collaboration tools to give it another task."
+            ),
+            error,
+        ),
+    };
+    let notification = format!(
+        "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\n{payload}"
+    );
     // If the child is still running when the parent turn starts, wait_agent blocks
     // until mailbox delivery. The follow-up request must then contain that delivery.
     mount_sse_once_match(
@@ -1165,6 +1190,7 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message() -> Result<()>
         |req: &wiremock::Request| {
             body_contains(req, TURN_2_NO_WAIT_PROMPT)
                 && body_contains(req, "Message Type: FINAL_ANSWER")
+                && body_contains(req, expected_text)
         },
         sse(vec![
             ev_response_created("resp-parent-4"),
@@ -1184,6 +1210,9 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message() -> Result<()>
                 .features
                 .enable(Feature::MultiAgentV2)
                 .expect("test config should allow feature update");
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(0);
+            config.model_provider.supports_websockets = false;
         })
         .build(&server)
         .await?;
