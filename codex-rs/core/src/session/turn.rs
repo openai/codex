@@ -1191,7 +1191,7 @@ pub(crate) async fn built_tools(
     {
         Some(ToolSuggestCandidates {
             tools: recommended_plugin_candidates.clone(),
-            presentation: ToolSuggestPresentation::DeveloperContext,
+            presentation: ToolSuggestPresentation::RecommendationContext,
         })
     } else {
         let auth = sess.services.auth_manager.auth().await;

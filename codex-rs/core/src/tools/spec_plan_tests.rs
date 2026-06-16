@@ -883,7 +883,7 @@ async fn request_plugin_install_requires_all_discovery_features() {
         None,
         Some(ToolSuggestCandidates {
             tools: Vec::new(),
-            presentation: ToolSuggestPresentation::DeveloperContext,
+            presentation: ToolSuggestPresentation::RecommendationContext,
         }),
     ] {
         let plan = probe_with(
@@ -959,7 +959,7 @@ async fn request_plugin_install_description_refers_to_recommended_plugins_hint()
         },
         ToolPlanInputs {
             tool_suggest_candidates: Some(plugin_candidates(
-                ToolSuggestPresentation::DeveloperContext,
+                ToolSuggestPresentation::RecommendationContext,
             )),
             ..ToolPlanInputs::default()
         },
@@ -973,7 +973,7 @@ async fn request_plugin_install_description_refers_to_recommended_plugins_hint()
     else {
         panic!("expected request_plugin_install function spec");
     };
-    assert!(request_description.contains("developer `<recommended_plugins>` list"));
+    assert!(request_description.contains("the `<recommended_plugins>` list"));
     assert!(!request_description.contains("list_available_plugins_to_install"));
     assert!(!request_description.contains("github"));
     plan.assert_visible_lacks(&["list_available_plugins_to_install"]);

@@ -39,8 +39,8 @@ pub(crate) fn create_request_plugin_install_tool(
         ToolSuggestPresentation::ListTool => format!(
             "# Request plugin/connector install\n\nUse this tool only after `{LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}` returns a plugin or connector that exactly matches the user's explicit request.\n\nDo not use it for adjacent capabilities, broad recommendations, or tools that merely seem useful. Pass the returned `tool_type` through directly, and pass the returned `id` as `tool_id`.\n\nIMPORTANT: DO NOT call this tool in parallel with other tools."
         ),
-        ToolSuggestPresentation::DeveloperContext =>
-            "# Suggest a recommended plugin installation\n\nSuggest installing a plugin from the developer `<recommended_plugins>` list when it would help with the user's current request. Briefly explain why in `suggest_reason`.".to_string(),
+        ToolSuggestPresentation::RecommendationContext =>
+            "# Suggest a recommended plugin installation\n\nSuggest installing a plugin from the `<recommended_plugins>` list when it would help with the user's current request. Briefly explain why in `suggest_reason`.".to_string(),
     };
 
     ToolSpec::Function(ResponsesApiTool {
@@ -126,15 +126,15 @@ mod tests {
     }
 
     #[test]
-    fn developer_recommendations_change_only_the_description() {
+    fn recommendation_context_changes_only_the_description() {
         let mut expected = create_request_plugin_install_tool(ToolSuggestPresentation::ListTool);
         let recommendations =
-            create_request_plugin_install_tool(ToolSuggestPresentation::DeveloperContext);
+            create_request_plugin_install_tool(ToolSuggestPresentation::RecommendationContext);
 
         let ToolSpec::Function(expected_function) = &mut expected else {
             panic!("expected function tool specs");
         };
-        expected_function.description = "# Suggest a recommended plugin installation\n\nSuggest installing a plugin from the developer `<recommended_plugins>` list when it would help with the user's current request. Briefly explain why in `suggest_reason`.".to_string();
+        expected_function.description = "# Suggest a recommended plugin installation\n\nSuggest installing a plugin from the `<recommended_plugins>` list when it would help with the user's current request. Briefly explain why in `suggest_reason`.".to_string();
 
         assert_eq!(recommendations, expected);
     }

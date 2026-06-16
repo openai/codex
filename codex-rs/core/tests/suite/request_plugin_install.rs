@@ -31,6 +31,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -133,20 +134,37 @@ fn assert_legacy_tools(body: &Value) {
         .and_then(Value::as_str)
         .expect("request tool description");
     assert!(description.contains(LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME));
-    assert!(!description.contains("developer recommendations"));
+    assert!(!description.contains("<recommended_plugins>"));
 }
 
 async fn build_test(
     server: &wiremock::MockServer,
     apps_server: &AppsTestServer,
 ) -> Result<TestCodex> {
-    let mut builder = test_codex()
+    let mut builder = configured_test_builder(apps_server);
+    builder.build(server).await
+}
+
+fn configured_test_builder(apps_server: &AppsTestServer) -> TestCodexBuilder {
+    test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config({
             let apps_base_url = apps_server.chatgpt_base_url.clone();
             move |config| configure_apps_without_search_tool(config, apps_base_url.as_str())
-        });
-    builder.build(server).await
+        })
+}
+
+fn enabled_recommendations_response() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({
+        "enabled": true,
+        "plugins": [{
+            "id": "plugin_github",
+            "name": "github",
+            "status": "ENABLED",
+            "installation_policy": "AVAILABLE",
+            "release": {"display_name": "GitHub"}
+        }]
+    }))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -190,7 +208,7 @@ async fn explicit_false_preserves_legacy_workflow() -> Result<()> {
     let request = &requests[0];
     assert!(
         !request
-            .message_input_texts("developer")
+            .message_input_texts("user")
             .join("\n")
             .contains("<recommended_plugins>")
     );
@@ -228,11 +246,123 @@ async fn failed_fetch_preserves_legacy_workflow() -> Result<()> {
     let request = mock.single_request();
     assert!(
         !request
-            .message_input_texts("developer")
+            .message_input_texts("user")
             .join("\n")
             .contains("<recommended_plugins>")
     );
     assert_legacy_tools(&request.body_json());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resumed_thread_without_recommendation_context_uses_legacy_workflow() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let initial_server = start_mock_server().await;
+    let initial_apps_server = AppsTestServer::mount(&initial_server).await?;
+    mount_recommendations(
+        &initial_server,
+        ResponseTemplate::new(200).set_body_json(json!({"enabled": false, "plugins": []})),
+    )
+    .await;
+    mount_sse_once(
+        &initial_server,
+        sse(vec![
+            ev_response_created("initial-response"),
+            ev_assistant_message("initial-message", "done"),
+            ev_completed("initial-response"),
+        ]),
+    )
+    .await;
+    let initial = build_test(&initial_server, &initial_apps_server).await?;
+    initial.submit_turn("start in legacy mode").await?;
+    let rollout_path = initial.codex.rollout_path().expect("rollout path");
+    let home = initial.home.clone();
+
+    let resumed_server = start_mock_server().await;
+    let resumed_apps_server = AppsTestServer::mount(&resumed_server).await?;
+    mount_recommendations(&resumed_server, enabled_recommendations_response()).await;
+    let resumed_mock = mount_sse_once(
+        &resumed_server,
+        sse(vec![
+            ev_response_created("resumed-response"),
+            ev_assistant_message("resumed-message", "done"),
+            ev_completed("resumed-response"),
+        ]),
+    )
+    .await;
+    let mut builder = configured_test_builder(&resumed_apps_server);
+    let resumed = builder.resume(&resumed_server, home, rollout_path).await?;
+
+    resumed.submit_turn("continue after resume").await?;
+
+    let request = resumed_mock.single_request();
+    assert!(
+        !request
+            .message_input_texts("user")
+            .join("\n")
+            .contains("<recommended_plugins>")
+    );
+    assert_legacy_tools(&request.body_json());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resumed_thread_with_recommendation_context_stays_in_endpoint_mode() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let initial_server = start_mock_server().await;
+    let initial_apps_server = AppsTestServer::mount(&initial_server).await?;
+    mount_recommendations(&initial_server, enabled_recommendations_response()).await;
+    mount_sse_once(
+        &initial_server,
+        sse(vec![
+            ev_response_created("initial-response"),
+            ev_assistant_message("initial-message", "done"),
+            ev_completed("initial-response"),
+        ]),
+    )
+    .await;
+    let initial = build_test(&initial_server, &initial_apps_server).await?;
+    initial.submit_turn("start in endpoint mode").await?;
+    let rollout_path = initial.codex.rollout_path().expect("rollout path");
+    let home = initial.home.clone();
+
+    let resumed_server = start_mock_server().await;
+    let resumed_apps_server = AppsTestServer::mount(&resumed_server).await?;
+    mount_recommendations(&resumed_server, enabled_recommendations_response()).await;
+    let resumed_mock = mount_sse_once(
+        &resumed_server,
+        sse(vec![
+            ev_response_created("resumed-response"),
+            ev_assistant_message("resumed-message", "done"),
+            ev_completed("resumed-response"),
+        ]),
+    )
+    .await;
+    let mut builder = configured_test_builder(&resumed_apps_server);
+    let resumed = builder.resume(&resumed_server, home, rollout_path).await?;
+
+    resumed.submit_turn("continue after resume").await?;
+
+    let request = resumed_mock.single_request();
+    assert!(
+        request
+            .message_input_texts("user")
+            .join("\n")
+            .contains("<recommended_plugins>")
+    );
+    let tools = tool_names(&request.body_json());
+    assert!(
+        !tools
+            .iter()
+            .any(|name| name == LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME)
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME)
+    );
     Ok(())
 }
 
@@ -297,18 +427,19 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
 
     let requests = mock.requests();
     assert_eq!(requests.len(), 2);
-    let developer_message = requests[0].message_input_texts("developer").join("\n");
-    assert!(developer_message.contains("<recommended_plugins>"));
-    assert!(developer_message.contains("All entries have `tool_type: plugin`"));
-    assert!(developer_message.contains("the parenthesized ID as `tool_id`"));
-    assert!(developer_message.contains(
+    let contextual_user_message = requests[0].message_input_texts("user").join("\n");
+    assert!(contextual_user_message.contains("<recommended_plugins>"));
+    assert!(contextual_user_message.contains("All entries have `tool_type: plugin`"));
+    assert!(contextual_user_message.contains("the parenthesized ID as `tool_id`"));
+    assert!(contextual_user_message.contains(
         "For example, suggest the Google Drive plugin if the query could possibly be better answered with access to Google Drive."
     ));
-    assert!(developer_message.contains("- GitHub (github@openai-curated-remote)"));
+    assert!(contextual_user_message.contains("- GitHub (github@openai-curated-remote)"));
     assert!(
-        developer_message.contains("- Google Calendar (google-calendar@openai-curated-remote)")
+        contextual_user_message
+            .contains("- Google Calendar (google-calendar@openai-curated-remote)")
     );
-    assert!(!developer_message.contains("plugin id:"));
+    assert!(!contextual_user_message.contains("plugin id:"));
     let body = requests[0].body_json();
     let tools = tool_names(&body);
     assert!(
@@ -328,7 +459,7 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
             .get("description")
             .and_then(Value::as_str)
             .is_some_and(|description| {
-                description.contains("developer `<recommended_plugins>` list")
+                description.contains("the `<recommended_plugins>` list")
                     && description.contains("Briefly explain why in `suggest_reason`")
                     && !description.contains("tool_type")
                     && !description.contains("parenthesized")
@@ -354,7 +485,7 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
         output
             .get("output")
             .and_then(Value::as_str)
-            .is_some_and(|output| output.contains("developer recommendations"))
+            .is_some_and(|output| output.contains("<recommended_plugins> list"))
     );
     Ok(())
 }
@@ -525,7 +656,7 @@ async fn endpoint_mode_with_no_eligible_candidates_exposes_no_suggestion_tools()
     let request = mock.single_request();
     assert!(
         !request
-            .message_input_texts("developer")
+            .message_input_texts("user")
             .join("\n")
             .contains("<recommended_plugins>")
     );

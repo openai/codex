@@ -135,6 +135,7 @@ pub struct TurnContext {
     pub(crate) timezone: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) recommended_plugin_candidates: Option<Vec<DiscoverableTool>>,
+    pub(crate) recommended_plugins_context_present: bool,
     pub(crate) developer_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
@@ -306,6 +307,7 @@ impl TurnContext {
             timezone: self.timezone.clone(),
             app_server_client_name: self.app_server_client_name.clone(),
             recommended_plugin_candidates: self.recommended_plugin_candidates.clone(),
+            recommended_plugins_context_present: self.recommended_plugins_context_present,
             developer_instructions: self.developer_instructions.clone(),
             compact_prompt: self.compact_prompt.clone(),
             user_instructions: self.user_instructions.clone(),
@@ -417,6 +419,7 @@ impl TurnContext {
             file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
             model: self.model_info.slug.clone(),
             comp_hash: self.comp_hash.clone(),
+            recommended_plugins_context_present: self.recommended_plugins_context_present,
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),
             multi_agent_version: Some(self.multi_agent_version),
@@ -424,6 +427,17 @@ impl TurnContext {
             effort: self.reasoning_effort.clone(),
             summary: ReasoningSummaryConfig::Auto,
         }
+    }
+
+    pub(crate) fn to_turn_context_item_after_full_context_injection(&self) -> TurnContextItem {
+        let mut item = self.to_turn_context_item();
+        item.recommended_plugins_context_present =
+            crate::tools::spec_plan::tool_suggest_enabled(self)
+                && self
+                    .recommended_plugin_candidates
+                    .as_ref()
+                    .is_some_and(|plugins| !plugins.is_empty());
+        item
     }
 
     fn turn_context_network_item(&self) -> Option<TurnContextNetworkItem> {
@@ -534,6 +548,7 @@ impl Session {
         sub_id: String,
         skills_outcome: Arc<SkillLoadOutcome>,
         recommended_plugin_candidates: Option<Vec<DiscoverableTool>>,
+        recommended_plugins_context_present: bool,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration
@@ -609,6 +624,7 @@ impl Session {
             timezone: Some(timezone),
             app_server_client_name: session_configuration.app_server_client_name.clone(),
             recommended_plugin_candidates,
+            recommended_plugins_context_present,
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration
@@ -787,10 +803,20 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&per_turn_config.plugins_config_input())
             .await;
+        let prior_recommended_plugins_context_present = self
+            .reference_context_item()
+            .await
+            .map(|item| item.recommended_plugins_context_present);
+        // A missing baseline means this turn will inject full initial context. A
+        // persisted false value means the surviving history predates the
+        // recommendation fragment, so keep that thread on the legacy list flow.
+        let can_use_endpoint_recommendations =
+            prior_recommended_plugins_context_present.unwrap_or(true);
         let recommended_plugin_candidates =
             if per_turn_config.features.enabled(Feature::ToolSuggest)
                 && per_turn_config.features.enabled(Feature::Apps)
                 && per_turn_config.features.enabled(Feature::Plugins)
+                && can_use_endpoint_recommendations
             {
                 let auth = self.services.auth_manager.auth().await;
                 match self
@@ -843,6 +869,12 @@ impl Session {
             } else {
                 None
             };
+        let recommended_plugins_context_present = prior_recommended_plugins_context_present
+            .unwrap_or_else(|| {
+                recommended_plugin_candidates
+                    .as_ref()
+                    .is_some_and(|plugins| !plugins.is_empty())
+            });
         let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
         let fs = primary_turn_environment
@@ -882,6 +914,7 @@ impl Session {
             sub_id,
             skills_outcome,
             recommended_plugin_candidates,
+            recommended_plugins_context_present,
         );
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 

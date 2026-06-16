@@ -3008,6 +3008,10 @@ pub struct TurnContextItem {
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comp_hash: Option<String>,
+    /// Whether surviving model context includes the recommended-plugins user
+    /// fragment used by endpoint-backed plugin suggestions.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub recommended_plugins_context_present: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5313,6 +5317,7 @@ mod tests {
         assert_eq!(item.network, None);
         assert_eq!(item.file_system_sandbox_policy, None);
         assert_eq!(item.comp_hash, None);
+        assert!(!item.recommended_plugins_context_present);
         Ok(())
     }
 
@@ -5374,6 +5379,7 @@ mod tests {
             ])),
             model: "gpt-5".to_string(),
             comp_hash: None,
+            recommended_plugins_context_present: false,
             personality: None,
             collaboration_mode: None,
             multi_agent_version: None,
@@ -5382,7 +5388,8 @@ mod tests {
             summary: ReasoningSummaryConfig::Auto,
         };
 
-        let value = serde_json::to_value(item)?;
+        let value = serde_json::to_value(&item)?;
+        assert_eq!(value.get("recommended_plugins_context_present"), None);
         assert_eq!(
             value["network"],
             json!({
