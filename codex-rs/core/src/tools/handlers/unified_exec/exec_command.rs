@@ -149,7 +149,6 @@ impl ExecCommandHandler {
             &cwd,
         )
         .await;
-        let process_id = manager.allocate_process_id().await;
         let shell_mode =
             shell_mode_for_environment(&turn.unified_exec_shell_mode, environment.as_ref());
         let shell = if environment.is_remote() {
@@ -223,7 +222,6 @@ impl ExecCommandHandler {
             )
         {
             let approval_policy = context.turn.approval_policy.value();
-            manager.release_process_id(process_id).await;
             return Err(FunctionCallError::RespondToModel(format!(
                 "approval policy is {approval_policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {approval_policy:?}"
             )));
@@ -248,10 +246,7 @@ impl ExecCommandHandler {
             |permissions| Ok(Some(permissions)),
         ) {
             Ok(normalized) => normalized,
-            Err(err) => {
-                manager.release_process_id(process_id).await;
-                return Err(FunctionCallError::RespondToModel(err));
-            }
+            Err(err) => return Err(FunctionCallError::RespondToModel(err)),
         };
 
         if let Some(output) = intercept_apply_patch(
@@ -267,7 +262,6 @@ impl ExecCommandHandler {
         )
         .await?
         {
-            manager.release_process_id(process_id).await;
             return Ok(boxed_tool_output(ExecCommandToolOutput {
                 event_call_id: String::new(),
                 chunk_id: String::new(),
@@ -283,6 +277,7 @@ impl ExecCommandHandler {
         }
 
         emit_unified_exec_tty_metric(&turn.session_telemetry, tty);
+        let process_id = manager.allocate_process_id().await;
         match manager
             .exec_command(
                 ExecCommandRequest {
