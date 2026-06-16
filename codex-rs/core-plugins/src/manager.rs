@@ -466,9 +466,14 @@ impl PluginsManager {
     }
 
     #[instrument(
-        level = "trace",
+        name = "plugins_for_config",
+        level = "info",
         skip_all,
-        fields(force_reload, plugins_enabled = config.plugins_enabled)
+        fields(
+            otel.name = "plugins_for_config",
+            force_reload,
+            plugins_enabled = config.plugins_enabled
+        )
     )]
     pub(crate) async fn plugins_for_config_with_force_reload(
         &self,
