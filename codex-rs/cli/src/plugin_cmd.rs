@@ -2,6 +2,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use clap::Parser;
+use codex_app_server_protocol::AuthMode;
 use codex_core::config::Config;
 use codex_core::config::find_codex_home;
 use codex_core_plugins::ConfiguredMarketplace;
@@ -17,6 +18,8 @@ use codex_core_plugins::marketplace::MarketplacePluginAuthPolicy;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
 use codex_core_plugins::marketplace::MarketplacePluginSource;
 use codex_core_plugins::marketplace::find_marketplace_manifest_path;
+use codex_login::CodexAuth;
+use codex_login::auth::read_codex_api_key_from_env;
 use codex_plugin::PluginId;
 use codex_plugin::validate_plugin_segment;
 use codex_utils_cli::CliConfigOverrides;
@@ -550,11 +553,29 @@ async fn load_plugin_command_context(
         .context("failed to load configuration")?;
     let plugins_input = config.plugins_config_input();
     let manager = PluginsManager::new(codex_home.to_path_buf());
+    manager.set_auth_mode(load_cli_auth_mode(&config).await);
     Ok(PluginCommandContext {
         codex_home: codex_home.to_path_buf(),
         plugins_input,
         manager,
     })
+}
+
+pub(crate) async fn load_cli_auth_mode(config: &Config) -> Option<AuthMode> {
+    if let Some(api_key) = read_codex_api_key_from_env() {
+        return Some(CodexAuth::from_api_key(&api_key).api_auth_mode());
+    }
+
+    CodexAuth::from_auth_storage(
+        &config.codex_home,
+        config.cli_auth_credentials_store_mode,
+        Some(&config.chatgpt_base_url),
+        config.auth_keyring_backend_kind(),
+    )
+    .await
+    .ok()
+    .flatten()
+    .map(|auth| auth.api_auth_mode())
 }
 
 struct PluginSelection {

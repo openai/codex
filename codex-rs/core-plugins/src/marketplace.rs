@@ -9,7 +9,6 @@ use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
-use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::Component;
@@ -19,6 +18,7 @@ use tracing::warn;
 
 const MARKETPLACE_MANIFEST_RELATIVE_PATHS: &[&str] = &[
     ".agents/plugins/marketplace.json",
+    ".agents/plugins/api_marketplace.json",
     ".claude-plugin/marketplace.json",
 ];
 
@@ -258,6 +258,19 @@ pub fn find_marketplace_manifest_path(root: &Path) -> Option<AbsolutePathBuf> {
         })
 }
 
+fn supported_marketplace_manifest_path(path: &Path) -> Option<AbsolutePathBuf> {
+    if !path.is_file() {
+        return None;
+    }
+    if !MARKETPLACE_MANIFEST_RELATIVE_PATHS
+        .iter()
+        .any(|relative_path| marketplace_root_from_layout(path, relative_path).is_some())
+    {
+        return None;
+    }
+    AbsolutePathBuf::try_from(path.to_path_buf()).ok()
+}
+
 fn invalid_marketplace_layout_error(path: &AbsolutePathBuf) -> MarketplaceError {
     MarketplaceError::InvalidMarketplaceFile {
         path: path.to_path_buf(),
@@ -327,16 +340,6 @@ pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Marketpla
     })
 }
 
-pub(crate) fn load_raw_marketplace_plugin_names(
-    path: &AbsolutePathBuf,
-) -> Result<HashSet<String>, MarketplaceError> {
-    Ok(load_raw_marketplace_manifest(path)?
-        .plugins
-        .into_iter()
-        .map(|plugin| plugin.name)
-        .collect())
-}
-
 #[doc(hidden)]
 pub fn list_marketplaces_with_home(
     additional_roots: &[AbsolutePathBuf],
@@ -377,6 +380,12 @@ fn discover_marketplace_paths_from_roots(
     }
 
     for root in additional_roots {
+        if let Some(path) = supported_marketplace_manifest_path(root.as_path())
+            && !paths.contains(&path)
+        {
+            paths.push(path);
+            continue;
+        }
         // Curated marketplaces can now come from an HTTP-downloaded directory that is not a git
         // checkout, so check the root directly before falling back to repo-root discovery.
         if let Some(path) = find_marketplace_manifest_path(root.as_path())
