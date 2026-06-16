@@ -52,6 +52,7 @@ mod request_user_input;
 mod review;
 mod safety_check_downgrade;
 mod skills_list;
+mod sleep;
 mod thread_archive;
 mod thread_delete;
 mod thread_fork;

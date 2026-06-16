@@ -673,6 +673,21 @@ async fn host_context_gates_agent_job_tools() {
 }
 
 #[tokio::test]
+async fn sleep_tool_follows_feature_gate() {
+    let disabled = probe(|turn| {
+        set_feature(turn, Feature::SleepTool, /*enabled*/ false);
+    })
+    .await;
+    disabled.assert_visible_lacks(&["sleep"]);
+
+    let enabled = probe(|turn| {
+        set_feature(turn, Feature::SleepTool, /*enabled*/ true);
+    })
+    .await;
+    enabled.assert_visible_contains(&["sleep"]);
+}
+
+#[tokio::test]
 async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     let direct_mcp = probe_with(
         |_| {},

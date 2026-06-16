@@ -47,6 +47,7 @@ pub enum TurnItem {
     Reasoning(ReasoningItem),
     WebSearch(WebSearchItem),
     ImageView(ImageViewItem),
+    Sleep(SleepItem),
     ImageGeneration(ImageGenerationItem),
     FileChange(FileChangeItem),
     McpToolCall(McpToolCallItem),
@@ -138,6 +139,12 @@ pub struct WebSearchItem {
 pub struct ImageViewItem {
     pub id: String,
     pub path: AbsolutePathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+pub struct SleepItem {
+    pub id: String,
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
@@ -576,6 +583,7 @@ impl TurnItem {
             TurnItem::Reasoning(item) => item.id.clone(),
             TurnItem::WebSearch(item) => item.id.clone(),
             TurnItem::ImageView(item) => item.id.clone(),
+            TurnItem::Sleep(item) => item.id.clone(),
             TurnItem::ImageGeneration(item) => item.id.clone(),
             TurnItem::FileChange(item) => item.id.clone(),
             TurnItem::McpToolCall(item) => item.id.clone(),
@@ -596,6 +604,7 @@ impl TurnItem {
                     path: item.path.clone(),
                 })]
             }
+            TurnItem::Sleep(_) => Vec::new(),
             TurnItem::ImageGeneration(item) => vec![item.as_legacy_event()],
             TurnItem::FileChange(item) => item
                 .as_legacy_end_event(String::new())
