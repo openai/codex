@@ -164,6 +164,17 @@ impl PathUri {
         }
     }
 
+    /// Renders native path text using the convention represented by this URI.
+    ///
+    /// This uses [`Self::infer_path_convention`] rather than the current host's
+    /// convention, so a Windows URI renders with Windows separators on POSIX
+    /// and vice versa. An opaque fallback that does not encode a recognizable
+    /// absolute path, or a URI that the inferred convention cannot represent,
+    /// displays as its canonical URI instead.
+    pub fn native_path_display(&self) -> impl fmt::Display + '_ {
+        NativePathDisplay(self)
+    }
+
     /// Returns the decoded final URI path segment, or `None` for the URI root
     /// or an opaque fallback URI created by [`Self::from_abs_path`].
     ///
@@ -367,6 +378,20 @@ impl FromStr for PathUri {
 impl fmt::Display for PathUri {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+struct NativePathDisplay<'a>(&'a PathUri);
+
+impl fmt::Display for NativePathDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let path = self.0;
+        if let Some(convention) = path.infer_path_convention()
+            && let Ok(native_path) = ApiPathString::from_path_uri(path, convention)
+        {
+            return native_path.fmt(f);
+        }
+        path.fmt(f)
     }
 }
 

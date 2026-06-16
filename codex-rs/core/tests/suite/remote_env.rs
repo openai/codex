@@ -28,8 +28,6 @@ use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_path_uri::ApiPathString;
-use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
@@ -1082,15 +1080,6 @@ async fn remote_test_env_sandboxed_read_rejects_symlink_parent_dotdot_escape() -
     let outside_dir_uri = PathUri::from_abs_path(&outside_dir);
     let secret_path_uri = PathUri::from_abs_path(&secret_path);
     let symlink_path_uri = allowed_dir_uri.join("link")?;
-    let windows_root = ApiPathString::from_path_uri(&root_uri, PathConvention::Windows)?;
-    let windows_allowed_dir =
-        ApiPathString::from_path_uri(&allowed_dir_uri, PathConvention::Windows)?;
-    let windows_outside_dir =
-        ApiPathString::from_path_uri(&outside_dir_uri, PathConvention::Windows)?;
-    let windows_secret_path =
-        ApiPathString::from_path_uri(&secret_path_uri, PathConvention::Windows)?;
-    let windows_symlink_path =
-        ApiPathString::from_path_uri(&symlink_path_uri, PathConvention::Windows)?;
     let linux_setup_command = format!(
         "rm -rf {root}; mkdir -p {allowed} {outside}; printf nope > {secret}; ln -s {outside} {allowed}/link",
         root = root.display(),
@@ -1110,11 +1099,11 @@ New-Item -ItemType Directory -Path $allowed -Force | Out-Null
 New-Item -ItemType Directory -Path $outside -Force | Out-Null
 [System.IO.File]::WriteAllText($secret, 'nope')
 New-Item -ItemType SymbolicLink -Path $link -Target $outside | Out-Null"#,
-        root = windows_root.as_str(),
-        allowed = windows_allowed_dir.as_str(),
-        outside = windows_outside_dir.as_str(),
-        secret = windows_secret_path.as_str(),
-        link = windows_symlink_path.as_str(),
+        root = root_uri.native_path_display(),
+        allowed = allowed_dir_uri.native_path_display(),
+        outside = outside_dir_uri.native_path_display(),
+        secret = secret_path_uri.native_path_display(),
+        link = symlink_path_uri.native_path_display(),
     );
     remote_exec(&linux_setup_command, &windows_setup_command)?;
 
@@ -1131,7 +1120,7 @@ New-Item -ItemType SymbolicLink -Path $link -Target $outside | Out-Null"#,
         r#"$ErrorActionPreference = 'Stop'
 $root = '{root}'
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue"#,
-        root = windows_root.as_str(),
+        root = root_uri.native_path_display(),
     );
     remote_exec(&linux_cleanup_command, &windows_cleanup_command)?;
     Ok(())
