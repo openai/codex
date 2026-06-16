@@ -1369,8 +1369,7 @@ async fn respect_system_proxy_feature_resolves_enabled() -> std::io::Result<()> 
             features: Some(
                 toml::from_str(
                     r#"
-[respect_system_proxy]
-enabled = true
+respect_system_proxy = true
 "#,
                 )
                 .expect("valid features"),
@@ -1392,8 +1391,7 @@ fn bootstrap_respect_system_proxy_honors_feature_requirements() -> std::io::Resu
         features: Some(
             toml::from_str(
                 r#"
-[respect_system_proxy]
-enabled = true
+respect_system_proxy = true
 "#,
             )
             .expect("valid features"),
@@ -1431,15 +1429,15 @@ async fn respect_system_proxy_cli_override_enables_feature() -> std::io::Result<
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"
-[features.respect_system_proxy]
-enabled = false
+[features]
+respect_system_proxy = false
 "#,
     )?;
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cli_overrides(vec![(
-            "features.respect_system_proxy.enabled".to_string(),
+            "features.respect_system_proxy".to_string(),
             toml::Value::Boolean(true),
         )])
         .build()

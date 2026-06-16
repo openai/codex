@@ -993,31 +993,6 @@ mod tests {
     }
 
     #[test]
-    fn respect_system_proxy_feature_accepts_enabled() {
-        let config: ConfigToml = toml::from_str(
-            r#"
-            [features.respect_system_proxy]
-            enabled = true
-            "#,
-        )
-        .expect("respect system proxy config should deserialize");
-
-        let features = config.features.expect("features should be present");
-        let codex_features::FeatureToml::Config(respect_system_proxy) = features
-            .respect_system_proxy
-            .expect("respect system proxy config should be present")
-        else {
-            panic!("respect system proxy should be parsed as a structured feature");
-        };
-        assert_eq!(
-            respect_system_proxy,
-            codex_features::RespectSystemProxyFeatureConfigToml {
-                enabled: Some(true),
-            }
-        );
-    }
-
-    #[test]
     fn forced_chatgpt_workspace_id_rejects_comma_separated_string() {
         let err = toml::from_str::<ConfigToml>(&format!(
             r#"forced_chatgpt_workspace_id = "{WORKSPACE_ID_A},{WORKSPACE_ID_B}""#

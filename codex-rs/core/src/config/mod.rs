@@ -2509,7 +2509,7 @@ fn network_proxy_toml_config(features: Option<&FeaturesToml>) -> Option<&Network
     }
 }
 
-/// Resolves `[features.respect_system_proxy]` for the initial cloud-config bootstrap.
+/// Resolves `features.respect_system_proxy` for the initial cloud-config bootstrap.
 ///
 /// This runs before cloud-managed config can be fetched, so it can only use
 /// the already loaded config layers. The full [`Config`] load path resolves the

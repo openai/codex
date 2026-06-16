@@ -588,7 +588,7 @@
               "type": "boolean"
             },
             "respect_system_proxy": {
-              "$ref": "#/definitions/FeatureToml_for_RespectSystemProxyFeatureConfigToml"
+              "type": "boolean"
             },
             "responses_websockets": {
               "type": "boolean"
@@ -887,16 +887,6 @@
         },
         {
           "$ref": "#/definitions/NetworkProxyConfigToml"
-        }
-      ]
-    },
-    "FeatureToml_for_RespectSystemProxyFeatureConfigToml": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "$ref": "#/definitions/RespectSystemProxyFeatureConfigToml"
         }
       ]
     },
@@ -2563,15 +2553,6 @@
           "type": "string"
         }
       ]
-    },
-    "RespectSystemProxyFeatureConfigToml": {
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        }
-      },
-      "type": "object"
     },
     "SandboxMode": {
       "enum": [
@@ -4765,7 +4746,7 @@
           "type": "boolean"
         },
         "respect_system_proxy": {
-          "$ref": "#/definitions/FeatureToml_for_RespectSystemProxyFeatureConfigToml"
+          "type": "boolean"
         },
         "responses_websockets": {
           "type": "boolean"

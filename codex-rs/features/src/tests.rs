@@ -662,11 +662,6 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
             proxy_url: Some("http://127.0.0.1:43128".to_string()),
             ..Default::default()
         })),
-        respect_system_proxy: Some(FeatureToml::Config(
-            crate::RespectSystemProxyFeatureConfigToml {
-                enabled: Some(false),
-            },
-        )),
         entries: BTreeMap::new(),
         ..Default::default()
     };
@@ -697,14 +692,6 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
             proxy_url: Some("http://127.0.0.1:43128".to_string()),
             ..Default::default()
         }))
-    );
-    assert_eq!(
-        features_toml.respect_system_proxy,
-        Some(FeatureToml::Config(
-            crate::RespectSystemProxyFeatureConfigToml {
-                enabled: Some(true),
-            },
-        ))
     );
     let replayed = Features::from_sources(
         FeatureConfigSource {
