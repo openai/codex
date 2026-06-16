@@ -202,7 +202,7 @@ pub struct ListThreadsParams {
     pub sort_key: ThreadSortKey,
     /// Sort direction requested by the caller.
     pub sort_direction: SortDirection,
-    /// Allowed session sources. Empty means implementation default.
+    /// Allowed session sources. Empty means no source filter.
     pub allowed_sources: Vec<SessionSource>,
     /// Optional model provider filter. `None` means implementation default, while an empty vector
     /// means all providers.
@@ -231,7 +231,7 @@ pub struct SearchThreadsParams {
     pub sort_key: ThreadSortKey,
     /// Sort direction requested by the caller.
     pub sort_direction: SortDirection,
-    /// Allowed session sources. Empty means implementation default.
+    /// Allowed session sources. Empty means no source filter.
     pub allowed_sources: Vec<SessionSource>,
     /// Whether archived threads should be searched instead of active threads.
     pub archived: bool,
