@@ -2201,6 +2201,49 @@ mod tests {
     }
 
     #[test]
+    fn cpp_module_extensions_use_cpp_highlighting() {
+        for extension in ["cpp", "ixx", "cxxm"] {
+            let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+            changes.insert(
+                PathBuf::from(format!("math.{extension}")),
+                FileChange::Add {
+                    content:
+                        "export module math;\nexport int sum(int a, int b) { return a + b; }\n"
+                            .to_string(),
+                },
+            );
+
+            let lines = create_diff_summary(&changes, &PathBuf::from("/"), /*wrap_cols*/ 80);
+            assert!(
+                lines.iter().any(|line| {
+                    line.spans
+                        .iter()
+                        .any(|span| matches!(span.style.fg, Some(ratatui::style::Color::Rgb(..))))
+                }),
+                "add diff for .{extension} file should produce syntax-highlighted (RGB) spans"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_extension_falls_back_without_syntax_highlighting() {
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("math.unknown-extension"),
+            FileChange::Add {
+                content: "export module math;\nexport int value = 42;\n".to_string(),
+            },
+        );
+
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), /*wrap_cols*/ 80);
+        assert!(lines.iter().all(|line| {
+            line.spans
+                .iter()
+                .all(|span| !matches!(span.style.fg, Some(ratatui::style::Color::Rgb(..))))
+        }));
+    }
+
+    #[test]
     fn delete_diff_uses_path_extension_for_highlighting() {
         let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
         changes.insert(
