@@ -1411,7 +1411,7 @@ text("phase 3");
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_yield_timeout_works_for_busy_loop() -> Result<()> {
+async fn code_mode_yield_and_termination_are_not_starved_by_runtime_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1420,8 +1420,12 @@ async fn code_mode_yield_timeout_works_for_busy_loop() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let code = r#"// @exec: {"yield_time_ms": 100}
-text("phase 1");
+    // Exact controller arbitration is covered by deterministic code-mode contract tests. Keep
+    // this end-to-end load bounded while exercising a substantial runtime output backlog.
+    let code = r#"// @exec: {"yield_time_ms": 0, "max_output_tokens": 16}
+for (let index = 0; index < 16_384; index++) {
+    text(`event ${index}`);
+}
 while (true) {}
 "#;
 
@@ -1451,7 +1455,7 @@ while (true) {}
 
     let first_request = first_completion.single_request();
     let first_items = custom_tool_output_items(&first_request, "call-1");
-    assert_eq!(first_items.len(), 2);
+    assert_eq!(first_items.len(), 1);
     assert_regex_match(
         concat!(
             r"(?s)\A",
@@ -1459,7 +1463,6 @@ while (true) {}
         ),
         text_item(&first_items, /*index*/ 0),
     );
-    assert_eq!(text_item(&first_items, /*index*/ 1), "phase 1");
     let cell_id = extract_running_cell_id(text_item(&first_items, /*index*/ 0));
 
     responses::mount_sse_once(
@@ -1491,7 +1494,7 @@ while (true) {}
 
     let second_request = second_completion.single_request();
     let second_items = function_tool_output_items(&second_request, "call-2");
-    assert_eq!(second_items.len(), 1);
+    assert!(!second_items.is_empty());
     assert_regex_match(
         concat!(
             r"(?s)\A",
