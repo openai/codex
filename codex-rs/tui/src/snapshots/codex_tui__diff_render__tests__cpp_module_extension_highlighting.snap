@@ -12,11 +12,23 @@ expression: highlighted_tokens
         "export| module math|;|export| |int| |sum|(|int| |a|,| |int| |b|)| |{| |return| a |+| b|;| |}",
     ),
     (
+        "CPPM",
+        "export| module math|;|export| |int| |sum|(|int| |a|,| |int| |b|)| |{| |return| a |+| b|;| |}",
+    ),
+    (
         "cxxm",
         "export| module math|;|export| |int| |sum|(|int| |a|,| |int| |b|)| |{| |return| a |+| b|;| |}",
     ),
     (
+        "CxXm",
+        "export| module math|;|export| |int| |sum|(|int| |a|,| |int| |b|)| |{| |return| a |+| b|;| |}",
+    ),
+    (
         "ixx",
+        "export| module math|;|export| |int| |sum|(|int| |a|,| |int| |b|)| |{| |return| a |+| b|;| |}",
+    ),
+    (
+        "IXX",
         "export| module math|;|export| |int| |sum|(|int| |a|,| |int| |b|)| |{| |return| a |+| b|;| |}",
     ),
 ]

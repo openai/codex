@@ -2203,7 +2203,7 @@ mod tests {
 
     #[test]
     fn cpp_module_extensions_use_cpp_highlighting() {
-        let highlighted_tokens = ["cpp", "cppm", "cxxm", "ixx"]
+        let highlighted_tokens = ["cpp", "cppm", "CPPM", "cxxm", "CxXm", "ixx", "IXX"]
             .into_iter()
             .map(|extension| {
                 let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
