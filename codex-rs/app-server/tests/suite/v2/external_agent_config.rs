@@ -718,24 +718,14 @@ async fn external_agent_config_import_returns_before_background_session_import_f
     let session_path = session_dir.join("session.jsonl");
     std::fs::create_dir_all(&project_root)?;
     std::fs::create_dir_all(&session_dir)?;
-    std::fs::write(
-        &session_path,
-        serde_json::json!({
-            "type": "user",
-            "cwd": &project_root,
-            "timestamp": &recent_timestamp,
-            "message": { "content": "first request" },
-        })
-        .to_string(),
-    )?;
-
-    let project_config_dir = project_root.join(".codex");
-    std::fs::create_dir_all(&project_config_dir)?;
-    let project_config = project_config_dir.join("config.toml");
-    let status = std::process::Command::new("mkfifo")
-        .arg(&project_config)
-        .status()?;
-    assert!(status.success());
+    let session_contents = serde_json::json!({
+        "type": "user",
+        "cwd": &project_root,
+        "timestamp": &recent_timestamp,
+        "message": { "content": "first request" },
+    })
+    .to_string();
+    std::fs::write(&session_path, &session_contents)?;
 
     let home_dir = codex_home.path().display().to_string();
     let mut mcp =
@@ -757,6 +747,12 @@ async fn external_agent_config_import_returns_before_background_session_import_f
     let detected: ExternalAgentConfigDetectResponse = to_response(response)?;
     assert_eq!(detected.items.len(), 1);
     let detected_items = detected.items;
+
+    std::fs::remove_file(&session_path)?;
+    let status = std::process::Command::new("mkfifo")
+        .arg(&session_path)
+        .status()?;
+    assert!(status.success());
 
     let request_id = mcp
         .send_raw_request(
@@ -796,28 +792,23 @@ async fn external_agent_config_import_returns_before_background_session_import_f
     let response: ExternalAgentConfigImportResponse = to_response(response)?;
     assert_eq!(response, ExternalAgentConfigImportResponse {});
 
-    let writer = tokio::spawn(async move {
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .open(&project_config)
-            .await?;
-        file.write_all(b"\n").await
-    });
-    timeout(DEFAULT_TIMEOUT, writer).await???;
+    for _ in 0..2 {
+        timeout(DEFAULT_TIMEOUT, async {
+            let mut file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .open(&session_path)
+                .await?;
+            file.write_all(session_contents.as_bytes()).await
+        })
+        .await??;
 
-    let notification = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
-    )
-    .await??;
-    assert_eq!(notification.method, "externalAgentConfig/import/completed");
-
-    let notification = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
-    )
-    .await??;
-    assert_eq!(notification.method, "externalAgentConfig/import/completed");
+        let notification = timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
+        )
+        .await??;
+        assert_eq!(notification.method, "externalAgentConfig/import/completed");
+    }
 
     let request_id = mcp
         .send_thread_list_request(ThreadListParams {
