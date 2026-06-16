@@ -142,7 +142,7 @@ impl AgentControl {
             .items;
         let initial_history = InitialHistory::Resumed(ResumedHistory {
             conversation_id: thread_id,
-            history,
+            history: Arc::new(history),
             rollout_path: stored_thread.rollout_path,
         });
         if initial_history.get_multi_agent_version() != Some(MultiAgentVersion::V2) {
@@ -625,7 +625,7 @@ impl AgentControl {
             .items;
         let initial_history = InitialHistory::Resumed(ResumedHistory {
             conversation_id: thread_id,
-            history,
+            history: Arc::new(history),
             rollout_path: stored_thread.rollout_path,
         });
         let parent_thread_id = stored_thread.parent_thread_id;

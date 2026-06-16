@@ -1684,7 +1684,7 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -1849,7 +1849,7 @@ async fn prepares_resumed_history_before_installing_it() {
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: vec![RolloutItem::ResponseItem(resumed_item)],
+            history: Arc::new(vec![RolloutItem::ResponseItem(resumed_item)]),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -1892,7 +1892,7 @@ fn resolve_multi_agent_version_handles_unset_and_legacy_history() {
         resolve_multi_agent_version(
             &InitialHistory::Resumed(ResumedHistory {
                 conversation_id: thread_id,
-                history: Vec::new(),
+                history: Arc::new(Vec::new()),
                 rollout_path: None,
             }),
             /*inherited_multi_agent_version*/ None,
@@ -1903,7 +1903,7 @@ fn resolve_multi_agent_version_handles_unset_and_legacy_history() {
         resolve_multi_agent_version(
             &InitialHistory::Resumed(ResumedHistory {
                 conversation_id: thread_id,
-                history: Vec::new(),
+                history: Arc::new(Vec::new()),
                 rollout_path: None,
             }),
             Some(MultiAgentVersion::V2),
@@ -1914,10 +1914,10 @@ fn resolve_multi_agent_version_handles_unset_and_legacy_history() {
         resolve_multi_agent_version(
             &InitialHistory::Resumed(ResumedHistory {
                 conversation_id: thread_id,
-                history: vec![session_meta_item(
+                history: Arc::new(vec![session_meta_item(
                     thread_id,
                     Some(MultiAgentVersion::Disabled)
-                )],
+                )]),
                 rollout_path: None,
             }),
             Some(MultiAgentVersion::V2),
@@ -1978,7 +1978,7 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -2072,7 +2072,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -5495,7 +5495,7 @@ async fn resumed_root_session_uses_thread_id_as_session_id() {
     let (session, rx_event) = make_session_with_history_source_and_agent_control_and_rx(
         InitialHistory::Resumed(ResumedHistory {
             conversation_id: thread_id,
-            history: Vec::new(),
+            history: Arc::new(Vec::new()),
             rollout_path: None,
         }),
         SessionSource::Exec,
@@ -5530,7 +5530,7 @@ async fn resumed_subagent_session_restores_persisted_session_id() {
     let (session, rx_event) = make_session_with_history_source_and_agent_control_and_rx(
         InitialHistory::Resumed(ResumedHistory {
             conversation_id: thread_id,
-            history: vec![RolloutItem::SessionMeta(SessionMetaLine {
+            history: Arc::new(vec![RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
                     session_id: parent_session_id,
                     id: thread_id,
@@ -5538,7 +5538,7 @@ async fn resumed_subagent_session_restores_persisted_session_id() {
                     ..SessionMeta::default()
                 },
                 git: None,
-            })],
+            })]),
             rollout_path: None,
         }),
         session_source,

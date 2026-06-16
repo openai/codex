@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use chrono::DateTime;
 use chrono::Utc;
@@ -96,7 +97,7 @@ pub struct ResumeThreadParams {
     /// Known local rollout path when the caller resumed from a specific file.
     pub rollout_path: Option<PathBuf>,
     /// Known replay history for the resumed thread, if already loaded by the caller.
-    pub history: Option<Vec<RolloutItem>>,
+    pub history: Option<Arc<Vec<RolloutItem>>>,
     /// Whether archived threads may be reopened.
     pub include_archived: bool,
     /// Metadata for future writes appended to the resumed live thread.
