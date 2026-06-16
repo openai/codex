@@ -546,6 +546,7 @@ root_agent_usage_hint_text = "Root guidance."
 subagent_usage_hint_text = "Subagent guidance."
 tool_namespace = "agents"
 hide_spawn_agent_metadata = true
+spawn_agent_model_overrides = ["gpt-5.4", "gpt-5.3-codex"]
 non_code_mode_only = true
 "#,
     )
@@ -569,6 +570,10 @@ non_code_mode_only = true
             subagent_usage_hint_text: Some("Subagent guidance.".to_string()),
             tool_namespace: Some("agents".to_string()),
             hide_spawn_agent_metadata: Some(true),
+            spawn_agent_model_overrides: Some(vec![
+                "gpt-5.4".to_string(),
+                "gpt-5.3-codex".to_string(),
+            ]),
             non_code_mode_only: Some(true),
         }))
     );
@@ -608,6 +613,7 @@ usage_hint_enabled = false
             subagent_usage_hint_text: None,
             tool_namespace: None,
             hide_spawn_agent_metadata: None,
+            spawn_agent_model_overrides: None,
             non_code_mode_only: None,
         }))
     );

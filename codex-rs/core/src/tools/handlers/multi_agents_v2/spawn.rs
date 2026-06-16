@@ -60,6 +60,13 @@ async fn handle_spawn_agent(
         .as_deref()
         .map(str::trim)
         .filter(|role| !role.is_empty());
+    validate_configured_model_override(
+        args.model.as_deref(),
+        turn.config
+            .multi_agent_v2
+            .spawn_agent_model_overrides
+            .as_deref(),
+    )?;
 
     let initial_operation = parse_collab_input(Some(args.message), /*items*/ None)?;
     let prompt = render_input_preview(&initial_operation);
@@ -97,6 +104,10 @@ async fn handle_spawn_agent(
             turn.as_ref(),
             &mut config,
             args.model.as_deref(),
+            turn.config
+                .multi_agent_v2
+                .spawn_agent_model_overrides
+                .as_deref(),
             args.reasoning_effort.clone(),
         )
         .await?;
@@ -235,6 +246,23 @@ async fn handle_spawn_agent(
             nickname,
         })
     }
+}
+
+fn validate_configured_model_override(
+    requested_model: Option<&str>,
+    allowed_models: Option<&[String]>,
+) -> Result<(), FunctionCallError> {
+    let (Some(requested_model), Some(allowed_models)) = (requested_model, allowed_models) else {
+        return Ok(());
+    };
+    if allowed_models.iter().any(|model| model == requested_model) {
+        return Ok(());
+    }
+
+    Err(FunctionCallError::RespondToModel(format!(
+        "Model `{requested_model}` is not allowed for spawn_agent. Configured models: {}",
+        allowed_models.join(", ")
+    )))
 }
 
 impl CoreToolRuntime for Handler {

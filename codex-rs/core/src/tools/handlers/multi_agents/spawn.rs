@@ -105,6 +105,7 @@ async fn handle_spawn_agent(
             turn.as_ref(),
             &mut config,
             args.model.as_deref(),
+            /*configured_model_overrides*/ None,
             args.reasoning_effort.clone(),
         )
         .await?;

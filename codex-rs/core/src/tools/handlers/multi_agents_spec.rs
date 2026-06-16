@@ -14,6 +14,7 @@ const MULTI_AGENT_V1_NAMESPACE_DESCRIPTION: &str = "Tools for spawning and manag
 const SPAWN_AGENT_INHERITED_MODEL_GUIDANCE: &str = "Spawned agents inherit your current model by default. Omit `model` to use that preferred default; set `model` only when an explicit override is needed.";
 const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str =
     "Model override for the new agent. Omit unless an explicit override is needed.";
+const SPAWN_AGENT_MODEL_ALLOWLIST_GUIDANCE: &str = "Choose `model` from the configured list when a different model is appropriate. Model overrides require `fork_turns` to be `none` or a positive integer; full-history forks inherit the parent model.";
 const SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION: &str =
     "Service tier override for the new agent. Omit unless explicitly requested.";
 const MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT_DESCRIPTION: usize = 5;
@@ -24,6 +25,7 @@ pub struct SpawnAgentToolOptions {
     pub available_models: Vec<ModelPreset>,
     pub agent_type_description: String,
     pub hide_agent_type_model_reasoning: bool,
+    pub model_overrides: Option<Vec<String>>,
     pub include_usage_hint: bool,
     pub usage_hint_text: Option<String>,
     pub max_concurrent_threads_per_session: Option<usize>,
@@ -79,13 +81,33 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions) -> ToolSpec {
 }
 
 pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions) -> ToolSpec {
-    let available_models_description = (!options.hide_agent_type_model_reasoning)
-        .then(|| spawn_agent_models_description(&options.available_models));
-    let inherited_model_guidance =
-        (!options.hide_agent_type_model_reasoning).then_some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE);
+    let model_only_overrides = options.model_overrides.as_deref();
+    let available_models_description = match model_only_overrides {
+        Some(models) => Some(spawn_agent_model_allowlist_description(models)),
+        None if !options.hide_agent_type_model_reasoning => {
+            Some(spawn_agent_models_description(&options.available_models))
+        }
+        None => None,
+    };
+    let inherited_model_guidance = match model_only_overrides {
+        Some(_) => Some(SPAWN_AGENT_MODEL_ALLOWLIST_GUIDANCE),
+        None if !options.hide_agent_type_model_reasoning => {
+            Some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE)
+        }
+        None => None,
+    };
     let mut properties = spawn_agent_common_properties_v2(&options.agent_type_description);
-    if options.hide_agent_type_model_reasoning {
+    if options.hide_agent_type_model_reasoning || model_only_overrides.is_some() {
         hide_spawn_agent_metadata_options(&mut properties);
+    }
+    if let Some(models) = model_only_overrides {
+        properties.insert(
+            "model".to_string(),
+            JsonSchema::string_enum(
+                models.iter().cloned().map(Value::String).collect(),
+                Some(SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION.to_string()),
+            ),
+        );
     }
     properties.insert(
         "task_name".to_string(),
@@ -635,6 +657,15 @@ fn hide_spawn_agent_metadata_options(properties: &mut BTreeMap<String, JsonSchem
     properties.remove("model");
     properties.remove("reasoning_effort");
     properties.remove("service_tier");
+}
+
+fn spawn_agent_model_allowlist_description(models: &[String]) -> String {
+    let models = models
+        .iter()
+        .map(|model| format!("`{model}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("Available model overrides: {models}.")
 }
 
 fn spawn_agent_tool_description(

@@ -1051,6 +1051,7 @@ pub struct MultiAgentV2Config {
     pub subagent_usage_hint_text: Option<String>,
     pub tool_namespace: Option<String>,
     pub hide_spawn_agent_metadata: bool,
+    pub spawn_agent_model_overrides: Option<Vec<String>>,
     pub non_code_mode_only: bool,
 }
 
@@ -1072,6 +1073,7 @@ impl Default for MultiAgentV2Config {
             ),
             tool_namespace: None,
             hide_spawn_agent_metadata: true,
+            spawn_agent_model_overrides: None,
             non_code_mode_only: true,
         }
     }
@@ -2349,6 +2351,10 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
     let hide_spawn_agent_metadata = base
         .and_then(|config| config.hide_spawn_agent_metadata)
         .unwrap_or(default.hide_spawn_agent_metadata);
+    let spawn_agent_model_overrides = base
+        .and_then(|config| config.spawn_agent_model_overrides.as_ref())
+        .cloned()
+        .or(default.spawn_agent_model_overrides);
     let non_code_mode_only = base
         .and_then(|config| config.non_code_mode_only)
         .unwrap_or(default.non_code_mode_only);
@@ -2364,6 +2370,7 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         subagent_usage_hint_text,
         tool_namespace,
         hide_spawn_agent_metadata,
+        spawn_agent_model_overrides,
         non_code_mode_only,
     }
 }
@@ -2533,6 +2540,38 @@ fn validate_multi_agent_v2_tool_namespace(namespace: Option<&str>) -> std::io::R
             std::io::ErrorKind::InvalidInput,
             format!("{LABEL} uses a reserved namespace: {namespace}"),
         ));
+    }
+
+    Ok(())
+}
+
+fn validate_multi_agent_v2_spawn_agent_model_overrides(
+    models: Option<&[String]>,
+) -> std::io::Result<()> {
+    const LABEL: &str = "features.multi_agent_v2.spawn_agent_model_overrides";
+
+    let Some(models) = models else {
+        return Ok(());
+    };
+    if models.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{LABEL} must contain at least one model"),
+        ));
+    }
+    for (index, model) in models.iter().enumerate() {
+        if model.is_empty() || model.trim() != model {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{LABEL}[{index}] must be non-empty and have no surrounding whitespace"),
+            ));
+        }
+        if models[..index].contains(model) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{LABEL} contains duplicate model `{model}`"),
+            ));
+        }
     }
 
     Ok(())
@@ -3122,6 +3161,9 @@ impl Config {
             ));
         }
         validate_multi_agent_v2_tool_namespace(multi_agent_v2.tool_namespace.as_deref())?;
+        validate_multi_agent_v2_spawn_agent_model_overrides(
+            multi_agent_v2.spawn_agent_model_overrides.as_deref(),
+        )?;
         let agent_max_threads = cfg.agents.as_ref().and_then(|agents| agents.max_threads);
         if agent_max_threads == Some(0) {
             return Err(std::io::Error::new(

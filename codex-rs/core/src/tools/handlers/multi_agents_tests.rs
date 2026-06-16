@@ -458,6 +458,97 @@ async fn multi_agent_v2_spawn_defaults_to_full_fork_and_rejects_child_model_over
 }
 
 #[tokio::test]
+async fn multi_agent_v2_spawn_rejects_model_outside_configured_overrides() {
+    let (session, mut turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config.multi_agent_v2.spawn_agent_model_overrides =
+        Some(vec!["gpt-5.4".to_string(), "gpt-5.3-codex".to_string()]);
+    set_turn_config(&mut turn, config);
+
+    let err = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "disallowed_model",
+                "fork_turns": "none",
+                "model": "gpt-5.2"
+            })),
+        ))
+        .await
+        .err()
+        .expect("model outside configured overrides should fail");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "Model `gpt-5.2` is not allowed for spawn_agent. Configured models: gpt-5.4, gpt-5.3-codex"
+                .to_string(),
+        )
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_accepts_freeform_configured_model_override() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config.multi_agent_v2.spawn_agent_model_overrides = Some(vec![
+        "self".to_string(),
+        "mini".to_string(),
+        "nano".to_string(),
+        "nano3093".to_string(),
+    ]);
+    set_turn_config(&mut turn, config);
+
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "freeform_model",
+                "fork_turns": "none",
+                "model": "nano3093"
+            })),
+        ))
+        .await
+        .expect("configured freeform model should be accepted");
+
+    let agent_id = manager
+        .captured_ops()
+        .into_iter()
+        .map(|(thread_id, _)| thread_id)
+        .find(|thread_id| *thread_id != root.thread_id)
+        .expect("spawned agent should receive an op");
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+
+    assert_eq!(snapshot.model, "nano3093");
+}
+
+#[tokio::test]
 async fn spawn_agent_service_tier_override_validates_the_effective_child_model() {
     #[derive(Debug, Deserialize)]
     struct SpawnAgentResult {

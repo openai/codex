@@ -54,6 +54,13 @@ pub struct MultiAgentV2ConfigToml {
     pub tool_namespace: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hide_spawn_agent_metadata: Option<bool>,
+    /// Models that the parent model may explicitly select for a spawned agent.
+    ///
+    /// When set, the spawn tool exposes only the `model` metadata override and
+    /// constrains it to this list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1))]
+    pub spawn_agent_model_overrides: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub non_code_mode_only: Option<bool>,
 }
