@@ -1,6 +1,5 @@
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
-use crate::shell::Shell;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -29,11 +28,11 @@ pub(crate) struct EnvironmentContext {
 pub(crate) struct EnvironmentContextEnvironment {
     pub(crate) id: String,
     pub(crate) cwd: AbsolutePathBuf,
-    pub(crate) shell: String,
+    pub(crate) shell: Option<String>,
 }
 
 impl EnvironmentContextEnvironment {
-    fn legacy(cwd: AbsolutePathBuf, shell: String) -> Self {
+    fn legacy(cwd: AbsolutePathBuf, shell: Option<String>) -> Self {
         Self {
             id: String::new(),
             cwd,
@@ -41,7 +40,7 @@ impl EnvironmentContextEnvironment {
         }
     }
 
-    fn from_turn_environments(environments: &[TurnEnvironment], shell: &Shell) -> Vec<Self> {
+    fn from_turn_environments(environments: &[TurnEnvironment]) -> Vec<Self> {
         environments
             .iter()
             .map(|environment| Self {
@@ -50,8 +49,7 @@ impl EnvironmentContextEnvironment {
                 shell: environment
                     .shell
                     .as_ref()
-                    .map(|shell| shell.name().to_string())
-                    .unwrap_or_else(|| shell.name().to_string()),
+                    .map(|shell| shell.name().to_string()),
             })
             .collect()
     }
@@ -418,11 +416,10 @@ impl EnvironmentContext {
         )
     }
 
-    pub(crate) fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
+    pub(crate) fn from_turn_context(turn_context: &TurnContext) -> Self {
         let mut context = Self::new(
             EnvironmentContextEnvironment::from_turn_environments(
                 &turn_context.environments.turn_environments,
-                shell,
             ),
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
@@ -436,17 +433,14 @@ impl EnvironmentContext {
         context
     }
 
-    pub(crate) fn from_turn_context_item(
-        turn_context_item: &TurnContextItem,
-        shell: String,
-    ) -> Self {
+    pub(crate) fn from_turn_context_item(turn_context_item: &TurnContextItem) -> Self {
         let cwd = match AbsolutePathBuf::try_from(turn_context_item.cwd.clone()) {
             Ok(cwd) => cwd,
             Err(_) => AbsolutePathBuf::resolve_path_against_base(&turn_context_item.cwd, "/"),
         };
         Self::new_with_environments(
             EnvironmentContextEnvironments::from_vec(vec![EnvironmentContextEnvironment::legacy(
-                cwd, shell,
+                cwd, None,
             )]),
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
@@ -547,7 +541,9 @@ impl ContextualUserFragment for EnvironmentContext {
                     "  <cwd>{}</cwd>",
                     environment.cwd.to_string_lossy()
                 ));
-                lines.push(format!("  <shell>{}</shell>", environment.shell));
+                if let Some(shell) = &environment.shell {
+                    lines.push(format!("  <shell>{shell}</shell>"));
+                }
             }
             EnvironmentContextEnvironments::Multiple(environments) => {
                 lines.push("  <environments>".to_string());
@@ -557,7 +553,9 @@ impl ContextualUserFragment for EnvironmentContext {
                         "      <cwd>{}</cwd>",
                         environment.cwd.to_string_lossy()
                     ));
-                    lines.push(format!("      <shell>{}</shell>", environment.shell));
+                    if let Some(shell) = &environment.shell {
+                        lines.push(format!("      <shell>{shell}</shell>"));
+                    }
                     lines.push("    </environment>".to_string());
                 }
                 lines.push("  </environments>".to_string());

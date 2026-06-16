@@ -9,6 +9,7 @@ use crate::exec_env::create_env;
 use crate::function_tool::FunctionCallError;
 use crate::maybe_emit_implicit_skill_invocation;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -84,16 +85,19 @@ impl ShellCommandHandler {
 
     pub(super) fn to_exec_params(
         params: &ShellCommandToolCallParams,
-        session: &crate::session::session::Session,
+        turn_environment: &TurnEnvironment,
         turn_context: &TurnContext,
         thread_id: ThreadId,
+        cwd: codex_utils_absolute_path::AbsolutePathBuf,
         allow_login_shell: bool,
     ) -> Result<ExecParams, FunctionCallError> {
-        let shell = session.user_shell();
+        let Some(shell) = turn_environment.shell.as_ref() else {
+            return Err(FunctionCallError::RespondToModel(
+                "shell is unavailable in this session".to_string(),
+            ));
+        };
         let use_login_shell = Self::resolve_use_login_shell(params.login, allow_login_shell)?;
-        let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
-        #[allow(deprecated)]
-        let cwd = turn_context.resolve_path(params.workdir.clone());
+        let command = Self::base_command(shell, &params.command, use_login_shell);
 
         Ok(ExecParams {
             command,
@@ -167,33 +171,35 @@ impl ShellCommandHandler {
             )));
         };
 
-        #[allow(deprecated)]
-        let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
+        let Some(turn_environment) = turn.environments.single_local_environment().cloned() else {
+            return Err(FunctionCallError::RespondToModel(
+                "shell is unavailable in this session".to_string(),
+            ));
+        };
+        let cwd = resolve_workdir_base_path(&arguments, turn_environment.cwd())?;
         let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
-        #[allow(deprecated)]
-        let workdir = turn.resolve_path(params.workdir.clone());
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
             turn.as_ref(),
             &params.command,
-            &workdir,
+            &cwd,
         )
         .await;
         let prefix_rule = params.prefix_rule.clone();
         let exec_params = Self::to_exec_params(
             &params,
-            session.as_ref(),
+            &turn_environment,
             turn.as_ref(),
             session.thread_id,
+            cwd,
             turn.config.permissions.allow_login_shell,
         )?;
-        let shell_type = Some(session.user_shell().shell_type);
         run_exec_like(RunExecLikeArgs {
             tool_name,
             exec_params,
+            turn_environment,
             cancellation_token,
             hook_command: params.command,
-            shell_type,
             additional_permissions: params.additional_permissions.clone(),
             prefix_rule,
             session,

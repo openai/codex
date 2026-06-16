@@ -528,8 +528,11 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         .context("build trusted hook state")?,
     );
 
-    let mut hook_shell_argv = session
-        .user_shell()
+    let mut hook_shell_argv = turn_context
+        .environments
+        .single_local_environment()
+        .and_then(|environment| environment.shell.as_ref())
+        .expect("local environment shell")
         .derive_exec_args("", /*use_login_shell*/ false);
     let hook_shell_program = hook_shell_argv.remove(0);
     let _ = hook_shell_argv.pop();

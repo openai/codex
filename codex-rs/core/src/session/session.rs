@@ -813,7 +813,7 @@ impl Session {
             };
             let turn_environments = Arc::new(ThreadEnvironments::new(
                 environment_manager,
-                default_shell.clone(),
+                default_shell,
                 shell_snapshot,
                 inherited_environments.unwrap_or_default(),
             ));
@@ -989,7 +989,6 @@ impl Session {
                 analytics_events_client,
                 hooks: arc_swap::ArcSwap::from_pointee(hooks),
                 rollout_thread_trace,
-                user_shell: Arc::new(default_shell),
                 show_raw_agent_reasoning: config.show_raw_agent_reasoning,
                 exec_policy,
                 auth_manager: Arc::clone(&auth_manager),

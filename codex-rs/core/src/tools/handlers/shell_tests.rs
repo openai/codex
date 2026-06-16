@@ -67,8 +67,12 @@ fn assert_safe(shell: &Shell, command: &str) {
 }
 
 #[tokio::test]
-async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_context() {
+async fn shell_command_handler_to_exec_params_uses_environment_shell_and_turn_context() {
     let (session, turn_context) = make_session_and_context().await;
+    let turn_environment = turn_context
+        .environments
+        .single_local_environment()
+        .expect("single local environment");
 
     let command = "echo hello".to_string();
     let workdir = Some("subdir".to_string());
@@ -77,11 +81,14 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
     let sandbox_permissions = SandboxPermissions::RequireEscalated;
     let justification = Some("because tests".to_string());
 
-    let expected_command = session
-        .user_shell()
+    let expected_command = turn_environment
+        .shell
+        .as_ref()
+        .expect("environment shell")
         .derive_exec_args(&command, /*use_login_shell*/ true);
-    #[allow(deprecated)]
-    let expected_cwd = turn_context.resolve_path(workdir.clone());
+    let expected_cwd = turn_environment
+        .cwd()
+        .join(workdir.as_deref().expect("workdir"));
     let expected_env = create_env(
         &turn_context.shell_environment_policy,
         Some(session.thread_id),
@@ -100,9 +107,10 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
 
     let exec_params = ShellCommandHandler::to_exec_params(
         &params,
-        &session,
+        turn_environment,
         &turn_context,
         session.thread_id,
+        expected_cwd.clone(),
         /*allow_login_shell*/ true,
     )
     .expect("login shells should be allowed");
@@ -149,6 +157,10 @@ fn shell_command_handler_respects_explicit_login_flag() {
 #[tokio::test]
 async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
     let (session, turn_context) = make_session_and_context().await;
+    let turn_environment = turn_context
+        .environments
+        .single_local_environment()
+        .expect("single local environment");
     let params = ShellCommandToolCallParams {
         command: "echo hello".to_string(),
         workdir: None,
@@ -162,17 +174,20 @@ async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
 
     let exec_params = ShellCommandHandler::to_exec_params(
         &params,
-        &session,
+        turn_environment,
         &turn_context,
         session.thread_id,
+        turn_environment.cwd().clone(),
         /*allow_login_shell*/ false,
     )
     .expect("non-login shells should still be allowed");
 
     assert_eq!(
         exec_params.command,
-        session
-            .user_shell()
+        turn_environment
+            .shell
+            .as_ref()
+            .expect("environment shell")
             .derive_exec_args("echo hello", /*use_login_shell*/ false)
     );
 }

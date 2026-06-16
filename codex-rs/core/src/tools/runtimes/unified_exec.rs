@@ -262,12 +262,6 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         ctx: &ToolCtx,
     ) -> Result<UnifiedExecProcess, ToolError> {
         let base_command = &req.command;
-        let session_shell = ctx.session.user_shell();
-        let shell = req
-            .turn_environment
-            .shell
-            .as_ref()
-            .unwrap_or(session_shell.as_ref());
         let shell_snapshot_location = req.turn_environment.shell_snapshot(&req.cwd);
         let (file_system_sandbox_policy, _) = attempt.permissions.to_runtime_permissions();
         let launch_sandbox_permissions = sandbox_permissions_preserving_denied_reads(
@@ -306,7 +300,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         let runtime_path_prepends = RuntimePathPrepends::default();
         let command = if environment_is_remote {
             base_command.to_vec()
-        } else {
+        } else if let Some(shell) = req.turn_environment.shell.as_ref() {
             maybe_wrap_shell_lc_with_snapshot(
                 base_command,
                 shell,
@@ -315,6 +309,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 &env,
                 &runtime_path_prepends,
             )
+        } else {
+            return Err(ToolError::Rejected(
+                "shell is unavailable in this environment".to_string(),
+            ));
         };
         let command = disable_powershell_profile_for_elevated_windows_sandbox(
             &command,

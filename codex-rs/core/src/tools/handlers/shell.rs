@@ -8,7 +8,7 @@ use crate::exec::ExecParams;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::function_tool::FunctionCallError;
 use crate::session::turn_context::TurnContext;
-use crate::shell::ShellType;
+use crate::session::turn_context::TurnEnvironment;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
@@ -45,9 +45,9 @@ fn shell_command_payload_command(payload: &ToolPayload) -> Option<String> {
 struct RunExecLikeArgs {
     tool_name: ToolName,
     exec_params: ExecParams,
+    turn_environment: TurnEnvironment,
     cancellation_token: CancellationToken,
     hook_command: String,
-    shell_type: Option<ShellType>,
     additional_permissions: Option<AdditionalPermissionProfile>,
     prefix_rule: Option<Vec<String>>,
     session: Arc<crate::session::session::Session>,
@@ -61,9 +61,9 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     let RunExecLikeArgs {
         tool_name,
         exec_params,
+        turn_environment,
         cancellation_token,
         hook_command,
-        shell_type,
         additional_permissions,
         prefix_rule,
         session,
@@ -73,11 +73,6 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         shell_runtime_backend,
     } = args;
 
-    let Some(turn_environment) = turn.environments.primary() else {
-        return Err(FunctionCallError::RespondToModel(
-            "shell is unavailable in this session".to_string(),
-        ));
-    };
     let fs = turn_environment.environment.get_filesystem();
 
     let explicit_env_overrides = turn.shell_environment_policy.r#set.clone();
@@ -179,8 +174,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
 
     let req = ShellRequest {
         command: exec_params.command.clone(),
-        turn_environment: turn_environment.clone(),
-        shell_type,
+        turn_environment,
         hook_command,
         cwd: exec_params.cwd.clone(),
         timeout_ms: exec_params.expiration.timeout_ms(),

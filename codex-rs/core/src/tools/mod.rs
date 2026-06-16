@@ -45,10 +45,8 @@ pub(crate) fn flat_tool_name(tool_name: &ToolName) -> Cow<'_, str> {
     }
 }
 
-pub(crate) fn tool_user_shell_type(
-    user_shell: &crate::shell::Shell,
-) -> codex_tools::ToolUserShellType {
-    match user_shell.shell_type {
+pub(crate) fn tool_shell_type(shell: &crate::shell::Shell) -> codex_tools::ToolUserShellType {
+    match shell.shell_type {
         crate::shell::ShellType::Zsh => codex_tools::ToolUserShellType::Zsh,
         crate::shell::ShellType::Bash => codex_tools::ToolUserShellType::Bash,
         crate::shell::ShellType::PowerShell => codex_tools::ToolUserShellType::PowerShell,

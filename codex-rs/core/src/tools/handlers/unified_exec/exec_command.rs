@@ -151,16 +151,9 @@ impl ExecCommandHandler {
         let process_id = manager.allocate_process_id().await;
         let shell_mode =
             shell_mode_for_environment(&turn.unified_exec_shell_mode, environment.as_ref());
-        // Remote environments may use a different OS and must build commands with their native
-        // shell; fall back to the session shell when the environment did not report one.
-        let shell = turn_environment
-            .shell
-            .clone()
-            .map(Arc::new)
-            .unwrap_or_else(|| session.user_shell());
         let resolved_command = get_command(
             &args,
-            shell,
+            turn_environment.shell.as_ref(),
             &shell_mode,
             turn.config.permissions.allow_login_shell,
         )

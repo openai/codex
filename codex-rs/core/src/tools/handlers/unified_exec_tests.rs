@@ -40,7 +40,7 @@ async fn invocation_for_payload(
 }
 
 #[test]
-fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> {
+fn test_get_command_uses_environment_shell_when_unspecified() -> anyhow::Result<()> {
     let json = r#"{"cmd": "echo hello"}"#;
 
     let args: ExecCommandArgs = parse_arguments(json)?;
@@ -49,7 +49,7 @@ fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> 
 
     let resolved = get_command(
         &args,
-        Arc::new(default_user_shell()),
+        Some(&default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
     )
@@ -71,7 +71,7 @@ fn test_get_command_respects_explicit_bash_shell() -> anyhow::Result<()> {
 
     let resolved = get_command(
         &args,
-        Arc::new(default_user_shell()),
+        Some(&default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
     )
@@ -112,7 +112,7 @@ fn test_get_command_respects_explicit_powershell_shell() -> anyhow::Result<()> {
 
     let resolved = get_command(
         &args,
-        Arc::new(default_user_shell()),
+        Some(&default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
     )
@@ -134,7 +134,7 @@ fn test_get_command_respects_explicit_cmd_shell() -> anyhow::Result<()> {
 
     let resolved = get_command(
         &args,
-        Arc::new(default_user_shell()),
+        Some(&default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
     )
@@ -152,7 +152,7 @@ fn test_get_command_rejects_explicit_login_when_disallowed() -> anyhow::Result<(
     let args: ExecCommandArgs = parse_arguments(json)?;
     let err = get_command(
         &args,
-        Arc::new(default_user_shell()),
+        Some(&default_user_shell()),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ false,
     )
@@ -183,13 +183,8 @@ fn test_get_command_rejects_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<
         })?,
     });
 
-    let err = get_command(
-        &args,
-        Arc::new(default_user_shell()),
-        &shell_mode,
-        /*allow_login_shell*/ true,
-    )
-    .expect_err("explicit shell should be rejected");
+    let err = get_command(&args, None, &shell_mode, /*allow_login_shell*/ true)
+        .expect_err("explicit shell should be rejected");
 
     assert!(
         err.contains("`shell` is not supported for local zsh-fork exec"),

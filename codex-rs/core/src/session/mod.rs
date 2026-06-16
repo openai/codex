@@ -1628,13 +1628,11 @@ impl Session {
             let state = self.state.lock().await;
             state.previous_turn_settings()
         };
-        let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
         crate::context_manager::updates::build_settings_update_items(
             reference_context_item,
             previous_turn_settings.as_ref(),
             current_context,
-            shell.as_ref(),
             exec_policy.as_ref(),
             self.features.enabled(Feature::Personality),
         )
@@ -2991,14 +2989,13 @@ impl Session {
             );
         }
         if turn_context.config.include_environment_context {
-            let shell = self.user_shell();
             let subagents = self
                 .services
                 .agent_control
                 .format_environment_context_subagents(self.thread_id)
                 .await;
             contextual_user_sections.push(
-                crate::context::EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
+                crate::context::EnvironmentContext::from_turn_context(turn_context)
                     .with_subagents(subagents)
                     .render(),
             );
@@ -3452,10 +3449,6 @@ impl Session {
 
     pub(crate) fn hooks(&self) -> Arc<Hooks> {
         self.services.hooks.load_full()
-    }
-
-    pub(crate) fn user_shell(&self) -> Arc<shell::Shell> {
-        Arc::clone(&self.services.user_shell)
     }
 
     pub(crate) async fn current_rollout_path(&self) -> anyhow::Result<Option<PathBuf>> {

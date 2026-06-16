@@ -55,7 +55,6 @@ use tokio_util::sync::CancellationToken;
 pub struct ShellRequest {
     pub command: Vec<String>,
     pub turn_environment: TurnEnvironment,
-    pub shell_type: Option<ShellType>,
     pub hook_command: String,
     pub cwd: AbsolutePathBuf,
     pub timeout_ms: Option<u64>,
@@ -241,12 +240,11 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        let session_shell = ctx.session.user_shell();
-        let shell = req
-            .turn_environment
-            .shell
-            .as_ref()
-            .unwrap_or(session_shell.as_ref());
+        let Some(shell) = req.turn_environment.shell.as_ref() else {
+            return Err(ToolError::Rejected(
+                "shell is unavailable in this session".to_string(),
+            ));
+        };
         let shell_snapshot_location = req.turn_environment.shell_snapshot(&req.cwd);
         let (file_system_sandbox_policy, _) = attempt.permissions.to_runtime_permissions();
         let sandbox_permissions = sandbox_permissions_preserving_denied_reads(
@@ -284,7 +282,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         );
         let command = disable_powershell_profile_for_elevated_windows_sandbox(
             &command,
-            req.shell_type.as_ref(),
+            Some(&shell.shell_type),
             attempt.sandbox,
             attempt.windows_sandbox_level,
         );

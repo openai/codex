@@ -12,7 +12,6 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_tools::UnifiedExecShellMode;
 use serde::Deserialize;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 #[cfg(test)]
 use crate::tools::handlers::parse_arguments;
@@ -96,7 +95,7 @@ fn post_unified_exec_tool_use_payload(
 
 pub(crate) fn get_command(
     args: &ExecCommandArgs,
-    session_shell: Arc<Shell>,
+    environment_shell: Option<&Shell>,
     shell_mode: &UnifiedExecShellMode,
     allow_login_shell: bool,
 ) -> Result<ResolvedCommand, String> {
@@ -116,7 +115,10 @@ pub(crate) fn get_command(
                 .shell
                 .as_ref()
                 .map(|shell_str| get_shell_by_model_provided_path(&PathBuf::from(shell_str)));
-            let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
+            let shell = model_shell
+                .as_ref()
+                .or(environment_shell)
+                .ok_or_else(|| "shell is unavailable in this environment".to_string())?;
             Ok(ResolvedCommand {
                 command: shell.derive_exec_args(&args.cmd, use_login_shell),
                 shell_type: shell.shell_type,

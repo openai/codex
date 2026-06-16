@@ -116,8 +116,14 @@ pub(super) async fn try_run_zsh_fork(
         tracing::warn!("ZshFork backend specified, but ShellZshFork feature is not enabled.");
         return Ok(None);
     }
-    if !matches!(ctx.session.user_shell().shell_type, ShellType::Zsh) {
-        tracing::warn!("ZshFork backend specified, but user shell is not Zsh.");
+    if !matches!(
+        req.turn_environment
+            .shell
+            .as_ref()
+            .map(|shell| shell.shell_type),
+        Some(ShellType::Zsh)
+    ) {
+        tracing::warn!("ZshFork backend specified, but environment shell is not Zsh.");
         return Ok(None);
     }
 

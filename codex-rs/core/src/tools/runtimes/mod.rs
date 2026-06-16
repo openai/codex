@@ -226,12 +226,12 @@ pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
 
 /// POSIX-only helper: for commands produced by `Shell::derive_exec_args`
 /// for Bash/Zsh/sh of the form `[shell_path, "-lc", "<script>"]`, and
-/// when a snapshot is configured on the session shell, rewrite the argv
+/// when a snapshot is configured on the environment shell, rewrite the argv
 /// to a single non-login shell that sources the snapshot before running
 /// the original script:
 ///
 ///   shell -lc "<script>"
-///   => user_shell -c ". SNAPSHOT (best effort); exec shell -c <script>"
+///   => environment_shell -c ". SNAPSHOT (best effort); exec shell -c <script>"
 ///
 /// This wrapper script uses POSIX constructs (`if`, `.`, `exec`) so it can
 /// be run by Bash/Zsh/sh. On non-matching commands, or when command cwd does
@@ -249,7 +249,7 @@ pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
 /// PATH unless the user explicitly overrides `PATH`.
 pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     command: &[String],
-    session_shell: &Shell,
+    shell: &Shell,
     shell_snapshot: Option<&AbsolutePathBuf>,
     explicit_env_overrides: &HashMap<String, String>,
     env: &HashMap<String, String>,
@@ -277,7 +277,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     }
 
     let snapshot_path = snapshot.to_string_lossy();
-    let shell_path = session_shell.shell_path.to_string_lossy();
+    let shell_path = shell.shell_path.to_string_lossy();
     let original_shell = shell_single_quote(&command[0]);
     let original_script = shell_single_quote(&command[2]);
     let snapshot_path = shell_single_quote(snapshot_path.as_ref());

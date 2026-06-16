@@ -527,7 +527,6 @@ impl Session {
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
         multi_agent_version: MultiAgentVersion,
-        user_shell: &shell::Shell,
         shell_zsh_path: Option<&PathBuf>,
         main_execve_wrapper_exe: Option<&PathBuf>,
         per_turn_config: Config,
@@ -552,12 +551,19 @@ impl Session {
         let provider_for_context = create_model_provider(provider, auth_manager);
         let session_telemetry_for_context = session_telemetry;
         let available_models = models_manager.try_list_models().unwrap_or_default();
-        let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
-            codex_tools::unified_exec_feature_mode_for_features(per_turn_config.features.get()),
-            crate::tools::tool_user_shell_type(user_shell),
-            shell_zsh_path,
-            main_execve_wrapper_exe,
-        );
+        let unified_exec_shell_mode = environments
+            .local()
+            .and_then(|environment| environment.shell.as_ref())
+            .map_or(UnifiedExecShellMode::Direct, |shell| {
+                UnifiedExecShellMode::for_session(
+                    codex_tools::unified_exec_feature_mode_for_features(
+                        per_turn_config.features.get(),
+                    ),
+                    crate::tools::tool_shell_type(shell),
+                    shell_zsh_path,
+                    main_execve_wrapper_exe,
+                )
+            });
 
         let mut per_turn_config = per_turn_config;
         let tool_mode = model_info.tool_mode.unwrap_or_else(|| {
@@ -805,7 +811,6 @@ impl Session {
             session_configuration.provider.clone(),
             &session_configuration,
             multi_agent_version,
-            self.services.user_shell.as_ref(),
             self.services.shell_zsh_path.as_ref(),
             self.services.main_execve_wrapper_exe.as_ref(),
             per_turn_config,

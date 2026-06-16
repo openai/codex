@@ -9,7 +9,6 @@ use crate::context::RealtimeStartInstructions;
 use crate::context::RealtimeStartWithInstructions;
 use crate::session::PreviousTurnSettings;
 use crate::session::turn_context::TurnContext;
-use crate::shell::Shell;
 use codex_execpolicy::Policy;
 use codex_features::Feature;
 use codex_protocol::config_types::Personality;
@@ -21,15 +20,14 @@ use codex_protocol::protocol::TurnContextItem;
 fn build_environment_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
-    shell: &Shell,
 ) -> Option<ResponseItem> {
     if !next.config.include_environment_context {
         return None;
     }
 
     let prev = previous?;
-    let prev_context = EnvironmentContext::from_turn_context_item(prev, shell.name().to_string());
-    let next_context = EnvironmentContext::from_turn_context(next, shell);
+    let prev_context = EnvironmentContext::from_turn_context_item(prev);
+    let next_context = EnvironmentContext::from_turn_context(next);
     if prev_context.equals_except_shell(&next_context) {
         return None;
     }
@@ -211,7 +209,6 @@ pub(crate) fn build_settings_update_items(
     previous: Option<&TurnContextItem>,
     previous_turn_settings: Option<&PreviousTurnSettings>,
     next: &TurnContext,
-    shell: &Shell,
     exec_policy: &Policy,
     personality_feature_enabled: bool,
 ) -> Vec<ResponseItem> {
@@ -219,7 +216,7 @@ pub(crate) fn build_settings_update_items(
     // model-visible item emitted by build_initial_context. Persist the remaining
     // inputs or add explicit replay events so fork/resume can diff everything
     // deterministically.
-    let contextual_user_message = build_environment_update_item(previous, next, shell);
+    let contextual_user_message = build_environment_update_item(previous, next);
     let developer_update_sections = [
         // Keep model-switch instructions first so model-specific guidance is read before
         // any other context diffs on this turn.

@@ -4993,7 +4993,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             ..HooksConfig::default()
         })),
         rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
-        user_shell: Arc::new(default_user_shell()),
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
         auth_manager: auth_manager.clone(),
@@ -5062,7 +5061,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         session_configuration.provider.clone(),
         &session_configuration,
         config.multi_agent_version_from_features(),
-        services.user_shell.as_ref(),
         services.shell_zsh_path.as_ref(),
         services.main_execve_wrapper_exe.as_ref(),
         per_turn_config,
@@ -7037,7 +7035,6 @@ where
             ..HooksConfig::default()
         })),
         rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
-        user_shell: Arc::new(default_user_shell()),
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
         auth_manager: Arc::clone(&auth_manager),
@@ -7106,7 +7103,6 @@ where
         session_configuration.provider.clone(),
         &session_configuration,
         config.multi_agent_version_from_features(),
-        services.user_shell.as_ref(),
         services.shell_zsh_path.as_ref(),
         services.main_execve_wrapper_exe.as_ref(),
         per_turn_config,
@@ -7301,24 +7297,16 @@ async fn build_settings_update_items_emits_environment_item_for_network_changes(
 }
 
 #[tokio::test]
-async fn environment_context_uses_session_shell_when_environment_shell_is_absent() {
-    let (mut session, mut turn_context) = make_session_and_context().await;
-    session.services.user_shell = Arc::new(crate::shell::Shell {
-        shell_type: crate::shell::ShellType::PowerShell,
-        shell_path: PathBuf::from("powershell"),
-    });
+async fn environment_context_omits_shell_when_environment_shell_is_absent() {
+    let (_session, mut turn_context) = make_session_and_context().await;
     for environment in &mut turn_context.environments.turn_environments {
         environment.shell = None;
     }
 
-    let session_shell = session.user_shell();
-    let environment_context = crate::context::EnvironmentContext::from_turn_context(
-        &turn_context,
-        session_shell.as_ref(),
-    )
-    .render();
+    let environment_context =
+        crate::context::EnvironmentContext::from_turn_context(&turn_context).render();
     assert!(
-        environment_context.contains("<shell>powershell</shell>"),
+        !environment_context.contains("<shell>"),
         "{environment_context}"
     );
 
@@ -7332,11 +7320,8 @@ async fn environment_context_uses_session_shell_when_environment_shell_is_absent
         shell_path: PathBuf::from("cmd"),
     });
 
-    let environment_context = crate::context::EnvironmentContext::from_turn_context(
-        &turn_context,
-        session_shell.as_ref(),
-    )
-    .render();
+    let environment_context =
+        crate::context::EnvironmentContext::from_turn_context(&turn_context).render();
     assert!(
         environment_context.contains("<shell>cmd</shell>"),
         "{environment_context}"
@@ -9888,7 +9873,12 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
     let turn_context_mut = Arc::get_mut(&mut turn_context).expect("unique thread settings Arc");
     turn_context_mut.permission_profile = PermissionProfile::Disabled;
 
-    let command = session.user_shell().derive_exec_args(
+    let shell = turn_context
+        .environments
+        .single_local_environment()
+        .and_then(|environment| environment.shell.as_ref())
+        .expect("local environment shell");
+    let command = shell.derive_exec_args(
         command_script,
         turn_context.config.permissions.allow_login_shell,
     );
