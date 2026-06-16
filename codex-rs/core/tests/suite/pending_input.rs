@@ -11,6 +11,8 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -417,6 +419,38 @@ async fn any_new_input_interrupts_sleep() {
 
     let third: Value = from_slice(&requests[2]).expect("parse third request");
     assert_interrupted_sleep_output(function_call_output_text(&third, SECOND_SLEEP_CALL_ID));
+
+    codex.submit(Op::Shutdown).await.expect("shutdown session");
+    wait_for_event(&codex, |event| matches!(event, EventMsg::ShutdownComplete)).await;
+
+    let rollout_path = codex.rollout_path().expect("rollout path");
+    let rollout = tokio::fs::read_to_string(rollout_path)
+        .await
+        .expect("read rollout");
+    let persisted_sleep_items = rollout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<RolloutLine>(line).ok())
+        .filter_map(|line| match line.item {
+            RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => match event.item {
+                TurnItem::Sleep(item) => Some(item),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        persisted_sleep_items,
+        vec![
+            SleepItem {
+                id: FIRST_SLEEP_CALL_ID.to_string(),
+                duration_ms: SLEEP_DURATION_MS,
+            },
+            SleepItem {
+                id: SECOND_SLEEP_CALL_ID.to_string(),
+                duration_ms: SLEEP_DURATION_MS,
+            },
+        ]
+    );
 
     server.shutdown().await;
 }

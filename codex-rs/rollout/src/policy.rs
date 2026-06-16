@@ -95,10 +95,14 @@ pub fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::ImageGenerationEnd(_)
         | EventMsg::SubAgentActivity(_) => true,
         EventMsg::ItemCompleted(event) => {
-            // Plan items are derived from streaming tags and are not part of the
-            // raw ResponseItem history, so we persist their completion to replay
-            // them on resume without bloating rollouts with every item lifecycle.
-            matches!(event.item, codex_protocol::items::TurnItem::Plan(_))
+            // These items have no equivalent raw ResponseItem or legacy event,
+            // so persist their completion for replay without retaining every
+            // item lifecycle event.
+            matches!(
+                event.item,
+                codex_protocol::items::TurnItem::Plan(_)
+                    | codex_protocol::items::TurnItem::Sleep(_)
+            )
         }
         EventMsg::Error(_)
         | EventMsg::GuardianAssessment(_)
