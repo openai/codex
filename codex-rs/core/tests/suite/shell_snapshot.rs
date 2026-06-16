@@ -7,6 +7,7 @@ use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -314,6 +315,7 @@ async fn run_shell_command_snapshot_with_options(
 #[allow(clippy::expect_used)]
 async fn run_tool_turn_on_harness(
     harness: &TestCodexHarness,
+    cwd: AbsolutePathBuf,
     prompt: &str,
     call_id: &str,
     tool_name: &str,
@@ -336,7 +338,6 @@ async fn run_tool_turn_on_harness(
     let test = harness.test();
     let codex = test.codex.clone();
     let session_model = test.session_configured.model.clone();
-    let cwd = test.config.cwd.clone();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, cwd.as_path());
     codex
@@ -438,6 +439,88 @@ async fn linux_shell_command_uses_shell_snapshot() -> Result<()> {
 
 #[cfg_attr(target_os = "windows", ignore)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_snapshot_rebuilds_for_changed_cwd_and_reuses_for_unchanged_cwd() -> Result<()> {
+    let builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::ShellSnapshot)
+            .expect("test config should allow feature update");
+    });
+    let harness = TestCodexHarness::with_builder(builder).await?;
+    let test = harness.test();
+    let codex_home = test.home.path().to_path_buf();
+    let initial_cwd = test.config.cwd.clone();
+    let changed_cwd = initial_cwd.join("changed-cwd");
+    fs::create_dir_all(&changed_cwd).await?;
+
+    run_tool_turn_on_harness(
+        &harness,
+        initial_cwd,
+        "create the initial shell snapshot",
+        "shell-snapshot-initial-cwd",
+        "shell_command",
+        json!({
+            "command": "printf initial",
+            "timeout_ms": 1_000,
+        }),
+    )
+    .await?;
+    let initial_snapshot = wait_for_snapshot(&codex_home).await?;
+
+    run_tool_turn_on_harness(
+        &harness,
+        changed_cwd.clone(),
+        "change cwd and rebuild the shell snapshot",
+        "shell-snapshot-changed-cwd",
+        "shell_command",
+        json!({
+            "command": "printf changed",
+            "timeout_ms": 1_000,
+        }),
+    )
+    .await?;
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let rebuilt_snapshot = loop {
+        let snapshot = wait_for_snapshot(&codex_home).await?;
+        if snapshot != initial_snapshot {
+            break snapshot;
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for shell snapshot to be rebuilt");
+        }
+        sleep(Duration::from_millis(25)).await;
+    };
+
+    const REUSE_MARKER: &str = "snapshot-reused-for-unchanged-cwd";
+    fs::write(
+        &rebuilt_snapshot,
+        format!("# Snapshot file\nexport CODEX_SNAPSHOT_REUSE_MARKER='{REUSE_MARKER}'\n"),
+    )
+    .await?;
+
+    let end = run_tool_turn_on_harness(
+        &harness,
+        changed_cwd,
+        "reuse the shell snapshot for an unchanged cwd",
+        "shell-snapshot-unchanged-cwd",
+        "shell_command",
+        json!({
+            "command": "printf '%s' \"${CODEX_SNAPSHOT_REUSE_MARKER:-missing}\"",
+            "timeout_ms": 1_000,
+        }),
+    )
+    .await?;
+
+    assert_eq!(normalize_newlines(&end.stdout).trim(), REUSE_MARKER);
+    assert_eq!(end.exit_code, 0);
+    assert_eq!(wait_for_snapshot(&codex_home).await?, rebuilt_snapshot);
+
+    Ok(())
+}
+
+#[cfg_attr(target_os = "windows", ignore)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shell_command_snapshot_preserves_shell_environment_policy_set() -> Result<()> {
     let builder = test_codex().with_config(|config| {
         config
@@ -448,8 +531,10 @@ async fn shell_command_snapshot_preserves_shell_environment_policy_set() -> Resu
     });
     let harness = TestCodexHarness::with_builder(builder).await?;
     let codex_home = harness.test().home.path().to_path_buf();
+    let cwd = harness.test().config.cwd.clone();
     run_tool_turn_on_harness(
         &harness,
+        cwd.clone(),
         "warm up shell snapshot",
         "shell-snapshot-policy-warmup",
         "shell_command",
@@ -465,6 +550,7 @@ async fn shell_command_snapshot_preserves_shell_environment_policy_set() -> Resu
     let command = command_asserting_policy_after_snapshot();
     let end = run_tool_turn_on_harness(
         &harness,
+        cwd,
         "verify shell policy after snapshot",
         "shell-snapshot-policy-assert",
         "shell_command",
@@ -502,8 +588,10 @@ async fn linux_unified_exec_snapshot_preserves_shell_environment_policy_set() ->
     });
     let harness = TestCodexHarness::with_builder(builder).await?;
     let codex_home = harness.test().home.path().to_path_buf();
+    let cwd = harness.test().config.cwd.clone();
     run_tool_turn_on_harness(
         &harness,
+        cwd.clone(),
         "warm up unified exec shell snapshot",
         "shell-snapshot-policy-warmup-exec",
         "exec_command",
@@ -519,6 +607,7 @@ async fn linux_unified_exec_snapshot_preserves_shell_environment_policy_set() ->
     let command = command_asserting_policy_after_snapshot();
     let end = run_tool_turn_on_harness(
         &harness,
+        cwd,
         "verify unified exec policy after snapshot",
         "shell-snapshot-policy-assert-exec",
         "exec_command",
