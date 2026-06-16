@@ -13,6 +13,7 @@ use crate::guardian::review_approval_request;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecServerEnvConfig;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::turn_context::TurnEnvironment;
 use crate::shell::ShellType;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalMode;
@@ -41,7 +42,6 @@ use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
-use codex_exec_server::Environment;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -53,7 +53,6 @@ use codex_tools::UnifiedExecShellMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
-use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 /// Request payload used by the unified-exec runtime after approvals and
@@ -66,7 +65,7 @@ pub struct UnifiedExecRequest {
     pub process_id: i32,
     pub cwd: AbsolutePathBuf,
     pub sandbox_cwd: AbsolutePathBuf,
-    pub environment: Arc<Environment>,
+    pub turn_environment: TurnEnvironment,
     pub env: HashMap<String, String>,
     pub exec_server_env_config: Option<ExecServerEnvConfig>,
     pub explicit_env_overrides: HashMap<String, String>,
@@ -264,10 +263,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
     ) -> Result<UnifiedExecProcess, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
-        let shell_snapshot = ctx.session.services.shell_snapshot.load_full();
-        let shell_snapshot_location = shell_snapshot
+        let shell = req
+            .turn_environment
+            .shell
             .as_ref()
-            .and_then(|snapshot| snapshot.location(&req.cwd));
+            .unwrap_or(session_shell.as_ref());
+        let shell_snapshot_location = req.turn_environment.shell_snapshot(&req.cwd);
         let (file_system_sandbox_policy, _) = attempt.permissions.to_runtime_permissions();
         let launch_sandbox_permissions = sandbox_permissions_preserving_denied_reads(
             req.sandbox_permissions,
@@ -281,7 +282,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         if let Some(network) = managed_network {
             network.apply_to_env(&mut env);
         }
-        let environment_is_remote = req.environment.is_remote();
+        let environment_is_remote = req.turn_environment.environment.is_remote();
         let explicit_env_overrides = req.explicit_env_overrides.clone();
         #[cfg(unix)]
         let runtime_path_prepends = {
@@ -308,7 +309,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         } else {
             maybe_wrap_shell_lc_with_snapshot(
                 base_command,
-                session_shell.as_ref(),
+                shell,
                 shell_snapshot_location.as_ref(),
                 &explicit_env_overrides,
                 &env,
@@ -321,7 +322,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             attempt.sandbox,
             attempt.windows_sandbox_level,
         );
-        let command = if matches!(session_shell.shell_type, ShellType::PowerShell) {
+        let command = if matches!(req.shell_type, ShellType::PowerShell) {
             prefix_powershell_script_with_utf8(&command)
         } else {
             command
@@ -351,7 +352,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .await?
             {
                 Some(prepared) => {
-                    if req.environment.is_remote() {
+                    if req.turn_environment.environment.is_remote() {
                         return Err(ToolError::Rejected(
                             "unified_exec zsh-fork is not supported for remote environments"
                                 .to_string(),
@@ -364,7 +365,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                             &prepared.exec_request,
                             req.tty,
                             prepared.spawn_lifecycle,
-                            req.environment.as_ref(),
+                            req.turn_environment.environment.as_ref(),
                         )
                         .await
                         .map_err(|err| match err {
@@ -403,7 +404,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 &exec_env,
                 req.tty,
                 Box::new(NoopSpawnLifecycle),
-                req.environment.as_ref(),
+                req.turn_environment.environment.as_ref(),
             )
             .await
             .map_err(|err| match err {
@@ -424,9 +425,20 @@ mod tests {
     use crate::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS;
     use crate::tools::sandboxing::ToolRuntime;
     use codex_exec_server::Environment;
+    use codex_exec_server::LOCAL_ENVIRONMENT_ID;
     use codex_tools::ZshForkConfig;
+    use std::sync::Arc;
     use std::time::Duration;
     use tempfile::tempdir;
+
+    fn test_turn_environment(cwd: AbsolutePathBuf) -> TurnEnvironment {
+        TurnEnvironment::new(
+            LOCAL_ENVIRONMENT_ID.to_string(),
+            Arc::new(Environment::default_for_tests()),
+            cwd,
+            /*shell*/ None,
+        )
+    }
 
     #[test]
     fn unified_exec_options_combines_default_timeout_with_network_denial_cancellation() {
@@ -467,7 +479,7 @@ mod tests {
             process_id: 1000,
             cwd,
             sandbox_cwd: sandbox_cwd.clone(),
-            environment: Arc::new(Environment::default_for_tests()),
+            turn_environment: test_turn_environment(sandbox_cwd.clone()),
             env: HashMap::new(),
             exec_server_env_config: None,
             explicit_env_overrides: HashMap::new(),
@@ -565,8 +577,8 @@ mod tests {
             hook_command: "echo hi".to_string(),
             process_id: 1000,
             cwd: cwd.clone(),
-            sandbox_cwd: cwd,
-            environment: Arc::new(Environment::default_for_tests()),
+            sandbox_cwd: cwd.clone(),
+            turn_environment: test_turn_environment(cwd),
             env: HashMap::new(),
             exec_server_env_config: None,
             explicit_env_overrides: HashMap::new(),

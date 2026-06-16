@@ -240,6 +240,7 @@ impl LazyRemoteExecServerClient {
                 if matches!(
                     &self.transport_params,
                     ExecServerTransportParams::WebSocketUrl { .. }
+                        | ExecServerTransportParams::NoiseRendezvous { .. }
                 ) =>
             {
                 ExecServerClient::connect_for_transport(self.transport_params.clone()).await?

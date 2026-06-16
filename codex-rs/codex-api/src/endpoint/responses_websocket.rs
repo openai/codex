@@ -815,6 +815,7 @@ mod tests {
                     text: "hello".to_string(),
                 }],
                 phase: None,
+                metadata: None,
             }],
             tools: vec![json!({
                 "type": "function",

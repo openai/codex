@@ -6,8 +6,10 @@ use crate::config::ConfigOverrides;
 use crate::config::test_config;
 use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
+use crate::environment_selection::ThreadEnvironments;
 use crate::function_tool::FunctionCallError;
 use crate::shell::default_user_shell;
+use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills::render::SkillMetadataBudget;
 use crate::test_support::models_manager_with_provider;
@@ -103,6 +105,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ResponseItemMetadata;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CompactedItem;
@@ -189,6 +192,7 @@ fn user_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        metadata: None,
     }
 }
 
@@ -200,6 +204,7 @@ fn assistant_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        metadata: None,
     }
 }
 
@@ -259,6 +264,7 @@ fn skill_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+        metadata: None,
     }
 }
 
@@ -571,6 +577,7 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
+        &Default::default(),
     ));
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     ToolCallRuntime::new(router, session, turn_context, tracker)
@@ -1597,6 +1604,9 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
             text: "summary".to_string(),
         }],
         phase: None,
+        metadata: Some(ResponseItemMetadata {
+            turn_id: Some("compact-turn".to_string()),
+        }),
     };
     let replacement_history = vec![
         summary_item.clone(),
@@ -1607,6 +1617,7 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
                 text: "stale developer instructions".to_string(),
             }],
             phase: None,
+            metadata: None,
         },
     ];
     let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
@@ -1668,32 +1679,35 @@ async fn resize_all_images_prepares_failures_before_history_insertion() {
             ]),
             success: Some(true),
         },
+        metadata: None,
     };
 
     session
         .record_conversation_items(turn_context.as_ref(), std::slice::from_ref(&item))
         .await;
 
+    let expected = vec![ResponseItem::FunctionCallOutput {
+        call_id: "call-1".to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::ContentItems(vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "before".to_string(),
+                },
+                FunctionCallOutputContentItem::InputText {
+                    text: "image content omitted because it could not be processed".to_string(),
+                },
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "https://example.com/image.png".to_string(),
+                    detail: Some(ImageDetail::High),
+                },
+            ]),
+            success: Some(true),
+        },
+        metadata: None,
+    }];
     assert_eq!(
         session.state.lock().await.clone_history().raw_items(),
-        &[ResponseItem::FunctionCallOutput {
-            call_id: "call-1".to_string(),
-            output: FunctionCallOutputPayload {
-                body: FunctionCallOutputBody::ContentItems(vec![
-                    FunctionCallOutputContentItem::InputText {
-                        text: "before".to_string(),
-                    },
-                    FunctionCallOutputContentItem::InputText {
-                        text: "image content omitted because it could not be processed".to_string(),
-                    },
-                    FunctionCallOutputContentItem::InputImage {
-                        image_url: "https://example.com/image.png".to_string(),
-                        detail: Some(ImageDetail::High),
-                    },
-                ]),
-                success: Some(true),
-            },
-        }]
+        expected.as_slice()
     );
 }
 
@@ -1720,6 +1734,7 @@ async fn resize_all_images_prepares_resumed_history_before_installing_it() {
             },
         ],
         phase: None,
+        metadata: None,
     };
 
     session
@@ -1744,6 +1759,7 @@ async fn resize_all_images_prepares_resumed_history_before_installing_it() {
                 },
             ],
             phase: None,
+            metadata: None,
         }]
     );
 }
@@ -1859,7 +1875,8 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
         .await;
-    expected.extend(session.build_initial_context(&turn_context).await);
+    let initial_context = session.build_initial_context(&turn_context).await;
+    expected.extend(initial_context);
     let history_after_seed = session.clone_history().await;
     assert_eq!(expected, history_after_seed.raw_items());
 
@@ -3308,7 +3325,6 @@ async fn set_rate_limits_retains_previous_credits() {
         parent_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
-        inherited_shell_snapshot: None,
         user_shell_override: None,
     };
 
@@ -3415,7 +3431,6 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         parent_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
-        inherited_shell_snapshot: None,
         user_shell_override: None,
     };
 
@@ -3947,7 +3962,6 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         parent_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
-        inherited_shell_snapshot: None,
         user_shell_override: None,
     }
 }
@@ -4031,18 +4045,18 @@ async fn emit_subagent_session_started_includes_fork_lineage_from_session_config
     );
 }
 
-fn turn_environments_for_tests(
-    environment: &Arc<codex_exec_server::Environment>,
-    cwd: &codex_utils_absolute_path::AbsolutePathBuf,
-) -> crate::environment_selection::ResolvedTurnEnvironments {
-    crate::environment_selection::ResolvedTurnEnvironments {
-        turn_environments: vec![TurnEnvironment::new(
-            codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-            Arc::clone(environment),
-            cwd.clone(),
-            /*shell*/ None,
-        )],
-    }
+async fn resolved_environments_for_configuration(
+    session_configuration: &SessionConfiguration,
+) -> (Arc<EnvironmentManager>, TurnEnvironmentSnapshot) {
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
+    let turn_environments = ThreadEnvironments::new(
+        Arc::clone(&environment_manager),
+        default_user_shell(),
+        ShellSnapshot::disabled(),
+        TurnEnvironmentSnapshot::default(),
+    );
+    turn_environments.update_selections(session_configuration.environment_selections());
+    (environment_manager, turn_environments.snapshot().await)
 }
 
 #[tokio::test]
@@ -4418,7 +4432,8 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
 
     let skill_fs = session
         .services
-        .environment_manager
+        .turn_environments
+        .environment_manager()
         .default_environment()
         .map(|environment| environment.get_filesystem())
         .unwrap_or_else(|| std::sync::Arc::clone(&codex_exec_server::LOCAL_FS));
@@ -4806,7 +4821,6 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         parent_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
-        inherited_shell_snapshot: None,
         user_shell_override: None,
     };
 
@@ -4818,9 +4832,11 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
     let result = Session::new(
         session_configuration,
         Arc::clone(&config),
+        /*user_instructions*/ None,
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
         models_manager,
@@ -4835,7 +4851,8 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
         AgentControl::default(),
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        environment_manager,
+        /*inherited_environments*/ None,
         /*analytics_events_client*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
@@ -4914,7 +4931,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         parent_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
-        inherited_shell_snapshot: None,
         user_shell_override: None,
     };
     let per_turn_config =
@@ -4931,6 +4947,21 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
 
     let state = SessionState::new(session_configuration.clone());
+    let (environment_manager, resolved_environments) =
+        resolved_environments_for_configuration(&session_configuration).await;
+    let resolved_turn_environments = resolved_environments.clone();
+    let turn_environments = Arc::new(ThreadEnvironments::new(
+        environment_manager,
+        default_user_shell(),
+        ShellSnapshot::disabled(),
+        resolved_environments,
+    ));
+    let environment = Arc::clone(
+        &resolved_turn_environments
+            .primary()
+            .expect("primary environment")
+            .environment,
+    );
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let skills_manager = Arc::new(SkillsManager::new(
@@ -4938,11 +4969,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         /*bundled_skills_enabled*/ true,
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
-    let environment = Arc::new(
-        codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)
-            .expect("create environment"),
-    );
-
     let services = SessionServices {
         mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from_pointee(
             McpConnectionManager::new_uninitialized_with_permission_profile(
@@ -4968,7 +4994,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         })),
         rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell: Arc::new(default_user_shell()),
-        shell_snapshot: arc_swap::ArcSwapOption::empty(),
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
         auth_manager: auth_manager.clone(),
@@ -5011,7 +5036,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
-        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        tool_search_handler_cache: Default::default(),
+        turn_environments: Arc::clone(&turn_environments),
     };
 
     let plugin_outcome = services
@@ -5028,7 +5054,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
             .await,
     );
-    let turn_environments = turn_environments_for_tests(&environment, session_configuration.cwd());
     let turn_context = Session::make_turn_context(
         thread_id,
         SessionId::from(thread_id),
@@ -5044,7 +5069,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         model_info,
         &models_manager,
         /*network*/ None,
-        turn_environments,
+        resolved_turn_environments,
         session_configuration.cwd().clone(),
         "turn_id".to_string(),
         skills_outcome,
@@ -5144,7 +5169,6 @@ async fn make_session_with_config_and_rx(
         parent_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
-        inherited_shell_snapshot: None,
         user_shell_override: None,
     };
 
@@ -5156,10 +5180,12 @@ async fn make_session_with_config_and_rx(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
 
     let session = Session::new(
         session_configuration,
         Arc::clone(&config),
+        /*user_instructions*/ None,
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
         models_manager,
@@ -5174,7 +5200,8 @@ async fn make_session_with_config_and_rx(
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
         AgentControl::default(),
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        environment_manager,
+        /*inherited_environments*/ None,
         /*analytics_events_client*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
@@ -5246,7 +5273,6 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         parent_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
-        inherited_shell_snapshot: None,
         user_shell_override: None,
     };
 
@@ -5258,10 +5284,12 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
 
     let session = Session::new(
         session_configuration,
         Arc::clone(&config),
+        /*user_instructions*/ None,
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
         models_manager,
@@ -5276,7 +5304,8 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
         agent_control,
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        environment_manager,
+        /*inherited_environments*/ None,
         /*analytics_events_client*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
@@ -6200,6 +6229,30 @@ async fn turn_environments_set_primary_environment() {
     let turn_cwd = turn_context.cwd.clone();
     assert_eq!(turn_cwd.as_path(), selected_cwd.as_path());
     assert_eq!(turn_context.config.cwd.as_path(), selected_cwd.as_path());
+
+    let stored_environment = {
+        session
+            .services
+            .turn_environments
+            .snapshot()
+            .await
+            .primary_environment()
+            .expect("stored primary environment")
+    };
+    assert!(Arc::ptr_eq(
+        &stored_environment,
+        &turn_environment.environment
+    ));
+
+    let default_turn = session.new_default_turn().await;
+    assert!(Arc::ptr_eq(
+        &stored_environment,
+        &default_turn
+            .environments
+            .primary()
+            .expect("default turn primary environment")
+            .environment
+    ));
 }
 
 #[tokio::test]
@@ -6208,7 +6261,10 @@ async fn default_turn_does_not_overlay_legacy_fallback_cwd_onto_stored_thread_en
     let session_cwd = session.get_config().await.cwd.clone();
     let selected_cwd =
         AbsolutePathBuf::try_from(session_cwd.as_path().join("selected")).expect("absolute path");
-
+    session
+        .services
+        .turn_environments
+        .update_selections(&[local(selected_cwd.clone())]);
     {
         let mut state = session.state.lock().await;
         state.session_configuration.environments.environments = vec![local(selected_cwd.clone())];
@@ -6237,6 +6293,7 @@ async fn default_turn_honors_empty_stored_thread_environments() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
     let session_cwd = session.get_config().await.cwd.clone();
 
+    session.services.turn_environments.update_selections(&[]);
     {
         let mut state = session.state.lock().await;
         state.session_configuration.environments.environments = Vec::new();
@@ -6919,7 +6976,6 @@ where
         parent_thread_id: None,
         thread_source: None,
         dynamic_tools,
-        inherited_shell_snapshot: None,
         user_shell_override: None,
     };
     let per_turn_config =
@@ -6936,6 +6992,20 @@ where
     );
 
     let state = SessionState::new(session_configuration.clone());
+    let (environment_manager, resolved_turn_environments) =
+        resolved_environments_for_configuration(&session_configuration).await;
+    let turn_environments = Arc::new(ThreadEnvironments::new(
+        environment_manager,
+        default_user_shell(),
+        ShellSnapshot::disabled(),
+        resolved_turn_environments.clone(),
+    ));
+    let environment = Arc::clone(
+        &resolved_turn_environments
+            .primary()
+            .expect("primary environment")
+            .environment,
+    );
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let skills_manager = Arc::new(SkillsManager::new(
@@ -6943,11 +7013,6 @@ where
         /*bundled_skills_enabled*/ true,
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
-    let environment = Arc::new(
-        codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)
-            .expect("create environment"),
-    );
-
     let services = SessionServices {
         mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from_pointee(
             McpConnectionManager::new_uninitialized_with_permission_profile(
@@ -6973,7 +7038,6 @@ where
         })),
         rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell: Arc::new(default_user_shell()),
-        shell_snapshot: arc_swap::ArcSwapOption::empty(),
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
         auth_manager: Arc::clone(&auth_manager),
@@ -7016,7 +7080,8 @@ where
             /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
-        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        tool_search_handler_cache: Default::default(),
+        turn_environments: Arc::clone(&turn_environments),
     };
 
     let plugin_outcome = services
@@ -7033,7 +7098,6 @@ where
             .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
             .await,
     );
-    let turn_environments = turn_environments_for_tests(&environment, session_configuration.cwd());
     let turn_context = Arc::new(Session::make_turn_context(
         thread_id,
         SessionId::from(thread_id),
@@ -7049,7 +7113,7 @@ where
         model_info,
         &models_manager,
         /*network*/ None,
-        turn_environments,
+        resolved_turn_environments,
         session_configuration.cwd().clone(),
         "turn_id".to_string(),
         skills_outcome,
@@ -7659,6 +7723,7 @@ async fn build_initial_context_omits_default_image_save_location_with_image_hist
                 status: "completed".to_string(),
                 revised_prompt: Some("a tiny blue square".to_string()),
                 result: "Zm9v".to_string(),
+                metadata: None,
             }],
             /*reference_context_item*/ None,
         )
@@ -7911,6 +7976,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
         status: "completed".to_string(),
         revised_prompt: Some("a tiny blue square".to_string()),
         result: "Zm9v".to_string(),
+        metadata: None,
     };
 
     let mut ctx = HandleOutputCtx {
@@ -7941,7 +8007,8 @@ async fn handle_output_item_done_records_image_save_history_message() {
             image_output_path.display(),
         ),
     );
-    assert_eq!(history.raw_items(), &[image_message, item]);
+    let expected = vec![image_message, item];
+    assert_eq!(history.raw_items(), expected.as_slice());
     assert_eq!(
         std::fs::read(&expected_saved_path).expect("saved file"),
         b"foo"
@@ -7966,6 +8033,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
         status: "completed".to_string(),
         revised_prompt: Some("broken payload".to_string()),
         result: "_-8".to_string(),
+        metadata: None,
     };
 
     let mut ctx = HandleOutputCtx {
@@ -7982,7 +8050,8 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
         .expect("image generation item should still complete");
 
     let history = session.clone_history().await;
-    assert_eq!(history.raw_items(), &[item]);
+    let expected = vec![item];
+    assert_eq!(history.raw_items(), expected.as_slice());
     assert!(!expected_saved_path.exists());
 }
 
@@ -8125,6 +8194,7 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
             text: format!("{}\nsummary", crate::compact::SUMMARY_PREFIX),
         }],
         phase: None,
+        metadata: None,
     };
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&compacted_summary))
@@ -8149,7 +8219,8 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
 
     let history = session.clone_history().await;
     let mut expected_history = vec![compacted_summary];
-    expected_history.extend(session.build_initial_context(&turn_context).await);
+    let initial_context = session.build_initial_context(&turn_context).await;
+    expected_history.extend(initial_context);
     assert_eq!(history.raw_items().to_vec(), expected_history);
 }
 
@@ -8722,6 +8793,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
             text: "late pending input".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     assert!(
         history.raw_items().iter().any(|item| item == &expected),
@@ -9154,6 +9226,7 @@ async fn abort_empty_active_turn_preserves_pending_input() {
             text: "late pending input".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     let turn_state = {
         let mut active = sess.active_turn.lock().await;
@@ -9412,6 +9485,7 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         namespace: None,
         arguments: "{}".to_string(),
         call_id: "call-1".to_string(),
+        metadata: None,
     };
     let mut ctx = HandleOutputCtx {
         sess: Arc::clone(&sess),
@@ -9531,6 +9605,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
+        &Default::default(),
     );
     let item = ResponseItem::CustomToolCall {
         id: None,
@@ -9538,6 +9613,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         call_id: "call-1".to_string(),
         name: "shell_command".to_string(),
         input: "{}".to_string(),
+        metadata: None,
     };
 
     let call = ToolRouter::build_tool_call(item.clone())
@@ -9622,6 +9698,7 @@ async fn sample_rollout(
             text: "first user".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     live_history.record_items(
         std::iter::once(&user1),
@@ -9636,6 +9713,7 @@ async fn sample_rollout(
             text: "assistant reply one".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     live_history.record_items(
         std::iter::once(&assistant1),
@@ -9663,6 +9741,7 @@ async fn sample_rollout(
             text: "second user".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     live_history.record_items(
         std::iter::once(&user2),
@@ -9677,6 +9756,7 @@ async fn sample_rollout(
             text: "assistant reply two".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     live_history.record_items(
         std::iter::once(&assistant2),
@@ -9704,6 +9784,7 @@ async fn sample_rollout(
             text: "third user".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     live_history.record_items(
         std::iter::once(&user3),
@@ -9718,6 +9799,7 @@ async fn sample_rollout(
             text: "assistant reply three".to_string(),
         }],
         phase: None,
+        metadata: None,
     };
     live_history.record_items(
         std::iter::once(&assistant3),
@@ -9863,6 +9945,7 @@ while :; do sleep 1; done"#,
         })
         .to_string(),
         call_id: "shell-cleanup-call".to_string(),
+        metadata: None,
     };
     let call = ToolRouter::build_tool_call(item)?
         .expect("shell command response item should build a tool call");

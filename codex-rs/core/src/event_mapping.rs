@@ -199,6 +199,7 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
             status,
             revised_prompt,
             result,
+            ..
         } => Some(TurnItem::ImageGeneration(
             codex_protocol::items::ImageGenerationItem {
                 id: id.clone(),

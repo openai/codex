@@ -1,4 +1,5 @@
 #![cfg(windows)]
+#![allow(clippy::expect_used)]
 
 mod common;
 

@@ -19,7 +19,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
+clap = { workspace = true, features = ["derive", "env"] }
 clap_complete = { workspace = true }
 codex-app-server = { workspace = true }
 codex-app-server-daemon = { workspace = true }

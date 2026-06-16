@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::FileSystemPath;
@@ -8,6 +9,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use futures::Stream;
 use std::future::Future;
@@ -57,7 +59,7 @@ pub struct ReadDirectoryEntry {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSystemSandboxContext {
-    pub permissions: PermissionProfile,
+    pub permissions: PermissionProfile<PathUri>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathUri>,
     pub windows_sandbox_level: WindowsSandboxLevel,
@@ -80,25 +82,32 @@ impl FileSystemSandboxContext {
                 &sandbox_policy,
                 &native_cwd,
             );
-        let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-            &file_system_sandbox_policy,
-            NetworkSandboxPolicy::from(&sandbox_policy),
-        );
+        let permissions =
+            PermissionProfile::<AbsolutePathBuf>::from_runtime_permissions_with_enforcement(
+                SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+                &file_system_sandbox_policy,
+                NetworkSandboxPolicy::from(&sandbox_policy),
+            );
         Ok(Self::from_permission_profile_with_cwd(permissions, cwd))
     }
 
-    pub fn from_permission_profile(permissions: PermissionProfile) -> Self {
+    pub fn from_permission_profile(permissions: PermissionProfile<AbsolutePathBuf>) -> Self {
         Self::from_permissions_and_cwd(permissions, /*cwd*/ None)
     }
 
-    pub fn from_permission_profile_with_cwd(permissions: PermissionProfile, cwd: PathUri) -> Self {
+    pub fn from_permission_profile_with_cwd(
+        permissions: PermissionProfile<AbsolutePathBuf>,
+        cwd: PathUri,
+    ) -> Self {
         Self::from_permissions_and_cwd(permissions, Some(cwd))
     }
 
-    fn from_permissions_and_cwd(permissions: PermissionProfile, cwd: Option<PathUri>) -> Self {
+    fn from_permissions_and_cwd(
+        permissions: PermissionProfile<AbsolutePathBuf>,
+        cwd: Option<PathUri>,
+    ) -> Self {
         Self {
-            permissions,
+            permissions: permissions.into(),
             cwd,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
@@ -107,14 +116,36 @@ impl FileSystemSandboxContext {
     }
 
     pub fn should_run_in_sandbox(&self) -> bool {
-        let file_system_policy = self.permissions.file_system_sandbox_policy();
+        let Ok(permissions) =
+            PermissionProfile::<AbsolutePathBuf>::try_from(self.permissions.clone())
+        else {
+            // A sandbox context for another host must not select the unsandboxed filesystem.
+            return true;
+        };
+        let file_system_policy = permissions.file_system_sandbox_policy();
         matches!(file_system_policy.kind, FileSystemSandboxKind::Restricted)
             && !file_system_policy.has_full_disk_write_access()
     }
 
     pub fn has_cwd_dependent_permissions(&self) -> bool {
-        let file_system_policy = self.permissions.file_system_sandbox_policy();
-        file_system_policy_has_cwd_dependent_entries(&file_system_policy)
+        match &self.permissions {
+            PermissionProfile::Managed {
+                file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+                ..
+            } => entries.iter().any(|entry| match &entry.path {
+                FileSystemPath::GlobPattern { pattern } => !Path::new(pattern).is_absolute(),
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::ProjectRoots { .. },
+                } => true,
+                FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => false,
+            }),
+            PermissionProfile::Managed {
+                file_system: ManagedFileSystemPermissions::Unrestricted,
+                ..
+            }
+            | PermissionProfile::Disabled
+            | PermissionProfile::External { .. } => false,
+        }
     }
 
     pub fn drop_cwd_if_unused(mut self) -> Self {
@@ -123,21 +154,6 @@ impl FileSystemSandboxContext {
         }
         self
     }
-}
-
-fn file_system_policy_has_cwd_dependent_entries(
-    file_system_policy: &FileSystemSandboxPolicy,
-) -> bool {
-    file_system_policy
-        .entries
-        .iter()
-        .any(|entry| match &entry.path {
-            FileSystemPath::GlobPattern { pattern } => !Path::new(pattern).is_absolute(),
-            FileSystemPath::Special {
-                value: FileSystemSpecialPath::ProjectRoots { .. },
-            } => true,
-            FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => false,
-        })
 }
 
 pub type FileSystemResult<T> = io::Result<T>;

@@ -6,10 +6,11 @@ use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::config::Config;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::emit_subagent_session_started;
+use crate::session_prefix::format_inter_agent_completion_message;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
-use crate::shell_snapshot::ShellSnapshot;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadManagerState;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
@@ -434,7 +435,6 @@ impl AgentControl {
                 return;
             };
             let child_thread = state.get_thread(child_thread_id).await.ok();
-            let message = format_subagent_notification_message(child_reference.as_str(), &status);
             let child_uses_multi_agent_v2 = match child_thread.as_ref() {
                 Some(child_thread) => {
                     child_thread.multi_agent_version() == Some(MultiAgentVersion::V2)
@@ -452,6 +452,13 @@ impl AgentControl {
                 else {
                     return;
                 };
+                let Some(message) = format_inter_agent_completion_message(
+                    parent_agent_path.clone(),
+                    child_agent_path.clone(),
+                    &status,
+                ) else {
+                    return;
+                };
                 let communication = InterAgentCommunication::new(
                     child_agent_path,
                     parent_agent_path,
@@ -464,6 +471,7 @@ impl AgentControl {
                     .await;
                 return;
             }
+            let message = format_subagent_notification_message(child_reference.as_str(), &status);
             let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
                 return;
             };
@@ -519,11 +527,11 @@ impl AgentControl {
             .ok_or_else(|| CodexErr::UnsupportedOperation("thread manager dropped".to_string()))
     }
 
-    async fn inherited_shell_snapshot_for_source(
+    async fn inherited_environments_for_source(
         &self,
         state: &Arc<ThreadManagerState>,
         session_source: Option<&SessionSource>,
-    ) -> Option<Arc<ShellSnapshot>> {
+    ) -> Option<TurnEnvironmentSnapshot> {
         let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
         })) = session_source
@@ -532,13 +540,15 @@ impl AgentControl {
         };
 
         let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
-        let snapshot = parent_thread
-            .codex
-            .session
-            .services
-            .shell_snapshot
-            .load_full()?;
-        (!snapshot.is_failed()).then_some(snapshot)
+        Some(
+            parent_thread
+                .codex
+                .session
+                .services
+                .turn_environments
+                .snapshot()
+                .await,
+        )
     }
 
     async fn inherited_exec_policy_for_source(

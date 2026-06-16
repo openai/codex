@@ -41,6 +41,7 @@ use crate::models::MessagePhase;
 use crate::models::PermissionProfile;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
+use crate::models::ResponseItemMetadata;
 use crate::models::SandboxEnforcement;
 use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
@@ -181,10 +182,16 @@ pub struct McpServerRefreshConfig {
 pub struct ConversationStartParams {
     /// Overrides the configured realtime architecture for this session only.
     pub architecture: Option<RealtimeConversationArchitecture>,
+    /// Sends automatic Codex responses as realtime conversation items instead of handoff appends.
+    pub codex_responses_as_items: bool,
+    /// Optional prefix added to automatic Codex response items when `codex_responses_as_items` is set.
+    pub codex_response_item_prefix: Option<String>,
     /// Overrides the configured realtime model for this session only.
     pub model: Option<String>,
     /// Selects whether the realtime session should produce text or audio output.
     pub output_modality: RealtimeOutputModality,
+    /// Whether to append Codex's startup context to the realtime backend prompt.
+    pub include_startup_context: bool,
     pub prompt: Option<Option<String>>,
     pub realtime_session_id: Option<String>,
     pub transport: Option<ConversationStartTransport>,
@@ -406,6 +413,11 @@ pub enum ConversationTextRole {
     Developer,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConversationSpeechParams {
+    pub text: String,
+}
+
 /// Persistent thread-settings overrides that can be applied before user input or
 /// on their own.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -501,6 +513,9 @@ pub enum Op {
 
     /// Send text input to the running realtime conversation stream.
     RealtimeConversationText(ConversationTextParams),
+
+    /// Append speakable text to the running realtime conversation stream.
+    RealtimeConversationSpeech(ConversationSpeechParams),
 
     /// Close the running realtime conversation stream.
     RealtimeConversationClose,
@@ -669,6 +684,9 @@ pub struct InterAgentCommunication {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub encrypted_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub metadata: Option<ResponseItemMetadata>,
     pub trigger_turn: bool,
 }
 
@@ -686,6 +704,7 @@ impl InterAgentCommunication {
             other_recipients,
             content,
             encrypted_content: None,
+            metadata: None,
             trigger_turn,
         }
     }
@@ -703,6 +722,7 @@ impl InterAgentCommunication {
             other_recipients,
             content: String::new(),
             encrypted_content: Some(encrypted_content),
+            metadata: None,
             trigger_turn,
         }
     }
@@ -719,17 +739,33 @@ impl InterAgentCommunication {
 
     pub fn to_model_input_item(&self) -> ResponseItem {
         let content = match &self.encrypted_content {
-            Some(encrypted_content) => AgentMessageInputContent::EncryptedContent {
-                encrypted_content: encrypted_content.clone(),
-            },
-            None => AgentMessageInputContent::InputText {
+            Some(encrypted_content) => {
+                let message_type = if self.trigger_turn {
+                    "NEW_TASK"
+                } else {
+                    "MESSAGE"
+                };
+                vec![
+                    AgentMessageInputContent::InputText {
+                        text: format!(
+                            "Message Type: {message_type}\nTask name: {}\nSender: {}\nPayload:\n",
+                            self.recipient, self.author
+                        ),
+                    },
+                    AgentMessageInputContent::EncryptedContent {
+                        encrypted_content: encrypted_content.clone(),
+                    },
+                ]
+            }
+            None => vec![AgentMessageInputContent::InputText {
                 text: self.content.clone(),
-            },
+            }],
         };
         ResponseItem::AgentMessage {
             author: self.author.to_string(),
             recipient: self.recipient.to_string(),
-            content: vec![content],
+            content,
+            metadata: self.metadata.clone(),
         }
     }
 
@@ -755,6 +791,7 @@ impl Op {
             Self::RealtimeConversationStart(_) => "realtime_conversation_start",
             Self::RealtimeConversationAudio(_) => "realtime_conversation_audio",
             Self::RealtimeConversationText(_) => "realtime_conversation_text",
+            Self::RealtimeConversationSpeech(_) => "realtime_conversation_speech",
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::UserInput { .. } => "user_input",
@@ -2932,6 +2969,7 @@ impl From<CompactedItem> for ResponseItem {
                 text: value.message,
             }],
             phase: None,
+            metadata: None,
         }
     }
 }
@@ -4217,6 +4255,7 @@ mod tests {
             other_recipients: vec![AgentPath::root().join("worker").expect("recipient path")],
             content: "review the diff".to_string(),
             encrypted_content: None,
+            metadata: None,
             trigger_turn: true,
         };
 
@@ -4228,6 +4267,35 @@ mod tests {
                     text: serde_json::to_string(&communication).expect("serialize communication"),
                 }],
                 phase: Some(MessagePhase::Commentary),
+            }
+        );
+    }
+
+    #[test]
+    fn queued_encrypted_inter_agent_communication_renders_message_envelope() {
+        let communication = InterAgentCommunication::new_encrypted(
+            AgentPath::root().join("worker").expect("author path"),
+            AgentPath::root(),
+            Vec::new(),
+            "encrypted payload".to_string(),
+            /*trigger_turn*/ false,
+        );
+
+        assert_eq!(
+            communication.to_model_input_item(),
+            ResponseItem::AgentMessage {
+                author: "/root/worker".to_string(),
+                recipient: "/root".to_string(),
+                content: vec![
+                    AgentMessageInputContent::InputText {
+                        text: "Message Type: MESSAGE\nTask name: /root\nSender: /root/worker\nPayload:\n"
+                            .to_string(),
+                    },
+                    AgentMessageInputContent::EncryptedContent {
+                        encrypted_content: "encrypted payload".to_string(),
+                    },
+                ],
+                metadata: None,
             }
         );
     }

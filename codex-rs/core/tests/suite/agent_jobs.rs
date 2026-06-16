@@ -75,9 +75,7 @@ impl Respond for StopAfterFirstResponder {
                 "result": { "item_id": item_id },
                 "stop": stop,
             });
-            let args_json = serde_json::to_string(&args).unwrap_or_else(|err| {
-                panic!("worker args serialize: {err}");
-            });
+            let args_json = serde_json::to_string(&args).expect("worker args should serialize");
             return sse_response(sse(vec![
                 ev_response_created("resp-worker"),
                 ev_function_call(&call_id, "report_agent_job_result", &args_json),
@@ -122,9 +120,7 @@ impl Respond for AgentJobsResponder {
                 "item_id": item_id,
                 "result": { "item_id": item_id }
             });
-            let args_json = serde_json::to_string(&args).unwrap_or_else(|err| {
-                panic!("worker args serialize: {err}");
-            });
+            let args_json = serde_json::to_string(&args).expect("worker args should serialize");
             return sse_response(sse(vec![
                 ev_response_created("resp-worker"),
                 ev_function_call(&call_id, "report_agent_job_result", &args_json),

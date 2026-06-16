@@ -37,6 +37,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_with::serde_as;
 use std::collections::HashMap;
+use std::io;
 use std::path::PathBuf;
 use ts_rs::TS;
 
@@ -355,6 +356,13 @@ pub enum ThreadItem {
     ImageView { id: String, path: AbsolutePathBuf },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
+    Sleep {
+        id: String,
+        #[ts(type = "number")]
+        duration_ms: u64,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     ImageGeneration {
         id: String,
         status: String,
@@ -399,6 +407,7 @@ impl ThreadItem {
             | ThreadItem::SubAgentActivity { id, .. }
             | ThreadItem::WebSearch { id, .. }
             | ThreadItem::ImageView { id, .. }
+            | ThreadItem::Sleep { id, .. }
             | ThreadItem::ImageGeneration { id, .. }
             | ThreadItem::EnteredReviewMode { id, .. }
             | ThreadItem::ExitedReviewMode { id, .. }
@@ -687,9 +696,11 @@ impl From<CoreGuardianAssessmentAction> for GuardianApprovalReviewAction {
     }
 }
 
-impl From<GuardianApprovalReviewAction> for CoreGuardianAssessmentAction {
-    fn from(value: GuardianApprovalReviewAction) -> Self {
-        match value {
+impl TryFrom<GuardianApprovalReviewAction> for CoreGuardianAssessmentAction {
+    type Error = io::Error;
+
+    fn try_from(value: GuardianApprovalReviewAction) -> Result<Self, Self::Error> {
+        Ok(match value {
             GuardianApprovalReviewAction::Command {
                 source,
                 command,
@@ -742,9 +753,9 @@ impl From<GuardianApprovalReviewAction> for CoreGuardianAssessmentAction {
                 permissions,
             } => Self::RequestPermissions {
                 reason,
-                permissions: permissions.into(),
+                permissions: permissions.try_into()?,
             },
-        }
+        })
     }
 }
 
@@ -833,6 +844,10 @@ impl From<CoreTurnItem> for ThreadItem {
             CoreTurnItem::ImageView(image) => ThreadItem::ImageView {
                 id: image.id,
                 path: image.path,
+            },
+            CoreTurnItem::Sleep(sleep) => ThreadItem::Sleep {
+                id: sleep.id,
+                duration_ms: sleep.duration_ms,
             },
             CoreTurnItem::ImageGeneration(image) => ThreadItem::ImageGeneration {
                 id: image.id,

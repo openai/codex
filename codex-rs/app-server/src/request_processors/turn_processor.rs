@@ -182,6 +182,16 @@ impl TurnRequestProcessor {
             .map(|response| response.map(Into::into))
     }
 
+    pub(crate) async fn thread_realtime_append_speech(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadRealtimeAppendSpeechParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_realtime_append_speech_inner(request_id, params)
+            .await
+            .map(|response| response.map(Into::into))
+    }
+
     pub(crate) async fn thread_realtime_stop(
         &self,
         request_id: &ConnectionRequestId,
@@ -942,8 +952,11 @@ impl TurnRequestProcessor {
             thread.as_ref(),
             Op::RealtimeConversationStart(ConversationStartParams {
                 architecture: params.architecture,
+                codex_responses_as_items: params.codex_responses_as_items.unwrap_or(false),
+                codex_response_item_prefix: params.codex_response_item_prefix,
                 model: params.model,
                 output_modality: params.output_modality,
+                include_startup_context: params.include_startup_context.unwrap_or(true),
                 prompt: params.prompt,
                 realtime_session_id: params.realtime_session_id,
                 transport: params.transport.map(|transport| match transport {
@@ -1016,6 +1029,31 @@ impl TurnRequestProcessor {
             ))
         })?;
         Ok(Some(ThreadRealtimeAppendTextResponse::default()))
+    }
+
+    async fn thread_realtime_append_speech_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadRealtimeAppendSpeechParams,
+    ) -> Result<Option<ThreadRealtimeAppendSpeechResponse>, JSONRPCErrorError> {
+        let Some((_, thread)) = self
+            .prepare_realtime_conversation_thread(request_id, &params.thread_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        self.submit_core_op(
+            request_id,
+            thread.as_ref(),
+            Op::RealtimeConversationSpeech(ConversationSpeechParams { text: params.text }),
+        )
+        .await
+        .map_err(|err| {
+            internal_error(format!(
+                "failed to append realtime conversation speech: {err}"
+            ))
+        })?;
+        Ok(Some(ThreadRealtimeAppendSpeechResponse::default()))
     }
 
     async fn thread_realtime_stop_inner(
