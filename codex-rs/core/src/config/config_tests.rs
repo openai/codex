@@ -11208,6 +11208,16 @@ MANAGED_SECRET_ALLOWED = "required"
     )
     .await?;
 
+    let expected_set = HashMap::from([
+        ("CONFIGURED".to_string(), "kept".to_string()),
+        ("MANAGED".to_string(), "required".to_string()),
+        ("MANAGED_SECRET_ALLOWED".to_string(), "required".to_string()),
+    ]);
+    #[cfg(target_os = "windows")]
+    let expected_set = expected_set
+        .into_iter()
+        .map(|(key, value)| (key.to_ascii_lowercase(), value))
+        .collect();
     let expected: codex_protocol::config_types::ShellEnvironmentPolicy =
         codex_config::types::ShellEnvironmentPolicyToml {
             ignore_default_excludes: Some(false),
@@ -11217,11 +11227,7 @@ MANAGED_SECRET_ALLOWED = "required"
                 "managed_*".to_string(),
             ]),
             include_only: Some(vec!["HOME".to_string(), "flip_to_include".to_string()]),
-            r#set: Some(HashMap::from([
-                ("CONFIGURED".to_string(), "kept".to_string()),
-                ("MANAGED".to_string(), "required".to_string()),
-                ("MANAGED_SECRET_ALLOWED".to_string(), "required".to_string()),
-            ])),
+            r#set: Some(expected_set),
             ..Default::default()
         }
         .into();
