@@ -526,8 +526,7 @@ fn evaluator_uses_apps_default_tools_approval_mode() {
         default: Some(AppsDefaultConfig {
             default_tools_approval_mode: Some(AppToolApproval::Prompt),
             ..defaults(
-                /*enabled*/ true,
-                /*destructive_enabled*/ true,
+                /*enabled*/ true, /*destructive_enabled*/ true,
                 /*open_world_enabled*/ true,
             )
         }),
@@ -559,8 +558,7 @@ fn evaluator_prefers_app_default_tools_approval_mode_over_apps_default() {
         default: Some(AppsDefaultConfig {
             default_tools_approval_mode: Some(AppToolApproval::Approve),
             ..defaults(
-                /*enabled*/ true,
-                /*destructive_enabled*/ true,
+                /*enabled*/ true, /*destructive_enabled*/ true,
                 /*open_world_enabled*/ true,
             )
         }),
