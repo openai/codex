@@ -37,6 +37,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::sse_failed;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_windows;
@@ -58,6 +59,15 @@ const SECOND_CONTINUATION_PROMPT: &str = "Now tighten it to just: meow.";
 const BLOCKED_PROMPT_CONTEXT: &str = "Remember the blocked lighthouse note.";
 const PERMISSION_REQUEST_HOOK_MATCHER: &str = "^Bash$";
 const PERMISSION_REQUEST_ALLOW_REASON: &str = "should not be used for allow";
+
+fn bundled_default_model_slug() -> String {
+    codex_core::test_support::all_model_presets()
+        .iter()
+        .find(|preset| preset.is_default)
+        .expect("bundled models should include a default")
+        .model
+        .clone()
+}
 
 fn restrictive_workspace_write_profile() -> PermissionProfile {
     PermissionProfile::workspace_write_with(
@@ -166,6 +176,55 @@ else:
     fs::write(&script_path, script).context("write stop hook script")?;
     fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
     Ok(())
+}
+
+fn write_stop_failure_hook(home: &Path, matcher: &str, output: Value) -> Result<()> {
+    let script_path = home.join("stop_failure_hook.py");
+    let log_path = home.join("stop_failure_hook_log.jsonl");
+    let output_json = serde_json::to_string(&output).context("serialize StopFailure output")?;
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+log_path = Path(r"{log_path}")
+output = json.loads({output_json:?})
+payload = json.load(sys.stdin)
+
+with log_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+print(json.dumps(output))
+"#,
+        log_path = log_path.display(),
+        output_json = output_json,
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "StopFailure": [{
+                "matcher": matcher,
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                    "statusMessage": "choosing a recovery",
+                }]
+            }]
+        }
+    });
+
+    fs::write(&script_path, script).context("write StopFailure hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+fn read_stop_failure_hook_inputs(home: &Path) -> Result<Vec<Value>> {
+    let path = home.join("stop_failure_hook_log.jsonl");
+    let contents = fs::read_to_string(path).context("read StopFailure hook log")?;
+    contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).context("parse StopFailure hook input"))
+        .collect()
 }
 
 fn write_parallel_stop_hooks(home: &Path, prompts: &[&str]) -> Result<()> {
@@ -1063,6 +1122,161 @@ fn request_message_input_texts(body: &[u8], role: &str) -> Vec<String> {
         .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
         .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
         .collect()
+}
+
+#[tokio::test]
+async fn stop_failure_hook_can_retry_with_an_explicit_model() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse_failed("resp-1", "server_is_overloaded", "capacity"),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "recovered"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let recovery_output = serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "StopFailure",
+            "recovery": {
+                "action": "retry",
+                "model": { "selector": "id", "id": "gpt-5.4" },
+                "reason": "The configured fallback is available."
+            }
+        }
+    });
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.2")
+        .with_pre_build_hook(move |home| {
+            write_stop_failure_hook(home, "overloaded", recovery_output)
+                .expect("failed to write StopFailure hook fixture");
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("please recover").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].body_json()["model"], "gpt-5.2");
+    assert_eq!(requests[1].body_json()["model"], "gpt-5.4");
+    assert!(
+        requests[1].body_contains_text("<model_switch>"),
+        "the recovery request should use the ordinary model-switch context"
+    );
+
+    let hook_inputs = read_stop_failure_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    let input = &hook_inputs[0];
+    assert_eq!(input["hook_event_name"], "StopFailure");
+    assert_eq!(input["error"], "overloaded");
+    assert_eq!(input["model"], "gpt-5.2");
+    assert_eq!(input["last_assistant_message"], Value::Null);
+    assert!(
+        input["error_details"]
+            .as_str()
+            .is_some_and(|details| details.contains("capacity"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn stop_failure_hook_can_retry_with_the_catalog_default() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse_failed("resp-1", "server_is_overloaded", "capacity"),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "recovered"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let recovery_output = serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "StopFailure",
+            "recovery": {
+                "action": "retry",
+                "model": { "selector": "catalog_default" }
+            }
+        }
+    });
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.2")
+        .with_pre_build_hook(move |home| {
+            write_stop_failure_hook(home, "overloaded", recovery_output)
+                .expect("failed to write StopFailure hook fixture");
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("use the default fallback").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].body_json()["model"],
+        bundled_default_model_slug()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn stop_failure_hook_runs_at_most_once_per_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse_failed("resp-1", "server_is_overloaded", "first failure"),
+            sse_failed("resp-2", "server_is_overloaded", "recovery failure"),
+        ],
+    )
+    .await;
+    let recovery_output = serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "StopFailure",
+            "recovery": {
+                "action": "retry",
+                "model": { "selector": "id", "id": "gpt-5.4" }
+            }
+        }
+    });
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.2")
+        .with_pre_build_hook(move |home| {
+            write_stop_failure_hook(home, "overloaded", recovery_output)
+                .expect("failed to write StopFailure hook fixture");
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("only recover once").await?;
+
+    assert_eq!(responses.requests().len(), 2);
+    assert_eq!(
+        read_stop_failure_hook_inputs(test.codex_home_path())?.len(),
+        1
+    );
+
+    Ok(())
 }
 
 #[tokio::test]

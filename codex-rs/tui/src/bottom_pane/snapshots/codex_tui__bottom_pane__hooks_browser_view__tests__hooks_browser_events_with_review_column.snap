@@ -19,5 +19,6 @@ expression: "render_lines(&view, 112)"
   SubagentStart         0           0           0           When a subagent is created                          
   SubagentStop          0           0           0           Right before a subagent ends its turn               
   Stop                  0           0           0           Right before Codex ends its turn                    
+  StopFailure           0           0           0           When a turn ends because of an API error            
                                                                                                                 
   Press t to trust all; enter to review hooks; esc to close

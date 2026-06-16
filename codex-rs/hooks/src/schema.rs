@@ -35,6 +35,8 @@ const SUBAGENT_STOP_INPUT_FIXTURE: &str = "subagent-stop.command.input.schema.js
 const SUBAGENT_STOP_OUTPUT_FIXTURE: &str = "subagent-stop.command.output.schema.json";
 const STOP_INPUT_FIXTURE: &str = "stop.command.input.schema.json";
 const STOP_OUTPUT_FIXTURE: &str = "stop.command.output.schema.json";
+const STOP_FAILURE_INPUT_FIXTURE: &str = "stop-failure.command.input.schema.json";
+const STOP_FAILURE_OUTPUT_FIXTURE: &str = "stop-failure.command.output.schema.json";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(transparent)]
@@ -117,6 +119,8 @@ pub(crate) enum HookEventNameWire {
     SubagentStop,
     #[serde(rename = "Stop")]
     Stop,
+    #[serde(rename = "StopFailure")]
+    StopFailure,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -461,6 +465,51 @@ pub(crate) struct StopCommandOutputWire {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "stop-failure.command.output")]
+pub(crate) struct StopFailureCommandOutputWire {
+    #[serde(flatten)]
+    pub universal: HookUniversalOutputWire,
+    #[serde(default)]
+    pub hook_specific_output: Option<StopFailureHookSpecificOutputWire>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StopFailureHookSpecificOutputWire {
+    #[schemars(schema_with = "stop_failure_hook_event_name_schema")]
+    pub hook_event_name: HookEventNameWire,
+    pub recovery: StopFailureRecoveryWire,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StopFailureRecoveryWire {
+    pub action: StopFailureRecoveryActionWire,
+    #[serde(default)]
+    pub model: Option<StopFailureModelSelectorWire>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StopFailureRecoveryActionWire {
+    Retry,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(tag = "selector", rename_all = "snake_case")]
+pub(crate) enum StopFailureModelSelectorWire {
+    Current,
+    CatalogDefault,
+    Id { id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 #[schemars(rename = "subagent-stop.command.output")]
 pub(crate) struct SubagentStopCommandOutputWire {
     #[serde(flatten)]
@@ -575,6 +624,26 @@ pub(crate) struct StopCommandInput {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "stop-failure.command.input")]
+pub(crate) struct StopFailureCommandInput {
+    pub session_id: String,
+    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
+    pub turn_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "stop_failure_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    #[schemars(schema_with = "stop_failure_error_schema")]
+    pub error: String,
+    pub error_details: NullableString,
+    pub last_assistant_message: NullableString,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(rename = "subagent-stop.command.input")]
 pub(crate) struct SubagentStopCommandInput {
     pub session_id: String,
@@ -678,6 +747,14 @@ pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
         &generated_dir.join(STOP_OUTPUT_FIXTURE),
         schema_json::<StopCommandOutputWire>()?,
     )?;
+    write_schema(
+        &generated_dir.join(STOP_FAILURE_INPUT_FIXTURE),
+        schema_json::<StopFailureCommandInput>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(STOP_FAILURE_OUTPUT_FIXTURE),
+        schema_json::<StopFailureCommandOutputWire>()?,
+    )?;
 
     Ok(())
 }
@@ -773,6 +850,22 @@ fn stop_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("Stop")
 }
 
+fn stop_failure_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("StopFailure")
+}
+
+fn stop_failure_error_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_enum_schema(&[
+        "rate_limit",
+        "overloaded",
+        "authentication_failed",
+        "billing_error",
+        "invalid_request",
+        "server_error",
+        "unknown",
+    ])
+}
+
 fn permission_mode_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_enum_schema(&[
         "default",
@@ -841,6 +934,8 @@ mod tests {
     use super::PreToolUseCommandOutputWire;
     use super::SESSION_START_INPUT_FIXTURE;
     use super::SESSION_START_OUTPUT_FIXTURE;
+    use super::STOP_FAILURE_INPUT_FIXTURE;
+    use super::STOP_FAILURE_OUTPUT_FIXTURE;
     use super::STOP_INPUT_FIXTURE;
     use super::STOP_OUTPUT_FIXTURE;
     use super::SUBAGENT_START_INPUT_FIXTURE;
@@ -849,6 +944,8 @@ mod tests {
     use super::SUBAGENT_STOP_OUTPUT_FIXTURE;
     use super::SessionStartCommandOutputWire;
     use super::StopCommandInput;
+    use super::StopFailureCommandInput;
+    use super::StopFailureCommandOutputWire;
     use super::SubagentCommandInputFields;
     use super::SubagentStartCommandInput;
     use super::SubagentStartCommandOutputWire;
@@ -928,6 +1025,12 @@ mod tests {
             STOP_OUTPUT_FIXTURE => {
                 include_str!("../schema/generated/stop.command.output.schema.json")
             }
+            STOP_FAILURE_INPUT_FIXTURE => {
+                include_str!("../schema/generated/stop-failure.command.input.schema.json")
+            }
+            STOP_FAILURE_OUTPUT_FIXTURE => {
+                include_str!("../schema/generated/stop-failure.command.output.schema.json")
+            }
             _ => panic!("unexpected fixture name: {name}"),
         }
     }
@@ -977,6 +1080,8 @@ mod tests {
             SUBAGENT_STOP_OUTPUT_FIXTURE,
             STOP_INPUT_FIXTURE,
             STOP_OUTPUT_FIXTURE,
+            STOP_FAILURE_INPUT_FIXTURE,
+            STOP_FAILURE_OUTPUT_FIXTURE,
         ] {
             let expected = normalize_newlines(expected_fixture(fixture));
             let actual = std::fs::read_to_string(schema_root.join("generated").join(fixture))
@@ -1011,6 +1116,10 @@ mod tests {
         assert_output_hook_event_name_const::<UserPromptSubmitCommandOutputWire>(
             "UserPromptSubmitHookSpecificOutputWire",
             "UserPromptSubmit",
+        );
+        assert_output_hook_event_name_const::<StopFailureCommandOutputWire>(
+            "StopFailureHookSpecificOutputWire",
+            "StopFailure",
         );
     }
 
@@ -1059,6 +1168,10 @@ mod tests {
             &schema_json::<StopCommandInput>().expect("serialize stop input schema"),
         )
         .expect("parse stop input schema");
+        let stop_failure: Value = serde_json::from_slice(
+            &schema_json::<StopFailureCommandInput>().expect("serialize stop failure input schema"),
+        )
+        .expect("parse stop failure input schema");
 
         for schema in [
             &pre_tool_use,
@@ -1070,6 +1183,7 @@ mod tests {
             &subagent_start,
             &subagent_stop,
             &stop,
+            &stop_failure,
         ] {
             assert_eq!(schema["properties"]["turn_id"]["type"], "string");
             assert!(

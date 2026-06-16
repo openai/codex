@@ -14,6 +14,9 @@ use codex_hooks::PreToolUseOutcome;
 use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
 use codex_hooks::StartHookTarget;
+use codex_hooks::StopFailureError;
+use codex_hooks::StopFailureOutcome;
+use codex_hooks::StopFailureRequest;
 use codex_hooks::StopHookTarget;
 use codex_hooks::StopOutcome;
 use codex_hooks::SubagentHookContext;
@@ -21,6 +24,7 @@ use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
 use codex_otel::HOOK_RUN_DURATION_METRIC;
 use codex_otel::HOOK_RUN_METRIC;
+use codex_protocol::error::CodexErr;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::ResponseItem;
@@ -361,6 +365,43 @@ pub(crate) async fn run_turn_stop_hooks(
     emit_hook_started_events(sess, turn_context, hooks.preview_stop(&request)).await;
 
     let mut outcome = hooks.run_stop(request).await;
+    emit_hook_completed_events(sess, turn_context, std::mem::take(&mut outcome.hook_events)).await;
+    outcome
+}
+
+#[instrument(level = "trace", skip_all)]
+pub(crate) async fn run_turn_stop_failure_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    error: &CodexErr,
+    error_kind: StopFailureError,
+    last_assistant_message: Option<String>,
+) -> StopFailureOutcome {
+    if matches!(
+        &turn_context.session_source,
+        SessionSource::SubAgent(source)
+            if !matches!(source, SubAgentSource::ThreadSpawn { .. })
+    ) {
+        return StopFailureOutcome::default();
+    }
+
+    let error_message = error.to_string();
+    let request = StopFailureRequest {
+        session_id: sess.session_id().into(),
+        turn_id: turn_context.sub_id.clone(),
+        #[allow(deprecated)]
+        cwd: turn_context.cwd.clone(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        error: error_kind,
+        error_details: Some(error_message.clone()),
+        last_assistant_message,
+    };
+    let hooks = sess.hooks();
+    emit_hook_started_events(sess, turn_context, hooks.preview_stop_failure(&request)).await;
+
+    let mut outcome = hooks.run_stop_failure(request).await;
     emit_hook_completed_events(sess, turn_context, std::mem::take(&mut outcome.hook_events)).await;
     outcome
 }
@@ -706,6 +747,7 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookEventName::SubagentStart => "SubagentStart",
         HookEventName::SubagentStop => "SubagentStop",
         HookEventName::Stop => "Stop",
+        HookEventName::StopFailure => "StopFailure",
     };
     let hook_source = match run.source {
         HookSource::System => "system",

@@ -404,6 +404,7 @@ fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> Managed
         subagent_start,
         subagent_stop,
         stop,
+        stop_failure,
     } = hooks;
 
     ManagedHooksRequirements {
@@ -419,6 +420,7 @@ fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> Managed
         subagent_start: map_hook_matcher_groups_to_api(subagent_start),
         subagent_stop: map_hook_matcher_groups_to_api(subagent_stop),
         stop: map_hook_matcher_groups_to_api(stop),
+        stop_failure: map_hook_matcher_groups_to_api(stop_failure),
     }
 }
 

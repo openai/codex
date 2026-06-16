@@ -74,6 +74,7 @@ pub(crate) struct StatelessHookOutput {
 }
 
 use crate::schema::BlockDecisionWire;
+use crate::schema::HookEventNameWire;
 use crate::schema::HookUniversalOutputWire;
 use crate::schema::PermissionRequestBehaviorWire;
 use crate::schema::PermissionRequestCommandOutputWire;
@@ -86,6 +87,9 @@ use crate::schema::PreToolUseDecisionWire;
 use crate::schema::PreToolUsePermissionDecisionWire;
 use crate::schema::SessionStartCommandOutputWire;
 use crate::schema::StopCommandOutputWire;
+use crate::schema::StopFailureCommandOutputWire;
+use crate::schema::StopFailureModelSelectorWire;
+use crate::schema::StopFailureRecoveryActionWire;
 use crate::schema::SubagentStartCommandOutputWire;
 use crate::schema::SubagentStopCommandOutputWire;
 use crate::schema::UserPromptSubmitCommandOutputWire;
@@ -288,6 +292,49 @@ pub(crate) fn parse_stop(stdout: &str) -> Option<StopOutput> {
         wire.reason,
         "Stop",
     ))
+}
+
+pub(crate) fn parse_stop_failure(
+    stdout: &str,
+) -> Option<crate::events::stop_failure::StopFailureOutput> {
+    let wire: StopFailureCommandOutputWire = parse_json(stdout)?;
+    let _ = wire.universal;
+    let recovery = match wire.hook_specific_output {
+        None => None,
+        Some(output) => {
+            if output.hook_event_name != HookEventNameWire::StopFailure {
+                return None;
+            }
+            let recovery = output.recovery;
+            let model = match recovery.model {
+                None | Some(StopFailureModelSelectorWire::Current) => {
+                    crate::events::stop_failure::StopFailureModelSelector::Current
+                }
+                Some(StopFailureModelSelectorWire::CatalogDefault) => {
+                    crate::events::stop_failure::StopFailureModelSelector::CatalogDefault
+                }
+                Some(StopFailureModelSelectorWire::Id { id }) => {
+                    let id = id.trim();
+                    if id.is_empty() {
+                        return None;
+                    }
+                    crate::events::stop_failure::StopFailureModelSelector::Id(id.to_string())
+                }
+            };
+            match recovery.action {
+                StopFailureRecoveryActionWire::Retry => {
+                    Some(crate::events::stop_failure::StopFailureRecovery {
+                        model,
+                        reason: recovery.reason.and_then(|reason| {
+                            let reason = reason.trim();
+                            (!reason.is_empty()).then(|| reason.to_string())
+                        }),
+                    })
+                }
+            }
+        }
+    };
+    Some(crate::events::stop_failure::StopFailureOutput { recovery })
 }
 
 pub(crate) fn parse_subagent_stop(stdout: &str) -> Option<StopOutput> {

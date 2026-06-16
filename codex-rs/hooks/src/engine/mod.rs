@@ -18,6 +18,8 @@ use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
+use crate::events::stop_failure::StopFailureOutcome;
+use crate::events::stop_failure::StopFailureRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 use crate::output_spill::HookOutputSpiller;
@@ -73,6 +75,7 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::SubagentStart => "subagent-start",
             codex_protocol::protocol::HookEventName::SubagentStop => "subagent-stop",
             codex_protocol::protocol::HookEventName::Stop => "stop",
+            codex_protocol::protocol::HookEventName::StopFailure => "stop-failure",
         }
     }
 }
@@ -263,6 +266,14 @@ impl ClaudeHooksEngine {
             .maybe_spill_prompt_fragments(session_id, outcome.continuation_fragments)
             .await;
         outcome
+    }
+
+    pub(crate) fn preview_stop_failure(&self, request: &StopFailureRequest) -> Vec<HookRunSummary> {
+        crate::events::stop_failure::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_stop_failure(&self, request: StopFailureRequest) -> StopFailureOutcome {
+        crate::events::stop_failure::run(&self.handlers, &self.shell, request).await
     }
 
     async fn maybe_spill_texts(&self, session_id: ThreadId, texts: Vec<String>) -> Vec<String> {

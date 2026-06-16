@@ -1187,6 +1187,13 @@
           },
           "type": "array"
         },
+        "StopFailure": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
         "SubagentStart": {
           "default": [],
           "items": {

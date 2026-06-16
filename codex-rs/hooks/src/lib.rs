@@ -16,7 +16,7 @@ pub use declarations::plugin_hook_declarations;
 pub use engine::HookListEntry;
 pub use events::common::SubagentHookContext;
 /// Hook event names as they appear in hooks JSON and config files.
-pub const HOOK_EVENT_NAMES: [&str; 10] = [
+pub const HOOK_EVENT_NAMES: [&str; 11] = [
     "PreToolUse",
     "PermissionRequest",
     "PostToolUse",
@@ -27,6 +27,7 @@ pub const HOOK_EVENT_NAMES: [&str; 10] = [
     "SubagentStart",
     "SubagentStop",
     "Stop",
+    "StopFailure",
 ];
 
 /// Hook event names whose matcher fields are meaningful during dispatch.
@@ -34,7 +35,7 @@ pub const HOOK_EVENT_NAMES: [&str; 10] = [
 /// Other events can appear in hooks JSON, but Codex ignores their matcher
 /// fields because those events do not dispatch against a tool, compaction
 /// trigger, or session-start source.
-pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 8] = [
+pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 9] = [
     "PreToolUse",
     "PermissionRequest",
     "PostToolUse",
@@ -43,6 +44,7 @@ pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 8] = [
     "SessionStart",
     "SubagentStart",
     "SubagentStop",
+    "StopFailure",
 ];
 
 pub use events::compact::PostCompactRequest;
@@ -63,6 +65,11 @@ pub use events::session_start::StartHookTarget;
 pub use events::stop::StopHookTarget;
 pub use events::stop::StopOutcome;
 pub use events::stop::StopRequest;
+pub use events::stop_failure::StopFailureError;
+pub use events::stop_failure::StopFailureModelSelector;
+pub use events::stop_failure::StopFailureOutcome;
+pub use events::stop_failure::StopFailureRecovery;
+pub use events::stop_failure::StopFailureRequest;
 pub use events::user_prompt_submit::UserPromptSubmitOutcome;
 pub use events::user_prompt_submit::UserPromptSubmitRequest;
 pub use legacy_notify::legacy_notify_json;
@@ -93,6 +100,7 @@ pub fn hook_event_key_label(event_name: HookEventName) -> &'static str {
         HookEventName::SubagentStart => "subagent_start",
         HookEventName::SubagentStop => "subagent_stop",
         HookEventName::Stop => "stop",
+        HookEventName::StopFailure => "stop_failure",
     }
 }
 

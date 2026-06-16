@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "NullableString": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "properties": {
+    "cwd": {
+      "type": "string"
+    },
+    "error": {
+      "enum": [
+        "rate_limit",
+        "overloaded",
+        "authentication_failed",
+        "billing_error",
+        "invalid_request",
+        "server_error",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "error_details": {
+      "$ref": "#/definitions/NullableString"
+    },
+    "hook_event_name": {
+      "const": "StopFailure",
+      "type": "string"
+    },
+    "last_assistant_message": {
+      "$ref": "#/definitions/NullableString"
+    },
+    "model": {
+      "type": "string"
+    },
+    "permission_mode": {
+      "enum": [
+        "default",
+        "acceptEdits",
+        "plan",
+        "dontAsk",
+        "bypassPermissions"
+      ],
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "$ref": "#/definitions/NullableString"
+    },
+    "turn_id": {
+      "description": "Codex extension: expose the active turn id to internal turn-scoped hooks.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "cwd",
+    "error",
+    "error_details",
+    "hook_event_name",
+    "last_assistant_message",
+    "model",
+    "permission_mode",
+    "session_id",
+    "transcript_path",
+    "turn_id"
+  ],
+  "title": "stop-failure.command.input",
+  "type": "object"
+}

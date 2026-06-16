@@ -1,0 +1,131 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "StopFailureHookSpecificOutputWire": {
+      "additionalProperties": false,
+      "properties": {
+        "hookEventName": {
+          "const": "StopFailure",
+          "type": "string"
+        },
+        "recovery": {
+          "$ref": "#/definitions/StopFailureRecoveryWire"
+        }
+      },
+      "required": [
+        "hookEventName",
+        "recovery"
+      ],
+      "type": "object"
+    },
+    "StopFailureModelSelectorWire": {
+      "oneOf": [
+        {
+          "properties": {
+            "selector": {
+              "enum": [
+                "current"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "selector"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "selector": {
+              "enum": [
+                "catalog_default"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "selector"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "selector": {
+              "enum": [
+                "id"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "selector"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "StopFailureRecoveryActionWire": {
+      "enum": [
+        "retry"
+      ],
+      "type": "string"
+    },
+    "StopFailureRecoveryWire": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/StopFailureRecoveryActionWire"
+        },
+        "model": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/StopFailureModelSelectorWire"
+            }
+          ],
+          "default": null
+        },
+        "reason": {
+          "default": null,
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "continue": {
+      "default": true,
+      "type": "boolean"
+    },
+    "hookSpecificOutput": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/StopFailureHookSpecificOutputWire"
+        }
+      ],
+      "default": null
+    },
+    "stopReason": {
+      "default": null,
+      "type": "string"
+    },
+    "suppressOutput": {
+      "default": false,
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "default": null,
+      "type": "string"
+    }
+  },
+  "title": "stop-failure.command.output",
+  "type": "object"
+}

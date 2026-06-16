@@ -1993,7 +1993,8 @@
         "userPromptSubmit",
         "subagentStart",
         "subagentStop",
-        "stop"
+        "stop",
+        "stopFailure"
       ],
       "type": "string"
     },

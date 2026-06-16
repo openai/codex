@@ -7053,7 +7053,8 @@
         "userPromptSubmit",
         "subagentStart",
         "subagentStop",
-        "stop"
+        "stop",
+        "stopFailure"
       ],
       "type": "string"
     },
@@ -8001,6 +8002,12 @@
           },
           "type": "array"
         },
+        "StopFailure": {
+          "items": {
+            "$ref": "#/definitions/ConfiguredHookMatcherGroup"
+          },
+          "type": "array"
+        },
         "SubagentStart": {
           "items": {
             "$ref": "#/definitions/ConfiguredHookMatcherGroup"
@@ -8040,6 +8047,7 @@
         "PreToolUse",
         "SessionStart",
         "Stop",
+        "StopFailure",
         "SubagentStart",
         "SubagentStop",
         "UserPromptSubmit"

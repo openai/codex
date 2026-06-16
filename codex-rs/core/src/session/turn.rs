@@ -23,6 +23,7 @@ use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_legacy_after_agent_hook;
 use crate::hook_runtime::run_pending_session_start_hooks;
+use crate::hook_runtime::run_turn_stop_failure_hooks;
 use crate::hook_runtime::run_turn_stop_hooks;
 use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
@@ -76,6 +77,9 @@ use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputEnvironment;
 use codex_features::Feature;
 use codex_git_utils::get_git_repo_root_with_fs;
+use codex_hooks::StopFailureError;
+use codex_hooks::StopFailureModelSelector;
+use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
@@ -136,7 +140,7 @@ use tracing::warn;
 ///
 pub(crate) async fn run_turn(
     sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
+    mut turn_context: Arc<TurnContext>,
     turn_extension_data: Arc<codex_extension_api::ExtensionData>,
     input: Vec<TurnInput>,
     prewarmed_client_session: Option<ModelClientSession>,
@@ -187,6 +191,7 @@ pub(crate) async fn run_turn(
 
     let mut last_agent_message: Option<String> = None;
     let mut stop_hook_active = false;
+    let mut stop_failure_hook_ran = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let display_roots = turn_diff_display_roots(turn_context.as_ref()).await;
@@ -381,6 +386,21 @@ pub(crate) async fn run_turn(
                     }
                 }
 
+                if !stop_failure_hook_ran {
+                    stop_failure_hook_ran = true;
+                    if let Some(recovered_context) = recover_from_stop_failure(
+                        &sess,
+                        &turn_context,
+                        &codex_error,
+                        last_agent_message.clone(),
+                    )
+                    .await
+                    {
+                        turn_context = recovered_context;
+                        continue;
+                    }
+                }
+
                 sess.track_turn_codex_error(turn_context.as_ref(), &codex_error);
                 let error = CodexErrorInfo::BadRequest;
                 sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
@@ -395,6 +415,20 @@ pub(crate) async fn run_turn(
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
+                if !stop_failure_hook_ran {
+                    stop_failure_hook_ran = true;
+                    if let Some(recovered_context) = recover_from_stop_failure(
+                        &sess,
+                        &turn_context,
+                        &e,
+                        last_agent_message.clone(),
+                    )
+                    .await
+                    {
+                        turn_context = recovered_context;
+                        continue;
+                    }
+                }
                 let error = e.to_codex_protocol_error();
                 sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
                     .await;
@@ -408,6 +442,103 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+async fn recover_from_stop_failure(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    error: &CodexErr,
+    last_assistant_message: Option<String>,
+) -> Option<Arc<TurnContext>> {
+    let failure_kind = StopFailureError::classify(error)?;
+    let recovery = run_turn_stop_failure_hooks(
+        sess,
+        turn_context,
+        error,
+        failure_kind,
+        last_assistant_message,
+    )
+    .await
+    .recovery?;
+    let current_model = turn_context.model_info.slug.as_str();
+    let (target_model, selector) = match recovery.model {
+        StopFailureModelSelector::Current => (current_model.to_string(), "current"),
+        StopFailureModelSelector::CatalogDefault => {
+            let configured_model = None;
+            (
+                sess.services
+                    .models_manager
+                    .get_default_model(&configured_model, RefreshStrategy::OnlineIfUncached)
+                    .await,
+                "catalog_default",
+            )
+        }
+        StopFailureModelSelector::Id(id) => (id, "id"),
+    };
+    if target_model.is_empty() {
+        sess.send_event(
+            turn_context,
+            EventMsg::Warning(WarningEvent {
+                message: "StopFailure hook requested recovery without a usable model; preserving the original error."
+                    .to_string(),
+            }),
+        )
+        .await;
+        return None;
+    }
+
+    let model_changed = target_model != current_model;
+    let recovered_context = if model_changed {
+        let recovered_context = Arc::new(
+            turn_context
+                .with_model(target_model.clone(), &sess.services.models_manager)
+                .await,
+        );
+        sess.record_context_updates_and_set_reference_context_item(recovered_context.as_ref())
+            .await;
+        sess.set_previous_turn_settings(Some(PreviousTurnSettings {
+            model: recovered_context.model_info.slug.clone(),
+            comp_hash: recovered_context.comp_hash.clone(),
+            realtime_active: Some(recovered_context.realtime_active),
+        }))
+        .await;
+        recovered_context
+    } else {
+        Arc::clone(turn_context)
+    };
+
+    let mut message = format!(
+        "Recovering from {} by retrying with model {}.",
+        failure_kind.as_str(),
+        recovered_context.model_info.slug
+    );
+    if let Some(reason) = recovery.reason {
+        message.push(' ');
+        message.push_str(&reason);
+    }
+    sess.send_event(
+        &recovered_context,
+        EventMsg::Warning(WarningEvent { message }),
+    )
+    .await;
+    turn_context.session_telemetry.counter(
+        "codex.stop_failure.recovery",
+        /*inc*/ 1,
+        &[
+            ("error", failure_kind.as_str()),
+            ("model_selector", selector),
+        ],
+    );
+
+    if !model_changed {
+        let delay = match error {
+            CodexErr::Stream(_, Some(delay)) => *delay,
+            _ => crate::util::backoff(/*retry_count*/ 1),
+        };
+        tokio::time::sleep(delay).await;
+    }
+
+    Some(recovered_context)
 }
 
 #[instrument(level = "trace", skip_all)]
