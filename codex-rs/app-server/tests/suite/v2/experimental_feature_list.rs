@@ -102,61 +102,6 @@ async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Resu
 }
 
 #[tokio::test]
-async fn experimental_feature_list_marks_apps_and_plugins_disabled_without_plugin_use_permission()
--> Result<()> {
-    let codex_home = TempDir::new()?;
-    let server = MockServer::start().await;
-    std::fs::write(
-        codex_home.path().join("config.toml"),
-        format!(
-            r#"chatgpt_base_url = "{}/backend-api/"
-"#,
-            server.uri()
-        ),
-    )?;
-    write_chatgpt_auth(
-        codex_home.path(),
-        ChatGptAuthFixture::new("chatgpt-token")
-            .account_id("account-123")
-            .chatgpt_user_id("user-123")
-            .chatgpt_account_id("account-123")
-            .plan_type("team"),
-        AuthCredentialsStoreMode::File,
-    )?;
-    Mock::given(method("GET"))
-        .and(path("/backend-api/accounts/account-123/settings"))
-        .and(header("authorization", "Bearer chatgpt-token"))
-        .and(header("chatgpt-account-id", "account-123"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"permissions":[]}"#))
-        .mount(&server)
-        .await;
-
-    let mut mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_experimental_feature_list_request(ExperimentalFeatureListParams::default())
-        .await?;
-
-    let actual = read_response::<ExperimentalFeatureListResponse>(&mut mcp, request_id).await?;
-    let apps = actual
-        .data
-        .iter()
-        .find(|feature| feature.name == "apps")
-        .expect("apps feature should be present");
-    let plugins = actual
-        .data
-        .iter()
-        .find(|feature| feature.name == "plugins")
-        .expect("plugins feature should be present");
-    assert!(!apps.enabled);
-    assert!(!plugins.enabled);
-    assert!(apps.default_enabled);
-    assert!(plugins.default_enabled);
-    Ok(())
-}
-
-#[tokio::test]
 async fn experimental_feature_list_resolves_thread_project_config() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;

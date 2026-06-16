@@ -155,68 +155,6 @@ async fn list_apps_returns_empty_with_api_key_auth() -> Result<()> {
 }
 
 #[tokio::test]
-async fn list_apps_returns_empty_without_plugin_use_permission() -> Result<()> {
-    let connectors = vec![AppInfo {
-        id: "beta".to_string(),
-        name: "Beta".to_string(),
-        description: Some("Beta connector".to_string()),
-        logo_url: None,
-        logo_url_dark: None,
-        distribution_channel: None,
-        branding: None,
-        app_metadata: None,
-        labels: None,
-        install_url: None,
-        is_accessible: false,
-        is_enabled: true,
-        plugin_display_names: Vec::new(),
-    }];
-    let tools = vec![connector_tool("beta", "Beta App")?];
-    let (server_url, server_handle) = start_apps_server_with_plugin_use_permission(
-        connectors, tools, /*plugin_use_allowed*/ false,
-    )
-    .await?;
-
-    let codex_home = TempDir::new()?;
-    write_connectors_config(codex_home.path(), &server_url)?;
-    write_chatgpt_auth(
-        codex_home.path(),
-        ChatGptAuthFixture::new("chatgpt-token")
-            .account_id("account-123")
-            .chatgpt_user_id("user-123")
-            .chatgpt_account_id("account-123")
-            .plan_type("team"),
-        AuthCredentialsStoreMode::File,
-    )?;
-
-    let mut mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_apps_list_request(AppsListParams {
-            limit: Some(50),
-            cursor: None,
-            thread_id: None,
-            force_refetch: false,
-        })
-        .await?;
-
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-
-    let AppsListResponse { data, next_cursor } = to_response(response)?;
-    assert!(data.is_empty());
-    assert!(next_cursor.is_none());
-
-    server_handle.abort();
-    let _ = server_handle.await;
-    Ok(())
-}
-
-#[tokio::test]
 async fn list_apps_includes_plugin_apps_for_chatgpt_auth() -> Result<()> {
     let (server_url, server_handle) =
         start_apps_server_with_delays(Vec::new(), Vec::new(), Duration::ZERO, Duration::ZERO)
@@ -1403,7 +1341,6 @@ struct AppsServerState {
     expected_account_id: String,
     response: Arc<StdMutex<serde_json::Value>>,
     directory_delay: Duration,
-    plugin_use_allowed: bool,
 }
 
 #[derive(Clone)]
@@ -1484,37 +1421,14 @@ async fn start_apps_server_with_delays(
     Ok((server_url, server_handle))
 }
 
-async fn start_apps_server_with_plugin_use_permission(
-    connectors: Vec<AppInfo>,
-    tools: Vec<Tool>,
-    plugin_use_allowed: bool,
-) -> Result<(String, JoinHandle<()>)> {
-    let (server_url, server_handle, _server_control) =
-        start_apps_server_with_delays_and_control_inner(
-            connectors,
-            tools,
-            Duration::ZERO,
-            Duration::ZERO,
-            plugin_use_allowed,
-        )
-        .await?;
-    Ok((server_url, server_handle))
-}
-
 async fn start_apps_server_with_delays_and_control(
     connectors: Vec<AppInfo>,
     tools: Vec<Tool>,
     directory_delay: Duration,
     tools_delay: Duration,
 ) -> Result<(String, JoinHandle<()>, AppsServerControl)> {
-    start_apps_server_with_delays_and_control_inner(
-        connectors,
-        tools,
-        directory_delay,
-        tools_delay,
-        /*plugin_use_allowed*/ true,
-    )
-    .await
+    start_apps_server_with_delays_and_control_inner(connectors, tools, directory_delay, tools_delay)
+        .await
 }
 
 async fn start_apps_server_with_delays_and_control_inner(
@@ -1522,7 +1436,6 @@ async fn start_apps_server_with_delays_and_control_inner(
     tools: Vec<Tool>,
     directory_delay: Duration,
     tools_delay: Duration,
-    plugin_use_allowed: bool,
 ) -> Result<(String, JoinHandle<()>, AppsServerControl)> {
     let response = Arc::new(StdMutex::new(
         json!({ "apps": connectors, "next_token": null }),
@@ -1533,7 +1446,6 @@ async fn start_apps_server_with_delays_and_control_inner(
         expected_account_id: "account-123".to_string(),
         response: response.clone(),
         directory_delay,
-        plugin_use_allowed,
     };
     let state = Arc::new(state);
     let server_control = AppsServerControl {
@@ -1559,10 +1471,6 @@ async fn start_apps_server_with_delays_and_control_inner(
             "/connectors/directory/list_workspace",
             get(list_directory_connectors),
         )
-        .route(
-            "/accounts/account-123/settings",
-            get(workspace_settings_response),
-        )
         .with_state(state)
         .nest_service("/api/codex/ps/mcp", mcp_service);
 
@@ -1571,31 +1479,6 @@ async fn start_apps_server_with_delays_and_control_inner(
     });
 
     Ok((format!("http://{addr}"), handle, server_control))
-}
-
-async fn workspace_settings_response(
-    State(state): State<Arc<AppsServerState>>,
-    headers: HeaderMap,
-) -> Result<impl axum::response::IntoResponse, StatusCode> {
-    let bearer_ok = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value == state.expected_bearer);
-    let account_ok = headers
-        .get("chatgpt-account-id")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value == state.expected_account_id);
-
-    if !bearer_ok || !account_ok {
-        Err(StatusCode::UNAUTHORIZED)
-    } else {
-        let permissions = if state.plugin_use_allowed {
-            vec!["chatgpt.workspace_plugin.use"]
-        } else {
-            Vec::new()
-        };
-        Ok(Json(json!({ "permissions": permissions })))
-    }
 }
 
 async fn list_directory_connectors(

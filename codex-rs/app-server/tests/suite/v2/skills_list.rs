@@ -337,68 +337,6 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
 }
 
 #[tokio::test]
-async fn skills_list_excludes_plugin_skills_without_plugin_use_permission() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let repo_root = TempDir::new()?;
-    let server = MockServer::start().await;
-    write_skill(&codex_home, "home-skill")?;
-    write_plugin_with_skill(repo_root.path(), "demo-plugin", "plugin-skill")?;
-    write_plugins_enabled_config_with_base_url(
-        codex_home.path(),
-        &format!("{}/backend-api/", server.uri()),
-    )?;
-    write_chatgpt_auth(
-        codex_home.path(),
-        ChatGptAuthFixture::new("chatgpt-token")
-            .account_id("account-123")
-            .chatgpt_user_id("user-123")
-            .chatgpt_account_id("account-123")
-            .plan_type("team"),
-        AuthCredentialsStoreMode::File,
-    )?;
-    Mock::given(method("GET"))
-        .and(path("/backend-api/accounts/account-123/settings"))
-        .and(header("authorization", "Bearer chatgpt-token"))
-        .and(header("chatgpt-account-id", "account-123"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"permissions":[]}"#))
-        .mount(&server)
-        .await;
-
-    let mut mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_skills_list_request(SkillsListParams {
-            cwds: vec![repo_root.path().to_path_buf()],
-            force_reload: true,
-        })
-        .await?;
-
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let SkillsListResponse { data } = to_response(response)?;
-    assert_eq!(data.len(), 1);
-    assert!(
-        data[0]
-            .skills
-            .iter()
-            .any(|skill| skill.name == "home-skill"),
-        "non-plugin skills should remain available"
-    );
-    assert!(
-        data[0]
-            .skills
-            .iter()
-            .all(|skill| skill.name != "demo-plugin:plugin-skill"),
-        "plugin skills should be hidden when workspace Codex plugins are disabled"
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn skills_list_skips_cwd_roots_when_environment_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;

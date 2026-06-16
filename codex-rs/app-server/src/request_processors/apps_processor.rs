@@ -5,7 +5,6 @@ pub(crate) struct AppsRequestProcessor {
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
     config_manager: ConfigManager,
-    workspace_permissions_cache: Arc<workspace_permissions::WorkspacePermissionsCache>,
     shutdown_token: CancellationToken,
     _shutdown_drop_guard: DropGuard,
 }
@@ -16,7 +15,6 @@ impl AppsRequestProcessor {
         thread_manager: Arc<ThreadManager>,
         outgoing: Arc<OutgoingMessageSender>,
         config_manager: ConfigManager,
-        workspace_permissions_cache: Arc<workspace_permissions::WorkspacePermissionsCache>,
         shutdown_token: CancellationToken,
     ) -> Self {
         let shutdown_drop_guard = shutdown_token.clone().drop_guard();
@@ -25,7 +23,6 @@ impl AppsRequestProcessor {
             thread_manager,
             outgoing,
             config_manager,
-            workspace_permissions_cache,
             shutdown_token,
             _shutdown_drop_guard: shutdown_drop_guard,
         }
@@ -69,13 +66,6 @@ impl AppsRequestProcessor {
             .features
             .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
         {
-            return Ok(Some(AppsListResponse {
-                data: Vec::new(),
-                next_cursor: None,
-            }));
-        }
-
-        if !self.workspace_plugins_allowed(&config, auth.as_ref()).await {
             return Ok(Some(AppsListResponse {
                 data: Vec::new(),
                 next_cursor: None,
@@ -329,24 +319,6 @@ impl AppsRequestProcessor {
             .load_latest_config(fallback_cwd)
             .await
             .map_err(|err| internal_error(format!("failed to reload config: {err}")))
-    }
-
-    async fn workspace_plugins_allowed(&self, config: &Config, auth: Option<&CodexAuth>) -> bool {
-        match workspace_permissions::codex_plugins_allowed_for_workspace(
-            config,
-            auth,
-            Some(&self.workspace_permissions_cache),
-        )
-        .await
-        {
-            Ok(enabled) => enabled,
-            Err(err) => {
-                warn!(
-                    "failed to fetch workspace plugin permission; allowing Codex plugins: {err:#}"
-                );
-                true
-            }
-        }
     }
 }
 
