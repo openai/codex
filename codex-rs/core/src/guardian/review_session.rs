@@ -306,6 +306,7 @@ impl GuardianReviewSessionManager {
                 parent_session.user_instructions().await,
             );
             let spawn_cancel_token = CancellationToken::new();
+            let spawn_cancel_guard = spawn_cancel_token.clone().drop_guard();
             let review_session = spawn_guardian_review_session(
                 &parent_session,
                 &parent_turn,
@@ -316,6 +317,7 @@ impl GuardianReviewSessionManager {
             )
             .await?;
             self.state.lock().await.trunk = Some(Arc::new(review_session));
+            drop(spawn_cancel_guard.disarm());
             Ok(())
         })
     }
