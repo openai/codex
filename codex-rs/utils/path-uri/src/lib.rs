@@ -19,8 +19,8 @@ use url::Url;
 
 mod api_path_string;
 
-pub use api_path_string::ApiPathString;
-pub use api_path_string::ApiPathStringError;
+pub use api_path_string::LegacyAppPathString;
+pub use api_path_string::LegacyAppPathStringError;
 pub use api_path_string::PathConvention;
 
 pub const FILE_SCHEME: &str = "file";
