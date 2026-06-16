@@ -156,6 +156,7 @@ pub(crate) struct ExternalAgentConfigImportSuccess {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExternalAgentConfigImportRawError {
     pub item_type: ExternalAgentConfigMigrationItemType,
+    pub error_type: Option<String>,
     pub failure_stage: String,
     pub message: String,
     pub cwd: Option<PathBuf>,
@@ -1850,6 +1851,7 @@ pub(crate) fn record_import_error(
 ) {
     result.record_error(ExternalAgentConfigImportRawError {
         item_type: result.item_type,
+        error_type: None,
         failure_stage: failure_stage.to_string(),
         message: message.into(),
         cwd: result.cwd.clone(),
@@ -1880,6 +1882,7 @@ fn plugin_import_raw_error(
 ) -> ExternalAgentConfigImportRawError {
     ExternalAgentConfigImportRawError {
         item_type: ExternalAgentConfigMigrationItemType::Plugins,
+        error_type: None,
         failure_stage: failure_stage.to_string(),
         message,
         cwd: cwd.map(Path::to_path_buf),

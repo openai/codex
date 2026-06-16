@@ -17,6 +17,7 @@ pub struct ExternalAgentConfigImportSuccessRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExternalAgentConfigImportFailureRecord {
     pub item_type: String,
+    pub error_type: Option<String>,
     pub failure_stage: String,
     pub message: String,
     pub cwd: Option<PathBuf>,

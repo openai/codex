@@ -677,6 +677,7 @@ pub struct ExternalAgentConfigImportResponse {
 #[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigImportItemTypeFailure {
     pub item_type: ExternalAgentConfigMigrationItemType,
+    pub error_type: Option<String>,
     pub failure_stage: String,
     pub message: String,
     pub cwd: Option<PathBuf>,

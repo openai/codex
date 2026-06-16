@@ -47,6 +47,7 @@ fn assert_single_plugin_raw_error(
         ExternalAgentConfigMigrationItemType::Plugins
     );
     assert_eq!(raw_error.failure_stage, failure_stage);
+    assert_eq!(raw_error.error_type, None);
     assert_eq!(raw_error.cwd, None);
     assert_eq!(raw_error.source.as_deref(), Some(source));
     assert!(!raw_error.message.is_empty());

@@ -600,6 +600,7 @@ async fn record_completed_import_notification(
                     .as_str()
                     .unwrap_or_default()
                     .to_string(),
+                error_type: failure.error_type.clone(),
                 failure_stage: failure.failure_stage.clone(),
                 message: failure.message.clone(),
                 cwd: failure.cwd.clone(),
@@ -654,6 +655,7 @@ fn protocol_import_failure_record(
 ) -> Result<ProtocolImportFailure, JSONRPCErrorError> {
     Ok(ProtocolImportFailure {
         item_type: protocol_import_record_item_type(record.item_type)?,
+        error_type: record.error_type,
         failure_stage: record.failure_stage,
         message: record.message,
         cwd: record.cwd,
@@ -750,6 +752,7 @@ fn protocol_import_success(
 fn protocol_import_raw_error(raw_error: &CoreImportRawError) -> ProtocolImportFailure {
     ProtocolImportFailure {
         item_type: protocol_migration_item_type(raw_error.item_type),
+        error_type: raw_error.error_type.clone(),
         failure_stage: raw_error.failure_stage.clone(),
         message: raw_error.message.clone(),
         cwd: raw_error.cwd.clone(),
