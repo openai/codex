@@ -261,6 +261,22 @@ fn workspace_write_sandbox(writable_root: PathBuf) -> FileSystemSandboxContext {
     ))
 }
 
+fn assert_normalized_path_rejected(error: &std::io::Error) {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => {}
+        std::io::ErrorKind::InvalidInput | std::io::ErrorKind::PermissionDenied => {
+            let message = error.to_string();
+            assert!(
+                message.contains("is not permitted")
+                    || message.contains("Operation not permitted")
+                    || message.contains("Permission denied"),
+                "unexpected rejection message: {message}",
+            );
+        }
+        other => panic!("unexpected normalized-path error kind: {other:?}: {error:?}"),
+    }
+}
+
 fn remote_exec_docker(command: &str) -> Result<()> {
     let remote_env = get_remote_test_env().context("remote env should be configured")?;
     let container_name = remote_env
@@ -1046,7 +1062,7 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
+async fn remote_test_env_sandboxed_read_rejects_symlink_parent_dotdot_escape() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
@@ -1055,48 +1071,98 @@ async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
     let test_env = test_env().await?;
     let file_system = test_env.environment().get_filesystem();
 
-    let root = test_env.cwd().join("remove-link");
+    let root = test_env.cwd().join("dotdot-escape");
     let allowed_dir = root.join("allowed");
     let outside_dir = root.join("outside");
-    let outside_file = outside_dir.join("keep.txt");
-    let symlink_path = allowed_dir.join("link");
+    let secret_path = root.join("secret.txt");
     let root_uri = PathUri::from_abs_path(&root);
     let allowed_dir_uri = PathUri::from_abs_path(&allowed_dir);
     let outside_dir_uri = PathUri::from_abs_path(&outside_dir);
-    let outside_file_uri = PathUri::from_abs_path(&outside_file);
-    let symlink_path_uri = PathUri::from_abs_path(&symlink_path);
+    let secret_path_uri = PathUri::from_abs_path(&secret_path);
+    let symlink_path_uri = allowed_dir_uri.join("link")?;
     let linux_setup_command = format!(
-        "rm -rf {root}; mkdir -p {allowed} {outside_parent}; printf outside > {outside}; ln -s {outside} {symlink}",
+        "rm -rf {root}; mkdir -p {allowed} {outside}; printf nope > {secret}; ln -s {outside} {allowed}/link",
         root = root.display(),
         allowed = allowed_dir.display(),
-        outside_parent = outside_dir.display(),
-        outside = outside_file.display(),
-        symlink = symlink_path.display(),
+        outside = outside_dir.display(),
+        secret = secret_path.display(),
     );
     let windows_setup_command = format!(
         r#"$ErrorActionPreference = 'Stop'
 $root = '{root}'
 $allowed = '{allowed}'
-$outsideParent = '{outside_parent}'
 $outside = '{outside}'
-$symlink = '{symlink}'
+$secret = '{secret}'
+$link = '{link}'
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $allowed -Force | Out-Null
-New-Item -ItemType Directory -Path $outsideParent -Force | Out-Null
-[System.IO.File]::WriteAllText($outside, 'outside')
-New-Item -ItemType SymbolicLink -Path $symlink -Target $outside | Out-Null"#,
+New-Item -ItemType Directory -Path $outside -Force | Out-Null
+[System.IO.File]::WriteAllText($secret, 'nope')
+New-Item -ItemType SymbolicLink -Path $link -Target $outside | Out-Null"#,
         root = root_uri.native_path_display(),
         allowed = allowed_dir_uri.native_path_display(),
-        outside_parent = outside_dir_uri.native_path_display(),
-        outside = outside_file_uri.native_path_display(),
-        symlink = symlink_path_uri.native_path_display(),
+        outside = outside_dir_uri.native_path_display(),
+        secret = secret_path_uri.native_path_display(),
+        link = symlink_path_uri.native_path_display(),
     );
     remote_exec(&linux_setup_command, &windows_setup_command)?;
 
-    let sandbox = workspace_write_sandbox(allowed_dir.to_path_buf());
+    let requested_path = allowed_dir_uri.join("link/../secret.txt")?;
+    let sandbox = read_only_sandbox(allowed_dir.to_path_buf());
+    let error = match file_system.read_file(&requested_path, Some(&sandbox)).await {
+        Ok(_) => anyhow::bail!("read should fail after path normalization"),
+        Err(error) => error,
+    };
+    assert_normalized_path_rejected(&error);
+
+    let linux_cleanup_command = format!("rm -rf {}", root.display());
+    let windows_cleanup_command = format!(
+        r#"$ErrorActionPreference = 'Stop'
+$root = '{root}'
+Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue"#,
+        root = root_uri.native_path_display(),
+    );
+    remote_exec(&linux_cleanup_command, &windows_cleanup_command)?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
+    skip_if_wine_exec!(Ok(()), "tests POSIX symlink removal semantics");
+    skip_if_no_network!(Ok(()));
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let test_env = test_env().await?;
+    let file_system = test_env.environment().get_filesystem();
+
+    let root = PathBuf::from(format!(
+        "/tmp/codex-remote-remove-link-{}",
+        std::process::id()
+    ));
+    let allowed_dir = root.join("allowed");
+    let outside_file = root.join("outside").join("keep.txt");
+    let symlink_path = allowed_dir.join("link");
+    remote_exec_docker(&format!(
+        "rm -rf {root}; mkdir -p {allowed} {outside_parent}; printf outside > {outside}; ln -s {outside} {symlink}",
+        root = root.display(),
+        allowed = allowed_dir.display(),
+        outside_parent = absolute_path(
+            outside_file
+                .parent()
+                .context("outside parent should exist")?
+                .to_path_buf(),
+        )
+        .display(),
+        outside = outside_file.display(),
+        symlink = symlink_path.display(),
+    ))?;
+
+    let sandbox = workspace_write_sandbox(allowed_dir.clone());
     file_system
         .remove(
-            &symlink_path_uri,
+            &PathUri::from_path(&symlink_path)?,
             RemoveOptions {
                 recursive: false,
                 force: false,
@@ -1106,18 +1172,21 @@ New-Item -ItemType SymbolicLink -Path $symlink -Target $outside | Out-Null"#,
         .await?;
 
     let symlink_exists = file_system
-        .get_metadata(&symlink_path_uri, /*sandbox*/ None)
+        .get_metadata(
+            &PathUri::from_abs_path(&absolute_path(symlink_path)),
+            /*sandbox*/ None,
+        )
         .await
         .is_ok();
     assert!(!symlink_exists);
     let outside = file_system
-        .read_file_text(&outside_file_uri, /*sandbox*/ None)
+        .read_file_text(&PathUri::from_path(&outside_file)?, /*sandbox*/ None)
         .await?;
     assert_eq!(outside, "outside");
 
     file_system
         .remove(
-            &root_uri,
+            &PathUri::from_path(&root)?,
             RemoveOptions {
                 recursive: true,
                 force: true,
