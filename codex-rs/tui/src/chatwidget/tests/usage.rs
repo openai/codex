@@ -47,6 +47,23 @@ async fn usage_command_shows_disabled_reset_when_none_is_available_snapshot() {
 }
 
 #[tokio::test]
+async fn usage_command_can_check_reset_availability_before_startup_refresh_finishes_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+    chat.start_rate_limit_reset_startup_check();
+
+    chat.dispatch_command(SlashCommand::Usage);
+
+    assert_chatwidget_snapshot!(
+        "usage_command_menu_before_reset_refresh",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenRateLimitResetCredits));
+}
+
+#[tokio::test]
 async fn usage_command_disables_reset_for_workspace_accounts() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
@@ -186,6 +203,31 @@ async fn rate_limit_reset_retry_reuses_idempotency_key() {
         Ok(AppEvent::ConsumeRateLimitResetCredit { idempotency_key })
             if idempotency_key == "stable-redeem-id"
     );
+}
+
+#[tokio::test]
+async fn no_credit_outcome_disables_reset_entry_in_usage_menu() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+    let startup_request_id = chat.start_rate_limit_reset_startup_check();
+    assert!(chat.finish_rate_limit_reset_hint_refresh(
+        startup_request_id,
+        Ok(RateLimitResetCreditsSummary { available_count: 1 }),
+    ));
+    let consume_request_id = chat.show_rate_limit_reset_consuming_popup();
+    assert!(!finish_reset_consume_outcome(
+        &mut chat,
+        consume_request_id,
+        "redeem-1",
+        ConsumeAccountRateLimitResetCreditOutcome::NoCredit,
+    ));
+    dismiss_popup(&mut chat);
+
+    chat.dispatch_command(SlashCommand::Usage);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenTokenActivity));
 }
 
 #[tokio::test]

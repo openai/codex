@@ -11,18 +11,22 @@ const RATE_LIMIT_RESET_VIEW_ID: &str = "rate-limit-reset";
 impl ChatWidget {
     pub(super) fn open_usage_menu(&mut self) {
         self.clear_pending_rate_limit_reset_hint();
-        let reset_available = self.has_chatgpt_account
-            && !self.plan_type.is_some_and(PlanType::is_workspace_account)
-            && self.available_rate_limit_reset_credits > 0;
-        let reset_description = if reset_available {
-            format!(
-                "You have {} {} available.",
-                self.available_rate_limit_reset_credits,
-                reset_label(self.available_rate_limit_reset_credits)
-            )
-        } else {
-            "No rate-limit resets available.".to_string()
-        };
+        let reset_eligible =
+            self.has_chatgpt_account && !self.plan_type.is_some_and(PlanType::is_workspace_account);
+        let (reset_available, reset_description) =
+            match (reset_eligible, self.available_rate_limit_reset_credits) {
+                (true, Some(available_count)) if available_count > 0 => (
+                    true,
+                    format!(
+                        "You have {available_count} {} available.",
+                        reset_label(available_count)
+                    ),
+                ),
+                (true, None) => (true, "Check reset availability.".to_string()),
+                (true, Some(_)) | (false, _) => {
+                    (false, "No rate-limit resets available.".to_string())
+                }
+            };
         self.bottom_pane.show_selection_view(SelectionViewParams {
             view_id: Some(USAGE_MENU_VIEW_ID),
             title: Some("Usage".to_string()),
@@ -85,7 +89,7 @@ impl ChatWidget {
 
         let params = match result {
             Ok(response) => {
-                self.available_rate_limit_reset_credits = response.available_count;
+                self.available_rate_limit_reset_credits = Some(response.available_count);
                 if response.available_count > 0 {
                     Self::rate_limit_reset_confirmation_params(response.available_count)
                 } else {
@@ -202,6 +206,7 @@ impl ChatWidget {
                         "Your usage does not need a reset right now."
                     }
                     ConsumeAccountRateLimitResetCreditOutcome::NoCredit => {
+                        self.available_rate_limit_reset_credits = Some(0);
                         "No rate-limit resets are available."
                     }
                     ConsumeAccountRateLimitResetCreditOutcome::Reset
@@ -252,7 +257,7 @@ impl ChatWidget {
 
         let message = match result {
             Ok(response) => {
-                self.available_rate_limit_reset_credits = response.available_count;
+                self.available_rate_limit_reset_credits = Some(response.available_count);
                 format!(
                     "Usage reset. You have {} {} left.",
                     response.available_count,
@@ -309,7 +314,7 @@ impl ChatWidget {
             return false;
         }
         if let Ok(response) = result {
-            self.available_rate_limit_reset_credits = response.available_count;
+            self.available_rate_limit_reset_credits = Some(response.available_count);
             self.set_rate_limit_reset_available_hint(response.available_count);
         }
         true
@@ -317,7 +322,7 @@ impl ChatWidget {
 
     pub(crate) fn clear_pending_rate_limit_reset_requests(&mut self) {
         self.pending_rate_limit_reset_request_id = None;
-        self.available_rate_limit_reset_credits = 0;
+        self.available_rate_limit_reset_credits = None;
         self.clear_pending_rate_limit_reset_hint();
         self.bottom_pane
             .dismiss_view_by_id(RATE_LIMIT_RESET_VIEW_ID);
