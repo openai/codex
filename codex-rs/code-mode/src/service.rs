@@ -86,6 +86,7 @@ struct CellHandle {
     control_tx: mpsc::UnboundedSender<CellControlCommand>,
     runtime_tx: std::sync::mpsc::Sender<RuntimeCommand>,
     cancellation_token: CancellationToken,
+    termination_requested: Arc<AtomicBool>,
 }
 
 struct Inner {
@@ -142,7 +143,7 @@ impl CodeModeService {
         )
         .await?;
 
-        Ok(StartedCell::new(cell_id, response_rx))
+        Ok(StartedCell::from_result_receiver(cell_id, response_rx))
     }
 
     pub async fn execute_to_pending(
@@ -162,7 +163,7 @@ impl CodeModeService {
 
         response_rx
             .await
-            .map_err(|_| "exec runtime ended unexpectedly".to_string())
+            .map_err(|_| "exec runtime ended unexpectedly".to_string())?
     }
 
     async fn start_cell(
@@ -195,6 +196,7 @@ impl CodeModeService {
                     control_tx,
                     runtime_tx: runtime_tx.clone(),
                     cancellation_token: cancellation_token.clone(),
+                    termination_requested: Arc::new(AtomicBool::new(false)),
                 },
             );
             (runtime_tx, runtime_control_tx, runtime_terminate_handle)
@@ -220,13 +222,20 @@ impl CodeModeService {
     }
 
     pub async fn wait(&self, request: WaitRequest) -> Result<WaitOutcome, String> {
+        self.begin_wait(request).await.await
+    }
+
+    async fn begin_wait(
+        &self,
+        request: WaitRequest,
+    ) -> CodeModeSessionResultFuture<'static, WaitOutcome> {
         let WaitRequest {
             cell_id,
             yield_time_ms,
         } = request;
         let handle = self.inner.cells.lock().await.get(&cell_id).cloned();
         let Some(handle) = handle else {
-            return Ok(WaitOutcome::MissingCell(missing_cell_response(cell_id)));
+            return missing_wait(cell_id);
         };
         let (response_tx, response_rx) = oneshot::channel();
         let control_message = CellControlCommand::Poll {
@@ -234,12 +243,9 @@ impl CodeModeService {
             response_tx,
         };
         if handle.control_tx.send(control_message).is_err() {
-            return Ok(WaitOutcome::MissingCell(missing_cell_response(cell_id)));
+            return missing_wait(cell_id);
         }
-        match response_rx.await {
-            Ok(response) => Ok(WaitOutcome::LiveCell(response)),
-            Err(_) => Ok(WaitOutcome::MissingCell(missing_cell_response(cell_id))),
-        }
+        wait_for_response(cell_id, response_rx)
     }
 
     pub async fn terminate(&self, cell_id: CellId) -> Result<WaitOutcome, String> {
@@ -247,16 +253,25 @@ impl CodeModeService {
         let Some(handle) = handle else {
             return Ok(WaitOutcome::MissingCell(missing_cell_response(cell_id)));
         };
+        if handle
+            .termination_requested
+            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            return Err(already_terminating_error(&cell_id));
+        }
         let (response_tx, response_rx) = oneshot::channel();
         if handle
             .control_tx
             .send(CellControlCommand::Terminate { response_tx })
             .is_err()
         {
+            handle.termination_requested.store(false, Ordering::Relaxed);
             return Ok(WaitOutcome::MissingCell(missing_cell_response(cell_id)));
         }
         match response_rx.await {
-            Ok(response) => Ok(WaitOutcome::LiveCell(response)),
+            Ok(Ok(response)) => Ok(WaitOutcome::LiveCell(response)),
+            Ok(Err(error_text)) => Err(error_text),
             Err(_) => Ok(WaitOutcome::MissingCell(missing_cell_response(cell_id))),
         }
     }
@@ -283,7 +298,8 @@ impl CodeModeService {
             )));
         }
         match response_rx.await {
-            Ok(response) => Ok(WaitToPendingOutcome::LiveCell(response)),
+            Ok(Ok(response)) => Ok(WaitToPendingOutcome::LiveCell(response)),
+            Ok(Err(error_text)) => Err(error_text),
             Err(_) => Ok(WaitToPendingOutcome::MissingCell(missing_cell_response(
                 cell_id,
             ))),
@@ -365,19 +381,19 @@ impl CodeModeSession for CodeModeService {
 enum CellControlCommand {
     Poll {
         yield_time_ms: u64,
-        response_tx: oneshot::Sender<RuntimeResponse>,
+        response_tx: oneshot::Sender<Result<RuntimeResponse, String>>,
     },
     PollToPending {
-        response_tx: oneshot::Sender<ExecuteToPendingOutcome>,
+        response_tx: oneshot::Sender<Result<ExecuteToPendingOutcome, String>>,
     },
     Terminate {
-        response_tx: oneshot::Sender<RuntimeResponse>,
+        response_tx: oneshot::Sender<Result<RuntimeResponse, String>>,
     },
 }
 
 enum CellResponseSender {
-    Runtime(oneshot::Sender<RuntimeResponse>),
-    ExecuteToPending(oneshot::Sender<ExecuteToPendingOutcome>),
+    Runtime(oneshot::Sender<Result<RuntimeResponse, String>>),
+    ExecuteToPending(oneshot::Sender<Result<ExecuteToPendingOutcome, String>>),
 }
 
 struct PendingResult {
@@ -402,6 +418,31 @@ fn missing_cell_response(cell_id: CellId) -> RuntimeResponse {
     }
 }
 
+fn missing_wait(cell_id: CellId) -> CodeModeSessionResultFuture<'static, WaitOutcome> {
+    Box::pin(async move { Ok(WaitOutcome::MissingCell(missing_cell_response(cell_id))) })
+}
+
+fn wait_for_response(
+    cell_id: CellId,
+    response_rx: oneshot::Receiver<Result<RuntimeResponse, String>>,
+) -> CodeModeSessionResultFuture<'static, WaitOutcome> {
+    Box::pin(async move {
+        match response_rx.await {
+            Ok(Ok(response)) => Ok(WaitOutcome::LiveCell(response)),
+            Ok(Err(error_text)) => Err(error_text),
+            Err(_) => Ok(WaitOutcome::MissingCell(missing_cell_response(cell_id))),
+        }
+    })
+}
+
+fn busy_observer_error(cell_id: &CellId) -> String {
+    format!("exec cell {cell_id} already has an active observer")
+}
+
+fn already_terminating_error(cell_id: &CellId) -> String {
+    format!("exec cell {cell_id} is already terminating")
+}
+
 fn pending_result_response(cell_id: &CellId, result: PendingResult) -> RuntimeResponse {
     RuntimeResponse::Result {
         cell_id: cell_id.clone(),
@@ -413,11 +454,24 @@ fn pending_result_response(cell_id: &CellId, result: PendingResult) -> RuntimeRe
 fn send_terminal_response(response_tx: CellResponseSender, response: RuntimeResponse) {
     match response_tx {
         CellResponseSender::Runtime(response_tx) => {
-            let _ = response_tx.send(response);
+            let _ = response_tx.send(Ok(response));
         }
         CellResponseSender::ExecuteToPending(response_tx) => {
-            let _ = response_tx.send(ExecuteToPendingOutcome::Completed(response));
+            let _ = response_tx.send(Ok(ExecuteToPendingOutcome::Completed(response)));
         }
+    }
+}
+
+fn send_termination_responses(
+    response_tx: Option<CellResponseSender>,
+    termination_response_tx: Option<oneshot::Sender<Result<RuntimeResponse, String>>>,
+    response: RuntimeResponse,
+) {
+    if let Some(response_tx) = response_tx {
+        send_terminal_response(response_tx, response.clone());
+    }
+    if let Some(termination_response_tx) = termination_response_tx {
+        let _ = termination_response_tx.send(Ok(response));
     }
 }
 
@@ -447,10 +501,10 @@ fn send_yield_response(
     };
     match current_response_tx {
         CellResponseSender::Runtime(response_tx) => {
-            let _ = response_tx.send(RuntimeResponse::Yielded {
+            let _ = response_tx.send(Ok(RuntimeResponse::Yielded {
                 cell_id: cell_id.clone(),
                 content_items: std::mem::take(content_items),
-            });
+            }));
         }
         CellResponseSender::ExecuteToPending(execute_to_pending_tx) => {
             *response_tx = Some(CellResponseSender::ExecuteToPending(execute_to_pending_tx));
@@ -478,30 +532,134 @@ async fn run_cell_control(
     let mut pending_tool_call_ids = Vec::new();
     let mut pending_result: Option<PendingResult> = None;
     let mut response_tx = Some(initial_response_tx);
+    let mut termination_response_tx = None;
     let mut termination_requested = false;
     let mut runtime_closed = false;
     let mut yield_timer: Option<std::pin::Pin<Box<tokio::time::Sleep>>> = None;
     let mut notification_tasks = JoinSet::new();
+    let mut tool_tasks = JoinSet::new();
 
     loop {
+        let yield_deadline_elapsed = yield_timer
+            .as_ref()
+            .is_some_and(|yield_timer| yield_timer.deadline() <= tokio::time::Instant::now());
         tokio::select! {
+            biased;
+            maybe_command = control_rx.recv() => {
+                let Some(command) = maybe_command else {
+                    break;
+                };
+                match command {
+                    CellControlCommand::Poll {
+                        yield_time_ms,
+                        response_tx: next_response_tx,
+                    } => {
+                        if let Some(result) = pending_result.take() {
+                            let _ = next_response_tx.send(Ok(pending_result_response(&cell_id, result)));
+                            break;
+                        }
+                        if response_tx.is_some() || termination_response_tx.is_some() {
+                            let _ = next_response_tx.send(Err(busy_observer_error(&cell_id)));
+                            continue;
+                        }
+                        response_tx = Some(CellResponseSender::Runtime(next_response_tx));
+                        yield_timer = Some(Box::pin(tokio::time::sleep(Duration::from_millis(yield_time_ms))));
+                        resume_paused_runtime(&runtime_control_tx, pending_mode);
+                    }
+                    CellControlCommand::PollToPending {
+                        response_tx: next_response_tx,
+                    } => {
+                        if let Some(result) = pending_result.take() {
+                            let response = pending_result_response(&cell_id, result);
+                            let _ = next_response_tx
+                                .send(Ok(ExecuteToPendingOutcome::Completed(response)));
+                            break;
+                        }
+                        if response_tx.is_some() || termination_response_tx.is_some() {
+                            let _ = next_response_tx.send(Err(busy_observer_error(&cell_id)));
+                            continue;
+                        }
+                        response_tx =
+                            Some(CellResponseSender::ExecuteToPending(next_response_tx));
+                        yield_timer = None;
+                        resume_paused_runtime(&runtime_control_tx, pending_mode);
+                    }
+                    CellControlCommand::Terminate { response_tx: next_response_tx } => {
+                        if let Some(result) = pending_result.take() {
+                            let _ = next_response_tx.send(Ok(pending_result_response(&cell_id, result)));
+                            break;
+                        }
+
+                        if termination_response_tx.is_some() {
+                            let _ = next_response_tx.send(Err(already_terminating_error(&cell_id)));
+                            continue;
+                        }
+
+                        termination_response_tx = Some(next_response_tx);
+                        termination_requested = true;
+                        cancellation_token.cancel();
+                        yield_timer = None;
+                        let _ = runtime_tx.send(RuntimeCommand::Terminate);
+                        terminate_paused_runtime(&runtime_control_tx, pending_mode);
+                        let _ = runtime_terminate_handle.terminate_execution();
+                        if runtime_closed {
+                            finish_callbacks(
+                                &cancellation_token,
+                                &mut notification_tasks,
+                                &mut tool_tasks,
+                                CallbackCompletion::Cancel,
+                            ).await;
+                            let response = RuntimeResponse::Terminated {
+                                cell_id: cell_id.clone(),
+                                content_items: std::mem::take(&mut content_items),
+                            };
+                            send_termination_responses(
+                                response_tx.take(),
+                                termination_response_tx.take(),
+                                response,
+                            );
+                            break;
+                        } else {
+                            continue;
+                        }
+                    }
+                }
+            }
+            _ = async {
+                if let Some(yield_timer) = yield_timer.as_mut() {
+                    yield_timer.await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
+                yield_timer = None;
+                send_yield_response(&cell_id, &mut content_items, &mut response_tx);
+            }
             maybe_event = async {
                 if runtime_closed {
                     std::future::pending::<Option<RuntimeEvent>>().await
                 } else {
                     event_rx.recv().await
                 }
-            } => {
+            }, if !yield_deadline_elapsed => {
                 let Some(event) = maybe_event else {
                     runtime_closed = true;
                     if termination_requested {
-                        if let Some(response_tx) = response_tx.take() {
-                            let response = RuntimeResponse::Terminated {
-                                cell_id: cell_id.clone(),
-                                content_items: std::mem::take(&mut content_items),
-                            };
-                            send_terminal_response(response_tx, response);
-                        }
+                        finish_callbacks(
+                            &cancellation_token,
+                            &mut notification_tasks,
+                            &mut tool_tasks,
+                            CallbackCompletion::Cancel,
+                        ).await;
+                        let response = RuntimeResponse::Terminated {
+                            cell_id: cell_id.clone(),
+                            content_items: std::mem::take(&mut content_items),
+                        };
+                        send_termination_responses(
+                            response_tx.take(),
+                            termination_response_tx.take(),
+                            response,
+                        );
                         break;
                     }
                     if pending_result.is_none() {
@@ -534,13 +692,13 @@ async fn run_cell_control(
                                         Some(CellResponseSender::Runtime(runtime_response_tx));
                                 }
                                 CellResponseSender::ExecuteToPending(response_tx) => {
-                                    let _ = response_tx.send(ExecuteToPendingOutcome::Pending {
+                                    let _ = response_tx.send(Ok(ExecuteToPendingOutcome::Pending {
                                         cell_id: cell_id.clone(),
                                         content_items: std::mem::take(&mut content_items),
                                         pending_tool_call_ids: std::mem::take(
                                             &mut pending_tool_call_ids,
                                         ),
-                                    });
+                                    }));
                                 }
                             }
                         }
@@ -557,20 +715,13 @@ async fn run_cell_control(
                         let cell_id = cell_id.clone();
                         let cancellation_token = cancellation_token.child_token();
                         notification_tasks.spawn(async move {
-                            tokio::select! {
-                                result = delegate.notify(
-                                    call_id,
-                                    cell_id.clone(),
-                                    text,
-                                    cancellation_token.clone(),
-                                ) => {
-                                    if let Err(err) = result {
-                                        warn!(
-                                            "failed to deliver code mode notification for cell {cell_id}: {err}"
-                                        );
-                                    }
-                                }
-                                _ = cancellation_token.cancelled() => {}
+                            if let Err(err) = delegate
+                                .notify(call_id, cell_id.clone(), text, cancellation_token)
+                                .await
+                            {
+                                warn!(
+                                    "failed to deliver code mode notification for cell {cell_id}: {err}"
+                                );
                             }
                         });
                     }
@@ -593,11 +744,8 @@ async fn run_cell_control(
                         let delegate = Arc::clone(&inner.delegate);
                         let runtime_tx = runtime_tx.clone();
                         let cancellation_token = cancellation_token.child_token();
-                        tokio::spawn(async move {
-                            let response = tokio::select! {
-                                response = delegate.invoke_tool(tool_call, cancellation_token.clone()) => response,
-                                _ = cancellation_token.cancelled() => return,
-                            };
+                        tool_tasks.spawn(async move {
+                            let response = delegate.invoke_tool(tool_call, cancellation_token).await;
                             let command = match response {
                                 Ok(result) => RuntimeCommand::ToolResponse { id, result },
                                 Err(error_text) => RuntimeCommand::ToolError { id, error_text },
@@ -611,16 +759,29 @@ async fn run_cell_control(
                     } => {
                         yield_timer = None;
                         if termination_requested {
-                            if let Some(response_tx) = response_tx.take() {
-                                let response = RuntimeResponse::Terminated {
-                                    cell_id: cell_id.clone(),
-                                    content_items: std::mem::take(&mut content_items),
-                                };
-                                send_terminal_response(response_tx, response);
-                            }
+                            finish_callbacks(
+                                &cancellation_token,
+                                &mut notification_tasks,
+                                &mut tool_tasks,
+                                CallbackCompletion::Cancel,
+                            ).await;
+                            let response = RuntimeResponse::Terminated {
+                                cell_id: cell_id.clone(),
+                                content_items: std::mem::take(&mut content_items),
+                            };
+                            send_termination_responses(
+                                response_tx.take(),
+                                termination_response_tx.take(),
+                                response,
+                            );
                             break;
                         }
-                        drain_notification_tasks(&mut notification_tasks).await;
+                        finish_callbacks(
+                            &cancellation_token,
+                            &mut notification_tasks,
+                            &mut tool_tasks,
+                            CallbackCompletion::DrainNotifications,
+                        ).await;
                         inner
                             .stored_values
                             .lock()
@@ -648,92 +809,56 @@ async fn run_cell_control(
                     warn!("code mode notification task failed: {err}");
                 }
             }
-            maybe_command = control_rx.recv() => {
-                let Some(command) = maybe_command else {
-                    break;
-                };
-                match command {
-                    CellControlCommand::Poll {
-                        yield_time_ms,
-                        response_tx: next_response_tx,
-                    } => {
-                        if let Some(result) = pending_result.take() {
-                            let _ = next_response_tx.send(pending_result_response(&cell_id, result));
-                            break;
-                        }
-                        response_tx = Some(CellResponseSender::Runtime(next_response_tx));
-                        yield_timer = Some(Box::pin(tokio::time::sleep(Duration::from_millis(yield_time_ms))));
-                        resume_paused_runtime(&runtime_control_tx, pending_mode);
-                    }
-                    CellControlCommand::PollToPending {
-                        response_tx: next_response_tx,
-                    } => {
-                        if let Some(result) = pending_result.take() {
-                            let response = pending_result_response(&cell_id, result);
-                            let _ = next_response_tx
-                                .send(ExecuteToPendingOutcome::Completed(response));
-                            break;
-                        }
-                        response_tx =
-                            Some(CellResponseSender::ExecuteToPending(next_response_tx));
-                        yield_timer = None;
-                        resume_paused_runtime(&runtime_control_tx, pending_mode);
-                    }
-                    CellControlCommand::Terminate { response_tx: next_response_tx } => {
-                        if let Some(result) = pending_result.take() {
-                            let _ = next_response_tx.send(pending_result_response(&cell_id, result));
-                            break;
-                        }
-
-                        response_tx = Some(CellResponseSender::Runtime(next_response_tx));
-                        termination_requested = true;
-                        cancellation_token.cancel();
-                        yield_timer = None;
-                        let _ = runtime_tx.send(RuntimeCommand::Terminate);
-                        terminate_paused_runtime(&runtime_control_tx, pending_mode);
-                        let _ = runtime_terminate_handle.terminate_execution();
-                        if runtime_closed {
-                            if let Some(response_tx) = response_tx.take() {
-                                let response = RuntimeResponse::Terminated {
-                                    cell_id: cell_id.clone(),
-                                    content_items: std::mem::take(&mut content_items),
-                                };
-                                send_terminal_response(response_tx, response);
-                            }
-                            break;
-                        } else {
-                            continue;
-                        }
-                    }
+            task_result = tool_tasks.join_next(), if !tool_tasks.is_empty() => {
+                if let Some(Err(err)) = task_result
+                    && !err.is_cancelled()
+                {
+                    warn!("code mode tool task failed: {err}");
                 }
-            }
-            _ = async {
-                if let Some(yield_timer) = yield_timer.as_mut() {
-                    yield_timer.await;
-                } else {
-                    std::future::pending::<()>().await;
-                }
-            } => {
-                yield_timer = None;
-                send_yield_response(&cell_id, &mut content_items, &mut response_tx);
             }
         }
     }
 
     let _ = runtime_tx.send(RuntimeCommand::Terminate);
     cancellation_token.cancel();
-    drain_notification_tasks(&mut notification_tasks).await;
+    finish_callbacks(
+        &cancellation_token,
+        &mut notification_tasks,
+        &mut tool_tasks,
+        CallbackCompletion::Cancel,
+    )
+    .await;
     terminate_paused_runtime(&runtime_control_tx, pending_mode);
     inner.cells.lock().await.remove(&cell_id);
     inner.delegate.cell_closed(&cell_id);
 }
 
-async fn drain_notification_tasks(notification_tasks: &mut JoinSet<()>) {
-    while let Some(result) = notification_tasks.join_next().await {
+#[derive(Clone, Copy)]
+enum CallbackCompletion {
+    DrainNotifications,
+    Cancel,
+}
+
+async fn finish_callbacks(
+    cancellation_token: &CancellationToken,
+    notification_tasks: &mut JoinSet<()>,
+    tool_tasks: &mut JoinSet<()>,
+    completion: CallbackCompletion,
+) {
+    if matches!(completion, CallbackCompletion::Cancel) {
+        cancellation_token.cancel();
+    }
+    drain_tasks(notification_tasks, "notification").await;
+    cancellation_token.cancel();
+    drain_tasks(tool_tasks, "tool").await;
+}
+
+async fn drain_tasks(tasks: &mut JoinSet<()>, description: &str) {
+    while let Some(result) = tasks.join_next().await {
         if let Err(err) = result
             && !err.is_cancelled()
         {
-            warn!("code mode notification task failed: {err}");
+            warn!("code mode {description} task failed: {err}");
         }
     }
 }
@@ -1786,10 +1911,10 @@ image({
         event_tx.send(RuntimeEvent::YieldRequested).unwrap();
         assert_eq!(
             initial_response_rx.await.unwrap(),
-            RuntimeResponse::Yielded {
+            Ok(RuntimeResponse::Yielded {
                 cell_id: cell_id("cell-1"),
                 content_items: Vec::new(),
-            }
+            })
         );
 
         let (terminate_response_tx, terminate_response_rx) = oneshot::channel();
@@ -1810,12 +1935,16 @@ image({
 
         assert_eq!(
             terminate_response.await,
-            RuntimeResponse::Terminated {
+            Ok(RuntimeResponse::Terminated {
                 cell_id: cell_id("cell-1"),
                 content_items: Vec::new(),
-            }
+            })
         );
 
         let _ = runtime_tx.send(RuntimeCommand::Terminate);
     }
 }
+
+#[cfg(test)]
+#[path = "service_contract_tests.rs"]
+mod contract_tests;
