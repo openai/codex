@@ -154,11 +154,8 @@ fn sandbox_cwd(sandbox: &FileSystemSandboxContext) -> Result<SandboxCwd, JSONRPC
 }
 
 fn native_sandbox_cwd(cwd: &PathUri) -> Result<AbsolutePathBuf, JSONRPCErrorError> {
-    cwd.to_abs_path().map_err(|err| {
-        invalid_request(format!(
-            "file system sandbox cwd is not native to this exec-server host: {err}"
-        ))
-    })
+    cwd.to_abs_path()
+        .map_err(|err| invalid_request(err.to_string()))
 }
 
 fn helper_read_roots(runtime_paths: &ExecServerRuntimePaths) -> Vec<AbsolutePathBuf> {
@@ -561,16 +558,16 @@ mod tests {
             FileSystemSpecialPath::project_roots(/*subpath*/ None),
             FileSystemAccessMode::Write,
         )]);
-        let sandbox_context = sandbox_context_with_cwd(&policy, cwd);
+        let sandbox_context = sandbox_context_with_cwd(&policy, cwd.clone());
 
         let err = sandbox_cwd(&sandbox_context).expect_err("non-native cwd should be rejected");
 
         assert_eq!(
             err,
-            crate::rpc::invalid_request(
-                "file system sandbox cwd is not native to this exec-server host: file URI contains an invalid absolute path"
-                    .to_string()
-            )
+            crate::rpc::invalid_request(format!(
+                "'{cwd}' is invalid on '{}'",
+                std::env::consts::OS
+            ))
         );
     }
 

@@ -42,7 +42,13 @@ fn non_native_uri_io_conversion_is_invalid_input() {
         .to_abs_path()
         .expect_err("URI should not be host-native");
 
-    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(
+        (error.kind(), error.to_string()),
+        (
+            io::ErrorKind::InvalidInput,
+            format!("'{uri}' is invalid on '{}'", std::env::consts::OS),
+        )
+    );
 }
 
 #[test]
@@ -193,7 +199,9 @@ fn malformed_bad_path_uris_are_rejected() {
     ] {
         assert_eq!(
             PathUri::parse(uri),
-            Err(PathUriParseError::InvalidFileUriPath),
+            Err(PathUriParseError::InvalidFileUriPath {
+                path: uri.to_string(),
+            }),
             "parsing {uri}"
         );
     }
@@ -222,7 +230,9 @@ fn bad_path_uris_are_opaque_to_lexical_operations() {
     assert_eq!(uri.join(""), Ok(uri.clone()));
     assert_eq!(
         uri.join("child"),
-        Err(PathUriParseError::InvalidFileUriPath)
+        Err(PathUriParseError::InvalidFileUriPath {
+            path: uri.to_string(),
+        })
     );
 }
 
@@ -497,10 +507,12 @@ fn join_rejects_absolute_and_null_paths() {
         base.join("/src"),
         Err(PathUriParseError::JoinPathMustBeRelative(path)) if path == "/src"
     ));
-    assert!(matches!(
+    assert_eq!(
         base.join("src\0file"),
-        Err(PathUriParseError::InvalidFileUriPath)
-    ));
+        Err(PathUriParseError::InvalidFileUriPath {
+            path: "src\0file".to_string(),
+        })
+    );
 }
 
 #[test]
