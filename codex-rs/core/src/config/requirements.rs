@@ -151,7 +151,7 @@ pub(super) fn push_structured_requirement_override_warning(
     ));
 }
 
-fn resolve_auth_restrictions(
+pub(super) fn resolve_auth_restrictions(
     config: &ConfigToml,
     requirements: &ConfigRequirements,
 ) -> std::io::Result<(Option<ForcedLoginMethod>, Option<Vec<String>>)> {

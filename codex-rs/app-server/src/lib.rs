@@ -739,6 +739,7 @@ pub async fn run_main_with_transport_options(
     }
     drop(unix_socket_startup_lock);
 
+    enforce_auth_restrictions(&config).await;
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
 
@@ -1169,6 +1170,12 @@ pub async fn run_main_with_transport_options(
     }
 
     Ok(())
+}
+
+async fn enforce_auth_restrictions(config: &Config) {
+    if let Err(err) = codex_login::enforce_login_restrictions(&config.auth_config()).await {
+        tracing::warn!("applied auth restrictions after logging out: {err}");
+    }
 }
 
 struct SqliteRecoveryNotice {

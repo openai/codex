@@ -17,6 +17,9 @@ use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
+use codex_app_server_protocol::ConfigBatchWriteParams;
+use codex_app_server_protocol::ConfigEdit;
+use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::GetAuthStatusParams;
@@ -27,11 +30,13 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
+use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::WriteStatus;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::CLIENT_ID_OVERRIDE_ENV_VAR;
@@ -248,6 +253,97 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
     .await??;
     let account: GetAccountResponse = to_response(get_resp)?;
     assert_eq!(account.account, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn startup_removes_disallowed_stored_auth() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            forced_method: Some("chatgpt".to_string()),
+            ..Default::default()
+        },
+    )?;
+    login_with_api_key(
+        codex_home.path(),
+        "sk-test-key",
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    assert!(!codex_home.path().join("auth.json").exists());
+
+    let request_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: GetAccountResponse = to_response(response)?;
+    assert_eq!(response.account, None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn config_reload_removes_newly_disallowed_auth() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    login_with_api_key(
+        codex_home.path(),
+        "sk-test-key",
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_batch_write_request(ConfigBatchWriteParams {
+            file_path: None,
+            edits: vec![ConfigEdit {
+                key_path: "forced_login_method".to_string(),
+                value: json!("chatgpt"),
+                merge_strategy: MergeStrategy::Replace,
+            }],
+            expected_version: None,
+            reload_user_config: true,
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ConfigWriteResponse = to_response(response)?;
+    assert_eq!(response.status, WriteStatus::Ok);
+    assert!(!codex_home.path().join("auth.json").exists());
+
+    let request_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: GetAccountResponse = to_response(response)?;
+    assert_eq!(response.account, None);
+
     Ok(())
 }
 

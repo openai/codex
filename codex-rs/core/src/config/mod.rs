@@ -25,6 +25,7 @@ use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
+use codex_config::config_toml::ForcedChatgptWorkspaceIds;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
@@ -149,6 +150,7 @@ mod requirements;
 mod resolved_permission_profile;
 #[cfg(test)]
 mod schema;
+pub use auth_keyring::bootstrap_auth_config;
 pub use auth_keyring::resolve_bootstrap_auth_keyring_backend_kind;
 pub use codex_config::ConfigLoadOptions;
 pub use codex_config::Constrained;
@@ -1755,6 +1757,14 @@ pub async fn load_bootstrap_config_toml_with_layer_stack(
     if let Some(required) = requirements.chatgpt_base_url.as_ref() {
         result.config_toml.chatgpt_base_url = Some(required.clone());
     }
+    let (forced_login_method, forced_chatgpt_workspace_id) =
+        requirements::resolve_auth_restrictions(
+            &result.config_toml,
+            result.config_layer_stack.requirements(),
+        )?;
+    result.config_toml.forced_login_method = forced_login_method;
+    result.config_toml.forced_chatgpt_workspace_id =
+        forced_chatgpt_workspace_id.map(ForcedChatgptWorkspaceIds::Multiple);
     Ok(result)
 }
 

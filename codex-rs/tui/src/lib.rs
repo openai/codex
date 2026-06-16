@@ -8,6 +8,7 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::ConfigTomlLoadResult;
+use crate::legacy_core::config::bootstrap_auth_config;
 use crate::legacy_core::config::load_bootstrap_config_toml_with_layer_stack;
 use crate::legacy_core::config::resolve_bootstrap_auth_keyring_backend_kind;
 use crate::legacy_core::config::resolve_oss_provider;
@@ -951,6 +952,7 @@ pub async fn run_main(
     )
     .await;
     let bootstrap_config_toml = &bootstrap_config.config_toml;
+    enforce_login_restrictions(&bootstrap_auth_config(&codex_home, &bootstrap_config)?).await?;
 
     let chatgpt_base_url = bootstrap_config_toml
         .chatgpt_base_url

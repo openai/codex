@@ -11001,6 +11001,13 @@ chatgpt_base_url = "https://user.example/backend-api"
 cli_auth_credentials_store = "keyring"
 chatgpt_base_url = "https://managed.example/backend-api"
 
+[allowed_login_methods]
+chatgpt = true
+api = false
+
+[allowed_chatgpt_workspaces]
+"123e4567-e89b-42d3-a456-426614174000" = true
+
 [features]
 secret_auth_storage = true
 "#,
@@ -11024,11 +11031,18 @@ secret_auth_storage = true
         (
             bootstrap_config.config_toml.cli_auth_credentials_store,
             bootstrap_config.config_toml.chatgpt_base_url,
+            bootstrap_config.config_toml.forced_login_method,
+            bootstrap_config
+                .config_toml
+                .forced_chatgpt_workspace_id
+                .map(codex_config::config_toml::ForcedChatgptWorkspaceIds::into_vec),
             auth_keyring_backend_kind,
         ),
         (
             Some(AuthCredentialsStoreMode::Keyring),
             Some("https://managed.example/backend-api".to_string()),
+            Some(ForcedLoginMethod::Chatgpt),
+            Some(vec!["123e4567-e89b-42d3-a456-426614174000".to_string()]),
             AuthKeyringBackendKind::Secrets,
         )
     );

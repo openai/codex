@@ -6,6 +6,7 @@ use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::request_processors::AccountRequestProcessor;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ComputerUseRequirements;
@@ -59,6 +60,7 @@ pub(crate) struct ConfigRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     config_manager: ConfigManager,
     thread_manager: Arc<ThreadManager>,
+    account_processor: AccountRequestProcessor,
     analytics_events_client: AnalyticsEventsClient,
 }
 
@@ -67,12 +69,14 @@ impl ConfigRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         config_manager: ConfigManager,
         thread_manager: Arc<ThreadManager>,
+        account_processor: AccountRequestProcessor,
         analytics_events_client: AnalyticsEventsClient,
     ) -> Self {
         Self {
             outgoing,
             config_manager,
             thread_manager,
+            account_processor,
             analytics_events_client,
         }
     }
@@ -282,6 +286,13 @@ impl ConfigRequestProcessor {
                 return;
             }
         };
+        if let Err(err) = self
+            .account_processor
+            .refresh_auth_restrictions(&next_config)
+            .await
+        {
+            tracing::warn!("applied updated auth restrictions after logging out: {err}");
+        }
         let thread_ids = self.thread_manager.list_thread_ids().await;
         for thread_id in thread_ids {
             let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
