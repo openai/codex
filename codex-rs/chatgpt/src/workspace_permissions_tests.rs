@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn encode_path_segment_leaves_unreserved_ascii_unchanged() {
+fn encode_path_segment_preserves_unreserved_ascii() {
     assert_eq!(
         encode_path_segment("account-123_ABC.~"),
         "account-123_ABC.~"

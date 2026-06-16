@@ -572,7 +572,7 @@ async fn plugin_install_rejects_remote_plugin_disabled_by_admin_before_download(
 }
 
 #[tokio::test]
-async fn plugin_install_rejects_when_workspace_codex_plugins_disabled() -> Result<()> {
+async fn plugin_install_rejects_without_plugin_use_permission() -> Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;
     let server = MockServer::start().await;
@@ -605,10 +605,7 @@ async fn plugin_install_rejects_when_workspace_codex_plugins_disabled() -> Resul
         .and(path("/backend-api/accounts/account-123/settings"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(r#"{"beta_settings":{"enable_plugins":false}}"#),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"permissions":[]}"#))
         .mount(&server)
         .await;
 

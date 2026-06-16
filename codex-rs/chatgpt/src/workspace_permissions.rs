@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
@@ -11,34 +10,34 @@ use crate::chatgpt_client::chatgpt_get_request_with_timeout;
 
 const WORKSPACE_SETTINGS_TIMEOUT: Duration = Duration::from_secs(10);
 const WORKSPACE_SETTINGS_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
-const CODEX_PLUGINS_BETA_SETTING: &str = "enable_plugins";
+const USE_PLUGIN_PERMISSION: &str = "chatgpt.workspace_plugin.use";
 
 #[derive(Debug, Deserialize)]
 struct WorkspaceSettingsResponse {
     #[serde(default)]
-    beta_settings: HashMap<String, bool>,
+    permissions: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default)]
-pub struct WorkspaceSettingsCache {
-    entry: RwLock<Option<CachedWorkspaceSettings>>,
+pub struct WorkspacePermissionsCache {
+    entry: RwLock<Option<CachedWorkspacePermissions>>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct WorkspaceSettingsCacheKey {
+struct WorkspacePermissionsCacheKey {
     chatgpt_base_url: String,
     account_id: String,
 }
 
 #[derive(Clone, Debug)]
-struct CachedWorkspaceSettings {
-    key: WorkspaceSettingsCacheKey,
+struct CachedWorkspacePermissions {
+    key: WorkspacePermissionsCacheKey,
     expires_at: Instant,
-    codex_plugins_enabled: bool,
+    plugin_use_allowed: bool,
 }
 
-impl WorkspaceSettingsCache {
-    fn get_codex_plugins_enabled(&self, key: &WorkspaceSettingsCacheKey) -> Option<bool> {
+impl WorkspacePermissionsCache {
+    fn get_plugin_use_allowed(&self, key: &WorkspacePermissionsCacheKey) -> Option<bool> {
         {
             let entry = match self.entry.read() {
                 Ok(entry) => entry,
@@ -49,7 +48,7 @@ impl WorkspaceSettingsCache {
                 && now < cached.expires_at
                 && cached.key == *key
             {
-                return Some(cached.codex_plugins_enabled);
+                return Some(cached.plugin_use_allowed);
             }
         }
 
@@ -67,23 +66,23 @@ impl WorkspaceSettingsCache {
         None
     }
 
-    fn set_codex_plugins_enabled(&self, key: WorkspaceSettingsCacheKey, enabled: bool) {
+    fn set_plugin_use_allowed(&self, key: WorkspacePermissionsCacheKey, allowed: bool) {
         let mut entry = match self.entry.write() {
             Ok(entry) => entry,
             Err(err) => err.into_inner(),
         };
-        *entry = Some(CachedWorkspaceSettings {
+        *entry = Some(CachedWorkspacePermissions {
             key,
             expires_at: Instant::now() + WORKSPACE_SETTINGS_CACHE_TTL,
-            codex_plugins_enabled: enabled,
+            plugin_use_allowed: allowed,
         });
     }
 }
 
-pub async fn codex_plugins_enabled_for_workspace(
+pub async fn codex_plugins_allowed_for_workspace(
     config: &Config,
     auth: Option<&CodexAuth>,
-    cache: Option<&WorkspaceSettingsCache>,
+    cache: Option<&WorkspacePermissionsCache>,
 ) -> anyhow::Result<bool> {
     let Some(auth) = auth else {
         return Ok(true);
@@ -100,14 +99,14 @@ pub async fn codex_plugins_enabled_for_workspace(
         return Ok(true);
     };
 
-    let cache_key = WorkspaceSettingsCacheKey {
+    let cache_key = WorkspacePermissionsCacheKey {
         chatgpt_base_url: config.chatgpt_base_url.clone(),
         account_id: account_id.clone(),
     };
     if let Some(cache) = cache
-        && let Some(enabled) = cache.get_codex_plugins_enabled(&cache_key)
+        && let Some(allowed) = cache.get_plugin_use_allowed(&cache_key)
     {
-        return Ok(enabled);
+        return Ok(allowed);
     }
 
     let encoded_account_id = encode_path_segment(&account_id);
@@ -118,17 +117,19 @@ pub async fn codex_plugins_enabled_for_workspace(
     )
     .await?;
 
-    let codex_plugins_enabled = settings
-        .beta_settings
-        .get(CODEX_PLUGINS_BETA_SETTING)
-        .copied()
-        .unwrap_or(true);
+    // Older servers omit RBAC permissions from this response. Allow plugins until the
+    // permission is present so client and server deployments do not need to be atomic.
+    let plugin_use_allowed = settings.permissions.as_ref().is_none_or(|permissions| {
+        permissions
+            .iter()
+            .any(|permission| permission == USE_PLUGIN_PERMISSION)
+    });
 
     if let Some(cache) = cache {
-        cache.set_codex_plugins_enabled(cache_key, codex_plugins_enabled);
+        cache.set_plugin_use_allowed(cache_key, plugin_use_allowed);
     }
 
-    Ok(codex_plugins_enabled)
+    Ok(plugin_use_allowed)
 }
 
 fn encode_path_segment(value: &str) -> String {
@@ -144,5 +145,5 @@ fn encode_path_segment(value: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "workspace_settings_tests.rs"]
+#[path = "workspace_permissions_tests.rs"]
 mod tests;

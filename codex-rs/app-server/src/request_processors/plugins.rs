@@ -30,7 +30,7 @@ pub(crate) struct PluginRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     analytics_events_client: AnalyticsEventsClient,
     config_manager: ConfigManager,
-    workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+    workspace_permissions_cache: Arc<workspace_permissions::WorkspacePermissionsCache>,
 }
 
 fn plugin_skills_to_info(
@@ -339,7 +339,7 @@ impl PluginRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         analytics_events_client: AnalyticsEventsClient,
         config_manager: ConfigManager,
-        workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+        workspace_permissions_cache: Arc<workspace_permissions::WorkspacePermissionsCache>,
     ) -> Self {
         Self {
             auth_manager,
@@ -347,7 +347,7 @@ impl PluginRequestProcessor {
             outgoing,
             analytics_events_client,
             config_manager,
-            workspace_settings_cache,
+            workspace_permissions_cache,
         }
     }
 
@@ -497,22 +497,18 @@ impl PluginRequestProcessor {
             .map_err(|err| internal_error(format!("failed to reload config: {err}")))
     }
 
-    async fn workspace_codex_plugins_enabled(
-        &self,
-        config: &Config,
-        auth: Option<&CodexAuth>,
-    ) -> bool {
-        match workspace_settings::codex_plugins_enabled_for_workspace(
+    async fn workspace_plugins_allowed(&self, config: &Config, auth: Option<&CodexAuth>) -> bool {
+        match workspace_permissions::codex_plugins_allowed_for_workspace(
             config,
             auth,
-            Some(&self.workspace_settings_cache),
+            Some(&self.workspace_permissions_cache),
         )
         .await
         {
             Ok(enabled) => enabled,
             Err(err) => {
                 warn!(
-                    "failed to fetch workspace Codex plugins setting; allowing Codex plugins: {err:#}"
+                    "failed to fetch workspace plugin permission; allowing Codex plugins: {err:#}"
                 );
                 true
             }
@@ -545,10 +541,7 @@ impl PluginRequestProcessor {
             return Ok(empty_response());
         }
         let auth = self.auth_manager.auth().await;
-        if !self
-            .workspace_codex_plugins_enabled(&config, auth.as_ref())
-            .await
-        {
+        if !self.workspace_plugins_allowed(&config, auth.as_ref()).await {
             return Ok(empty_response());
         }
         let auth_mode = auth.as_ref().map(CodexAuth::api_auth_mode);
@@ -796,10 +789,7 @@ impl PluginRequestProcessor {
             return Ok(empty_response());
         }
         let auth = self.auth_manager.auth().await;
-        if !self
-            .workspace_codex_plugins_enabled(&config, auth.as_ref())
-            .await
-        {
+        if !self.workspace_plugins_allowed(&config, auth.as_ref()).await {
             return Ok(empty_response());
         }
         plugins_manager.set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
@@ -1427,10 +1417,7 @@ impl PluginRequestProcessor {
         let config = self.load_latest_config(config_cwd.clone()).await?;
         let auth = self.auth_manager.auth().await;
 
-        if !self
-            .workspace_codex_plugins_enabled(&config, auth.as_ref())
-            .await
-        {
+        if !self.workspace_plugins_allowed(&config, auth.as_ref()).await {
             return Err(invalid_request(
                 "Codex plugins are disabled for this workspace",
             ));

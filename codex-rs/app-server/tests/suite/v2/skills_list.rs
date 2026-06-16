@@ -337,7 +337,7 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
 }
 
 #[tokio::test]
-async fn skills_list_excludes_plugin_skills_when_workspace_codex_plugins_disabled() -> Result<()> {
+async fn skills_list_excludes_plugin_skills_without_plugin_use_permission() -> Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;
     let server = MockServer::start().await;
@@ -360,10 +360,7 @@ async fn skills_list_excludes_plugin_skills_when_workspace_codex_plugins_disable
         .and(path("/backend-api/accounts/account-123/settings"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(r#"{"beta_settings":{"enable_plugins":false}}"#),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"permissions":[]}"#))
         .mount(&server)
         .await;
 

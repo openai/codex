@@ -10,7 +10,7 @@ pub(crate) struct CatalogRequestProcessor {
     pub(super) thread_manager: Arc<ThreadManager>,
     pub(super) config: Arc<Config>,
     pub(super) config_manager: ConfigManager,
-    pub(super) workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+    pub(super) workspace_permissions_cache: Arc<workspace_permissions::WorkspacePermissionsCache>,
 }
 
 const SKILLS_LIST_CWD_CONCURRENCY: usize = 5;
@@ -104,7 +104,7 @@ impl CatalogRequestProcessor {
         thread_manager: Arc<ThreadManager>,
         config: Arc<Config>,
         config_manager: ConfigManager,
-        workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+        workspace_permissions_cache: Arc<workspace_permissions::WorkspacePermissionsCache>,
     ) -> Self {
         Self {
             outgoing,
@@ -113,7 +113,7 @@ impl CatalogRequestProcessor {
             thread_manager,
             config,
             config_manager,
-            workspace_settings_cache,
+            workspace_permissions_cache,
         }
     }
 
@@ -223,22 +223,18 @@ impl CatalogRequestProcessor {
             .map_err(|err| internal_error(format!("failed to reload config: {err}")))
     }
 
-    async fn workspace_codex_plugins_enabled(
-        &self,
-        config: &Config,
-        auth: Option<&CodexAuth>,
-    ) -> bool {
-        match workspace_settings::codex_plugins_enabled_for_workspace(
+    async fn workspace_plugins_allowed(&self, config: &Config, auth: Option<&CodexAuth>) -> bool {
+        match workspace_permissions::codex_plugins_allowed_for_workspace(
             config,
             auth,
-            Some(&self.workspace_settings_cache),
+            Some(&self.workspace_permissions_cache),
         )
         .await
         {
             Ok(enabled) => enabled,
             Err(err) => {
                 warn!(
-                    "failed to fetch workspace Codex plugins setting; allowing Codex plugins: {err:#}"
+                    "failed to fetch workspace plugin permission; allowing Codex plugins: {err:#}"
                 );
                 true
             }
@@ -333,9 +329,8 @@ impl CatalogRequestProcessor {
             None => self.load_latest_config(/*fallback_cwd*/ None).await?,
         };
         let auth = self.auth_manager.auth().await;
-        let workspace_codex_plugins_enabled = self
-            .workspace_codex_plugins_enabled(&config, auth.as_ref())
-            .await;
+        let workspace_plugins_allowed =
+            self.workspace_plugins_allowed(&config, auth.as_ref()).await;
 
         let data = FEATURES
             .iter()
@@ -371,7 +366,7 @@ impl CatalogRequestProcessor {
                     description,
                     announcement,
                     enabled: config.features.enabled(spec.id)
-                        && (workspace_codex_plugins_enabled
+                        && (workspace_plugins_allowed
                             || !matches!(spec.id, Feature::Apps | Feature::Plugins)),
                     default_enabled: spec.default_enabled,
                 }
@@ -508,9 +503,8 @@ impl CatalogRequestProcessor {
 
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let auth = self.auth_manager.auth().await;
-        let workspace_codex_plugins_enabled = self
-            .workspace_codex_plugins_enabled(&config, auth.as_ref())
-            .await;
+        let workspace_plugins_allowed =
+            self.workspace_plugins_allowed(&config, auth.as_ref()).await;
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
         let fs = self
@@ -542,7 +536,7 @@ impl CatalogRequestProcessor {
                             );
                         }
                     };
-                    let effective_skill_roots = if workspace_codex_plugins_enabled {
+                    let effective_skill_roots = if workspace_plugins_allowed {
                         let plugins_input = config.plugins_config_input();
                         plugins_manager
                             .effective_skill_roots_for_layer_stack(
@@ -640,11 +634,10 @@ impl CatalogRequestProcessor {
                     continue;
                 }
             };
-            let workspace_codex_plugins_enabled = self
-                .workspace_codex_plugins_enabled(&config, auth.as_ref())
-                .await;
+            let workspace_plugins_allowed =
+                self.workspace_plugins_allowed(&config, auth.as_ref()).await;
             let plugins_enabled =
-                config.features.enabled(Feature::Plugins) && workspace_codex_plugins_enabled;
+                config.features.enabled(Feature::Plugins) && workspace_plugins_allowed;
             let plugin_hooks = if plugins_enabled {
                 let plugins_input = config.plugins_config_input();
                 let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;

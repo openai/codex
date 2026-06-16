@@ -469,7 +469,7 @@ async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_
 }
 
 #[tokio::test]
-async fn plugin_list_returns_empty_when_workspace_codex_plugins_disabled() -> Result<()> {
+async fn plugin_list_returns_empty_without_plugin_use_permission() -> Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;
     let server = MockServer::start().await;
@@ -511,7 +511,7 @@ async fn plugin_list_returns_empty_when_workspace_codex_plugins_disabled() -> Re
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_string(r#"{"beta_settings":{"enable_plugins":false}}"#),
+                .set_body_string(r#"{"beta_settings":{"enable_plugins":true},"permissions":[]}"#),
         )
         .mount(&server)
         .await;
@@ -553,7 +553,7 @@ async fn plugin_list_returns_empty_when_workspace_codex_plugins_disabled() -> Re
 }
 
 #[tokio::test]
-async fn plugin_list_reuses_cached_workspace_codex_plugins_setting() -> Result<()> {
+async fn plugin_list_reuses_cached_plugin_use_permission() -> Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;
     let server = MockServer::start().await;
@@ -601,8 +601,9 @@ async fn plugin_list_reuses_cached_workspace_codex_plugins_setting() -> Result<(
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(r#"{"beta_settings":{"enable_plugins":true}}"#),
+            ResponseTemplate::new(200).set_body_string(
+                r#"{"beta_settings":{"enable_plugins":false},"permissions":["chatgpt.workspace_plugin.use"]}"#,
+            ),
         )
         .mount(&server)
         .await;

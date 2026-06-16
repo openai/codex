@@ -155,7 +155,7 @@ async fn list_apps_returns_empty_with_api_key_auth() -> Result<()> {
 }
 
 #[tokio::test]
-async fn list_apps_returns_empty_when_workspace_codex_plugins_disabled() -> Result<()> {
+async fn list_apps_returns_empty_without_plugin_use_permission() -> Result<()> {
     let connectors = vec![AppInfo {
         id: "beta".to_string(),
         name: "Beta".to_string(),
@@ -172,8 +172,8 @@ async fn list_apps_returns_empty_when_workspace_codex_plugins_disabled() -> Resu
         plugin_display_names: Vec::new(),
     }];
     let tools = vec![connector_tool("beta", "Beta App")?];
-    let (server_url, server_handle) = start_apps_server_with_workspace_plugins_enabled(
-        connectors, tools, /*workspace_plugins_enabled*/ false,
+    let (server_url, server_handle) = start_apps_server_with_plugin_use_permission(
+        connectors, tools, /*plugin_use_allowed*/ false,
     )
     .await?;
 
@@ -1403,7 +1403,7 @@ struct AppsServerState {
     expected_account_id: String,
     response: Arc<StdMutex<serde_json::Value>>,
     directory_delay: Duration,
-    workspace_plugins_enabled: bool,
+    plugin_use_allowed: bool,
 }
 
 #[derive(Clone)]
@@ -1484,10 +1484,10 @@ async fn start_apps_server_with_delays(
     Ok((server_url, server_handle))
 }
 
-async fn start_apps_server_with_workspace_plugins_enabled(
+async fn start_apps_server_with_plugin_use_permission(
     connectors: Vec<AppInfo>,
     tools: Vec<Tool>,
-    workspace_plugins_enabled: bool,
+    plugin_use_allowed: bool,
 ) -> Result<(String, JoinHandle<()>)> {
     let (server_url, server_handle, _server_control) =
         start_apps_server_with_delays_and_control_inner(
@@ -1495,7 +1495,7 @@ async fn start_apps_server_with_workspace_plugins_enabled(
             tools,
             Duration::ZERO,
             Duration::ZERO,
-            workspace_plugins_enabled,
+            plugin_use_allowed,
         )
         .await?;
     Ok((server_url, server_handle))
@@ -1512,7 +1512,7 @@ async fn start_apps_server_with_delays_and_control(
         tools,
         directory_delay,
         tools_delay,
-        /*workspace_plugins_enabled*/ true,
+        /*plugin_use_allowed*/ true,
     )
     .await
 }
@@ -1522,7 +1522,7 @@ async fn start_apps_server_with_delays_and_control_inner(
     tools: Vec<Tool>,
     directory_delay: Duration,
     tools_delay: Duration,
-    workspace_plugins_enabled: bool,
+    plugin_use_allowed: bool,
 ) -> Result<(String, JoinHandle<()>, AppsServerControl)> {
     let response = Arc::new(StdMutex::new(
         json!({ "apps": connectors, "next_token": null }),
@@ -1533,7 +1533,7 @@ async fn start_apps_server_with_delays_and_control_inner(
         expected_account_id: "account-123".to_string(),
         response: response.clone(),
         directory_delay,
-        workspace_plugins_enabled,
+        plugin_use_allowed,
     };
     let state = Arc::new(state);
     let server_control = AppsServerControl {
@@ -1589,11 +1589,12 @@ async fn workspace_settings_response(
     if !bearer_ok || !account_ok {
         Err(StatusCode::UNAUTHORIZED)
     } else {
-        Ok(Json(json!({
-            "beta_settings": {
-                "enable_plugins": state.workspace_plugins_enabled
-            }
-        })))
+        let permissions = if state.plugin_use_allowed {
+            vec!["chatgpt.workspace_plugin.use"]
+        } else {
+            Vec::new()
+        };
+        Ok(Json(json!({ "permissions": permissions })))
     }
 }
 
