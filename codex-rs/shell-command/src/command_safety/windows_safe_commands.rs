@@ -1,4 +1,3 @@
-use crate::command_safety::is_safe_command::is_safe_git_command;
 use crate::command_safety::powershell_parser::PowershellParseOutcome;
 use crate::command_safety::powershell_parser::parse_with_powershell_ast;
 use std::path::Path;
@@ -188,8 +187,6 @@ pub(crate) fn is_safe_powershell_words(words: &[String]) -> bool {
         "select-object" | "select" => true,
         "get-item" => true,
 
-        "git" => is_safe_git_command(words),
-
         "rg" => is_safe_ripgrep(words),
 
         // Extra safety: explicitly prohibit common side-effecting cmdlets regardless of args.
@@ -242,7 +239,7 @@ mod tests {
             "Get-ChildItem -Path .",
         ])));
 
-        assert!(is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_command_windows(&vec_str(&[
             "powershell.exe",
             "-NoProfile",
             "-Command",
@@ -290,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn allows_read_only_pipelines_and_git_usage() {
+    fn allows_read_only_pipelines_without_git_usage() {
         let Some(pwsh) = try_find_pwsh_executable_blocking() else {
             return;
         };
@@ -313,7 +310,7 @@ mod tests {
             "Get-Content foo.rs | Select-Object -Skip 200".to_string()
         ]));
 
-        assert!(is_safe_command_windows(&[
+        assert!(!is_safe_command_windows(&[
             pwsh.clone(),
             "-Command".to_string(),
             "git show HEAD:foo.rs".to_string()
