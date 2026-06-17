@@ -561,6 +561,7 @@ impl App {
                 service_tier,
                 final_output_json_schema,
                 collaboration_mode,
+                multi_agent_mode,
                 personality,
             } => {
                 let mut should_start_turn = true;
@@ -653,6 +654,7 @@ impl App {
                             *summary,
                             service_tier.clone(),
                             collaboration_mode.clone(),
+                            *multi_agent_mode,
                             *personality,
                             final_output_json_schema.clone(),
                         )

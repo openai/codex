@@ -384,6 +384,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_multi_agent_mode_command_enabled(&mut self, enabled: bool) {
+        self.composer.set_multi_agent_mode_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub fn set_connectors_enabled(&mut self, enabled: bool) {
         self.composer.set_connectors_enabled(enabled);
     }

@@ -11,6 +11,7 @@ use codex_app_server_protocol::UserInput;
 use codex_config::types::ApprovalsReviewer;
 use codex_protocol::approvals::GuardianAssessmentEvent;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -43,6 +44,7 @@ pub(crate) enum AppCommand {
         service_tier: Option<Option<String>>,
         final_output_json_schema: Option<Value>,
         collaboration_mode: Option<CollaborationMode>,
+        multi_agent_mode: Option<MultiAgentMode>,
         personality: Option<Personality>,
     },
     OverrideTurnContext {
@@ -143,6 +145,7 @@ impl AppCommand {
         service_tier: Option<Option<String>>,
         final_output_json_schema: Option<Value>,
         collaboration_mode: Option<CollaborationMode>,
+        multi_agent_mode: Option<MultiAgentMode>,
         personality: Option<Personality>,
     ) -> Self {
         Self::UserTurn {
@@ -157,6 +160,7 @@ impl AppCommand {
             service_tier,
             final_output_json_schema,
             collaboration_mode,
+            multi_agent_mode,
             personality,
         }
     }

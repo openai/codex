@@ -30,6 +30,7 @@ fn thread_settings_for_test(
                     developer_instructions: None,
                 },
             },
+            multi_agent_mode: MultiAgentMode::Proactive,
             personality: Some(Personality::Pragmatic),
         },
     }
@@ -137,6 +138,7 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
     );
     assert_eq!(chat.config_ref().personality, Some(Personality::Pragmatic));
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.multi_agent_mode, MultiAgentMode::Proactive);
     assert!(
         drain_insert_history(&mut rx).is_empty(),
         "ThreadSettingsUpdated should not render transcript history"

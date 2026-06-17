@@ -96,6 +96,9 @@ impl ChatWidget {
                 self.update_collaboration_mode_indicator();
             }
         }
+        if feature == Feature::MultiAgentV2 {
+            self.sync_multi_agent_mode_command_enabled();
+        }
         if feature == Feature::MentionsV2 {
             self.sync_mentions_v2_enabled();
         }
@@ -278,6 +281,11 @@ impl ChatWidget {
     pub(super) fn sync_goal_command_enabled(&mut self) {
         self.bottom_pane
             .set_goal_command_enabled(self.config.features.enabled(Feature::Goals));
+    }
+
+    pub(super) fn sync_multi_agent_mode_command_enabled(&mut self) {
+        self.bottom_pane
+            .set_multi_agent_mode_command_enabled(self.multi_agent_mode_enabled());
     }
 
     pub(super) fn sync_mentions_v2_enabled(&mut self) {
@@ -481,6 +489,7 @@ impl ChatWidget {
         self.set_approval_policy(settings.approval_policy);
         self.set_approvals_reviewer(settings.approvals_reviewer.to_core());
         self.config.personality = settings.personality;
+        self.apply_server_multi_agent_mode(settings.multi_agent_mode);
 
         let permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
             &settings.sandbox_policy.to_core(),

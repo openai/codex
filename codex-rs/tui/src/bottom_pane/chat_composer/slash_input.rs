@@ -172,6 +172,7 @@ impl<'a> SlashInput<'a> {
         let mut command_popup = CommandPopup::new(
             CommandPopupFlags {
                 collaboration_modes_enabled: self.command_flags.collaboration_modes_enabled,
+                multi_agent_mode_enabled: self.command_flags.multi_agent_mode_enabled,
                 connectors_enabled: self.command_flags.connectors_enabled,
                 plugins_command_enabled: self.command_flags.plugins_command_enabled,
                 token_activity_command_enabled: self.command_flags.token_activity_command_enabled,

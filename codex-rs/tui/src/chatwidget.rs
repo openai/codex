@@ -145,6 +145,7 @@ use codex_protocol::approvals::GuardianAssessmentStatus;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 #[cfg(any(target_os = "windows", test))]
@@ -372,6 +373,7 @@ use self::plugins::PluginsCacheState;
 mod plan_implementation;
 use self::plan_implementation::PLAN_IMPLEMENTATION_TITLE;
 mod model_popups;
+mod multi_agent_mode;
 mod notifications;
 use self::notifications::Notification;
 mod permission_popups;
@@ -537,6 +539,8 @@ pub(crate) struct ChatWidget {
     current_collaboration_mode: CollaborationMode,
     /// The currently active collaboration mask, if any.
     active_collaboration_mask: Option<CollaborationModeMask>,
+    multi_agent_mode: MultiAgentMode,
+    pending_multi_agent_mode: Option<MultiAgentMode>,
     has_chatgpt_account: bool,
     has_codex_backend_auth: bool,
     model_catalog: Arc<ModelCatalog>,

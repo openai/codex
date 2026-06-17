@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+assertion_line: 2886
+expression: rendered
+---
+• Multi-agent delegation: proactive Use /multi-agent off to require an explicit delegation request.

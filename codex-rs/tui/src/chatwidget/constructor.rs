@@ -113,6 +113,8 @@ impl ChatWidget {
             skills_initial_state: None,
             current_collaboration_mode,
             active_collaboration_mask,
+            multi_agent_mode: MultiAgentMode::default(),
+            pending_multi_agent_mode: None,
             has_chatgpt_account,
             has_codex_backend_auth,
             model_catalog,
@@ -253,6 +255,7 @@ impl ChatWidget {
         widget.sync_personality_command_enabled();
         widget.sync_plugins_command_enabled();
         widget.sync_goal_command_enabled();
+        widget.sync_multi_agent_mode_command_enabled();
         widget.sync_mentions_v2_enabled();
         widget
             .bottom_pane

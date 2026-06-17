@@ -2867,6 +2867,32 @@ async fn raw_slash_command_reports_usage_for_invalid_arg() {
 }
 
 #[tokio::test]
+async fn multi_agent_slash_command_updates_and_reports_mode() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::MultiAgentV2, /*enabled*/ true);
+
+    chat.dispatch_command_with_args(SlashCommand::MultiAgent, "on".to_string(), Vec::new());
+
+    assert_eq!(
+        chat.multi_agent_mode_for_turn(),
+        Some(MultiAgentMode::Proactive)
+    );
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_chatwidget_snapshot!("multi_agent_slash_command_proactive", rendered);
+
+    chat.dispatch_command_with_args(SlashCommand::MultiAgent, "off".to_string(), Vec::new());
+    assert_eq!(
+        chat.multi_agent_mode_for_turn(),
+        Some(MultiAgentMode::ExplicitRequestOnly)
+    );
+}
+
+#[tokio::test]
 async fn compact_queues_user_messages_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());

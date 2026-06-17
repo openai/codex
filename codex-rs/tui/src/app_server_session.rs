@@ -753,6 +753,7 @@ impl AppServerSession {
         summary: Option<codex_protocol::config_types::ReasoningSummary>,
         service_tier: Option<Option<String>>,
         collaboration_mode: Option<codex_protocol::config_types::CollaborationMode>,
+        multi_agent_mode: Option<codex_protocol::config_types::MultiAgentMode>,
         personality: Option<codex_protocol::config_types::Personality>,
         output_schema: Option<serde_json::Value>,
     ) -> Result<TurnStartResponse> {
@@ -782,6 +783,7 @@ impl AppServerSession {
                     personality,
                     output_schema,
                     collaboration_mode,
+                    multi_agent_mode,
                 },
             })
             .await

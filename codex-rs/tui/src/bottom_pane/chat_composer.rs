@@ -370,6 +370,7 @@ pub(crate) struct ChatComposer {
     plugins: Option<Vec<PluginCapabilitySummary>>,
     connectors_snapshot: Option<ConnectorsSnapshot>,
     collaboration_modes_enabled: bool,
+    multi_agent_mode_enabled: bool,
     config: ChatComposerConfig,
     connectors_enabled: bool,
     plugins_command_enabled: bool,
@@ -440,6 +441,7 @@ impl ChatComposer {
     fn builtin_command_flags(&self) -> BuiltinCommandFlags {
         BuiltinCommandFlags {
             collaboration_modes_enabled: self.collaboration_modes_enabled,
+            multi_agent_mode_enabled: self.multi_agent_mode_enabled,
             connectors_enabled: self.connectors_enabled,
             plugins_command_enabled: self.plugins_command_enabled,
             token_activity_command_enabled: self.token_activity_command_enabled,
@@ -534,6 +536,7 @@ impl ChatComposer {
             plugins: None,
             connectors_snapshot: None,
             collaboration_modes_enabled: false,
+            multi_agent_mode_enabled: false,
             config,
             connectors_enabled: false,
             plugins_command_enabled: false,
@@ -624,6 +627,10 @@ impl ChatComposer {
 
     pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
         self.collaboration_modes_enabled = enabled;
+    }
+
+    pub fn set_multi_agent_mode_enabled(&mut self, enabled: bool) {
+        self.multi_agent_mode_enabled = enabled;
     }
 
     pub fn set_connectors_enabled(&mut self, enabled: bool) {

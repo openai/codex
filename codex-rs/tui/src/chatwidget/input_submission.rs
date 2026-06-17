@@ -348,6 +348,7 @@ impl ChatWidget {
             service_tier,
             /*final_output_json_schema*/ None,
             collaboration_mode,
+            self.multi_agent_mode_for_turn(),
             personality,
         );
 

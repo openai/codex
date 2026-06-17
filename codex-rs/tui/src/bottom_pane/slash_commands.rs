@@ -56,6 +56,7 @@ impl SlashCommandItem {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct BuiltinCommandFlags {
     pub(crate) collaboration_modes_enabled: bool,
+    pub(crate) multi_agent_mode_enabled: bool,
     pub(crate) connectors_enabled: bool,
     pub(crate) plugins_command_enabled: bool,
     pub(crate) token_activity_command_enabled: bool,
@@ -72,6 +73,7 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .into_iter()
         .filter(|(_, cmd)| flags.allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
         .filter(|(_, cmd)| flags.collaboration_modes_enabled || *cmd != SlashCommand::Plan)
+        .filter(|(_, cmd)| flags.multi_agent_mode_enabled || *cmd != SlashCommand::MultiAgent)
         .filter(|(_, cmd)| flags.connectors_enabled || *cmd != SlashCommand::Apps)
         .filter(|(_, cmd)| flags.plugins_command_enabled || *cmd != SlashCommand::Plugins)
         .filter(|(_, cmd)| flags.token_activity_command_enabled || *cmd != SlashCommand::Usage)
@@ -165,6 +167,7 @@ mod tests {
     fn all_enabled_flags() -> BuiltinCommandFlags {
         BuiltinCommandFlags {
             collaboration_modes_enabled: true,
+            multi_agent_mode_enabled: true,
             connectors_enabled: true,
             plugins_command_enabled: true,
             token_activity_command_enabled: true,
@@ -225,6 +228,14 @@ mod tests {
         }];
 
         assert_eq!(find_slash_command("fast", flags, &commands), None);
+    }
+
+    #[test]
+    fn multi_agent_command_is_hidden_when_mode_is_unavailable() {
+        let mut flags = all_enabled_flags();
+        flags.multi_agent_mode_enabled = false;
+
+        assert_eq!(find_builtin_command("multi-agent", flags), None);
     }
 
     #[test]
