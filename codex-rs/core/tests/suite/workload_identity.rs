@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "windows"))]
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -5,8 +6,7 @@ use anyhow::Result;
 use anyhow::bail;
 use base64::Engine;
 use codex_config::types::ShellEnvironmentPolicyToml;
-use codex_protocol::permissions::FileSystemAccessMode;
-use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::ReadDenyMatcher;
 use codex_workload_identity::CredentialSourceConfig;
 use codex_workload_identity::WorkloadIdentityConfig;
 use core_test_support::responses;
@@ -124,19 +124,11 @@ async fn configured_workload_identity_authenticates_responses_turn() -> Result<(
     test.submit_turn("authenticate with workload identity")
         .await?;
 
+    let file_system_policy = test.config.permissions.file_system_sandbox_policy();
+    let matcher = ReadDenyMatcher::new(&file_system_policy, test.config.cwd.as_path())
+        .expect("workload credential should install a deny-read matcher");
     assert!(
-        test.config
-            .permissions
-            .file_system_sandbox_policy()
-            .entries
-            .iter()
-            .any(|entry| {
-                entry.access == FileSystemAccessMode::Deny
-                    && matches!(
-                        &entry.path,
-                        FileSystemPath::Path { path } if path.as_path() == token_path.as_path()
-                    )
-            }),
+        matcher.is_read_denied(&token_path),
         "the workload credential must remain denied by the runtime sandbox"
     );
     let request = response_mock.single_request();

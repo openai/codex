@@ -11,9 +11,11 @@ fn valid_config() -> WorkloadIdentityConfig {
         audience: "https://auth.openai.com/workload-identity".to_string(),
         token_url: "https://auth.openai.com/oauth/token".to_string(),
         credential_source: CredentialSourceConfig::Azure {
-            token_file: Some(PathBuf::from(
-                "/var/run/secrets/azure/tokens/azure-identity-token",
-            )),
+            token_file: Some(
+                std::env::temp_dir()
+                    .join("azure-tokens")
+                    .join("azure-identity-token"),
+            ),
         },
     }
 }

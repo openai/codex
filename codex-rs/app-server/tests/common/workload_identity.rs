@@ -29,14 +29,15 @@ pub async fn configure_expiring_workload_identity(
     codex_home: &Path,
     server: &MockServer,
 ) -> Result<ExpiringWorkloadIdentityFixture> {
-    configure_expiring_workload_identity_inner(codex_home, server, true).await
+    configure_expiring_workload_identity_inner(codex_home, server, /*mock_cloud_config*/ true).await
 }
 
 pub async fn configure_expiring_workload_identity_without_cloud_config_mock(
     codex_home: &Path,
     server: &MockServer,
 ) -> Result<ExpiringWorkloadIdentityFixture> {
-    configure_expiring_workload_identity_inner(codex_home, server, false).await
+    configure_expiring_workload_identity_inner(codex_home, server, /*mock_cloud_config*/ false)
+        .await
 }
 
 async fn configure_expiring_workload_identity_inner(

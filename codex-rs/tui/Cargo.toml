@@ -18,10 +18,6 @@ name = "codex_tui"
 path = "src/lib.rs"
 doctest = false
 
-[features]
-default = ["workload-identity-all-providers"]
-workload-identity-all-providers = ["codex-login/workload-identity-all-providers"]
-
 [lints]
 workspace = true
 

@@ -307,6 +307,7 @@ type = "azure"
 async fn workload_credential_file_is_denied_even_with_danger_full_access() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
     let token_file = codex_home.path().join("azure-token");
+    std::fs::write(&token_file, "subject-token")?;
     let cfg = ConfigToml {
         workload_identity: Some(WorkloadIdentityConfig {
             identity_provider_id: "idp_example".to_string(),
@@ -383,7 +384,11 @@ async fn workload_credential_deny_preserves_an_existing_user_deny() -> anyhow::R
             .entries
             .contains(&user_deny)
     );
-    assert!(config.workload_identity_credential_deny_paths.is_empty());
+    assert!(
+        !config
+            .workload_identity_credential_deny_paths
+            .contains(&token_path)
+    );
     Ok(())
 }
 
@@ -447,6 +452,9 @@ async fn rotating_workload_credential_denies_its_secret_directory() -> anyhow::R
         codex_home.abs(),
     )
     .await?;
+    let next_token = secret_dir.join("next-version/token");
+    std::fs::create_dir_all(next_token.parent().expect("next token has parent"))?;
+    std::fs::write(&next_token, "rotated-subject-token")?;
 
     let mut file_system_policy = config.permissions.file_system_sandbox_policy();
     file_system_policy.entries.push(FileSystemSandboxEntry {
@@ -458,7 +466,7 @@ async fn rotating_workload_credential_denies_its_secret_directory() -> anyhow::R
     let matcher = ReadDenyMatcher::new(&file_system_policy, config.cwd.as_path())
         .expect("workload credential should install a deny-read matcher");
     assert!(matcher.is_read_denied(&token_file));
-    assert!(matcher.is_read_denied(&secret_dir.join("next-version/token")));
+    assert!(matcher.is_read_denied(&next_token));
     assert_eq!(
         file_system_policy.resolve_access_with_cwd(&token_file, config.cwd.as_path()),
         FileSystemAccessMode::Deny

@@ -39,7 +39,7 @@ pub struct WorkloadIdentityConfig {
     pub credential_source: CredentialSourceConfig,
 }
 
-/// Supported runtime credential sources. Implementations are independently feature gated.
+/// Supported runtime credential sources. Implementations live in separate provider crates.
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "snake_case", tag = "type")]
 pub enum CredentialSourceConfig {

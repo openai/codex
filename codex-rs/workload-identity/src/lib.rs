@@ -18,4 +18,3 @@ pub use source::MAX_SUBJECT_TOKEN_BYTES;
 pub use source::SubjectToken;
 pub use source::SubjectTokenError;
 pub use source::SubjectTokenProvider;
-pub use source::UnavailableSubjectTokenSource;

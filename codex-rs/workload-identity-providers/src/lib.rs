@@ -4,14 +4,9 @@ use codex_workload_identity::FileSubjectTokenSource;
 use codex_workload_identity::SubjectToken;
 use codex_workload_identity::SubjectTokenError;
 use codex_workload_identity::SubjectTokenProvider;
-use codex_workload_identity::UnavailableSubjectTokenSource;
-#[cfg(feature = "aws")]
 use codex_workload_identity_aws::AwsSubjectTokenProvider;
-#[cfg(feature = "azure")]
 use codex_workload_identity_azure::AzureSubjectTokenProvider;
-#[cfg(feature = "github-actions")]
 use codex_workload_identity_github_actions::GithubActionsSubjectTokenProvider;
-#[cfg(feature = "spiffe")]
 use codex_workload_identity_spiffe::SpiffeSubjectTokenProvider;
 
 pub use codex_workload_identity::WorkloadIdentityConfig;
@@ -22,15 +17,10 @@ pub type ConfiguredWorkloadIdentityClient =
 pub enum ConfiguredSubjectTokenProvider {
     Environment(EnvironmentSubjectTokenSource),
     File(FileSubjectTokenSource),
-    #[cfg(feature = "aws")]
     Aws(AwsSubjectTokenProvider),
-    #[cfg(feature = "azure")]
     Azure(AzureSubjectTokenProvider),
-    #[cfg(feature = "github-actions")]
     GithubActions(GithubActionsSubjectTokenProvider),
-    #[cfg(feature = "spiffe")]
     Spiffe(SpiffeSubjectTokenProvider),
-    Unavailable(UnavailableSubjectTokenSource),
 }
 
 impl ConfiguredSubjectTokenProvider {
@@ -48,64 +38,29 @@ impl ConfiguredSubjectTokenProvider {
                 Self::File(FileSubjectTokenSource::new(path.clone()))
             }
             CredentialSourceConfig::Azure { token_file } => {
-                #[cfg(feature = "azure")]
-                {
-                    Self::Azure(AzureSubjectTokenProvider::new(token_file.clone()))
-                }
-                #[cfg(not(feature = "azure"))]
-                {
-                    let _ = token_file;
-                    Self::Unavailable(UnavailableSubjectTokenSource::new("azure"))
-                }
+                Self::Azure(AzureSubjectTokenProvider::new(token_file.clone()))
             }
-            CredentialSourceConfig::GithubActions {} => {
-                #[cfg(feature = "github-actions")]
-                {
-                    Self::GithubActions(GithubActionsSubjectTokenProvider::capture(
-                        audience.to_string(),
-                        http,
-                    ))
-                }
-                #[cfg(not(feature = "github-actions"))]
-                {
-                    let _ = http;
-                    Self::Unavailable(UnavailableSubjectTokenSource::new("github_actions"))
-                }
-            }
+            CredentialSourceConfig::GithubActions {} => Self::GithubActions(
+                GithubActionsSubjectTokenProvider::capture(audience.to_string(), http),
+            ),
             CredentialSourceConfig::Spiffe {
                 endpoint_socket,
                 spiffe_id,
             } => {
-                #[cfg(feature = "spiffe")]
-                {
-                    let _ = http;
-                    Self::Spiffe(SpiffeSubjectTokenProvider::new(
-                        endpoint_socket.clone(),
-                        spiffe_id.clone(),
-                        audience.to_string(),
-                    ))
-                }
-                #[cfg(not(feature = "spiffe"))]
-                {
-                    let _ = (endpoint_socket, spiffe_id, http);
-                    Self::Unavailable(UnavailableSubjectTokenSource::new("spiffe"))
-                }
+                let _ = http;
+                Self::Spiffe(SpiffeSubjectTokenProvider::new(
+                    endpoint_socket.clone(),
+                    spiffe_id.clone(),
+                    audience.to_string(),
+                ))
             }
             CredentialSourceConfig::Aws { region } => {
-                #[cfg(feature = "aws")]
-                {
-                    let _ = http;
-                    Self::Aws(AwsSubjectTokenProvider::new(
-                        identity_provider_id.to_string(),
-                        audience.to_string(),
-                        region.clone(),
-                    ))
-                }
-                #[cfg(not(feature = "aws"))]
-                {
-                    let _ = (identity_provider_id, audience, region, http);
-                    Self::Unavailable(UnavailableSubjectTokenSource::new("aws"))
-                }
+                let _ = http;
+                Self::Aws(AwsSubjectTokenProvider::new(
+                    identity_provider_id.to_string(),
+                    audience.to_string(),
+                    region.clone(),
+                ))
             }
         }
     }
@@ -116,15 +71,10 @@ impl SubjectTokenProvider for ConfiguredSubjectTokenProvider {
         match self {
             Self::Environment(source) => source.subject_token().await,
             Self::File(source) => source.subject_token().await,
-            #[cfg(feature = "aws")]
             Self::Aws(source) => source.subject_token().await,
-            #[cfg(feature = "azure")]
             Self::Azure(source) => source.subject_token().await,
-            #[cfg(feature = "github-actions")]
             Self::GithubActions(source) => source.subject_token().await,
-            #[cfg(feature = "spiffe")]
             Self::Spiffe(source) => source.subject_token().await,
-            Self::Unavailable(source) => source.subject_token().await,
         }
     }
 }

@@ -18,10 +18,6 @@ doctest = false
 name = "all"
 path = "tests/all.rs"
 
-[features]
-default = ["workload-identity-all-providers"]
-workload-identity-all-providers = ["codex-login/workload-identity-all-providers"]
-
 [lints]
 workspace = true
 

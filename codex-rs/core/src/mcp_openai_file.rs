@@ -16,6 +16,7 @@ use crate::session::turn_context::TurnContext;
 use codex_api::OPENAI_FILE_UPLOAD_LIMIT_BYTES;
 use codex_api::upload_openai_file;
 use codex_login::CodexAuth;
+use codex_protocol::permissions::ReadDenyMatcher;
 use codex_utils_path_uri::PathUri;
 use serde_json::Value as JsonValue;
 
@@ -146,9 +147,15 @@ async fn build_uploaded_argument_value(
         .map_err(|error| contextualize_error(error.to_string()))?;
     let resolved_path = native_environment_cwd.join(file_path);
     let file_system_policy = turn_context.file_system_sandbox_policy();
-    if !file_system_policy
-        .can_read_path_with_cwd(resolved_path.as_path(), native_environment_cwd.as_path())
-    {
+    let read_deny_matcher =
+        ReadDenyMatcher::new(&file_system_policy, native_environment_cwd.as_path());
+    let is_readable = |path: &std::path::Path| {
+        file_system_policy.can_read_path_with_cwd(path, native_environment_cwd.as_path())
+            && !read_deny_matcher
+                .as_ref()
+                .is_some_and(|matcher| matcher.is_read_denied(path))
+    };
+    if !is_readable(resolved_path.as_path()) {
         return Err(contextualize_error(
             "path is not readable under the current sandbox policy".to_string(),
         ));
@@ -165,9 +172,7 @@ async fn build_uploaded_argument_value(
     let canonical_path = canonical_path_uri
         .to_abs_path()
         .map_err(|error| contextualize_error(error.to_string()))?;
-    if !file_system_policy
-        .can_read_path_with_cwd(canonical_path.as_path(), native_environment_cwd.as_path())
-    {
+    if !is_readable(canonical_path.as_path()) {
         return Err(contextualize_error(
             "path is not readable under the current sandbox policy".to_string(),
         ));

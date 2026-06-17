@@ -2,11 +2,5 @@ load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
     name = "workload-identity-providers",
-    crate_features = [
-        "aws",
-        "azure",
-        "github-actions",
-        "spiffe",
-    ],
     crate_name = "codex_workload_identity_providers",
 )

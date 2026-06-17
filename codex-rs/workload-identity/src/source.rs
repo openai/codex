@@ -91,8 +91,6 @@ pub enum SubjectTokenError {
     InvalidResponse { provider: &'static str },
     #[error("{provider} credential source configuration is invalid")]
     InvalidConfiguration { provider: &'static str },
-    #[error("{provider} credential source is not included in this Codex build")]
-    ProviderNotIncluded { provider: &'static str },
 }
 
 enum CapturedEnvironmentValue {
@@ -221,25 +219,6 @@ fn validate_file_metadata(
         return Err(SubjectTokenError::TooLarge { provider: source });
     }
     Ok(())
-}
-
-#[derive(Clone, Debug)]
-pub struct UnavailableSubjectTokenSource {
-    source: &'static str,
-}
-
-impl UnavailableSubjectTokenSource {
-    pub const fn new(source: &'static str) -> Self {
-        Self { source }
-    }
-}
-
-impl SubjectTokenProvider for UnavailableSubjectTokenSource {
-    async fn subject_token(&self) -> Result<SubjectToken, SubjectTokenError> {
-        Err(SubjectTokenError::ProviderNotIncluded {
-            provider: self.source,
-        })
-    }
 }
 
 #[cfg(test)]

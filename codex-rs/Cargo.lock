@@ -4485,7 +4485,6 @@ dependencies = [
  "codex-workload-identity-github-actions",
  "codex-workload-identity-spiffe",
  "reqwest 0.12.28",
- "tokio",
 ]
 
 [[package]]

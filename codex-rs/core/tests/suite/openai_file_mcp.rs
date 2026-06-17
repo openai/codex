@@ -8,6 +8,7 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_config::CONFIG_TOML_FILE;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::ReadDenyMatcher;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_path_uri::PathUri;
 use core_test_support::apps_test_server::AppsTestServer;
@@ -304,12 +305,10 @@ default_tools_approval_mode = "approve"
     let upload_path = test.cwd.path().join("report.txt");
     std::os::unix::fs::symlink(&credential_path, &upload_path)?;
 
-    assert!(
-        test.config
-            .workload_identity_credential_deny_paths
-            .iter()
-            .any(|path| path.as_path() == credential_path)
-    );
+    let file_system_policy = test.config.permissions.file_system_sandbox_policy();
+    let matcher = ReadDenyMatcher::new(&file_system_policy, test.config.cwd.as_path())
+        .expect("workload credential should install a deny-read matcher");
+    assert!(matcher.is_read_denied(&credential_path));
     let responses = run_extract_turn(
         &test,
         &server,
