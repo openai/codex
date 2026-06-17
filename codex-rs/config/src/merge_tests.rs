@@ -179,10 +179,11 @@ fn shell_environment_policy_filters_overlay_merges_by_exact_key() {
 }
 
 #[test]
-fn shell_environment_policy_filters_override_lower_legacy_arrays_by_pattern() {
+fn shell_environment_policy_filters_replace_lower_legacy_filter_fields() {
     let mut base = parse_toml(
         r#"
 [shell_environment_policy]
+inherit = "core"
 exclude = ["FLIP_TO_INCLUDE", "KEEP_EXCLUDED"]
 include_only = ["FLIP_TO_EXCLUDE", "KEEP_INCLUDED"]
 "#,
@@ -202,21 +203,25 @@ include_only = ["FLIP_TO_EXCLUDE", "KEEP_INCLUDED"]
         base,
         parse_toml(
             r#"
+[shell_environment_policy]
+inherit = "core"
+
 [shell_environment_policy.filters]
 "ADD_INCLUDED" = "include"
 "FLIP_TO_EXCLUDE" = "exclude"
 "FLIP_TO_INCLUDE" = "include"
-"KEEP_EXCLUDED" = "exclude"
-"KEEP_INCLUDED" = "include"
 "#,
         )
     );
 }
 
 #[test]
-fn shell_environment_policy_legacy_array_replaces_lower_filters_for_its_action() {
+fn shell_environment_policy_legacy_arrays_replace_lower_filters() {
     let mut base = parse_toml(
         r#"
+[shell_environment_policy]
+inherit = "core"
+
 [shell_environment_policy.filters]
 "FLIP_TO_EXCLUDE" = "include"
 "LOW_EXCLUDED" = "exclude"
@@ -237,8 +242,8 @@ exclude = ["FLIP_TO_EXCLUDE", "HIGH_EXCLUDED"]
         parse_toml(
             r#"
 [shell_environment_policy]
+inherit = "core"
 exclude = ["FLIP_TO_EXCLUDE", "HIGH_EXCLUDED"]
-include_only = ["KEEP_INCLUDED"]
 "#,
         )
     );

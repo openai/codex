@@ -9,7 +9,7 @@ pub fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
 }
 
 fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &mut Vec<String>) {
-    reconcile_shell_environment_policy_representations(base, overlay, path);
+    replace_shell_environment_policy_filter_representation(base, overlay, path);
 
     if let TomlValue::Table(overlay_table) = overlay
         && let TomlValue::Table(base_table) = base
@@ -36,11 +36,9 @@ fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &m
     }
 }
 
-/// Ordinary config keeps accepting legacy arrays while `filters` is the
-/// canonical keyed form. Reconcile the two shapes only at this boundary so
-/// layer precedence remains correct and array compatibility can be removed
-/// cleanly after the migration.
-fn reconcile_shell_environment_policy_representations(
+/// Switching between legacy arrays and keyed filters replaces lower filter
+/// fields instead of attempting to reconcile the two representations.
+fn replace_shell_environment_policy_filter_representation(
     base: &mut TomlValue,
     overlay: &TomlValue,
     path: &[String],
@@ -55,108 +53,12 @@ fn reconcile_shell_environment_policy_representations(
         return;
     };
 
-    let overlay_has_filters = overlay.contains_key("filters");
-    let overlay_has_legacy =
-        overlay.contains_key("exclude") || overlay.contains_key("include_only");
-    if overlay_has_filters && !overlay_has_legacy {
-        convert_legacy_to_filters(base);
-    } else if overlay_has_legacy && !overlay_has_filters {
-        convert_filters_to_legacy(base);
+    if overlay.contains_key("filters") {
+        base.remove("exclude");
+        base.remove("include_only");
+    } else if overlay.contains_key("exclude") || overlay.contains_key("include_only") {
+        base.remove("filters");
     }
-
-    for (legacy_field, opposite_field) in [("exclude", "include_only"), ("include_only", "exclude")]
-    {
-        let Some(patterns) = overlay
-            .get(legacy_field)
-            .and_then(TomlValue::as_array)
-            .and_then(|items| {
-                items
-                    .iter()
-                    .map(TomlValue::as_str)
-                    .collect::<Option<Vec<_>>>()
-            })
-        else {
-            continue;
-        };
-        remove_patterns_from_legacy_array(base, opposite_field, &patterns);
-    }
-}
-
-fn convert_legacy_to_filters(table: &mut toml::map::Map<String, TomlValue>) {
-    let mut filters = match table.get("filters") {
-        Some(TomlValue::Table(filters)) => filters.clone(),
-        Some(_) => return,
-        None => toml::map::Map::new(),
-    };
-    table.remove("filters");
-    for (field, action) in [("exclude", "exclude"), ("include_only", "include")] {
-        let Some(TomlValue::Array(patterns)) = table.get(field).cloned() else {
-            continue;
-        };
-        table.remove(field);
-        for pattern in patterns {
-            if let TomlValue::String(pattern) = pattern {
-                filters
-                    .entry(pattern)
-                    .or_insert_with(|| TomlValue::String(action.to_string()));
-            }
-        }
-    }
-    if !filters.is_empty() {
-        table.insert("filters".to_string(), TomlValue::Table(filters));
-    }
-}
-
-fn convert_filters_to_legacy(table: &mut toml::map::Map<String, TomlValue>) {
-    let Some(TomlValue::Table(filters)) = table.get("filters").cloned() else {
-        return;
-    };
-    table.remove("filters");
-    for (pattern, action) in filters {
-        match action.as_str() {
-            Some("exclude") => push_legacy_pattern(table, "exclude", "include_only", pattern),
-            Some("include") => push_legacy_pattern(table, "include_only", "exclude", pattern),
-            _ => {}
-        }
-    }
-}
-
-fn push_legacy_pattern(
-    table: &mut toml::map::Map<String, TomlValue>,
-    field: &str,
-    opposite_field: &str,
-    pattern: String,
-) {
-    remove_patterns_from_legacy_array(table, opposite_field, &[pattern.as_str()]);
-    let items = table
-        .entry(field.to_string())
-        .or_insert_with(|| TomlValue::Array(Vec::new()));
-    let Some(items) = items.as_array_mut() else {
-        return;
-    };
-    if !items
-        .iter()
-        .any(|item| item.as_str().is_some_and(|candidate| candidate == pattern))
-    {
-        items.push(TomlValue::String(pattern));
-    }
-}
-
-fn remove_patterns_from_legacy_array(
-    table: &mut toml::map::Map<String, TomlValue>,
-    field: &str,
-    patterns: &[&str],
-) {
-    let Some(items) = table.get_mut(field).and_then(TomlValue::as_array_mut) else {
-        return;
-    };
-    if !items.iter().all(|item| item.as_str().is_some()) {
-        return;
-    }
-    items.retain(|item| {
-        item.as_str()
-            .is_none_or(|candidate| !patterns.contains(&candidate))
-    });
 }
 
 fn is_permission_network_domains_path(path: &[String]) -> bool {
