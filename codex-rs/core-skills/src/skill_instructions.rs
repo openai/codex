@@ -1,22 +1,10 @@
 use codex_context_fragments::ContextualUserFragment;
 
-use crate::injection::SkillInjection;
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkillInstructions {
     name: String,
     path: String,
     contents: String,
-}
-
-impl From<&SkillInjection> for SkillInstructions {
-    fn from(skill: &SkillInjection) -> Self {
-        Self {
-            name: skill.name.clone(),
-            path: skill.path.clone(),
-            contents: skill.contents.clone(),
-        }
-    }
 }
 
 impl ContextualUserFragment for SkillInstructions {

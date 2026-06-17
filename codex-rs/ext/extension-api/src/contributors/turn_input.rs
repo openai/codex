@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
@@ -21,8 +22,15 @@ pub struct TurnInputContext {
     pub thread_id: ThreadId,
     /// Stable host-owned turn identifier.
     pub turn_id: String,
+    /// Model slug selected for this turn.
+    pub model: String,
     /// User input submitted for this turn.
     pub user_input: Vec<UserInput>,
+    /// Plain tool names already claimed by host-managed capabilities.
+    ///
+    /// Contributors should not resolve these names through ambiguous plaintext
+    /// mentions. Explicit resource or path mentions remain valid.
+    pub reserved_plain_tool_names: HashSet<String>,
     /// Resolved turn environments, in host priority order.
     pub environments: Vec<TurnInputEnvironment>,
 }

@@ -7,12 +7,14 @@ use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillPackageId;
+use crate::catalog::SkillSourceKind;
 
 const SKILL_PATH_PREFIX: &str = "skill://";
 
 pub(crate) fn collect_explicit_skill_mentions(
     inputs: &[UserInput],
     catalog: &SkillCatalog,
+    reserved_plain_tool_names: &HashSet<String>,
 ) -> Vec<SkillCatalogEntry> {
     let mut selected = Vec::new();
     let mut seen = HashSet::new();
@@ -54,13 +56,29 @@ pub(crate) fn collect_explicit_skill_mentions(
             if blocked_plain_names.contains(name) {
                 continue;
             }
-            if let Some(entry) = catalog
+            let matching_entries = catalog
                 .entries
                 .iter()
-                .find(|entry| entry.enabled && entry.name == name)
+                .filter(|entry| entry.enabled && entry.name == name);
+            if let Some(entry) = matching_entries
+                .clone()
+                .find(|entry| entry.authority.kind != SkillSourceKind::Host)
             {
                 push_selected(entry, &mut seen, &mut selected);
+                continue;
             }
+
+            let mut host_entries =
+                matching_entries.filter(|entry| entry.authority.kind == SkillSourceKind::Host);
+            let Some(entry) = host_entries.next() else {
+                continue;
+            };
+            if host_entries.next().is_some()
+                || reserved_plain_tool_names.contains(&name.to_ascii_lowercase())
+            {
+                continue;
+            }
+            push_selected(entry, &mut seen, &mut selected);
         }
     }
 

@@ -99,6 +99,7 @@ pub(super) async fn spawn_review_thread(
     let extension_data = Arc::new(codex_extension_api::ExtensionData::new(
         review_turn_id.clone(),
     ));
+    extension_data.insert(session_telemetry_for_context.clone());
     extension_data.insert(parent_turn_context.turn_skills.snapshot.clone());
 
     let review_turn_context = TurnContext {
