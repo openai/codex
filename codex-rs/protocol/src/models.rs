@@ -1288,7 +1288,7 @@ impl ResponseItem {
                 internal_chat_message_metadata_passthrough: metadata,
                 ..
             } => metadata.as_ref(),
-            Self::CompactionTrigger { .. } | Self::Other => None,
+            Self::CompactionTrigger { .. } | Self::AdditionalTools { .. } | Self::Other => None,
         }
     }
 
@@ -1352,7 +1352,7 @@ impl ResponseItem {
                 internal_chat_message_metadata_passthrough: metadata,
                 ..
             } => Some(metadata),
-            Self::CompactionTrigger { .. } | Self::Other => None,
+            Self::CompactionTrigger { .. } | Self::AdditionalTools { .. } | Self::Other => None,
         }
     }
 }
