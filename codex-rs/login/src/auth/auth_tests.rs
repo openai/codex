@@ -643,27 +643,54 @@ async fn external_chatgpt_auth_resolves_and_refreshes_without_writing_auth_file(
     )
     .await;
     manager.set_external_auth(external.clone());
+    let mut auth_changes = manager.auth_change_receiver();
 
-    assert_eq!(manager.auth_mode(), Some(AuthMode::Chatgpt));
-    assert_eq!(
-        manager.get_api_auth_mode(),
-        Some(AuthMode::ChatgptAuthTokens)
-    );
+    assert_eq!(manager.auth_mode(), None);
+    assert_eq!(manager.get_api_auth_mode(), None);
     let auth = manager
         .auth()
         .await
         .expect("external auth resolution should succeed")
         .expect("external auth should resolve");
+    assert!(
+        auth_changes
+            .has_changed()
+            .expect("auth watch should be open")
+    );
+    drop(auth_changes.borrow_and_update());
     assert!(manager.is_external_chatgpt_auth_active());
+    assert_eq!(manager.auth_mode(), Some(AuthMode::Chatgpt));
+    assert_eq!(
+        manager.get_api_auth_mode(),
+        Some(AuthMode::ChatgptAuthTokens)
+    );
     assert_eq!(auth.get_token().unwrap(), token);
     assert_eq!(auth.get_account_id().as_deref(), Some(WORKSPACE_ID_ALLOWED));
     assert!(!get_auth_file(codex_home.path()).exists());
+
+    let repeated = manager
+        .auth()
+        .await
+        .expect("repeated external auth resolution should succeed")
+        .expect("repeated external auth should resolve");
+    assert_eq!(repeated.get_token().unwrap(), token);
+    assert!(
+        !auth_changes
+            .has_changed()
+            .expect("auth watch should be open"),
+        "unchanged external tokens must not publish an auth change"
+    );
 
     manager
         .refresh_token()
         .await
         .expect("external auth refresh");
     assert_eq!(external.refresh_count.load(Ordering::Relaxed), 1);
+    assert!(
+        auth_changes
+            .has_changed()
+            .expect("auth watch should be open")
+    );
     assert_eq!(
         manager.auth_cached().unwrap().get_token().unwrap(),
         refreshed_token
@@ -731,6 +758,11 @@ async fn auth_result_preserves_external_auth_resolution_errors() {
     .await;
     manager.set_external_auth(Arc::new(FailingExternalChatgptAuth));
 
+    assert_eq!(manager.auth_mode(), Some(AuthMode::Chatgpt));
+    assert_eq!(
+        manager.get_api_auth_mode(),
+        Some(ApiAuthMode::ChatgptAuthTokens)
+    );
     let error = manager
         .auth_result()
         .await

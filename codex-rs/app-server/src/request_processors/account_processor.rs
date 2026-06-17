@@ -780,12 +780,11 @@ impl AccountRequestProcessor {
                 requires_openai_auth: Some(false),
             }
         } else {
-            let auth = if do_refresh {
-                Ok(self.auth_manager.auth_cached())
-            } else {
-                self.auth_manager.auth().await
-            }
-            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
+            let auth = self
+                .auth_manager
+                .auth()
+                .await
+                .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
             match auth {
                 Some(auth) => {
                     let permanent_refresh_failure =

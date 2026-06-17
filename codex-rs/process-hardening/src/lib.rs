@@ -3,6 +3,18 @@ use std::ffi::OsString;
 
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+use std::sync::OnceLock;
+
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+#[derive(Clone, Copy)]
+enum ProcessInspectionHardening {
+    Applied,
+    Failed(Option<i32>),
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+static PROCESS_INSPECTION_HARDENING: OnceLock<ProcessInspectionHardening> = OnceLock::new();
 
 /// This is designed to be called pre-main() (using `#[ctor::ctor]`) to perform
 /// various process hardening steps, such as
@@ -43,12 +55,8 @@ const SET_RLIMIT_CORE_FAILED_EXIT_CODE: i32 = 7;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) fn pre_main_hardening_linux() {
     // Disable ptrace attach / mark process non-dumpable.
-    let ret_code = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
-    if ret_code != 0 {
-        eprintln!(
-            "ERROR: prctl(PR_SET_DUMPABLE, 0) failed: {}",
-            std::io::Error::last_os_error()
-        );
+    if let Err(error) = disable_process_inspection() {
+        eprintln!("ERROR: prctl(PR_SET_DUMPABLE, 0) failed: {error}");
         std::process::exit(PRCTL_FAILED_EXIT_CODE);
     }
 
@@ -63,12 +71,7 @@ pub(crate) fn pre_main_hardening_linux() {
 /// Mark the current Linux process non-dumpable so same-user processes cannot attach with ptrace.
 #[cfg(target_os = "linux")]
 pub fn disable_process_dumping() -> std::io::Result<()> {
-    let ret_code = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
-    if ret_code == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
+    disable_process_inspection()
 }
 
 #[cfg(any(target_os = "freebsd", target_os = "openbsd"))]
@@ -82,12 +85,8 @@ pub(crate) fn pre_main_hardening_bsd() {
 #[cfg(target_os = "macos")]
 pub(crate) fn pre_main_hardening_macos() {
     // Prevent debuggers from attaching to this process.
-    let ret_code = unsafe { libc::ptrace(libc::PT_DENY_ATTACH, 0, std::ptr::null_mut(), 0) };
-    if ret_code == -1 {
-        eprintln!(
-            "ERROR: ptrace(PT_DENY_ATTACH) failed: {}",
-            std::io::Error::last_os_error()
-        );
+    if let Err(error) = disable_process_inspection() {
+        eprintln!("ERROR: ptrace(PT_DENY_ATTACH) failed: {error}");
         std::process::exit(PTRACE_DENY_ATTACH_FAILED_EXIT_CODE);
     }
 
@@ -119,6 +118,55 @@ fn set_core_file_size_limit_to_zero() {
 #[cfg(windows)]
 pub(crate) fn pre_main_hardening_windows() {
     // TODO(mbolin): Perform the appropriate configuration for Windows.
+}
+
+/// Prevent same-user child processes from inspecting this process's environment or memory.
+///
+/// This is idempotent because auth managers can be rebuilt as configuration changes. Callers that
+/// hold in-memory credentials should fail closed when the current platform cannot provide this
+/// boundary.
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+pub fn disable_process_inspection() -> std::io::Result<()> {
+    match *PROCESS_INSPECTION_HARDENING.get_or_init(apply_process_inspection_hardening) {
+        ProcessInspectionHardening::Applied => Ok(()),
+        ProcessInspectionHardening::Failed(Some(error)) => {
+            Err(std::io::Error::from_raw_os_error(error))
+        }
+        ProcessInspectionHardening::Failed(None) => Err(std::io::Error::other(
+            "failed to disable process inspection",
+        )),
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+pub fn disable_process_inspection() -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "process inspection hardening is unsupported on this platform",
+    ))
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+fn apply_process_inspection_hardening() -> ProcessInspectionHardening {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        let result = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+        if result == 0 {
+            ProcessInspectionHardening::Applied
+        } else {
+            ProcessInspectionHardening::Failed(std::io::Error::last_os_error().raw_os_error())
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let result = unsafe { libc::ptrace(libc::PT_DENY_ATTACH, 0, std::ptr::null_mut(), 0) };
+        if result == 0 {
+            ProcessInspectionHardening::Applied
+        } else {
+            ProcessInspectionHardening::Failed(std::io::Error::last_os_error().raw_os_error())
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -189,5 +237,14 @@ mod tests {
         let keys = env_keys_with_prefix(vars, b"LD_");
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].as_os_str(), ld_test_var);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn disable_process_inspection_marks_process_non_dumpable() {
+        disable_process_inspection().expect("process inspection hardening should succeed");
+
+        let dumpable = unsafe { libc::prctl(libc::PR_GET_DUMPABLE) };
+        assert_eq!(dumpable, 0);
     }
 }

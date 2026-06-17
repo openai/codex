@@ -2,6 +2,7 @@ use chrono::DateTime;
 use chrono::Local;
 use chrono::Utc;
 use reqwest::header::HeaderMap;
+use std::sync::Arc;
 
 use codex_core::config::Config;
 use codex_login::AuthManager;
@@ -41,19 +42,13 @@ pub fn normalize_base_url(input: &str) -> String {
     base_url
 }
 
-pub async fn load_auth_manager(chatgpt_base_url: Option<String>) -> Option<AuthManager> {
+pub async fn load_auth_manager(chatgpt_base_url: Option<String>) -> Option<Arc<AuthManager>> {
     // TODO: pass in cli overrides once cloud tasks properly support them.
-    let config = Config::load_with_cli_overrides(Vec::new()).await.ok()?;
-    Some(
-        AuthManager::new(
-            config.codex_home.to_path_buf(),
-            /*enable_codex_api_key_env*/ false,
-            config.cli_auth_credentials_store_mode,
-            chatgpt_base_url.or(Some(config.chatgpt_base_url.clone())),
-            config.auth_keyring_backend_kind(),
-        )
-        .await,
-    )
+    let mut config = Config::load_with_cli_overrides(Vec::new()).await.ok()?;
+    if let Some(chatgpt_base_url) = chatgpt_base_url {
+        config.chatgpt_base_url = chatgpt_base_url;
+    }
+    Some(AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await)
 }
 
 /// Build headers for ChatGPT-backed requests: `User-Agent`, optional `Authorization`,

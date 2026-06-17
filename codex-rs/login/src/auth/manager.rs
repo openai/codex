@@ -1787,7 +1787,15 @@ impl AuthManager {
                 (ApiAuthMode::ApiKey, ApiAuthMode::ApiKey) => a.api_key() == b.api_key(),
                 (ApiAuthMode::Chatgpt, ApiAuthMode::Chatgpt)
                 | (ApiAuthMode::ChatgptAuthTokens, ApiAuthMode::ChatgptAuthTokens) => {
-                    a.get_current_auth_json() == b.get_current_auth_json()
+                    let mut a = a.get_current_auth_json();
+                    let mut b = b.get_current_auth_json();
+                    if let Some(a) = a.as_mut() {
+                        a.last_refresh = None;
+                    }
+                    if let Some(b) = b.as_mut() {
+                        b.last_refresh = None;
+                    }
+                    a == b
                 }
                 (ApiAuthMode::AgentIdentity, ApiAuthMode::AgentIdentity) => match (a, b) {
                     (CodexAuth::AgentIdentity(a), CodexAuth::AgentIdentity(b)) => {
@@ -1973,9 +1981,18 @@ impl AuthManager {
     }
 
     fn external_auth_mode(&self) -> Option<AuthMode> {
-        self.external_auth()
-            .as_ref()
-            .map(|external_auth| external_auth.auth_mode())
+        let external_auth = self.external_auth()?;
+        let mode = external_auth.auth_mode();
+        if mode == AuthMode::Chatgpt
+            && !external_auth.requires_successful_resolution()
+            && !self
+                .auth_cached()
+                .as_ref()
+                .is_some_and(CodexAuth::is_external_chatgpt_tokens)
+        {
+            return None;
+        }
+        Some(mode)
     }
 
     fn has_external_api_key_auth(&self) -> bool {

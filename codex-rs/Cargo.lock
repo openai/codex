@@ -3246,6 +3246,7 @@ dependencies = [
  "codex-keyring-store",
  "codex-model-provider-info",
  "codex-otel",
+ "codex-process-hardening",
  "codex-protocol",
  "codex-secrets",
  "codex-terminal-detection",

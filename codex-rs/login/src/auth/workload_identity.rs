@@ -8,14 +8,24 @@ use super::ExternalAuthTokens;
 
 pub(super) struct WorkloadIdentityExternalAuth {
     client: ConfiguredWorkloadIdentityClient,
+    process_isolation_error: Option<String>,
 }
 
 impl WorkloadIdentityExternalAuth {
     pub(super) fn new(client: ConfiguredWorkloadIdentityClient) -> Self {
-        Self { client }
+        let process_isolation_error = codex_process_hardening::disable_process_inspection()
+            .err()
+            .map(|error| format!("workload identity process isolation failed: {error}"));
+        Self {
+            client,
+            process_isolation_error,
+        }
     }
 
     async fn tokens(&self, force_refresh: bool) -> std::io::Result<ExternalAuthTokens> {
+        if let Some(error) = self.process_isolation_error.as_ref() {
+            return Err(std::io::Error::other(error.clone()));
+        }
         let token = if force_refresh {
             self.client.refresh().await
         } else {
