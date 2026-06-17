@@ -1029,6 +1029,59 @@ model_reasoning_effort = "high"
 }
 
 #[tokio::test]
+async fn thread_start_with_remote_primary_environment_does_not_persist_project_trust() -> Result<()>
+{
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    std::fs::write(
+        codex_home.path().join("environments.toml"),
+        r#"
+default = "remote"
+include_local = true
+
+[[environments]]
+id = "remote"
+url = "ws://127.0.0.1:1"
+"#,
+    )?;
+    let config_path = codex_home.path().join("config.toml");
+    let config_before = std::fs::read_to_string(&config_path)?;
+    let workspace = TempDir::new()?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    for environments in [
+        None,
+        Some(vec![TurnEnvironmentParams {
+            environment_id: "remote".to_string(),
+            cwd: workspace.path().to_path_buf().abs().into(),
+        }]),
+    ] {
+        let request_id = mcp
+            .send_thread_start_request(ThreadStartParams {
+                cwd: Some(workspace.path().display().to_string()),
+                sandbox: Some(SandboxMode::WorkspaceWrite),
+                environments,
+                ..Default::default()
+            })
+            .await?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+
+        let config_after = std::fs::read_to_string(&config_path)?;
+        assert_eq!(config_after, config_before);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_start_with_nested_git_cwd_trusts_repo_root() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 

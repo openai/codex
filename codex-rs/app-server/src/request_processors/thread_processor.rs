@@ -1035,6 +1035,20 @@ impl ThreadRequestProcessor {
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
             .await
             .map_err(|err| config_load_error(&err))?;
+        let environments = environments.unwrap_or_else(|| {
+            listener_task_context
+                .thread_manager
+                .default_environment_selections(&config.cwd)
+        });
+        let primary_environment_is_remote = environments
+            .first()
+            .and_then(|selection| {
+                listener_task_context
+                    .thread_manager
+                    .environment_manager()
+                    .get_environment(&selection.environment_id)
+            })
+            .is_some_and(|environment| environment.is_remote());
 
         // The user may have requested WorkspaceWrite or DangerFullAccess via
         // the command line, though in the process of deriving the Config, it
@@ -1048,7 +1062,8 @@ impl ThreadRequestProcessor {
             config.cwd.as_path(),
         );
 
-        if requested_cwd.is_some()
+        if !primary_environment_is_remote
+            && requested_cwd.is_some()
             && config.active_project.trust_level.is_none()
             && (requested_permissions_trust_project || effective_permissions_trust_project)
         {
@@ -1101,11 +1116,6 @@ impl ThreadRequestProcessor {
                 .map_err(|err| config_load_error(&err))?;
         }
 
-        let environments = environments.unwrap_or_else(|| {
-            listener_task_context
-                .thread_manager
-                .default_environment_selections(&config.cwd)
-        });
         let dynamic_tools = dynamic_tools.unwrap_or_default();
         if !dynamic_tools.is_empty() {
             validate_dynamic_tools(&dynamic_tools).map_err(invalid_request)?;
