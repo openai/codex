@@ -8236,6 +8236,49 @@ async fn turn_context_item_stores_split_file_system_sandbox_policy_when_differen
 }
 
 #[tokio::test]
+async fn turn_context_item_redacts_enforcement_only_paths_from_split_policy() {
+    let (_session, mut turn_context) = make_session_and_context().await;
+    let credential_path = turn_context.config.codex_home.join("workload-token");
+    let mut config = (*turn_context.config).clone();
+    config.workload_identity_credential_deny_paths = vec![credential_path.clone()];
+    turn_context.config = Arc::new(config);
+
+    let visible_file_system_policy = file_system_policy_with_unreadable_glob(&turn_context);
+    let mut enforced_file_system_policy = visible_file_system_policy.clone();
+    enforced_file_system_policy
+        .entries
+        .push(FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: credential_path.clone(),
+            },
+            access: FileSystemAccessMode::Deny,
+        });
+    let visible_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        turn_context.permission_profile.enforcement(),
+        &visible_file_system_policy,
+        turn_context.network_sandbox_policy(),
+    );
+    turn_context.permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        turn_context.permission_profile.enforcement(),
+        &enforced_file_system_policy,
+        turn_context.network_sandbox_policy(),
+    );
+
+    let item = turn_context.to_turn_context_item();
+
+    assert_eq!(
+        item.file_system_sandbox_policy,
+        Some(visible_file_system_policy)
+    );
+    assert_eq!(item.permission_profile, Some(visible_permission_profile));
+    assert!(
+        !serde_json::to_string(&item)
+            .expect("serialize turn context item")
+            .contains(credential_path.to_string_lossy().as_ref())
+    );
+}
+
+#[tokio::test]
 async fn record_context_updates_and_set_reference_context_item_injects_full_context_when_baseline_missing()
  {
     let (session, turn_context) = make_session_and_context().await;

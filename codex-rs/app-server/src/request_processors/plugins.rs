@@ -1082,6 +1082,7 @@ impl PluginRequestProcessor {
                 };
                 let app_summaries = load_plugin_app_summaries(
                     &config,
+                    auth.as_ref(),
                     &outcome.plugin.apps,
                     &outcome.plugin.app_category_by_id,
                 )
@@ -1166,8 +1167,13 @@ impl PluginRequestProcessor {
                     .as_ref()
                     .map(plugin_app_category_by_id_from_value)
                     .unwrap_or_default();
-                let app_summaries =
-                    load_plugin_app_summaries(&config, &plugin_apps, &app_category_by_id).await;
+                let app_summaries = load_plugin_app_summaries(
+                    &config,
+                    auth.as_ref(),
+                    &plugin_apps,
+                    &app_category_by_id,
+                )
+                .await;
                 remote_plugin_detail_to_info(remote_detail, app_summaries)
             }
         };
@@ -1508,7 +1514,7 @@ impl PluginRequestProcessor {
         let apps_needing_auth = self
             .plugin_apps_needing_auth_for_install(
                 &config,
-                auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth),
+                auth.as_ref(),
                 &result.plugin_id.as_key(),
                 &plugin_apps,
             )
@@ -1645,9 +1651,10 @@ impl PluginRequestProcessor {
                     .as_ref()
                     .map(plugin_app_category_by_id_from_value)
                     .unwrap_or_default();
-                let all_connectors = connectors::list_cached_all_connectors(&config, &[])
-                    .await
-                    .unwrap_or_default();
+                let all_connectors =
+                    connectors::list_cached_all_connectors(&config, auth.as_ref(), &[])
+                        .await
+                        .unwrap_or_default();
                 connectors::connectors_for_plugin_apps(all_connectors, &plugin_apps)
                     .into_iter()
                     .map(|connector| {
@@ -1671,7 +1678,7 @@ impl PluginRequestProcessor {
                 codex_plugin::app_connector_ids_from_declarations(&plugin_app_declarations);
             self.plugin_apps_needing_auth_for_install(
                 &config,
-                is_chatgpt_auth,
+                auth.as_ref(),
                 &result.plugin_id.as_key(),
                 &plugin_apps,
             )
@@ -1687,17 +1694,23 @@ impl PluginRequestProcessor {
     async fn plugin_apps_needing_auth_for_install(
         &self,
         config: &Config,
-        is_chatgpt_auth: bool,
+        auth: Option<&CodexAuth>,
         plugin_id: &str,
         plugin_apps: &[codex_plugin::AppConnectorId],
     ) -> Vec<AppSummary> {
+        let is_chatgpt_auth = auth.is_some_and(CodexAuth::is_chatgpt_auth);
         if plugin_apps.is_empty() || !config.features.apps_enabled_for_auth(is_chatgpt_auth) {
             return Vec::new();
         }
 
         let environment_manager = self.thread_manager.environment_manager();
         let (all_connectors_result, accessible_connectors_result) = tokio::join!(
-            connectors::list_all_connectors_with_options(config, /*force_refetch*/ false, &[]),
+            connectors::list_all_connectors_with_options(
+                config,
+                auth,
+                /*force_refetch*/ false,
+                &[],
+            ),
             connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
                 config,
                 /*force_refetch*/ true,
@@ -1713,7 +1726,7 @@ impl PluginRequestProcessor {
                     plugin = plugin_id,
                     "failed to load app metadata after plugin install: {err:#}"
                 );
-                connectors::list_cached_all_connectors(config, &[])
+                connectors::list_cached_all_connectors(config, auth, &[])
                     .await
                     .unwrap_or_default()
             }
@@ -1974,6 +1987,7 @@ impl PluginRequestProcessor {
 
 async fn load_plugin_app_summaries(
     config: &Config,
+    auth: Option<&CodexAuth>,
     plugin_apps: &[codex_plugin::AppConnectorId],
     app_category_by_id: &HashMap<String, String>,
 ) -> Vec<AppSummary> {
@@ -1983,6 +1997,7 @@ async fn load_plugin_app_summaries(
 
     let connectors = match connectors::list_all_connectors_with_options(
         config,
+        auth,
         /*force_refetch*/ false,
         &[],
     )
@@ -1991,7 +2006,7 @@ async fn load_plugin_app_summaries(
         Ok(connectors) => connectors,
         Err(err) => {
             warn!("failed to load app metadata for plugin/read: {err:#}");
-            connectors::list_cached_all_connectors(config, &[])
+            connectors::list_cached_all_connectors(config, auth, &[])
                 .await
                 .unwrap_or_default()
         }

@@ -374,7 +374,10 @@ impl TurnContext {
         }
     }
 
-    fn non_legacy_file_system_sandbox_policy(&self) -> Option<FileSystemSandboxPolicy> {
+    fn non_legacy_file_system_sandbox_policy(
+        &self,
+        model_visible_permission_profile: &PermissionProfile,
+    ) -> Option<FileSystemSandboxPolicy> {
         // Omit the derived split filesystem policy when it is equivalent to
         // the legacy sandbox policy. This keeps turn-context payloads stable
         // while both fields exist; once callers consume only the split policy,
@@ -385,13 +388,17 @@ impl TurnContext {
                 #[allow(deprecated)]
                 &self.cwd,
             );
-        let file_system_sandbox_policy = self.file_system_sandbox_policy();
+        let file_system_sandbox_policy =
+            model_visible_permission_profile.file_system_sandbox_policy();
         (file_system_sandbox_policy != legacy_file_system_sandbox_policy)
             .then_some(file_system_sandbox_policy)
     }
 
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         let workspace_roots = self.config.effective_workspace_roots();
+        let model_visible_permission_profile = self.model_visible_permission_profile();
+        let model_visible_file_system_sandbox_policy =
+            self.non_legacy_file_system_sandbox_policy(&model_visible_permission_profile);
         #[allow(deprecated)]
         let cwd = self.cwd.clone();
         TurnContextItem {
@@ -402,9 +409,9 @@ impl TurnContext {
             timezone: self.timezone.clone(),
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy(),
-            permission_profile: Some(self.model_visible_permission_profile()),
+            permission_profile: Some(model_visible_permission_profile),
             network: self.turn_context_network_item(),
-            file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
+            file_system_sandbox_policy: model_visible_file_system_sandbox_policy,
             model: self.model_info.slug.clone(),
             comp_hash: self.model_info.comp_hash.clone(),
             personality: self.personality,

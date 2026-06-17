@@ -113,6 +113,7 @@ pub async fn codex_plugins_enabled_for_workspace(
     let encoded_account_id = encode_path_segment(&account_id);
     let settings: WorkspaceSettingsResponse = chatgpt_get_request_with_timeout(
         config,
+        auth,
         format!("/accounts/{encoded_account_id}/settings"),
         Some(WORKSPACE_SETTINGS_TIMEOUT),
     )

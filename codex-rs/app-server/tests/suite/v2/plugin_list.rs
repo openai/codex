@@ -185,10 +185,11 @@ async fn plugin_list_local_succeeds_when_workload_identity_becomes_unavailable()
     std::fs::write(&token_path, "external-subject-token\n")?;
     write_plugins_enabled_config_with_workload_identity(codex_home.path(), &server, &token_path)?;
 
+    let access_token = workload_identity_access_token();
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "access_token": workload_identity_access_token(),
+            "access_token": access_token.clone(),
             "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
             "token_type": "Bearer",
             "expires_in": 3600,
@@ -201,6 +202,15 @@ async fn plugin_list_local_succeeds_when_workload_identity_becomes_unavailable()
     Mock::given(method("GET"))
         .and(path("/backend-api/wham/config/bundle"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/accounts/workspace_test/settings"))
+        .and(header("authorization", format!("Bearer {access_token}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "beta_settings": { "enable_plugins": true },
+        })))
         .expect(1)
         .mount(&server)
         .await;

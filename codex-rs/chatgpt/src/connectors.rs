@@ -19,29 +19,20 @@ pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_o
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status;
 pub use codex_core::connectors::list_cached_accessible_connectors_from_mcp_tools;
 pub use codex_core::connectors::with_app_enabled_state;
-use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::originator;
 use codex_plugin::AppConnectorId;
 
 const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
 
-async fn apps_enabled(config: &Config) -> bool {
-    let auth_manager =
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
-    let auth = auth_manager.auth().await.ok().flatten();
+fn apps_enabled(config: &Config, auth: Option<&CodexAuth>) -> bool {
     config
         .features
-        .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
+        .apps_enabled_for_auth(auth.is_some_and(CodexAuth::uses_codex_backend))
 }
 
-async fn connector_auth(config: &Config) -> anyhow::Result<CodexAuth> {
-    let auth_manager =
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
-    let auth = auth_manager
-        .auth()
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("ChatGPT auth not available"))?;
+fn connector_auth(auth: Option<&CodexAuth>) -> anyhow::Result<&CodexAuth> {
+    let auth = auth.ok_or_else(|| anyhow::anyhow!("ChatGPT auth not available"))?;
     anyhow::ensure!(
         auth.uses_codex_backend(),
         "ChatGPT connectors require Codex backend auth"
@@ -49,12 +40,15 @@ async fn connector_auth(config: &Config) -> anyhow::Result<CodexAuth> {
     Ok(auth)
 }
 
-pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
-    if !apps_enabled(config).await {
+pub async fn list_connectors(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+) -> anyhow::Result<Vec<AppInfo>> {
+    if !apps_enabled(config, auth) {
         return Ok(Vec::new());
     }
     let (connectors_result, accessible_result) = tokio::join!(
-        list_all_connectors(config),
+        list_all_connectors(config, auth),
         list_accessible_connectors_from_mcp_tools(config),
     );
     let connectors = connectors_result?;
@@ -67,34 +61,39 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     ))
 }
 
-pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
-    list_all_connectors_with_options(config, /*force_refetch*/ false, &[]).await
+pub async fn list_all_connectors(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+) -> anyhow::Result<Vec<AppInfo>> {
+    list_all_connectors_with_options(config, auth, /*force_refetch*/ false, &[]).await
 }
 
 pub async fn list_cached_all_connectors(
     config: &Config,
+    auth: Option<&CodexAuth>,
     plugin_apps: &[AppConnectorId],
 ) -> Option<Vec<AppInfo>> {
-    if !apps_enabled(config).await {
+    if !apps_enabled(config, auth) {
         return Some(Vec::new());
     }
 
-    let auth = connector_auth(config).await.ok()?;
-    let cache_context = connector_directory_cache_context(config, &auth);
+    let auth = connector_auth(auth).ok()?;
+    let cache_context = connector_directory_cache_context(config, auth);
     let connectors = codex_connectors::cached_directory_connectors(&cache_context)?;
     Some(merge_and_filter_plugin_connectors(connectors, plugin_apps))
 }
 
 pub async fn list_all_connectors_with_options(
     config: &Config,
+    auth: Option<&CodexAuth>,
     force_refetch: bool,
     plugin_apps: &[AppConnectorId],
 ) -> anyhow::Result<Vec<AppInfo>> {
-    if !apps_enabled(config).await {
+    if !apps_enabled(config, auth) {
         return Ok(Vec::new());
     }
-    let auth = connector_auth(config).await?;
-    let cache_context = connector_directory_cache_context(config, &auth);
+    let auth = connector_auth(auth)?;
+    let cache_context = connector_directory_cache_context(config, auth);
     let connectors = codex_connectors::list_all_connectors_with_options(
         cache_context,
         auth.is_workspace_account(),
@@ -102,6 +101,7 @@ pub async fn list_all_connectors_with_options(
         |path| async move {
             chatgpt_get_request_with_timeout::<DirectoryListResponse>(
                 config,
+                auth,
                 path,
                 Some(DIRECTORY_CONNECTORS_TIMEOUT),
             )
