@@ -13,6 +13,8 @@ use crate::LogRow;
 use crate::MEMORIES_DB_FILENAME;
 use crate::STATE_DB_FILENAME;
 use crate::SortKey;
+use crate::ThreadListItem;
+use crate::ThreadListPage;
 use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
 use crate::ThreadsPage;

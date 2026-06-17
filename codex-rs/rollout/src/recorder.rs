@@ -379,6 +379,7 @@ impl RolloutRecorder {
                 /*parent_thread_id*/ None,
                 archived,
                 search_term,
+                /*validate_rollout_paths*/ false,
             )
             .await
             .map(Into::into)
@@ -452,8 +453,8 @@ impl RolloutRecorder {
         // Warm the DB by repairing every filesystem hit before querying SQLite. Source/provider/cwd
         // filters are already validated from rollout head metadata, so lightweight read-repair is
         // enough there. Search can depend on full title metadata, so keep full reconciliation.
-        for item in &fs_page.items {
-            if search_term.is_some() {
+        if search_term.is_some() {
+            for item in &fs_page.items {
                 state_db::reconcile_rollout(
                     state_db_ctx.as_deref(),
                     item.path.as_path(),
@@ -464,15 +465,19 @@ impl RolloutRecorder {
                     /*new_thread_memory_mode*/ None,
                 )
                 .await;
-            } else {
-                state_db::read_repair_rollout_path(
-                    state_db_ctx.as_deref(),
-                    item.thread_id,
-                    Some(archived),
-                    item.path.as_path(),
-                )
-                .await;
             }
+        } else {
+            let repair_paths = fs_page
+                .items
+                .iter()
+                .map(|item| (item.thread_id, item.path.clone()))
+                .collect::<Vec<_>>();
+            state_db::read_repair_rollout_paths(
+                state_db_ctx.as_deref(),
+                repair_paths.as_slice(),
+                Some(archived),
+            )
+            .await;
         }
 
         let db_page = state_db::list_threads_db(
@@ -488,6 +493,7 @@ impl RolloutRecorder {
             /*parent_thread_id*/ None,
             archived,
             search_term,
+            /*validate_rollout_paths*/ true,
         )
         .await;
         if let Some(db_page) = db_page {
@@ -517,6 +523,7 @@ impl RolloutRecorder {
                     /*parent_thread_id*/ None,
                     archived,
                     search_term,
+                    /*validate_rollout_paths*/ true,
                 )
                 .await
                 {
@@ -557,6 +564,7 @@ impl RolloutRecorder {
                         /*parent_thread_id*/ None,
                         archived,
                         search_term,
+                        /*validate_rollout_paths*/ true,
                     )
                     .await
                     {
@@ -635,6 +643,7 @@ impl RolloutRecorder {
                     /*parent_thread_id*/ None,
                     /*archived*/ false,
                     /*search_term*/ None,
+                    /*validate_rollout_paths*/ true,
                 )
                 .await
                 else {
@@ -868,59 +877,38 @@ impl RolloutRecorder {
         path: &Path,
     ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
         trace!("Resuming rollout from {path:?}");
+        if let Some(existing_path) = compression::existing_rollout_path(path).await
+            && compression::RolloutFile::from_path(existing_path.clone())
+                .is_some_and(|rollout_file| !rollout_file.is_compressed())
+        {
+            match tokio::task::spawn_blocking(move || {
+                load_plain_rollout_items_blocking(existing_path.as_path())
+            })
+            .await
+            .map_err(IoError::other)?
+            {
+                Ok(result) => return Ok(result),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err),
+            }
+        }
+
         let mut items: Vec<RolloutItem> = Vec::new();
         let mut thread_id: Option<ThreadId> = None;
         let mut parse_errors = 0usize;
         let mut reader = compression::open_rollout_line_reader(path).await?;
         let mut saw_non_empty_line = false;
         while let Some(line) = reader.next_line().await? {
-            if line.trim().is_empty() {
-                continue;
-            }
-            saw_non_empty_line = true;
-            let mut v: Value = match serde_json::from_str(&line) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("failed to parse line as JSON: {line:?}, error: {e}");
-                    parse_errors = parse_errors.saturating_add(1);
-                    continue;
-                }
-            };
-            if strip_legacy_ghost_snapshot_rollout_line(&mut v) {
-                trace!("skipping legacy ghost_snapshot rollout line");
-                continue;
-            }
-
-            // Parse the rollout line structure
-            match serde_json::from_value::<RolloutLine>(v.clone()) {
-                Ok(rollout_line) => {
-                    let item = rollout_line.item;
-                    // Use the FIRST SessionMeta encountered in the file as the canonical
-                    // thread id and main session information. Keep all items intact.
-                    if thread_id.is_none()
-                        && let RolloutItem::SessionMeta(session_meta_line) = &item
-                    {
-                        thread_id = Some(session_meta_line.meta.id);
-                    }
-                    items.push(item);
-                }
-                Err(e) => {
-                    trace!("failed to parse rollout line: {e}");
-                    parse_errors = parse_errors.saturating_add(1);
-                }
-            }
-        }
-        if !saw_non_empty_line {
-            return Err(IoError::other("empty session file"));
+            parse_rollout_item_line(
+                line.as_str(),
+                &mut items,
+                &mut thread_id,
+                &mut parse_errors,
+                &mut saw_non_empty_line,
+            );
         }
 
-        tracing::debug!(
-            "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
-            items.len(),
-            thread_id,
-            parse_errors,
-        );
-        Ok((items, thread_id, parse_errors))
+        finish_loaded_rollout(items, thread_id, parse_errors, saw_non_empty_line)
     }
 
     pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
@@ -966,6 +954,91 @@ impl RolloutRecorder {
         };
         Ok(())
     }
+}
+
+fn load_plain_rollout_items_blocking(
+    path: &Path,
+) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
+    let contents = std::fs::read_to_string(path)?;
+    let mut items: Vec<RolloutItem> = Vec::new();
+    let mut thread_id: Option<ThreadId> = None;
+    let mut parse_errors = 0usize;
+    let mut saw_non_empty_line = false;
+    for line in contents.lines() {
+        parse_rollout_item_line(
+            line,
+            &mut items,
+            &mut thread_id,
+            &mut parse_errors,
+            &mut saw_non_empty_line,
+        );
+    }
+    finish_loaded_rollout(items, thread_id, parse_errors, saw_non_empty_line)
+}
+
+fn parse_rollout_item_line(
+    line: &str,
+    items: &mut Vec<RolloutItem>,
+    thread_id: &mut Option<ThreadId>,
+    parse_errors: &mut usize,
+    saw_non_empty_line: &mut bool,
+) {
+    if line.trim().is_empty() {
+        return;
+    }
+    *saw_non_empty_line = true;
+    let rollout_line = if line.contains("ghost_snapshot") {
+        let mut v: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("failed to parse line as JSON: {line:?}, error: {e}");
+                *parse_errors = (*parse_errors).saturating_add(1);
+                return;
+            }
+        };
+        if strip_legacy_ghost_snapshot_rollout_line(&mut v) {
+            trace!("skipping legacy ghost_snapshot rollout line");
+            return;
+        }
+        serde_json::from_value::<RolloutLine>(v)
+    } else {
+        serde_json::from_str::<RolloutLine>(line)
+    };
+
+    match rollout_line {
+        Ok(rollout_line) => {
+            let item = rollout_line.item;
+            if thread_id.is_none()
+                && let RolloutItem::SessionMeta(session_meta_line) = &item
+            {
+                *thread_id = Some(session_meta_line.meta.id);
+            }
+            items.push(item);
+        }
+        Err(e) => {
+            trace!("failed to parse rollout line: {e}");
+            *parse_errors = (*parse_errors).saturating_add(1);
+        }
+    }
+}
+
+fn finish_loaded_rollout(
+    items: Vec<RolloutItem>,
+    thread_id: Option<ThreadId>,
+    parse_errors: usize,
+    saw_non_empty_line: bool,
+) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
+    if !saw_non_empty_line {
+        return Err(IoError::other("empty session file"));
+    }
+
+    tracing::debug!(
+        "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
+        items.len(),
+        thread_id,
+        parse_errors,
+    );
+    Ok((items, thread_id, parse_errors))
 }
 
 fn strip_legacy_ghost_snapshot_rollout_line(value: &mut Value) -> bool {
@@ -1037,19 +1110,43 @@ async fn fill_missing_thread_item_metadata_from_state_db(
         return page;
     };
 
+    let thread_ids = page
+        .items
+        .iter()
+        .filter_map(|item| item.thread_id)
+        .collect::<Vec<_>>();
+    let mut metadata_by_id = match state_db_ctx.get_threads(thread_ids.as_slice()).await {
+        Ok(metadata_by_id) => metadata_by_id,
+        Err(err) => {
+            warn!(
+                "state db get_threads failed while overlaying filesystem scan thread metadata: {err}"
+            );
+            for item in &mut page.items {
+                let Some(thread_id) = item.thread_id else {
+                    continue;
+                };
+                let metadata = match state_db_ctx.get_thread(thread_id).await {
+                    Ok(Some(metadata)) => metadata,
+                    Ok(None) => continue,
+                    Err(err) => {
+                        warn!(
+                            "state db get_thread failed while overlaying filesystem scan thread metadata: {err}"
+                        );
+                        continue;
+                    }
+                };
+                fill_missing_thread_item_metadata(item, thread_item_from_state_metadata(metadata));
+            }
+            return page;
+        }
+    };
+
     for item in &mut page.items {
         let Some(thread_id) = item.thread_id else {
             continue;
         };
-        let metadata = match state_db_ctx.get_thread(thread_id).await {
-            Ok(Some(metadata)) => metadata,
-            Ok(None) => continue,
-            Err(err) => {
-                warn!(
-                    "state db get_thread failed while overlaying filesystem scan thread metadata: {err}"
-                );
-                continue;
-            }
+        let Some(metadata) = metadata_by_id.remove(&thread_id) else {
+            continue;
         };
         fill_missing_thread_item_metadata(item, thread_item_from_state_metadata(metadata));
     }
@@ -1063,6 +1160,7 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
         thread_id: _state_thread_id,
         first_user_message,
         preview,
+        title,
         cwd,
         git_branch,
         git_sha,
@@ -1083,6 +1181,9 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
     }
     if item.preview.is_none() {
         item.preview = preview;
+    }
+    if item.title.is_none() {
+        item.title = title;
     }
     if item.cwd.is_none() {
         item.cwd = cwd;
@@ -1741,6 +1842,22 @@ impl JsonlWriter {
     }
 }
 
+impl From<codex_state::ThreadListPage> for ThreadsPage {
+    fn from(db_page: codex_state::ThreadListPage) -> Self {
+        let items = db_page
+            .items
+            .into_iter()
+            .map(thread_item_from_state_list_item)
+            .collect();
+        Self {
+            items,
+            next_cursor: db_page.next_anchor.map(Into::into),
+            num_scanned_files: db_page.num_scanned_rows,
+            reached_scan_cap: false,
+        }
+    }
+}
+
 impl From<codex_state::ThreadsPage> for ThreadsPage {
     fn from(db_page: codex_state::ThreadsPage) -> Self {
         let items = db_page
@@ -1757,12 +1874,40 @@ impl From<codex_state::ThreadsPage> for ThreadsPage {
     }
 }
 
+fn thread_item_from_state_list_item(item: codex_state::ThreadListItem) -> ThreadItem {
+    ThreadItem {
+        path: item.rollout_path,
+        thread_id: Some(item.id),
+        first_user_message: item.first_user_message,
+        preview: item.preview,
+        title: Some(item.title),
+        cwd: Some(item.cwd),
+        git_branch: item.git_branch,
+        git_sha: item.git_sha,
+        git_origin_url: item.git_origin_url,
+        source: Some(
+            serde_json::from_str(item.source.as_str())
+                .or_else(|_| serde_json::from_value(Value::String(item.source)))
+                .unwrap_or(SessionSource::Unknown),
+        ),
+        parent_thread_id: None,
+        agent_nickname: item.agent_nickname,
+        agent_role: item.agent_role,
+        model_provider: Some(item.model_provider),
+        cli_version: Some(item.cli_version),
+        created_at: Some(item.created_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
+        updated_at: Some(item.updated_at.to_rfc3339_opts(SecondsFormat::Millis, true)),
+        recency_at: Some(item.recency_at.to_rfc3339_opts(SecondsFormat::Millis, true)),
+    }
+}
+
 fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadItem {
     ThreadItem {
         path: item.rollout_path,
         thread_id: Some(item.id),
         first_user_message: item.first_user_message,
         preview: item.preview,
+        title: Some(item.title),
         cwd: Some(item.cwd),
         git_branch: item.git_branch,
         git_sha: item.git_sha,
@@ -1837,7 +1982,7 @@ async fn resume_candidate_matches_cwd(
 }
 
 async fn select_resume_path_from_db_page(
-    page: &codex_state::ThreadsPage,
+    page: &codex_state::ThreadListPage,
     filter_cwd: Option<&Path>,
     default_provider: &str,
 ) -> Option<PathBuf> {

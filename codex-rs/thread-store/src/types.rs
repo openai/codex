@@ -94,6 +94,9 @@ pub struct ResumeThreadParams {
     pub rollout_path: Option<PathBuf>,
     /// Known replay history for the resumed thread, if already loaded by the caller.
     pub history: Option<Vec<RolloutItem>>,
+    /// Defer loading history for metadata repair until the next append.
+    #[serde(default)]
+    pub defer_metadata_history_load: bool,
     /// Whether archived threads may be reopened.
     pub include_archived: bool,
     /// Metadata for future writes appended to the resumed live thread.

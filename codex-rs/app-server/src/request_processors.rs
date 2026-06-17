@@ -530,8 +530,11 @@ use crate::thread_state::ConnectionCapabilities;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
+use token_usage_replay::TokenUsageTurnOwner;
+use token_usage_replay::latest_token_usage_turn_id_from_owner;
 use token_usage_replay::latest_token_usage_turn_id_from_rollout_items;
 use token_usage_replay::send_thread_token_usage_update_to_connection;
+use token_usage_replay::token_usage_turn_owner_for_rollout_item;
 
 fn resolve_request_cwd(cwd: Option<PathBuf>) -> Result<Option<AbsolutePathBuf>, JSONRPCErrorError> {
     cwd.map(|cwd| {
@@ -606,11 +609,23 @@ pub(crate) use self::thread_summary::thread_settings_from_config_snapshot;
 pub(crate) use self::thread_summary::thread_settings_from_core_snapshot;
 
 pub(crate) fn build_api_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
+    build_api_turns_from_rollout_items_with_token_usage_owner(items).0
+}
+
+fn build_api_turns_from_rollout_items_with_token_usage_owner(
+    items: &[RolloutItem],
+) -> (Vec<Turn>, Option<TokenUsageTurnOwner>) {
     let mut builder = ThreadHistoryBuilder::new();
+    let mut token_usage_turn_owner = None;
+
     for item in items {
+        if let Some(owner) = token_usage_turn_owner_for_rollout_item(&builder, item) {
+            token_usage_turn_owner = Some(owner);
+        }
         if is_persisted_rollout_item(item) {
             builder.handle_rollout_item(item);
         }
     }
-    builder.finish()
+
+    (builder.finish(), token_usage_turn_owner)
 }

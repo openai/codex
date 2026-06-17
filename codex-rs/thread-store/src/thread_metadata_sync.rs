@@ -41,6 +41,7 @@ pub(crate) struct ThreadMetadataSync {
     last_touch_persisted_at: Option<Instant>,
     defer_create_update_until_history_exists: bool,
     defer_resume_update_until_append: bool,
+    needs_resume_history_observation: bool,
 }
 
 pub(crate) struct PendingThreadMetadataPatch {
@@ -87,6 +88,7 @@ impl ThreadMetadataSync {
             last_touch_persisted_at: None,
             defer_create_update_until_history_exists: true,
             defer_resume_update_until_append: false,
+            needs_resume_history_observation: false,
         }
     }
 
@@ -106,13 +108,26 @@ impl ThreadMetadataSync {
             last_touch_persisted_at: None,
             defer_create_update_until_history_exists: false,
             defer_resume_update_until_append: false,
+            needs_resume_history_observation: params.history.is_none(),
         };
         if let Some(history) = params.history.as_deref() {
-            let update = sync.observe_resume_history(history);
-            sync.merge_pending_update(update);
-            sync.defer_resume_update_until_append = sync.pending_update.is_some();
+            sync.observe_loaded_resume_history(history);
         }
         sync
+    }
+
+    pub(crate) fn needs_resume_history_observation(&self) -> bool {
+        self.needs_resume_history_observation
+    }
+
+    pub(crate) fn observe_loaded_resume_history(&mut self, items: &[RolloutItem]) {
+        if !self.needs_resume_history_observation && self.pending_update.is_some() {
+            return;
+        }
+        let update = self.observe_resume_history(items);
+        self.merge_pending_update(update);
+        self.defer_resume_update_until_append = self.pending_update.is_some();
+        self.needs_resume_history_observation = false;
     }
 
     pub(crate) fn take_pending_update(&self) -> Option<PendingThreadMetadataPatch> {
@@ -127,6 +142,9 @@ impl ThreadMetadataSync {
     pub(crate) fn take_pending_update_for_existing_history(
         &self,
     ) -> Option<PendingThreadMetadataPatch> {
+        if self.needs_resume_history_observation {
+            return None;
+        }
         if self.defer_create_update_until_history_exists {
             return None;
         }
@@ -548,11 +566,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn deferred_resume_history_observation_keeps_existing_preview_fields() {
+        let thread_id = ThreadId::new();
+        let mut params = resume_params(thread_id, Vec::new());
+        params.history = None;
+        params.defer_metadata_history_load = true;
+        let mut sync = ThreadMetadataSync::for_resume(&params);
+
+        assert!(sync.needs_resume_history_observation());
+        assert!(sync.take_pending_update_for_existing_history().is_none());
+
+        sync.observe_loaded_resume_history(&[RolloutItem::EventMsg(EventMsg::UserMessage(
+            user_message("first user text"),
+        ))]);
+        let update = sync
+            .observe_appended_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(user_message(
+                "later user text",
+            )))])
+            .expect("first append should flush resume metadata");
+
+        assert!(!sync.needs_resume_history_observation());
+        assert_eq!(update.patch.preview.as_deref(), Some("first user text"));
+        assert_eq!(update.patch.title.as_deref(), Some("first user text"));
+        assert_eq!(
+            update.patch.first_user_message.as_deref(),
+            Some("first user text")
+        );
+        assert!(update.patch.updated_at.is_some());
+    }
+
     fn resume_params(thread_id: ThreadId, history: Vec<RolloutItem>) -> ResumeThreadParams {
         ResumeThreadParams {
             thread_id,
             rollout_path: None,
             history: Some(history),
+            defer_metadata_history_load: false,
             include_archived: false,
             metadata: ThreadPersistenceMetadata {
                 cwd: None,

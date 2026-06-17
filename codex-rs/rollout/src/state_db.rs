@@ -12,6 +12,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 pub use codex_state::LogEntry;
+use codex_state::ThreadMetadata;
 use codex_state::ThreadMetadataBuilder;
 use codex_utils_path::normalize_for_path_comparison;
 use serde_json::Value;
@@ -355,7 +356,7 @@ pub async fn list_thread_ids_db(
     }
 }
 
-/// List thread metadata from SQLite without rollout directory traversal.
+/// List thread summaries from SQLite without rollout directory traversal.
 #[allow(clippy::too_many_arguments)]
 pub async fn list_threads_db(
     context: Option<&codex_state::StateRuntime>,
@@ -370,7 +371,8 @@ pub async fn list_threads_db(
     parent_thread_id: Option<ThreadId>,
     archived: bool,
     search_term: Option<&str>,
-) -> Option<codex_state::ThreadsPage> {
+    validate_rollout_paths: bool,
+) -> Option<codex_state::ThreadListPage> {
     let ctx = context?;
     if ctx.codex_home() != codex_home {
         warn!(
@@ -415,15 +417,15 @@ pub async fn list_threads_db(
     };
     let page = match parent_thread_id {
         Some(parent_thread_id) => {
-            ctx.list_threads_by_parent(page_size, parent_thread_id, filters)
+            ctx.list_thread_summaries_by_parent(page_size, parent_thread_id, filters)
                 .await
         }
-        None => ctx.list_threads(page_size, filters).await,
+        None => ctx.list_thread_summaries(page_size, filters).await,
     };
     match page {
         Ok(mut page) => {
-            // Parent-filtered listings intentionally treat persisted state as authoritative.
-            if parent_thread_id.is_some() {
+            // Parent-filtered and DB-only listings intentionally treat persisted state as authoritative.
+            if parent_thread_id.is_some() || !validate_rollout_paths {
                 return Some(page);
             }
             let mut valid_items = Vec::with_capacity(page.items.len());
@@ -559,6 +561,67 @@ pub async fn reconcile_rollout(
     }
 }
 
+/// Repair a batch of thread rollout paths after filesystem fallback succeeds.
+pub async fn read_repair_rollout_paths(
+    context: Option<&codex_state::StateRuntime>,
+    rollout_paths: &[(Option<ThreadId>, PathBuf)],
+    archived_only: Option<bool>,
+) {
+    let Some(ctx) = context else {
+        return;
+    };
+    if rollout_paths.is_empty() {
+        return;
+    }
+
+    let mut seen_thread_ids = std::collections::HashSet::with_capacity(rollout_paths.len());
+    let mut thread_ids = Vec::with_capacity(rollout_paths.len());
+    for (thread_id, _) in rollout_paths {
+        if let Some(thread_id) = thread_id
+            && seen_thread_ids.insert(*thread_id)
+        {
+            thread_ids.push(*thread_id);
+        }
+    }
+
+    let metadata_by_id = match ctx.get_threads(&thread_ids).await {
+        Ok(metadata_by_id) => metadata_by_id,
+        Err(err) => {
+            warn!("state db batch read-repair lookup failed: {err}");
+            for (thread_id, rollout_path) in rollout_paths {
+                read_repair_rollout_path(Some(ctx), *thread_id, archived_only, rollout_path).await;
+            }
+            return;
+        }
+    };
+
+    for (thread_id, rollout_path) in rollout_paths {
+        if let Some(thread_id) = thread_id {
+            if let Some(metadata) = metadata_by_id.get(thread_id) {
+                if read_repair_existing_rollout_metadata(
+                    ctx,
+                    metadata,
+                    archived_only,
+                    rollout_path.as_path(),
+                )
+                .await
+                {
+                    continue;
+                }
+            } else {
+                warn!(
+                    "state db discrepancy during read_repair_rollout_path: upsert_needed (slow path)"
+                );
+            }
+        } else {
+            warn!(
+                "state db discrepancy during read_repair_rollout_path: upsert_needed (slow path)"
+            );
+        }
+        reconcile_rollout_path_from_contents(ctx, rollout_path.as_path(), archived_only).await;
+    }
+}
+
 /// Repair a thread's rollout path after filesystem fallback succeeds.
 pub async fn read_repair_rollout_path(
     context: Option<&codex_state::StateRuntime>,
@@ -577,28 +640,8 @@ pub async fn read_repair_rollout_path(
         && let Ok(Some(metadata)) = ctx.get_thread(thread_id).await
     {
         saw_existing_metadata = true;
-        let mut repaired = metadata.clone();
-        repaired.rollout_path = rollout_path.to_path_buf();
-        repaired.cwd = normalize_cwd_for_state_db(&repaired.cwd);
-        match archived_only {
-            Some(true) if repaired.archived_at.is_none() => {
-                repaired.archived_at = Some(repaired.updated_at);
-            }
-            Some(false) => {
-                repaired.archived_at = None;
-            }
-            Some(true) | None => {}
-        }
-        if repaired == metadata {
-            return;
-        }
-        warn!("state db discrepancy during read_repair_rollout_path: upsert_needed (fast path)");
-        if let Err(err) = ctx.upsert_thread(&repaired).await {
-            warn!(
-                "state db read-repair upsert failed for {}: {err}",
-                rollout_path.display()
-            );
-        } else {
+        if read_repair_existing_rollout_metadata(ctx, &metadata, archived_only, rollout_path).await
+        {
             return;
         }
     }
@@ -608,6 +651,47 @@ pub async fn read_repair_rollout_path(
     if !saw_existing_metadata {
         warn!("state db discrepancy during read_repair_rollout_path: upsert_needed (slow path)");
     }
+    reconcile_rollout_path_from_contents(ctx, rollout_path, archived_only).await;
+}
+
+async fn read_repair_existing_rollout_metadata(
+    ctx: &codex_state::StateRuntime,
+    metadata: &ThreadMetadata,
+    archived_only: Option<bool>,
+    rollout_path: &Path,
+) -> bool {
+    let mut repaired = metadata.clone();
+    repaired.rollout_path = rollout_path.to_path_buf();
+    repaired.cwd = normalize_cwd_for_state_db(&repaired.cwd);
+    match archived_only {
+        Some(true) if repaired.archived_at.is_none() => {
+            repaired.archived_at = Some(repaired.updated_at);
+        }
+        Some(false) => {
+            repaired.archived_at = None;
+        }
+        Some(true) | None => {}
+    }
+    if repaired == *metadata {
+        return true;
+    }
+    warn!("state db discrepancy during read_repair_rollout_path: upsert_needed (fast path)");
+    if let Err(err) = ctx.upsert_thread(&repaired).await {
+        warn!(
+            "state db read-repair upsert failed for {}: {err}",
+            rollout_path.display()
+        );
+        false
+    } else {
+        true
+    }
+}
+
+async fn reconcile_rollout_path_from_contents(
+    ctx: &codex_state::StateRuntime,
+    rollout_path: &Path,
+    archived_only: Option<bool>,
+) {
     let default_provider = crate::list::read_session_meta_line(rollout_path)
         .await
         .ok()

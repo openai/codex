@@ -99,6 +99,7 @@ pub(crate) async fn run_codex_thread_interactive(
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
         extensions: Arc::clone(&parent_session.services.extensions),
         conversation_history,
+        include_initial_messages: true,
         session_source: SessionSource::SubAgent(subagent_source.clone()),
         forked_from_thread_id,
         parent_thread_id: Some(parent_session.thread_id),

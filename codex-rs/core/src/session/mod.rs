@@ -419,6 +419,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     pub(crate) conversation_history: InitialHistory,
+    pub(crate) include_initial_messages: bool,
     pub(crate) session_source: SessionSource,
     pub(crate) forked_from_thread_id: Option<ThreadId>,
     pub(crate) parent_thread_id: Option<ThreadId>,
@@ -507,6 +508,7 @@ impl Codex {
             mcp_manager,
             extensions,
             conversation_history,
+            include_initial_messages,
             session_source,
             forked_from_thread_id,
             parent_thread_id,
@@ -659,6 +661,7 @@ impl Codex {
             tx_event.clone(),
             agent_status_tx.clone(),
             conversation_history,
+            include_initial_messages,
             session_source_clone,
             skills_service,
             plugins_manager,
@@ -896,8 +899,13 @@ pub(crate) fn session_loop_termination_from_handle(
 async fn thread_title_from_thread_store(
     live_thread: Option<&LiveThread>,
     thread_store: &Arc<dyn ThreadStore>,
+    state_db_ctx: Option<&codex_state::StateRuntime>,
     conversation_id: ThreadId,
 ) -> Option<String> {
+    if let Some(title) = thread_title_from_state_db(state_db_ctx, conversation_id).await {
+        return Some(title);
+    }
+
     let thread = match live_thread {
         Some(live_thread) => {
             live_thread
@@ -939,6 +947,35 @@ fn push_prompt_fragment(
             separate_developer_sections.push(fragment.text().to_string());
         }
     }
+}
+
+async fn thread_title_from_state_db(
+    state_db_ctx: Option<&codex_state::StateRuntime>,
+    conversation_id: ThreadId,
+) -> Option<String> {
+    let metadata = state_db_ctx?
+        .get_thread(conversation_id)
+        .await
+        .ok()
+        .flatten()?;
+    distinct_metadata_title(
+        metadata.title.as_str(),
+        metadata.preview.as_deref(),
+        metadata.first_user_message.as_deref(),
+    )
+}
+
+fn distinct_metadata_title(
+    title: &str,
+    preview: Option<&str>,
+    first_user_message: Option<&str>,
+) -> Option<String> {
+    let title = title.trim();
+    if title.is_empty() || first_user_message.map(str::trim) == Some(title) {
+        return None;
+    }
+    let preview = preview.or(first_user_message).unwrap_or_default().trim();
+    (preview != title).then(|| title.to_string())
 }
 
 impl Session {

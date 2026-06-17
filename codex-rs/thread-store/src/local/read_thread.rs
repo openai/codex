@@ -2,6 +2,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_rollout::RolloutRecorder;
@@ -39,15 +40,17 @@ pub(super) async fn read_thread(
                     metadata.rollout_path.as_path(),
                 )))
         && (!params.include_history
-            || sqlite_rollout_path_can_load_history_for_thread(
-                store,
-                &metadata.rollout_path,
-                thread_id,
-            )
-            .await)
+            || codex_rollout::existing_rollout_path(metadata.rollout_path.as_path())
+                .await
+                .is_some())
     {
         let metadata_sandbox_policy = metadata.sandbox_policy.clone();
-        let mut thread = stored_thread_from_sqlite_metadata(store, metadata).await;
+        let mut thread = stored_thread_from_sqlite_metadata(
+            store,
+            metadata,
+            /*include_session_meta*/ !params.include_history,
+        )
+        .await;
         if !params.include_history
             && let Some(rollout_path) = thread.rollout_path.clone()
             && let Ok(mut rollout_thread) = read_thread_from_rollout_path(store, rollout_path).await
@@ -66,8 +69,22 @@ pub(super) async fn read_thread(
             );
             thread = rollout_thread;
         }
-        attach_history_if_requested(&mut thread, params.include_history).await?;
-        return Ok(thread);
+        if params.include_history {
+            let Some(rollout_path) = thread.rollout_path.clone() else {
+                return Err(ThreadStoreError::Internal {
+                    message: format!("failed to load thread history for thread {thread_id}"),
+                });
+            };
+            if let Some(history) =
+                load_history_for_thread(rollout_path.as_path(), thread_id).await?
+            {
+                apply_session_meta_from_history(&mut thread, &history.items);
+                thread.history = Some(history);
+                return Ok(thread);
+            }
+        } else {
+            return Ok(thread);
+        }
     }
 
     let path = resolve_rollout_path(store, thread_id, params.include_archived)
@@ -86,22 +103,6 @@ pub(super) async fn read_thread(
     Ok(thread)
 }
 
-async fn sqlite_rollout_path_can_load_history_for_thread(
-    store: &LocalThreadStore,
-    path: &std::path::Path,
-    thread_id: codex_protocol::ThreadId,
-) -> bool {
-    if codex_rollout::existing_rollout_path(path).await.is_none() {
-        return false;
-    }
-    // SQLite metadata can outlive a moved/recreated rollout path. When history is
-    // requested, verify the path still resolves to the requested thread before
-    // trusting it as the source replay.
-    read_thread_from_rollout_path(store, path.to_path_buf())
-        .await
-        .is_ok_and(|thread| thread.thread_id == thread_id)
-}
-
 pub(super) async fn read_thread_by_rollout_path(
     store: &LocalThreadStore,
     rollout_path: std::path::PathBuf,
@@ -117,6 +118,9 @@ pub(super) async fn read_thread_by_rollout_path(
     }
     if let Some(metadata) = read_sqlite_metadata(store, thread.thread_id).await {
         thread.recency_at = metadata.recency_at;
+        if let Some(title) = distinct_thread_metadata_title(&metadata) {
+            set_thread_name_from_title(&mut thread, title);
+        }
         let existing_git_info = thread.git_info.take();
         let (fallback_sha, fallback_branch, fallback_origin_url) = match existing_git_info {
             Some(info) => (
@@ -190,9 +194,17 @@ async fn attach_history_if_requested(
             message: format!("failed to load thread history for thread {thread_id}"),
         });
     };
-    let items = load_history_items(&path).await?;
-    thread.history = Some(StoredThreadHistory { thread_id, items });
-    Ok(())
+    match load_history_for_thread(&path, thread_id).await? {
+        Some(history) => {
+            thread.history = Some(history);
+            Ok(())
+        }
+        None => Err(ThreadStoreError::InvalidRequest {
+            message: format!(
+                "rollout history for thread {thread_id} belongs to a different thread"
+            ),
+        }),
+    }
 }
 
 async fn resolve_rollout_path(
@@ -280,15 +292,34 @@ async fn read_thread_from_rollout_path(
     Ok(thread)
 }
 
-async fn load_history_items(
+fn apply_session_meta_from_history(thread: &mut StoredThread, items: &[RolloutItem]) {
+    if let Some(meta_line) = items.iter().find_map(|item| match item {
+        RolloutItem::SessionMeta(meta_line) => Some(meta_line),
+        RolloutItem::ResponseItem(_)
+        | RolloutItem::InterAgentCommunication(_)
+        | RolloutItem::Compacted(_)
+        | RolloutItem::TurnContext(_)
+        | RolloutItem::EventMsg(_) => None,
+    }) {
+        thread.forked_from_id = meta_line.meta.forked_from_id;
+        thread.parent_thread_id = meta_line.meta.parent_thread_id;
+    }
+}
+
+async fn load_history_for_thread(
     path: &std::path::Path,
-) -> ThreadStoreResult<Vec<codex_protocol::protocol::RolloutItem>> {
-    let (items, _, _) = RolloutRecorder::load_rollout_items(path)
-        .await
-        .map_err(|err| ThreadStoreError::Internal {
-            message: format!("failed to load thread history {}: {err}", path.display()),
-        })?;
-    Ok(items)
+    thread_id: codex_protocol::ThreadId,
+) -> ThreadStoreResult<Option<StoredThreadHistory>> {
+    let (items, history_thread_id, _) =
+        RolloutRecorder::load_rollout_items(path)
+            .await
+            .map_err(|err| ThreadStoreError::Internal {
+                message: format!("failed to load thread history {}: {err}", path.display()),
+            })?;
+    if history_thread_id != Some(thread_id) {
+        return Ok(None);
+    }
+    Ok(Some(StoredThreadHistory { thread_id, items }))
 }
 
 async fn read_sqlite_metadata(
@@ -302,6 +333,7 @@ async fn read_sqlite_metadata(
 async fn stored_thread_from_sqlite_metadata(
     store: &LocalThreadStore,
     metadata: ThreadMetadata,
+    include_session_meta: bool,
 ) -> StoredThread {
     let name = match distinct_thread_metadata_title(&metadata) {
         Some(title) => Some(title),
@@ -311,10 +343,14 @@ async fn stored_thread_from_sqlite_metadata(
             .flatten()
             .filter(|title| !title.trim().is_empty()),
     };
-    let session_meta = read_session_meta_line(metadata.rollout_path.as_path())
-        .await
-        .ok()
-        .map(|meta_line| meta_line.meta);
+    let session_meta = if include_session_meta {
+        read_session_meta_line(metadata.rollout_path.as_path())
+            .await
+            .ok()
+            .map(|meta_line| meta_line.meta)
+    } else {
+        None
+    };
     let rollout_path = codex_rollout::plain_rollout_path(metadata.rollout_path.as_path());
     let forked_from_id = session_meta.as_ref().and_then(|meta| meta.forked_from_id);
     let parent_thread_id = session_meta.as_ref().and_then(|meta| meta.parent_thread_id);

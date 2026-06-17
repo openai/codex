@@ -53,6 +53,8 @@ pub use model::Stage1Output;
 pub use model::Stage1StartupClaimParams;
 pub use model::ThreadGoal;
 pub use model::ThreadGoalStatus;
+pub use model::ThreadListItem;
+pub use model::ThreadListPage;
 pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadsPage;

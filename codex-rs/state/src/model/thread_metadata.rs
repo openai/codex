@@ -49,6 +49,56 @@ pub struct ThreadsPage {
     pub num_scanned_rows: usize,
 }
 
+/// A single page of lightweight thread list results.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadListPage {
+    /// The thread summary items in this page.
+    pub items: Vec<ThreadListItem>,
+    /// The next anchor to use for pagination, if any.
+    pub next_anchor: Option<Anchor>,
+    /// The number of rows scanned to produce this page.
+    pub num_scanned_rows: usize,
+}
+
+/// Thread metadata fields needed to render list/search pages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadListItem {
+    /// The thread identifier.
+    pub id: ThreadId,
+    /// The absolute rollout path on disk.
+    pub rollout_path: PathBuf,
+    /// The creation timestamp.
+    pub created_at: DateTime<Utc>,
+    /// The last update timestamp.
+    pub updated_at: DateTime<Utc>,
+    /// The product recency timestamp used by recent-thread listings.
+    pub recency_at: DateTime<Utc>,
+    /// The session source (stringified enum).
+    pub source: String,
+    /// Optional random unique nickname assigned to an AgentControl-spawned sub-agent.
+    pub agent_nickname: Option<String>,
+    /// Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.
+    pub agent_role: Option<String>,
+    /// The model provider identifier.
+    pub model_provider: String,
+    /// The working directory for the thread.
+    pub cwd: PathBuf,
+    /// Version of the CLI that created the thread.
+    pub cli_version: String,
+    /// A best-effort thread title.
+    pub title: String,
+    /// Best available user-facing preview for discovery and list display.
+    pub preview: Option<String>,
+    /// First user message observed for this thread, if any.
+    pub first_user_message: Option<String>,
+    /// The git commit SHA, if known.
+    pub git_sha: Option<String>,
+    /// The git branch name, if known.
+    pub git_branch: Option<String>,
+    /// The git origin URL, if known.
+    pub git_origin_url: Option<String>,
+}
+
 /// The outcome of extracting metadata from a rollout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractionOutcome {

@@ -45,6 +45,36 @@ WHERE threads.id = ?
             .transpose()
     }
 
+    pub async fn get_threads(
+        &self,
+        ids: &[ThreadId],
+    ) -> anyhow::Result<std::collections::HashMap<ThreadId, crate::ThreadMetadata>> {
+        if ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        const MAX_SQL_BINDINGS: usize = 900;
+        let mut metadata_by_id = std::collections::HashMap::with_capacity(ids.len());
+        for chunk in ids.chunks(MAX_SQL_BINDINGS) {
+            let mut builder = QueryBuilder::<Sqlite>::new("");
+            push_thread_select_columns(&mut builder);
+            builder.push(" FROM threads WHERE threads.id IN (");
+            let mut separated = builder.separated(", ");
+            for id in chunk {
+                separated.push_bind(id.to_string());
+            }
+            separated.push_unseparated(")");
+
+            let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
+            for row in rows {
+                let metadata = ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from)?;
+                metadata_by_id.insert(metadata.id, metadata);
+            }
+        }
+
+        Ok(metadata_by_id)
+    }
+
     pub async fn get_thread_memory_mode(&self, id: ThreadId) -> anyhow::Result<Option<String>> {
         let row = sqlx::query("SELECT memory_mode FROM threads WHERE id = ?")
             .bind(id.to_string())
@@ -414,6 +444,59 @@ ON CONFLICT(child_thread_id) DO NOTHING
     ) -> anyhow::Result<crate::ThreadsPage> {
         self.list_threads_matching(page_size, filters, Some(parent_thread_id))
             .await
+    }
+
+    /// List lightweight thread summaries using the underlying database.
+    pub async fn list_thread_summaries(
+        &self,
+        page_size: usize,
+        filters: ThreadFilterOptions<'_>,
+    ) -> anyhow::Result<crate::ThreadListPage> {
+        self.list_thread_summaries_matching(page_size, filters, /*parent_thread_id*/ None)
+            .await
+    }
+
+    /// List lightweight direct children of `parent_thread_id` using persisted spawn edges.
+    pub async fn list_thread_summaries_by_parent(
+        &self,
+        page_size: usize,
+        parent_thread_id: ThreadId,
+        filters: ThreadFilterOptions<'_>,
+    ) -> anyhow::Result<crate::ThreadListPage> {
+        self.list_thread_summaries_matching(page_size, filters, Some(parent_thread_id))
+            .await
+    }
+
+    async fn list_thread_summaries_matching(
+        &self,
+        page_size: usize,
+        filters: ThreadFilterOptions<'_>,
+        parent_thread_id: Option<ThreadId>,
+    ) -> anyhow::Result<crate::ThreadListPage> {
+        let limit = page_size.saturating_add(1);
+
+        let mut builder = QueryBuilder::<Sqlite>::new("");
+        push_list_thread_summaries_query(&mut builder, filters, parent_thread_id, limit);
+
+        let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
+        let mut items = rows
+            .into_iter()
+            .map(|row| thread_list_item_from_row(&row))
+            .collect::<Result<Vec<_>, _>>()?;
+        let num_scanned_rows = items.len();
+        let next_anchor = if items.len() > page_size {
+            items.pop();
+            items
+                .last()
+                .and_then(|item| anchor_from_list_item(item, filters.sort_key))
+        } else {
+            None
+        };
+        Ok(ThreadListPage {
+            items,
+            next_anchor,
+            num_scanned_rows,
+        })
     }
 
     async fn list_threads_matching(
@@ -1094,6 +1177,16 @@ fn one_thread_id_from_rows(
     }
 }
 
+fn push_list_thread_summaries_query(
+    builder: &mut QueryBuilder<Sqlite>,
+    filters: ThreadFilterOptions<'_>,
+    parent_thread_id: Option<ThreadId>,
+    limit: usize,
+) {
+    push_thread_list_select_columns(builder);
+    push_list_threads_from_filter_order(builder, filters, parent_thread_id, limit);
+}
+
 fn push_list_threads_query(
     builder: &mut QueryBuilder<Sqlite>,
     filters: ThreadFilterOptions<'_>,
@@ -1101,14 +1194,25 @@ fn push_list_threads_query(
     limit: usize,
 ) {
     push_thread_select_columns(builder);
-    builder.push(" FROM threads");
+    push_list_threads_from_filter_order(builder, filters, parent_thread_id, limit);
+}
+
+fn push_list_threads_from_filter_order(
+    builder: &mut QueryBuilder<Sqlite>,
+    filters: ThreadFilterOptions<'_>,
+    parent_thread_id: Option<ThreadId>,
+    limit: usize,
+) {
+    if parent_thread_id.is_some() {
+        builder.push(" FROM thread_spawn_edges CROSS JOIN threads");
+    } else {
+        builder.push(" FROM threads");
+    }
     push_thread_filters(builder, filters);
     if let Some(parent_thread_id) = parent_thread_id {
-        builder.push(
-            " AND threads.id IN (SELECT child_thread_id FROM thread_spawn_edges WHERE parent_thread_id = ",
-        );
+        builder.push(" AND thread_spawn_edges.parent_thread_id = ");
         builder.push_bind(parent_thread_id.to_string());
-        builder.push(")");
+        builder.push(" AND threads.id = thread_spawn_edges.child_thread_id");
     }
     let order_by_index = match filters.cwd_filters {
         // Multi-cwd listing is supported but at the time of writing has no current use in production.
@@ -1122,6 +1226,31 @@ fn push_list_threads_query(
         filters.sort_direction,
         order_by_index,
         limit,
+    );
+}
+
+fn push_thread_list_select_columns(builder: &mut QueryBuilder<Sqlite>) {
+    builder.push(
+        r#"
+SELECT
+    threads.id,
+    threads.rollout_path,
+    threads.created_at_ms AS created_at,
+    threads.updated_at_ms AS updated_at,
+    threads.recency_at_ms AS recency_at,
+    threads.source,
+    threads.agent_nickname,
+    threads.agent_role,
+    threads.model_provider,
+    threads.cwd,
+    threads.cli_version,
+    threads.title,
+    threads.preview,
+    threads.first_user_message,
+    threads.git_sha,
+    threads.git_branch,
+    threads.git_origin_url
+"#,
     );
 }
 
@@ -1323,6 +1452,43 @@ pub(super) fn push_thread_order_and_limit(
     }
     builder.push(" LIMIT ");
     builder.push_bind(limit as i64);
+}
+
+fn thread_list_item_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<ThreadListItem> {
+    let id: String = row.try_get("id")?;
+    let preview: String = row.try_get("preview")?;
+    let first_user_message: String = row.try_get("first_user_message")?;
+    Ok(ThreadListItem {
+        id: ThreadId::try_from(id)?,
+        rollout_path: PathBuf::from(row.try_get::<String, _>("rollout_path")?),
+        created_at: epoch_millis_to_datetime(row.try_get("created_at")?)?,
+        updated_at: epoch_millis_to_datetime(row.try_get("updated_at")?)?,
+        recency_at: epoch_millis_to_datetime(row.try_get("recency_at")?)?,
+        source: row.try_get("source")?,
+        agent_nickname: row.try_get("agent_nickname")?,
+        agent_role: row.try_get("agent_role")?,
+        model_provider: row.try_get("model_provider")?,
+        cwd: PathBuf::from(row.try_get::<String, _>("cwd")?),
+        cli_version: row.try_get("cli_version")?,
+        title: row.try_get("title")?,
+        preview: (!preview.is_empty()).then_some(preview),
+        first_user_message: (!first_user_message.is_empty()).then_some(first_user_message),
+        git_sha: row.try_get("git_sha")?,
+        git_branch: row.try_get("git_branch")?,
+        git_origin_url: row.try_get("git_origin_url")?,
+    })
+}
+
+fn anchor_from_list_item(item: &ThreadListItem, sort_key: SortKey) -> Option<crate::Anchor> {
+    let ts = match sort_key {
+        SortKey::CreatedAt => item.created_at,
+        SortKey::UpdatedAt => item.updated_at,
+        SortKey::RecencyAt => item.recency_at,
+    };
+    Some(crate::Anchor {
+        ts,
+        id: (sort_key == SortKey::RecencyAt).then_some(item.id),
+    })
 }
 
 fn metadata_preview(metadata: &crate::ThreadMetadata) -> &str {

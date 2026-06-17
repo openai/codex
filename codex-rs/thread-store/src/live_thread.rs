@@ -32,6 +32,7 @@ pub struct LiveThread {
     thread_id: ThreadId,
     thread_store: Arc<dyn ThreadStore>,
     metadata_sync: Arc<Mutex<ThreadMetadataSync>>,
+    resume_history_include_archived: bool,
 }
 
 /// Owns a live thread while session initialization is still fallible.
@@ -95,16 +96,18 @@ impl LiveThread {
             thread_id,
             thread_store,
             metadata_sync: Arc::new(Mutex::new(metadata_sync)),
+            resume_history_include_archived: true,
         })
     }
 
     pub async fn resume(
         thread_store: Arc<dyn ThreadStore>,
-        mut params: ResumeThreadParams,
+        params: ResumeThreadParams,
     ) -> ThreadStoreResult<Self> {
         let thread_id = params.thread_id;
-        let should_load_history = params.history.is_none();
         let include_archived = params.include_archived;
+        let should_load_history = params.history.is_none() && !params.defer_metadata_history_load;
+        let mut params = params;
         thread_store.resume_thread(params.clone()).await?;
         if should_load_history {
             match thread_store
@@ -130,6 +133,7 @@ impl LiveThread {
             thread_id,
             thread_store,
             metadata_sync: Arc::new(Mutex::new(metadata_sync)),
+            resume_history_include_archived: include_archived,
         })
     }
 
@@ -137,6 +141,9 @@ impl LiveThread {
         let canonical_items = persisted_rollout_items(items);
         if items.is_empty() {
             return Ok(());
+        }
+        if !canonical_items.is_empty() {
+            self.observe_deferred_resume_history().await?;
         }
         self.thread_store
             .append_items(AppendThreadItemsParams {
@@ -187,6 +194,29 @@ impl LiveThread {
 
     pub async fn discard(&self) -> ThreadStoreResult<()> {
         self.thread_store.discard_thread(self.thread_id).await
+    }
+
+    async fn observe_deferred_resume_history(&self) -> ThreadStoreResult<()> {
+        if !self
+            .metadata_sync
+            .lock()
+            .await
+            .needs_resume_history_observation()
+        {
+            return Ok(());
+        }
+        let history = self
+            .thread_store
+            .load_history(LoadThreadHistoryParams {
+                thread_id: self.thread_id,
+                include_archived: self.resume_history_include_archived,
+            })
+            .await?;
+        let mut metadata_sync = self.metadata_sync.lock().await;
+        if metadata_sync.needs_resume_history_observation() {
+            metadata_sync.observe_loaded_resume_history(history.items.as_slice());
+        }
+        Ok(())
     }
 
     pub async fn load_history(

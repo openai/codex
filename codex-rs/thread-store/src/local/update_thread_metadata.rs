@@ -803,6 +803,7 @@ mod tests {
                 thread_id,
                 rollout_path: Some(path.clone()),
                 history: None,
+                defer_metadata_history_load: false,
                 include_archived: true,
                 metadata: test_thread_metadata(),
             })
@@ -1606,6 +1607,7 @@ mod tests {
                 thread_id,
                 rollout_path: Some(archived_path.clone()),
                 history: None,
+                defer_metadata_history_load: false,
                 include_archived: true,
                 metadata: test_thread_metadata(),
             })
