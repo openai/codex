@@ -34,7 +34,7 @@ struct RawPluginManifest {
     #[serde(default)]
     mcp_servers: Option<RawPluginManifestMcpServers>,
     #[serde(default)]
-    apps: Option<RawPluginManifestPaths>,
+    apps: Option<String>,
     #[serde(default)]
     hooks: Option<RawPluginManifestHooks>,
     #[serde(default)]
@@ -104,7 +104,6 @@ enum RawPluginManifestPaths {
 #[serde(untagged)]
 enum RawPluginManifestMcpServers {
     Path(String),
-    Paths(Vec<String>),
     Object(std::collections::BTreeMap<String, JsonValue>),
     Invalid(JsonValue),
 }
@@ -234,7 +233,7 @@ pub(crate) fn parse_plugin_manifest(
         paths: PluginManifestPaths {
             skills: resolve_manifest_paths(plugin_root, "skills", skills.as_ref()),
             mcp_servers: resolve_manifest_mcp_servers(plugin_root, mcp_servers),
-            apps: resolve_manifest_paths(plugin_root, "apps", apps.as_ref()),
+            apps: resolve_manifest_path(plugin_root, "apps", apps.as_deref()),
             hooks: resolve_manifest_hooks(plugin_root, hooks),
         },
         interface,
@@ -278,15 +277,7 @@ fn resolve_manifest_mcp_servers(
     match mcp_servers? {
         RawPluginManifestMcpServers::Path(path) => {
             resolve_manifest_path(plugin_root, "mcpServers", Some(&path))
-                .map(|path| PluginManifestMcpServers::Paths(vec![path]))
-        }
-        RawPluginManifestMcpServers::Paths(paths) => {
-            let mcp_server_paths = paths
-                .iter()
-                .filter_map(|path| resolve_manifest_path(plugin_root, "mcpServers", Some(path)))
-                .collect::<Vec<_>>();
-            (!mcp_server_paths.is_empty())
-                .then_some(PluginManifestMcpServers::Paths(mcp_server_paths))
+                .map(PluginManifestMcpServers::Path)
         }
         RawPluginManifestMcpServers::Object(servers) => match serde_json::to_string(&servers) {
             Ok(servers) => Some(PluginManifestMcpServers::Object(servers)),
@@ -297,7 +288,7 @@ fn resolve_manifest_mcp_servers(
         },
         RawPluginManifestMcpServers::Invalid(value) => {
             tracing::warn!(
-                "ignoring mcpServers: expected a string, string array, or object; found {}",
+                "ignoring mcpServers: expected a string or object; found {}",
                 json_value_type(&value)
             );
             None

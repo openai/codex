@@ -61,9 +61,9 @@
 - `license` (`string`): License identifier (for example `MIT`, `Apache-2.0`).
 - `keywords` (`array` of `string`): Search/discovery tags.
 - `skills` (`string` or array of `string`): Relative path(s) to skill directories/files.
-- `hooks` (`string` or array of `string`): Hook config path(s).
-- `mcpServers` (`string`, array of `string`, or `object`): MCP config path(s), or an object whose keys are MCP server names and whose values are MCP server config objects.
-- `apps` (`string` or array of `string`): App manifest path(s) for plugin integrations.
+- `hooks` (`string`): Hook config path.
+- `mcpServers` (`string` or `object`): MCP config path, or an object whose keys are MCP server names and whose values are MCP server config objects.
+- `apps` (`string`): App manifest path for plugin integrations.
 - `interface` (`object`): Interface/UX metadata block for plugin presentation.
 
 `mcpServers` may be declared as a companion file path:
@@ -112,7 +112,8 @@ Or as an object directly in `plugin.json`:
 ### Path conventions and defaults
 
 - Path values should be relative and begin with `./`.
-- `skills`, `hooks`, `apps`, and file-backed `mcpServers` can be declared as either a single path string or an array of path strings.
+- `skills` can be declared as either a single path string or an array of path strings.
+- `skills`, `hooks`, and string-valued `mcpServers` are supplemented on top of default component discovery; they do not replace defaults.
 - Custom path values must follow the plugin root convention and naming/namespacing rules.
 - This repo’s scaffold writes `.codex-plugin/plugin.json`; treat that as the manifest location this skill generates.
 
