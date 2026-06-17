@@ -561,8 +561,7 @@ async fn import_repo_migrates_mcp_hooks_commands_and_subagents() {
             details: None,
         },
     ])
-    .await
-    .expect("import");
+    .await;
 
     let config: TomlValue = toml::from_str(
         &fs::read_to_string(repo_root.join(".codex").join("config.toml")).expect("read config"),
@@ -724,8 +723,7 @@ url = "https://example.com/mixed-transport"
             cwd: Some(repo_root.clone()),
             details: None,
         }])
-        .await
-        .expect("import");
+        .await;
 
     assert_eq!(
         fs::read_to_string(repo_root.join(".codex").join("config.toml")).expect("read config"),
@@ -838,8 +836,7 @@ async fn import_home_migrates_supported_config_fields_skills_and_agents_md() {
                 details: None,
             },
         ])
-        .await
-        .expect("import");
+        .await;
 
     assert_eq!(
         fs::read_to_string(codex_home.join("AGENTS.md")).expect("read agents"),
@@ -894,8 +891,7 @@ async fn import_home_config_uses_local_settings_over_project_settings() {
             cwd: None,
             details: None,
         }])
-        .await
-        .expect("import");
+        .await;
 
     let config: TomlValue =
         toml::from_str(&fs::read_to_string(codex_home.join("config.toml")).expect("read config"))
@@ -939,8 +935,7 @@ async fn import_home_config_ignores_invalid_local_settings() {
             cwd: None,
             details: None,
         }])
-        .await
-        .expect("import");
+        .await;
 
     assert_eq!(
         fs::read_to_string(codex_home.join("config.toml")).expect("read config"),
@@ -965,8 +960,7 @@ async fn import_home_skips_empty_config_migration() {
             cwd: None,
             details: None,
         }])
-        .await
-        .expect("import");
+        .await;
 
     assert_eq!(
         outcome.item_results,
@@ -1043,8 +1037,7 @@ async fn import_local_plugins_returns_completed_status() {
                 ..Default::default()
             }),
         }])
-        .await
-        .expect("import");
+        .await;
 
     assert_eq!(
         outcome.pending_plugin_imports,
@@ -1104,8 +1097,7 @@ async fn import_git_plugins_returns_pending_async_status() {
                 ..Default::default()
             }),
         }])
-        .await
-        .expect("import");
+        .await;
 
     assert_eq!(
         outcome.pending_plugin_imports,
@@ -1235,8 +1227,7 @@ async fn import_repo_agents_md_rewrites_terms_and_skips_non_empty_targets() {
             details: None,
         },
     ])
-    .await
-    .expect("import");
+    .await;
 
     assert_eq!(
         outcome.item_results,
@@ -1302,8 +1293,7 @@ async fn import_repo_agents_md_overwrites_empty_targets() {
         cwd: Some(repo_root.clone()),
         details: None,
     }])
-    .await
-    .expect("import");
+    .await;
 
     assert_eq!(
         outcome.item_results,
@@ -1403,8 +1393,7 @@ async fn import_repo_hooks_preserves_disabled_codex_hooks_feature() {
         cwd: Some(repo_root.clone()),
         details: None,
     }])
-    .await
-    .expect("import");
+    .await;
 
     assert_eq!(
         outcome.item_results,
@@ -1481,8 +1470,7 @@ async fn import_repo_mcp_uses_home_settings_toggles_when_repo_settings_missing()
             cwd: Some(repo_root.clone()),
             details: None,
         }])
-        .await
-        .expect("import");
+        .await;
 
     assert_eq!(
         outcome.item_results,
@@ -1559,8 +1547,7 @@ async fn import_repo_mcp_uses_local_settings_toggles_over_project_settings() {
             cwd: Some(repo_root.clone()),
             details: None,
         }])
-        .await
-        .expect("import");
+        .await;
 
     let config: TomlValue = toml::from_str(
         &fs::read_to_string(repo_root.join(".codex").join("config.toml")).expect("read config"),
@@ -1607,8 +1594,7 @@ async fn import_repo_mcp_ignores_invalid_home_settings_when_repo_settings_missin
             cwd: Some(repo_root.clone()),
             details: None,
         }])
-        .await
-        .expect("import");
+        .await;
 
     let config: TomlValue = toml::from_str(
         &fs::read_to_string(repo_root.join(".codex").join("config.toml")).expect("read config"),
@@ -1649,8 +1635,7 @@ async fn import_repo_uses_non_empty_external_agent_agents_source() {
         cwd: Some(repo_root.clone()),
         details: None,
     }])
-    .await
-    .expect("import");
+    .await;
 
     assert_eq!(
         fs::read_to_string(repo_root.join("AGENTS.md")).expect("read target"),
@@ -1683,8 +1668,7 @@ async fn import_continues_after_failed_migration_item() {
             details: None,
         },
     ])
-    .await
-    .expect("import continues");
+    .await;
 
     assert_eq!(
         fs::read_to_string(repo_root.join("AGENTS.md")).expect("read target"),

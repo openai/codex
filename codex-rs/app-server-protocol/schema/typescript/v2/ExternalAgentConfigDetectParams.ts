@@ -4,7 +4,7 @@
 
 export type ExternalAgentConfigDetectParams = {
 /**
- * If true, include detection under the user's home (~/.claude, ~/.codex, etc.).
+ * If true, include detection under the user's home directory.
  */
 includeHome?: boolean,
 /**

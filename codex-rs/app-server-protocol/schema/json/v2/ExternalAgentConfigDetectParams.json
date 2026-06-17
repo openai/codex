@@ -12,7 +12,7 @@
       ]
     },
     "includeHome": {
-      "description": "If true, include detection under the user's home (~/.claude, ~/.codex, etc.).",
+      "description": "If true, include detection under the user's home directory.",
       "type": "boolean"
     }
   },
