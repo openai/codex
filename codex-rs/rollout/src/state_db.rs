@@ -290,7 +290,10 @@ fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<codex_state::Anchor> {
     let millis = cursor.timestamp().unix_timestamp_nanos() / 1_000_000;
     let millis = i64::try_from(millis).ok()?;
     let ts = chrono::DateTime::<Utc>::from_timestamp_millis(millis)?;
-    Some(codex_state::Anchor { ts })
+    Some(codex_state::Anchor {
+        ts,
+        id: cursor.thread_id(),
+    })
 }
 
 pub fn normalize_cwd_for_state_db(cwd: &Path) -> PathBuf {
@@ -336,6 +339,7 @@ pub async fn list_thread_ids_db(
             match sort_key {
                 ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
                 ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
+                ThreadSortKey::RecencyAt => codex_state::SortKey::RecencyAt,
             },
             allowed_sources.as_slice(),
             model_providers.as_deref(),
@@ -401,6 +405,7 @@ pub async fn list_threads_db(
         sort_key: match sort_key {
             ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
             ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
+            ThreadSortKey::RecencyAt => codex_state::SortKey::RecencyAt,
         },
         sort_direction: match sort_direction {
             SortDirection::Asc => codex_state::SortDirection::Asc,
