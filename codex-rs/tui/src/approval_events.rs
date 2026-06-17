@@ -26,6 +26,8 @@ pub(crate) struct ExecApprovalRequestEvent {
     pub(crate) approval_id: Option<String>,
     #[serde(default)]
     pub(crate) turn_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) environment_id: Option<String>,
     pub(crate) command: Vec<String>,
     pub(crate) cwd: AbsolutePathBuf,
     pub(crate) reason: Option<String>,
