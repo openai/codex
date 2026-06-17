@@ -2,6 +2,7 @@ use codex_exec_server::LOCAL_FS;
 use codex_git_utils::GitInfo;
 use codex_git_utils::GitSha;
 use codex_git_utils::collect_git_info;
+#[cfg(unix)]
 use codex_git_utils::default_branch_name;
 use codex_git_utils::get_git_repo_root_with_fs;
 use codex_git_utils::get_has_changes;
