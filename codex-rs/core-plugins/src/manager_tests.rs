@@ -1282,36 +1282,45 @@ async fn capability_summary_truncates_overlong_plugin_descriptions() {
 
 #[tokio::test]
 async fn load_plugins_uses_manifest_configured_component_paths() {
-    let codex_home = TempDir::new().unwrap();
-    let plugin_root = codex_home
-        .path()
-        .join("plugins/cache")
-        .join("test/sample/local");
+    for (skills_json, expected_skill_dirs) in [
+        (r#""./custom-skills/""#, &["custom-skills"][..]),
+        (
+            r#"["./custom-skills/", "./extra-skills/"]"#,
+            &["custom-skills", "extra-skills"][..],
+        ),
+    ] {
+        let codex_home = TempDir::new().unwrap();
+        let plugin_root = codex_home
+            .path()
+            .join("plugins/cache")
+            .join("test/sample/local");
 
-    write_file(
-        &plugin_root.join(".codex-plugin/plugin.json"),
-        r#"{
+        write_file(
+            &plugin_root.join(".codex-plugin/plugin.json"),
+            &format!(
+                r#"{{
   "name": "sample",
-  "skills": ["./custom-skills/", "./extra-skills/"],
+  "skills": {skills_json},
   "mcpServers": "./config/custom.mcp.json",
   "apps": "./config/custom.app.json"
-}"#,
-    );
-    write_file(
-        &plugin_root.join("skills/default-skill/SKILL.md"),
-        "---\nname: default-skill\ndescription: default skill\n---\n",
-    );
-    write_file(
-        &plugin_root.join("custom-skills/custom-skill/SKILL.md"),
-        "---\nname: custom-skill\ndescription: custom skill\n---\n",
-    );
-    write_file(
-        &plugin_root.join("extra-skills/extra-skill/SKILL.md"),
-        "---\nname: extra-skill\ndescription: extra skill\n---\n",
-    );
-    write_file(
-        &plugin_root.join(".mcp.json"),
-        r#"{
+}}"#
+            ),
+        );
+        write_file(
+            &plugin_root.join("skills/default-skill/SKILL.md"),
+            "---\nname: default-skill\ndescription: default skill\n---\n",
+        );
+        write_file(
+            &plugin_root.join("custom-skills/custom-skill/SKILL.md"),
+            "---\nname: custom-skill\ndescription: custom skill\n---\n",
+        );
+        write_file(
+            &plugin_root.join("extra-skills/extra-skill/SKILL.md"),
+            "---\nname: extra-skill\ndescription: extra skill\n---\n",
+        );
+        write_file(
+            &plugin_root.join(".mcp.json"),
+            r#"{
   "mcpServers": {
     "default": {
       "type": "http",
@@ -1319,10 +1328,10 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
     }
   }
 }"#,
-    );
-    write_file(
-        &plugin_root.join("config/custom.mcp.json"),
-        r#"{
+        );
+        write_file(
+            &plugin_root.join("config/custom.mcp.json"),
+            r#"{
   "mcpServers": {
     "custom": {
       "type": "http",
@@ -1330,74 +1339,73 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
     }
   }
 }"#,
-    );
-    write_file(
-        &plugin_root.join(".app.json"),
-        r#"{
+        );
+        write_file(
+            &plugin_root.join(".app.json"),
+            r#"{
   "apps": {
     "default-app": {
       "id": "connector_default"
     }
   }
 }"#,
-    );
-    write_file(
-        &plugin_root.join("config/custom.app.json"),
-        r#"{
+        );
+        write_file(
+            &plugin_root.join("config/custom.app.json"),
+            r#"{
   "apps": {
     "custom-app": {
       "id": "connector_custom"
     }
   }
 }"#,
-    );
-    let outcome = load_plugins_from_config(
-        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
-        codex_home.path(),
-        Some(AuthMode::Chatgpt),
-    )
-    .await;
+        );
+        let outcome = load_plugins_from_config(
+            &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
+            codex_home.path(),
+            Some(AuthMode::Chatgpt),
+        )
+        .await;
+        let expected_skill_roots = expected_skill_dirs
+            .iter()
+            .map(|dir| plugin_root.join(dir).abs())
+            .chain(std::iter::once(plugin_root.join("skills").abs()))
+            .collect::<Vec<_>>();
 
-    assert_eq!(
-        outcome.plugins()[0].skill_roots,
-        vec![
-            plugin_root.join("custom-skills").abs(),
-            plugin_root.join("extra-skills").abs(),
-            plugin_root.join("skills").abs()
-        ]
-    );
-    assert_eq!(
-        outcome.plugins()[0].mcp_servers,
-        HashMap::from([(
-            "custom".to_string(),
-            McpServerConfig {
-                transport: McpServerTransportConfig::StreamableHttp {
-                    url: "https://custom.example/mcp".to_string(),
-                    bearer_token_env_var: None,
-                    http_headers: None,
-                    env_http_headers: None,
+        assert_eq!(outcome.plugins()[0].skill_roots, expected_skill_roots);
+        assert_eq!(
+            outcome.plugins()[0].mcp_servers,
+            HashMap::from([(
+                "custom".to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::StreamableHttp {
+                        url: "https://custom.example/mcp".to_string(),
+                        bearer_token_env_var: None,
+                        http_headers: None,
+                        env_http_headers: None,
+                    },
+                    environment_id: "local".to_string(),
+                    enabled: true,
+                    required: false,
+                    supports_parallel_tool_calls: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: None,
+                    tool_timeout_sec: None,
+                    default_tools_approval_mode: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
                 },
-                environment_id: "local".to_string(),
-                enabled: true,
-                required: false,
-                supports_parallel_tool_calls: false,
-                disabled_reason: None,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                default_tools_approval_mode: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
-            },
-        )])
-    );
-    assert_eq!(
-        outcome.plugins()[0].apps,
-        vec![app_declaration("custom-app", "connector_custom")]
-    );
+            )])
+        );
+        assert_eq!(
+            outcome.plugins()[0].apps,
+            vec![app_declaration("custom-app", "connector_custom")]
+        );
+    }
 }
 
 #[tokio::test]
