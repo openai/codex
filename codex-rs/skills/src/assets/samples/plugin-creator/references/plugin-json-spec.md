@@ -60,7 +60,7 @@
 - `repository` (`string`): Source code URL.
 - `license` (`string`): License identifier (for example `MIT`, `Apache-2.0`).
 - `keywords` (`array` of `string`): Search/discovery tags.
-- `skills` (`string` or array of `string`): Relative path(s) to skill directories/files.
+- `skills` (`string`): Relative path to skill directories/files.
 - `hooks` (`string`): Hook config path.
 - `mcpServers` (`string` or `object`): MCP config path, or an object whose keys are MCP server names and whose values are MCP server config objects.
 - `apps` (`string`): App manifest path for plugin integrations.
@@ -112,7 +112,6 @@ Or as an object directly in `plugin.json`:
 ### Path conventions and defaults
 
 - Path values should be relative and begin with `./`.
-- `skills` can be declared as either a single path string or an array of path strings.
 - `skills`, `hooks`, and string-valued `mcpServers` are supplemented on top of default component discovery; they do not replace defaults.
 - Custom path values must follow the plugin root convention and naming/namespacing rules.
 - This repo’s scaffold writes `.codex-plugin/plugin.json`; treat that as the manifest location this skill generates.

@@ -124,7 +124,7 @@ def validate_manifest_shape(
         validate_optional_non_empty_string(author, "email", errors, prefix="author")
         validate_optional_https_url(author, "url", errors, prefix="author")
 
-    validate_optional_skills_paths(manifest, errors)
+    validate_optional_contract_path(manifest, "skills", "skills", errors)
     validate_optional_contract_path(manifest, "apps", ".app.json", errors)
     validate_manifest_mcp_servers(plugin_root, manifest, errors)
 
@@ -279,37 +279,6 @@ def validate_optional_contract_path(
     normalized = normalize_contract_path(value) if isinstance(value, str) else None
     if normalized != expected:
         errors.append(f"plugin.json field `{key}` must resolve to `{expected}`")
-
-
-def validate_optional_skills_paths(payload: dict[str, Any], errors: list[str]) -> None:
-    value = payload.get("skills")
-    if value is None:
-        return
-    if isinstance(value, str):
-        validate_manifest_relative_path(value, "skills", errors)
-        return
-    if isinstance(value, list):
-        for index, path in enumerate(value):
-            validate_manifest_relative_path(path, f"skills[{index}]", errors)
-        return
-    errors.append("plugin.json field `skills` must be a string path or array of string paths")
-
-
-def validate_manifest_relative_path(raw_path: Any, field: str, errors: list[str]) -> None:
-    label = f"plugin.json field `{field}`"
-    if not isinstance(raw_path, str) or not raw_path.strip():
-        errors.append(f"{label} must be a non-empty path string")
-        return
-    if not raw_path.startswith("./"):
-        errors.append(f"{label} must start with `./` relative to plugin root")
-        return
-    relative_path = raw_path[2:]
-    if not relative_path:
-        errors.append(f"{label} must not be `./`")
-        return
-    candidate = PurePosixPath(relative_path.replace("\\", "/"))
-    if candidate.is_absolute() or any(part in {"", ".", ".."} for part in candidate.parts):
-        errors.append(f"{label} must stay inside the plugin archive")
 
 
 def validate_manifest_mcp_servers(
