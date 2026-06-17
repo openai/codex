@@ -324,6 +324,160 @@ mod thread_processor_behavior_tests {
         assert_eq!(turns.last(), Some(&active_turn));
     }
 
+    fn compacted_resume_test_line(item: RolloutItem) -> codex_protocol::protocol::RolloutLine {
+        codex_protocol::protocol::RolloutLine {
+            timestamp: "2025-09-05T16:53:11.850Z".to_string(),
+            item,
+        }
+    }
+
+    fn compacted_resume_test_session(thread_id: ThreadId) -> RolloutItem {
+        RolloutItem::SessionMeta(codex_protocol::protocol::SessionMetaLine {
+            meta: codex_protocol::protocol::SessionMeta {
+                id: thread_id,
+                timestamp: "2025-09-05T16:53:11.850Z".to_string(),
+                ..codex_protocol::protocol::SessionMeta::default()
+            },
+            git: None,
+        })
+    }
+
+    fn compacted_resume_test_user_event(text: &str) -> RolloutItem {
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: text.to_string(),
+                ..Default::default()
+            },
+        ))
+    }
+
+    fn compacted_resume_test_agent_event(text: &str) -> RolloutItem {
+        RolloutItem::EventMsg(EventMsg::AgentMessage(
+            codex_protocol::protocol::AgentMessageEvent {
+                message: text.to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+        ))
+    }
+
+    fn compacted_resume_test_message(
+        role: &str,
+        text: &str,
+    ) -> codex_protocol::models::ResponseItem {
+        let content = if role == "user" {
+            vec![codex_protocol::models::ContentItem::InputText {
+                text: text.to_string(),
+            }]
+        } else {
+            vec![codex_protocol::models::ContentItem::OutputText {
+                text: text.to_string(),
+            }]
+        };
+        codex_protocol::models::ResponseItem::Message {
+            id: None,
+            role: role.to_string(),
+            content,
+            phase: None,
+        }
+    }
+
+    fn compacted_resume_test_compaction(message: &str, window_id: u64) -> RolloutItem {
+        RolloutItem::Compacted(codex_protocol::protocol::CompactedItem {
+            message: message.to_string(),
+            replacement_history: Some(vec![compacted_resume_test_message("assistant", message)]),
+            window_id: Some(window_id),
+        })
+    }
+
+    fn compacted_resume_test_rollout_contents(items: Vec<RolloutItem>) -> Result<String> {
+        let mut contents = String::new();
+        for item in items {
+            contents.push_str(&serde_json::to_string(&compacted_resume_test_line(item))?);
+            contents.push('\n');
+        }
+        Ok(contents)
+    }
+
+    fn compacted_resume_test_replacement_text(item: &RolloutItem) -> Option<&str> {
+        let RolloutItem::Compacted(compacted) = item else {
+            return None;
+        };
+        let [codex_protocol::models::ResponseItem::Message { content, .. }] =
+            compacted.replacement_history.as_deref()?
+        else {
+            return None;
+        };
+        let [codex_protocol::models::ContentItem::OutputText { text }] = content.as_slice() else {
+            return None;
+        };
+        Some(text.as_str())
+    }
+
+    #[test]
+    fn compacted_resume_rollout_items_reads_latest_checkpoint_suffix_across_chunks() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let path = temp_dir.path().join("rollout.jsonl");
+        let thread_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
+        let large_tail_message = "tail".repeat(20_000);
+        let contents = compacted_resume_test_rollout_contents(vec![
+            compacted_resume_test_session(thread_id),
+            compacted_resume_test_user_event("first user event"),
+            RolloutItem::ResponseItem(compacted_resume_test_message("user", "first user response")),
+            compacted_resume_test_compaction("older checkpoint", 1),
+            compacted_resume_test_user_event("middle user event"),
+            compacted_resume_test_compaction("latest checkpoint", 2),
+            compacted_resume_test_agent_event(&large_tail_message),
+        ])?;
+        std::fs::write(&path, contents)?;
+
+        let items = read_compacted_resume_rollout_items(path.as_path(), thread_id)?
+            .expect("compacted resume items");
+
+        assert_eq!(items.len(), 5);
+        assert!(matches!(items[0], RolloutItem::SessionMeta(_)));
+        assert!(matches!(
+            items[1],
+            RolloutItem::EventMsg(EventMsg::UserMessage(_))
+        ));
+        assert!(matches!(items[2], RolloutItem::ResponseItem(_)));
+        assert_eq!(
+            compacted_resume_test_replacement_text(&items[3]),
+            Some("latest checkpoint")
+        );
+        assert!(matches!(
+            &items[4],
+            RolloutItem::EventMsg(EventMsg::AgentMessage(event))
+                if event.message == large_tail_message
+        ));
+        assert_eq!(
+            items
+                .iter()
+                .filter(|item| matches!(item, RolloutItem::Compacted(_)))
+                .count(),
+            1
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compacted_resume_rollout_items_falls_back_on_malformed_tail_line() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let path = temp_dir.path().join("rollout.jsonl");
+        let thread_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
+        let mut contents = compacted_resume_test_rollout_contents(vec![
+            compacted_resume_test_session(thread_id),
+            compacted_resume_test_user_event("first user event"),
+            RolloutItem::ResponseItem(compacted_resume_test_message("user", "first user response")),
+            compacted_resume_test_compaction("latest checkpoint", 2),
+        ])?;
+        contents.push_str("{not json}\n");
+        std::fs::write(&path, contents)?;
+
+        assert!(read_compacted_resume_rollout_items(path.as_path(), thread_id)?.is_none());
+        Ok(())
+    }
+
     #[test]
     fn validate_dynamic_tools_rejects_empty_namespace() {
         let tools = vec![dynamic_tool(

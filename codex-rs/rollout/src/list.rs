@@ -1258,6 +1258,25 @@ fn event_msg_preview(event: &EventMsg) -> Option<String> {
 /// Read the SessionMetaLine from the head of a rollout file for reuse by
 /// callers that need the session metadata (e.g. to derive a cwd for config).
 pub async fn read_session_meta_line(path: &Path) -> io::Result<SessionMetaLine> {
+    let mut lines = compression::open_rollout_line_reader(path).await?;
+    while let Some(line) = lines.next_line().await? {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if let Ok(RolloutLine {
+            item: RolloutItem::SessionMeta(session_meta_line),
+            ..
+        }) = serde_json::from_str::<RolloutLine>(trimmed)
+        {
+            return Ok(session_meta_line);
+        }
+        break;
+    }
+
+    // Preserve the legacy tolerant behavior for unusual files whose first
+    // parseable summary record is still session metadata.
     let head = read_head_for_summary(path).await?;
     let Some(first) = head.first() else {
         return Err(io::Error::other(format!(

@@ -130,6 +130,7 @@ async fn get_conversation_summary_by_thread_id_reads_pathless_store_thread() -> 
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             multi_agent_version: None,
+            initial_rollout_copy: None,
             metadata: ThreadPersistenceMetadata {
                 cwd: None,
                 model_provider: "test-provider".to_string(),

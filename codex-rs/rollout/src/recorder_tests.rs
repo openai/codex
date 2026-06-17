@@ -506,6 +506,7 @@ async fn writer_state_retries_write_error_before_reporting_flush_success() -> st
         Some(tokio::fs::File::from_std(read_only_file)),
         /*deferred_log_file_info*/ None,
         /*meta*/ None,
+        /*initial_rollout_copy*/ None,
         home.path().to_path_buf(),
         rollout_path.clone(),
     );
