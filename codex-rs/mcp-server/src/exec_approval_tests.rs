@@ -10,7 +10,11 @@ fn message_names_execution_environment() {
         "Allow Codex to run `echo 'hello world'` in environment `remote` with working directory `/workspace`?"
     );
     assert_eq!(
-        exec_approval_message(&command, Path::new("/workspace"), None),
+        exec_approval_message(
+            &command,
+            Path::new("/workspace"),
+            /*environment_id*/ None,
+        ),
         "Allow Codex to run `echo 'hello world'` in `/workspace`?"
     );
 }
