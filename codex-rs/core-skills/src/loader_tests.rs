@@ -1476,22 +1476,66 @@ async fn loads_unquoted_short_description_containing_colon_space_and_apostrophe(
 }
 
 #[tokio::test]
-async fn keeps_unrecognized_frontmatter_fields_with_colon_space_invalid() {
+async fn loads_unrecognized_frontmatter_fields_that_need_quotes() {
     let codex_home = tempfile::tempdir().expect("tempdir");
-    write_raw_skill_at(
+    let skill_path = write_raw_skill_at(
         &codex_home.path().join("skills"),
-        "invalid-argument-hint",
-        "name: invalid-argument-hint\ndescription: valid description\nargument-hint: product: competitor",
+        "repaired-unknown-fields",
+        "name: repaired-unknown-fields\ndescription: valid description\nargument-hint: <duration: e.g. 7d, 2w>\ntags: [next,@supabase/ssr]",
     );
 
     let cfg = make_config(&codex_home).await;
     let outcome = load_skills_for_test(&cfg).await;
-    assert_eq!(outcome.skills, Vec::new());
-    assert_eq!(outcome.errors.len(), 1);
     assert!(
-        outcome.errors[0].message.contains("invalid YAML"),
-        "expected YAML error, got: {:?}",
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
         outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![SkillMetadata {
+            name: "repaired-unknown-fields".to_string(),
+            description: "valid description".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: normalized(&skill_path),
+            scope: SkillScope::User,
+            plugin_id: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn preserves_block_scalar_body_while_repairing_other_fields() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let skill_path = write_raw_skill_at(
+        &codex_home.path().join("skills"),
+        "block-description-with-repair",
+        "name: block-description-with-repair\ndescription: |-\n  Build for AWS: ECS\nargument-hint: <duration: e.g. 7d>",
+    );
+
+    let cfg = make_config(&codex_home).await;
+    let outcome = load_skills_for_test(&cfg).await;
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![SkillMetadata {
+            name: "block-description-with-repair".to_string(),
+            description: "Build for AWS: ECS".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: normalized(&skill_path),
+            scope: SkillScope::User,
+            plugin_id: None,
+        }]
     );
 }
 

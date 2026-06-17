@@ -653,9 +653,10 @@ async fn parse_skill_file(
 
     let parsed: SkillFrontmatter = match serde_yaml::from_str(&frontmatter) {
         Ok(parsed) => Ok(parsed),
-        Err(original_error) => match repair_frontmatter_plain_string_fields(&frontmatter) {
-            // Some third-party skills use prose like `description: Build for AWS: ECS`.
-            // Keep the repair narrow so unrelated invalid YAML still surfaces.
+        Err(original_error) => match repair_frontmatter_scalar_fields(&frontmatter) {
+            // Some third-party skills use prose like `description: Build for AWS: ECS`
+            // or `argument-hint: <duration: e.g. 7d>`. Keep the repair line-oriented
+            // so unrelated invalid YAML still surfaces.
             Some(repaired_frontmatter) => {
                 serde_yaml::from_str(&repaired_frontmatter).map_err(|_| original_error)
             }
@@ -1007,17 +1008,28 @@ fn sanitize_single_line(raw: &str) -> String {
     raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn repair_frontmatter_plain_string_fields(frontmatter: &str) -> Option<String> {
+fn repair_frontmatter_scalar_fields(frontmatter: &str) -> Option<String> {
     let mut changed = false;
+    let mut block_scalar_indent: Option<usize> = None;
     let mut repaired_lines: Vec<String> = Vec::new();
     for line in frontmatter.lines() {
+        let indent = line
+            .chars()
+            .take_while(|character| *character == ' ')
+            .count();
+        if let Some(block_indent) = block_scalar_indent {
+            if line.trim().is_empty() || indent > block_indent {
+                repaired_lines.push(line.to_string());
+                continue;
+            }
+            block_scalar_indent = None;
+        }
+
         let Some((key, value)) = line.split_once(':') else {
             repaired_lines.push(line.to_string());
             continue;
         };
-        if !matches!(key.trim(), "description" | "short-description")
-            || !value.chars().next().is_none_or(char::is_whitespace)
-        {
+        if key.trim().is_empty() || !value.chars().next().is_none_or(char::is_whitespace) {
             repaired_lines.push(line.to_string());
             continue;
         }
@@ -1046,7 +1058,12 @@ fn repair_frontmatter_plain_string_fields(frontmatter: &str) -> Option<String> {
             repaired_lines.push(line.to_string());
             continue;
         };
-        if matches!(first_char, '\'' | '"' | '|' | '>' | '[' | '{') {
+        if matches!(first_char, '|' | '>') {
+            block_scalar_indent = Some(indent);
+            repaired_lines.push(line.to_string());
+            continue;
+        }
+        if matches!(first_char, '\'' | '"') {
             repaired_lines.push(line.to_string());
             continue;
         }
@@ -1060,7 +1077,9 @@ fn repair_frontmatter_plain_string_fields(frontmatter: &str) -> Option<String> {
                 break;
             }
         }
-        if !has_colon_separator {
+        let invalid_flow_like_scalar = matches!(first_char, '[' | '{' | '@' | '`')
+            && serde_yaml::from_str::<serde_yaml::Value>(scalar).is_err();
+        if !has_colon_separator && !invalid_flow_like_scalar {
             repaired_lines.push(line.to_string());
             continue;
         }
