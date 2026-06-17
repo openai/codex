@@ -31,6 +31,7 @@ Keep these requirements in mind while migrating code to conform with the above g
 * path reasoning must work before the related environment has come online
 * URIs cannot explicitly encode the executor’s path convention or operating system
 * users must not configure the environment’s OS/path convention explicitly
+* URIs should not yet be stored in rollouts
 
 It is OK if the conversion between paths and URIs is somewhat lossy as long as it will do the right
 thing for real users.
