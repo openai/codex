@@ -174,6 +174,7 @@ impl ExecCommandHandler {
             }
         };
         let hook_command = args.cmd.clone();
+        // TODO(anp) wire PathUri through implicit skills instead of skipping on foreign paths
         if let Some(native_cwd) = native_cwd.as_ref() {
             maybe_emit_implicit_skill_invocation(
                 session.as_ref(),
