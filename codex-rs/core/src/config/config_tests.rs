@@ -4975,13 +4975,12 @@ fn web_search_mode_disabled_overrides_legacy_request() {
 }
 
 #[test]
-fn index_gated_feature_resolves_live_config_and_survives_disabled_permissions() {
+fn index_gated_mode_survives_disabled_permissions() {
     let cfg = ConfigToml {
-        web_search: Some(WebSearchMode::Live),
+        web_search: Some(WebSearchMode::IndexGated),
         ..Default::default()
     };
-    let mut features = Features::with_defaults();
-    features.enable(Feature::IndexGatedWebSearch);
+    let features = Features::with_defaults();
 
     let resolved = resolve_web_search_mode(&cfg, &features);
     assert_eq!(resolved, Some(WebSearchMode::IndexGated));

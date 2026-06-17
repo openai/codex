@@ -211,6 +211,14 @@ pub enum SearchResponseLength {
     Long,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchMode {
+    Offline,
+    IndexGated,
+    Online,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct SearchSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -226,7 +234,7 @@ pub struct SearchSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_web_access: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub index_gated_web_access: Option<bool>,
+    pub mode: Option<SearchMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

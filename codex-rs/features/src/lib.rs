@@ -114,8 +114,6 @@ pub enum Feature {
     /// Allow the model to request web searches that fetch cached content.
     /// Takes precedence over `WebSearchRequest`.
     WebSearchCached,
-    /// Interpret live web search configuration as index-gated web search.
-    IndexGatedWebSearch,
     /// Expose the extension-backed standalone web search tool.
     StandaloneWebSearch,
     /// Use the legacy Landlock Linux sandbox fallback instead of the default
@@ -827,12 +825,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::WebSearchCached,
         key: "web_search_cached",
         stage: Stage::Deprecated,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::IndexGatedWebSearch,
-        key: "index_gated_web_search",
-        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

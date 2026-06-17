@@ -62,6 +62,7 @@ mod tests {
     use crate::search::SearchFilters;
     use crate::search::SearchImageSettings;
     use crate::search::SearchInput;
+    use crate::search::SearchMode;
     use crate::search::SearchQuery;
     use crate::search::SearchSettings;
     use codex_client::Request;
@@ -194,7 +195,7 @@ mod tests {
                         }),
                         allowed_callers: Some(vec![AllowedCaller::Direct]),
                         external_web_access: Some(true),
-                        index_gated_web_access: None,
+                        mode: Some(SearchMode::Online),
                     }),
                     max_output_tokens: Some(2500),
                 },
@@ -259,7 +260,8 @@ mod tests {
                     },
                     "image_settings": {"max_results": 4, "caption": true},
                     "allowed_callers": ["direct"],
-                    "external_web_access": true
+                    "external_web_access": true,
+                    "mode": "online"
                 },
                 "max_output_tokens": 2500
             })

@@ -91,6 +91,7 @@ pub use crate::search::SearchContextSize;
 pub use crate::search::SearchFilters;
 pub use crate::search::SearchImageSettings;
 pub use crate::search::SearchInput;
+pub use crate::search::SearchMode;
 pub use crate::search::SearchQuery;
 pub use crate::search::SearchRequest;
 pub use crate::search::SearchResponse;

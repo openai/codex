@@ -5,6 +5,7 @@ use codex_api::ApproximateLocation;
 use codex_api::LocationType;
 use codex_api::SearchContextSize;
 use codex_api::SearchFilters;
+use codex_api::SearchMode;
 use codex_api::SearchSettings;
 use codex_core::config::Config;
 use codex_extension_api::ConfigContributor;
@@ -17,6 +18,7 @@ use codex_extension_api::ToolContributor;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::config_types::StandaloneWebSearchMethod;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchMode;
 
@@ -42,12 +44,12 @@ impl From<&Config> for WebSearchExtensionConfig {
             available: config.model_provider.is_openai()
                 && web_search_mode != WebSearchMode::Disabled,
             provider: config.model_provider.clone(),
-            settings: search_settings(config, web_search_mode),
+            settings: search_settings(config),
         }
     }
 }
 
-fn search_settings(config: &Config, web_search_mode: WebSearchMode) -> SearchSettings {
+fn search_settings(config: &Config) -> SearchSettings {
     let web_search_config = config.web_search_config.as_ref();
     SearchSettings {
         user_location: web_search_config
@@ -73,11 +75,11 @@ fn search_settings(config: &Config, web_search_mode: WebSearchMode) -> SearchSet
                 blocked_domains: None,
             }),
         allowed_callers: Some(vec![AllowedCaller::Direct]),
-        external_web_access: Some(match web_search_mode {
-            WebSearchMode::IndexGated | WebSearchMode::Live => true,
-            WebSearchMode::Cached | WebSearchMode::Disabled => false,
+        mode: Some(match config.standalone_web_search_method {
+            StandaloneWebSearchMethod::Offline => SearchMode::Offline,
+            StandaloneWebSearchMethod::IndexGated => SearchMode::IndexGated,
+            StandaloneWebSearchMethod::Online => SearchMode::Online,
         }),
-        index_gated_web_access: (web_search_mode == WebSearchMode::IndexGated).then_some(true),
         ..Default::default()
     }
 }

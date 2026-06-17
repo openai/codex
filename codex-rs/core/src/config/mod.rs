@@ -89,6 +89,7 @@ use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::config_types::StandaloneWebSearchMethod;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchConfig;
@@ -992,6 +993,9 @@ pub struct Config {
 
     /// Explicit or feature-derived web search mode.
     pub web_search_mode: Constrained<WebSearchMode>,
+
+    /// Page-access method used by the standalone web search executor.
+    pub standalone_web_search_method: StandaloneWebSearchMethod,
 
     /// Additional parameters for the web search tool when it is enabled.
     pub web_search_config: Option<WebSearchConfig>,
@@ -2363,11 +2367,6 @@ pub fn resolve_oss_provider(
 
 /// Resolve the web search mode from explicit config and feature flags.
 fn resolve_web_search_mode(config_toml: &ConfigToml, features: &Features) -> Option<WebSearchMode> {
-    if features.enabled(Feature::IndexGatedWebSearch)
-        && matches!(config_toml.web_search, None | Some(WebSearchMode::Live))
-    {
-        return Some(WebSearchMode::IndexGated);
-    }
     if let Some(mode) = config_toml.web_search {
         return Some(mode);
     }
@@ -3122,6 +3121,7 @@ impl Config {
         }
         let web_search_mode =
             resolve_web_search_mode(&cfg, &features).unwrap_or(WebSearchMode::Cached);
+        let standalone_web_search_method = cfg.standalone_web_search_method.unwrap_or_default();
         let web_search_config = resolve_web_search_config(&cfg);
         let experimental_request_user_input_enabled =
             resolve_experimental_request_user_input_enabled(&cfg);
@@ -3659,6 +3659,7 @@ impl Config {
             forced_chatgpt_workspace_id,
             forced_login_method,
             web_search_mode: constrained_web_search_mode.value,
+            standalone_web_search_method,
             web_search_config,
             experimental_request_user_input_enabled,
             code_mode,

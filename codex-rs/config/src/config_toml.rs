@@ -40,6 +40,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::StandaloneWebSearchMethod;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
@@ -411,6 +412,9 @@ pub struct ConfigToml {
 
     /// Controls the web search tool mode: disabled, cached, index-gated, or live.
     pub web_search: Option<WebSearchMode>,
+
+    /// Controls page access for the standalone web search executor.
+    pub standalone_web_search_method: Option<StandaloneWebSearchMethod>,
 
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,

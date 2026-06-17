@@ -10,6 +10,7 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::config_types::StandaloneWebSearchMethod;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
@@ -279,6 +280,7 @@ text(result);
                 .web_search_mode
                 .set(WebSearchMode::IndexGated)
                 .expect("web search mode should be accepted");
+            config.standalone_web_search_method = StandaloneWebSearchMethod::IndexGated;
         });
     let test = builder.build(&server).await?;
 
@@ -308,8 +310,7 @@ text(result);
         search_body["settings"],
         serde_json::json!({
             "allowed_callers": ["direct"],
-            "external_web_access": true,
-            "index_gated_web_access": true,
+            "mode": "index_gated",
         })
     );
     assert_eq!(
