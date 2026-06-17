@@ -559,7 +559,6 @@ pub(crate) async fn finalize_turn_item(
     turn_item: &mut TurnItem,
     plan_mode: bool,
 ) {
-    let should_persist_image = matches!(&contributor_policy, TurnItemContributorPolicy::Run(_));
     if let TurnItemContributorPolicy::Run(turn_store) = contributor_policy {
         apply_turn_item_contributors(sess, turn_store, turn_item).await;
     }
@@ -579,8 +578,7 @@ pub(crate) async fn finalize_turn_item(
             agent_message.memory_citation = memory_citation;
         }
     }
-    if should_persist_image
-        && let TurnItem::ImageGeneration(image_item) = &mut *turn_item
+    if let TurnItem::ImageGeneration(image_item) = &mut *turn_item
         && !image_item.result.is_empty()
     {
         persist_image_generation_item(sess, turn_context, image_item).await;
