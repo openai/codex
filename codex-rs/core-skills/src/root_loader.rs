@@ -61,8 +61,14 @@ impl SkillRootCacheKey {
 /// Non-plugin roots are always loaded directly because their filesystem lifecycle is owned by the
 /// environment or config layer that supplied them.
 #[derive(Default)]
+struct PluginRootCache {
+    generation: u64,
+    snapshots: HashMap<SkillRootCacheKey, SkillRootSnapshot>,
+}
+
+#[derive(Default)]
 pub struct SkillRootLoader {
-    plugin_root_cache: RwLock<HashMap<SkillRootCacheKey, SkillRootSnapshot>>,
+    plugin_root_cache: RwLock<PluginRootCache>,
 }
 
 impl SkillRootLoader {
@@ -74,12 +80,15 @@ impl SkillRootLoader {
         let mut snapshots = Vec::new();
         for root in roots {
             let cache_key = SkillRootCacheKey::from_root(&root);
-            let snapshot = match cache_key.as_ref().and_then(|key| self.cached_snapshot(key)) {
+            let (cache_generation, cached_snapshot) = cache_key
+                .as_ref()
+                .map_or((0, None), |key| self.cached_snapshot(key));
+            let snapshot = match cached_snapshot {
                 Some(snapshot) => snapshot,
                 None => {
                     let snapshot = load_skill_root(root).await;
                     if let Some(cache_key) = cache_key {
-                        self.cache_snapshot(cache_key, snapshot.clone());
+                        self.cache_snapshot(cache_generation, cache_key, snapshot.clone());
                     }
                     snapshot
                 }
@@ -96,23 +105,30 @@ impl SkillRootLoader {
             .plugin_root_cache
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache.clear();
+        cache.generation = cache.generation.wrapping_add(1);
+        cache.snapshots.clear();
     }
 
-    fn cached_snapshot(&self, key: &SkillRootCacheKey) -> Option<SkillRootSnapshot> {
+    fn cached_snapshot(&self, key: &SkillRootCacheKey) -> (u64, Option<SkillRootSnapshot>) {
         match self.plugin_root_cache.read() {
-            Ok(cache) => cache.get(key).cloned(),
-            Err(err) => err.into_inner().get(key).cloned(),
+            Ok(cache) => (cache.generation, cache.snapshots.get(key).cloned()),
+            Err(err) => {
+                let cache = err.into_inner();
+                (cache.generation, cache.snapshots.get(key).cloned())
+            }
         }
     }
 
-    fn cache_snapshot(&self, key: SkillRootCacheKey, snapshot: SkillRootSnapshot) {
+    fn cache_snapshot(&self, generation: u64, key: SkillRootCacheKey, snapshot: SkillRootSnapshot) {
         let mut cache = self
             .plugin_root_cache
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if cache.len() < MAX_CACHED_PLUGIN_SKILL_ROOTS || cache.contains_key(&key) {
-            cache.insert(key, snapshot);
+        if cache.generation == generation
+            && (cache.snapshots.len() < MAX_CACHED_PLUGIN_SKILL_ROOTS
+                || cache.snapshots.contains_key(&key))
+        {
+            cache.snapshots.insert(key, snapshot);
         }
     }
 }
