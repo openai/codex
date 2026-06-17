@@ -330,6 +330,12 @@ impl TurnContext {
         FileSystemSandboxContext {
             permissions: permissions.into(),
             cwd: Some(cwd.clone()),
+            workspace_roots: self
+                .config
+                .effective_workspace_roots()
+                .iter()
+                .map(PathUri::from_abs_path)
+                .collect(),
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: self
                 .config
