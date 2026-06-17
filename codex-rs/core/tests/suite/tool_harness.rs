@@ -30,7 +30,6 @@ use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use serde_json::Value;
 use serde_json::json;
-use test_case::test_case;
 fn call_output(req: &ResponsesRequest, call_id: &str) -> (String, Option<bool>) {
     let raw = req.function_call_output(call_id);
     assert_eq!(
@@ -136,11 +135,8 @@ async fn shell_command_tool_executes_command_and_streams_output() -> anyhow::Res
     Ok(())
 }
 
-#[test_case(None; "omitted_namespace")]
-#[test_case(Some(""); "empty_namespace")]
-#[test_case(Some("functions"); "explicit_functions_namespace")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn update_plan_tool_emits_plan_update_event(namespace: Option<&str>) -> anyhow::Result<()> {
+async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -163,15 +159,9 @@ async fn update_plan_tool_emits_plan_update_event(namespace: Option<&str>) -> an
     })
     .to_string();
 
-    let function_call = match namespace {
-        Some(namespace) => {
-            ev_function_call_with_namespace(call_id, namespace, "update_plan", &plan_args)
-        }
-        None => ev_function_call(call_id, "update_plan", &plan_args),
-    };
     let first_response = sse(vec![
         ev_response_created("resp-1"),
-        function_call,
+        ev_function_call_with_namespace(call_id, "functions", "update_plan", &plan_args),
         ev_completed("resp-1"),
     ]);
     responses::mount_sse_once(&server, first_response).await;

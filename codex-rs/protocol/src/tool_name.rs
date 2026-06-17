@@ -48,9 +48,10 @@ impl ToolName {
     }
 
     pub fn is_default_namespace(&self) -> bool {
-        self.namespace
-            .as_deref()
-            .is_none_or(|namespace| namespace.is_empty() || namespace == DEFAULT_FUNCTION_NAMESPACE)
+        matches!(
+            self.namespace.as_deref(),
+            None | Some("") | Some(DEFAULT_FUNCTION_NAMESPACE)
+        )
     }
 }
 

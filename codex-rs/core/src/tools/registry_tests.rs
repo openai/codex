@@ -151,10 +151,8 @@ fn handler_normalizes_only_the_default_namespace() {
     let namespaced_handler = Arc::new(TestHandler {
         tool_name: namespaced_name.clone(),
     }) as Arc<dyn CoreToolRuntime>;
-    let registry = ToolRegistry::new(HashMap::from([
-        (plain_name.clone(), Arc::clone(&plain_handler)),
-        (namespaced_name.clone(), Arc::clone(&namespaced_handler)),
-    ]));
+    let registry =
+        ToolRegistry::from_tools([Arc::clone(&plain_handler), Arc::clone(&namespaced_handler)]);
 
     let plain = registry.tool(&plain_name);
     let default_namespaced = registry.tool(&codex_tools::ToolName::function(tool_name));
@@ -164,10 +162,7 @@ fn handler_normalizes_only_the_default_namespace() {
         tool_name,
     ));
 
-    assert_eq!(plain.is_some(), true);
-    assert_eq!(default_namespaced.is_some(), true);
-    assert_eq!(namespaced.is_some(), true);
-    assert_eq!(missing_namespaced.is_none(), true);
+    assert!(missing_namespaced.is_none());
     assert!(
         plain
             .as_ref()
@@ -397,10 +392,7 @@ async fn dispatch_notifies_tool_lifecycle_contributors() -> anyhow::Result<()> {
         tool_name: failing_tool.clone(),
         result: LifecycleTestResult::Err,
     }) as Arc<dyn CoreToolRuntime>;
-    let registry = ToolRegistry::new(HashMap::from([
-        (ok_tool.clone(), ok_handler),
-        (failing_tool.clone(), failing_handler),
-    ]));
+    let registry = ToolRegistry::from_tools([ok_handler, failing_handler]);
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 

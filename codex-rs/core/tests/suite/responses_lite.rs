@@ -120,13 +120,6 @@ async fn responses_lite_uses_input_items_for_instructions_and_tools() -> Result<
     Ok(())
 }
 
-fn functions_namespace(tools: &[Value]) -> Option<&Value> {
-    tools.iter().find(|tool| {
-        tool.get("type").and_then(Value::as_str) == Some("namespace")
-            && tool.get("name").and_then(Value::as_str) == Some("functions")
-    })
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_lite_rejects_oversized_additional_tools_item() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -279,7 +272,12 @@ async fn responses_lite_uses_standalone_web_search_and_image_generation() -> Res
     assert!(body.get("tools").is_none());
     let tools = additional_tools(&body)?;
     assert!(!tools.is_empty());
-    let function_tools = functions_namespace(tools)
+    let function_tools = tools
+        .iter()
+        .find(|tool| {
+            tool.get("type").and_then(Value::as_str) == Some("namespace")
+                && tool.get("name").and_then(Value::as_str) == Some("functions")
+        })
         .and_then(|namespace| namespace.get("tools"))
         .and_then(Value::as_array)
         .context("Responses Lite should group default tools under functions")?;

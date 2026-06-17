@@ -325,10 +325,6 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     fn new(tools: HashMap<ToolName, Arc<dyn CoreToolRuntime>>) -> Self {
-        let tools = tools
-            .into_iter()
-            .map(|(name, tool)| (name.with_default_namespace(), tool))
-            .collect();
         Self { tools }
     }
 
@@ -356,8 +352,7 @@ impl ToolRegistry {
     where
         T: CoreToolRuntime + 'static,
     {
-        let name = handler.tool_name();
-        Self::new(HashMap::from([(name, handler as Arc<dyn CoreToolRuntime>)]))
+        Self::from_tools([handler as Arc<dyn CoreToolRuntime>])
     }
 
     fn tool(&self, name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {

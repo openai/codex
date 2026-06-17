@@ -96,24 +96,31 @@ pub fn create_tools_json_for_responses_api(
 pub fn create_tools_json_for_responses_lite(
     tools: &[ToolSpec],
 ) -> Result<Vec<Value>, serde_json::Error> {
-    let mut functions = Vec::new();
-    let mut functions_description = None;
+    let mut functions = ResponsesApiNamespace {
+        name: DEFAULT_FUNCTION_NAMESPACE.to_string(),
+        description: default_namespace_description(DEFAULT_FUNCTION_NAMESPACE),
+        tools: Vec::new(),
+    };
     let mut functions_index = None;
     let mut tools_json = Vec::new();
 
     for tool in tools {
         match tool {
             ToolSpec::Function(tool) => {
-                functions.push(ResponsesApiNamespaceTool::Function(tool.clone()));
+                functions
+                    .tools
+                    .push(ResponsesApiNamespaceTool::Function(tool.clone()));
             }
             ToolSpec::Freeform(tool) => {
-                functions.push(ResponsesApiNamespaceTool::Freeform(tool.clone()));
+                functions
+                    .tools
+                    .push(ResponsesApiNamespaceTool::Freeform(tool.clone()));
             }
             ToolSpec::Namespace(namespace) if namespace.name == DEFAULT_FUNCTION_NAMESPACE => {
                 if !namespace.description.trim().is_empty() {
-                    functions_description = Some(namespace.description.clone());
+                    functions.description = namespace.description.clone();
                 }
-                functions.extend(namespace.tools.clone());
+                functions.tools.extend(namespace.tools.clone());
             }
             tool => {
                 tools_json.push(serde_json::to_value(tool)?);
@@ -124,16 +131,11 @@ pub fn create_tools_json_for_responses_lite(
     }
 
     if let Some(functions_index) = functions_index
-        && !functions.is_empty()
+        && !functions.tools.is_empty()
     {
         tools_json.insert(
             functions_index,
-            serde_json::to_value(ToolSpec::Namespace(ResponsesApiNamespace {
-                name: DEFAULT_FUNCTION_NAMESPACE.to_string(),
-                description: functions_description
-                    .unwrap_or_else(|| default_namespace_description(DEFAULT_FUNCTION_NAMESPACE)),
-                tools: functions,
-            }))?,
+            serde_json::to_value(ToolSpec::Namespace(functions))?,
         );
     }
 
