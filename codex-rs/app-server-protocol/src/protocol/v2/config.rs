@@ -666,16 +666,7 @@ pub struct ExternalAgentConfigImportParams {
     /// Source product that produced the migration items. Missing means Claude Code for
     /// compatibility with older clients.
     #[ts(optional = nullable)]
-    pub source: Option<ExternalAgentConfigImportSource>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum ExternalAgentConfigImportSource {
-    ClaudeCode,
-    ClaudeCowork,
+    pub source: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

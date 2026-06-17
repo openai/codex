@@ -9266,15 +9266,11 @@
             "type": "array"
           },
           "source": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ExternalAgentConfigImportSource"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Source product that produced the migration items. Missing means Claude Code for compatibility with older clients."
+            "description": "Source product that produced the migration items. Missing means Claude Code for compatibility with older clients.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -9315,13 +9311,6 @@
         ],
         "title": "ExternalAgentConfigImportResponse",
         "type": "object"
-      },
-      "ExternalAgentConfigImportSource": {
-        "enum": [
-          "claudeCode",
-          "claudeCowork"
-        ],
-        "type": "string"
       },
       "ExternalAgentConfigImportTypeResult": {
         "properties": {

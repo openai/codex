@@ -3497,7 +3497,6 @@ async fn reducer_ingests_plugin_install_failed_fact_without_detail() {
         &PluginId::parse("unknown@openai-curated-remote").expect("valid plugin id"),
     );
     plugin.remote_plugin_id = Some("plugins~Plugin_00000000000000000000000000000000".to_string());
-    plugin.event_plugin_name = None;
 
     reducer
         .ingest(
@@ -3518,7 +3517,7 @@ async fn reducer_ingests_plugin_install_failed_fact_without_detail() {
             "event_type": "codex_plugin_install_failed",
             "event_params": {
                 "plugin_id": "plugins~Plugin_00000000000000000000000000000000",
-                "plugin_name": null,
+                "plugin_name": "unknown",
                 "marketplace_name": "openai-curated-remote",
                 "has_skills": null,
                 "mcp_server_count": null,
@@ -4488,7 +4487,6 @@ fn sample_plugin_metadata() -> PluginTelemetryMetadata {
     PluginTelemetryMetadata {
         plugin_id: PluginId::parse("sample@test").expect("valid plugin id"),
         remote_plugin_id: None,
-        event_plugin_name: Some("sample".to_string()),
         capability_summary: Some(PluginCapabilitySummary {
             config_name: "sample@test".to_string(),
             display_name: "sample".to_string(),

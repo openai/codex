@@ -1020,13 +1020,12 @@ pub(crate) fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPlu
     let PluginTelemetryMetadata {
         plugin_id,
         remote_plugin_id,
-        event_plugin_name,
         capability_summary,
     } = plugin;
     let event_plugin_id = remote_plugin_id.unwrap_or_else(|| plugin_id.as_key());
     CodexPluginMetadata {
         plugin_id: Some(event_plugin_id),
-        plugin_name: event_plugin_name,
+        plugin_name: Some(plugin_id.plugin_name),
         marketplace_name: Some(plugin_id.marketplace_name),
         has_skills: capability_summary
             .as_ref()

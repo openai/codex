@@ -74,9 +74,6 @@ pub struct PluginTelemetryMetadata {
     /// Optional backend identifier for remote plugins, used when analytics
     /// should report the remote id instead of the local plugin cache id.
     pub remote_plugin_id: Option<String>,
-    /// Plugin name to report in analytics. This is absent when only the remote
-    /// plugin id is known.
-    pub event_plugin_name: Option<String>,
     pub capability_summary: Option<PluginCapabilitySummary>,
 }
 
@@ -85,7 +82,6 @@ impl PluginTelemetryMetadata {
         Self {
             plugin_id: plugin_id.clone(),
             remote_plugin_id: None,
-            event_plugin_name: Some(plugin_id.plugin_name.clone()),
             capability_summary: None,
         }
     }
@@ -96,7 +92,6 @@ impl PluginCapabilitySummary {
         PluginId::parse(&self.config_name)
             .ok()
             .map(|plugin_id| PluginTelemetryMetadata {
-                event_plugin_name: Some(plugin_id.plugin_name.clone()),
                 plugin_id,
                 remote_plugin_id: None,
                 capability_summary: Some(self.clone()),

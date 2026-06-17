@@ -539,7 +539,7 @@ async fn plugin_install_tracks_analytics_when_remote_detail_fetch_fails() -> Res
         "codex_plugin_install_failed"
     );
     assert_eq!(event_params["plugin_id"], REMOTE_PLUGIN_ID);
-    assert_eq!(event_params["plugin_name"], json!(null));
+    assert_eq!(event_params["plugin_name"], "unknown");
     assert_eq!(event_params["marketplace_name"], "openai-curated-remote");
     assert_eq!(
         event_params["error_type"],
@@ -607,7 +607,7 @@ async fn plugin_install_rejects_remote_plugin_disabled_by_admin_before_download(
         "codex_plugin_install_failed"
     );
     assert_eq!(event_params["plugin_id"], REMOTE_PLUGIN_ID);
-    assert_eq!(event_params["plugin_name"], json!(null));
+    assert_eq!(event_params["plugin_name"], "unknown");
     assert_eq!(event_params["marketplace_name"], "openai-curated-remote");
     assert_eq!(
         event_params["error_type"],

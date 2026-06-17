@@ -28,7 +28,6 @@ use codex_app_server_protocol::ExternalAgentConfigImportItemTypeSuccess as Proto
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
 use codex_app_server_protocol::ExternalAgentConfigImportProgressNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
-use codex_app_server_protocol::ExternalAgentConfigImportSource;
 use codex_app_server_protocol::ExternalAgentConfigImportTypeResult as ProtocolImportTypeResult;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
@@ -208,7 +207,8 @@ impl ExternalAgentConfigRequestProcessor {
         let import_id = Uuid::new_v4().to_string();
         let import_source = params
             .source
-            .unwrap_or(ExternalAgentConfigImportSource::ClaudeCode);
+            .clone()
+            .unwrap_or_else(|| "claude_code".to_string());
         let needs_runtime_refresh = migration_items_need_runtime_refresh(&params.migration_items);
         let has_migration_items = !params.migration_items.is_empty();
         let has_plugin_imports = params.migration_items.iter().any(|item| {
@@ -568,7 +568,7 @@ async fn send_completed_import_notification(
     state_db: Option<&StateDbHandle>,
     analytics_events_client: &AnalyticsEventsClient,
     import_id: String,
-    import_source: ExternalAgentConfigImportSource,
+    import_source: String,
     item_results: &[CoreImportItemResult],
 ) {
     let notification = completed_notification(import_id, item_results);
@@ -609,10 +609,10 @@ fn log_completed_import_failures(notification: &ExternalAgentConfigImportComplet
 
 fn track_completed_import_notification(
     analytics_events_client: &AnalyticsEventsClient,
-    import_source: ExternalAgentConfigImportSource,
+    import_source: String,
     notification: &ExternalAgentConfigImportCompletedNotification,
 ) {
-    let source = analytics_import_source(import_source).to_string();
+    let source = analytics_import_source(&import_source);
     for type_result in &notification.item_type_results {
         analytics_events_client.track_external_agent_config_import_completed(
             ExternalAgentConfigImportCompletedInput {
@@ -637,10 +637,11 @@ fn track_completed_import_notification(
     }
 }
 
-fn analytics_import_source(source: ExternalAgentConfigImportSource) -> &'static str {
+fn analytics_import_source(source: &str) -> String {
     match source {
-        ExternalAgentConfigImportSource::ClaudeCode => "claude_code",
-        ExternalAgentConfigImportSource::ClaudeCowork => "claude_cowork",
+        "claudeCode" => "claude_code".to_string(),
+        "claudeCowork" => "claude_cowork".to_string(),
+        source => source.to_string(),
     }
 }
 

@@ -1725,7 +1725,6 @@ impl PluginRequestProcessor {
         };
         let mut plugin = PluginTelemetryMetadata::from_plugin_id(&plugin_id);
         plugin.remote_plugin_id = Some(remote_plugin_id.to_string());
-        plugin.event_plugin_name = None;
         self.analytics_events_client
             .track_plugin_install_failed(plugin, error_type.to_string());
     }
