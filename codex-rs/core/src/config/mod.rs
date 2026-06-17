@@ -2388,6 +2388,7 @@ fn workload_identity_credential_path_deny_paths(path: PathBuf) -> Vec<AbsolutePa
     let Some(parent) = path.as_path().parent() else {
         return vec![path];
     };
+    let original_parent = parent.to_path_buf();
     let parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
 
     // Projected service-account tokens are symlinks whose targets rotate. Mask
@@ -2403,15 +2404,25 @@ fn workload_identity_credential_path_deny_paths(path: PathBuf) -> Vec<AbsolutePa
             .collect();
     }
 
-    let mut deny_paths = AbsolutePathBuf::from_absolute_path(&parent)
-        .into_iter()
-        .collect::<Vec<_>>();
+    let mut deny_paths = vec![path.clone()];
+    if let Some(file_name) = path.as_path().file_name()
+        && let Ok(canonical_link_path) = AbsolutePathBuf::from_absolute_path(parent.join(file_name))
+    {
+        deny_paths.push(canonical_link_path);
+    }
+    if let Ok(original_parent) = AbsolutePathBuf::from_absolute_path(original_parent) {
+        deny_paths.push(original_parent);
+    }
+    if let Ok(parent) = AbsolutePathBuf::from_absolute_path(&parent) {
+        deny_paths.push(parent);
+    }
     if let Ok(target) = std::fs::canonicalize(path.as_path())
         && !target.starts_with(&parent)
         && let Ok(target) = AbsolutePathBuf::from_absolute_path(target)
     {
         deny_paths.push(target);
     }
+    dedupe_absolute_paths(&mut deny_paths);
     deny_paths
 }
 

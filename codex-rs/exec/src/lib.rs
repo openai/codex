@@ -349,6 +349,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
+    let workload_identity = if oss {
+        None
+    } else {
+        bootstrap_config_toml.workload_identity_for_cloud_config()
+    };
     let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
         codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
@@ -357,7 +362,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             .unwrap_or_default(),
         resolve_bootstrap_auth_keyring_backend_kind(&bootstrap_config)?,
         chatgpt_base_url,
-        bootstrap_config_toml.workload_identity.clone(),
+        workload_identity,
     )
     .await;
     let run_cli_overrides = cli_kv_overrides.clone();

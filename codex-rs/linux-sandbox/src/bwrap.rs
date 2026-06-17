@@ -525,6 +525,7 @@ fn create_filesystem_args(
         }
     }
     let unreadable_paths: HashSet<PathBuf> = unreadable_roots.iter().cloned().collect();
+    unreadable_roots = prune_redundant_unreadable_roots(unreadable_roots, &allowed_write_paths);
     let mut sorted_writable_roots = writable_roots;
     sorted_writable_roots.sort_by_key(|writable_root| path_depth(writable_root.root.as_path()));
     // Mask only the unreadable ancestors that sit outside every writable root.
@@ -996,6 +997,63 @@ fn normalize_command_cwd_for_bwrap(command_cwd: &Path) -> PathBuf {
     command_cwd
         .canonicalize()
         .unwrap_or_else(|_| command_cwd.to_path_buf())
+}
+
+/// Remove nested deny mounts already covered by an unreadable ancestor.
+///
+/// The policy keeps every deny entry for permission precedence, but mounting a
+/// denied file after its parent directory was replaced with a read-only tmpfs
+/// makes bubblewrap fail before the command starts. A nested deny remains
+/// necessary when a writable path between the ancestor and child will be
+/// rebound later.
+fn prune_redundant_unreadable_roots(
+    unreadable_roots: Vec<PathBuf>,
+    allowed_write_paths: &[PathBuf],
+) -> Vec<PathBuf> {
+    let mut comparable_roots = unreadable_roots
+        .into_iter()
+        .map(|path| {
+            let comparable = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            (comparable, path)
+        })
+        .collect::<Vec<_>>();
+    comparable_roots.sort_by(|(left_comparable, left), (right_comparable, right)| {
+        path_depth(left_comparable)
+            .cmp(&path_depth(right_comparable))
+            .then_with(|| left_comparable.cmp(right_comparable))
+            .then_with(|| left.cmp(right))
+    });
+    let comparable_write_paths = allowed_write_paths
+        .iter()
+        .map(|path| fs::canonicalize(path).unwrap_or_else(|_| path.clone()))
+        .collect::<Vec<_>>();
+    let mut retained: Vec<(PathBuf, PathBuf)> = Vec::new();
+
+    'candidate: for (candidate, original) in comparable_roots {
+        if first_writable_symlink_component_in_path(&original, allowed_write_paths).is_some() {
+            retained.push((candidate, original));
+            continue;
+        }
+        for (ancestor, _) in &retained {
+            if candidate == *ancestor {
+                continue 'candidate;
+            }
+            if !candidate.starts_with(ancestor) {
+                continue;
+            }
+            let reopened_between = comparable_write_paths.iter().any(|writable| {
+                writable != ancestor
+                    && writable.starts_with(ancestor)
+                    && candidate.starts_with(writable)
+            });
+            if !reopened_between {
+                continue 'candidate;
+            }
+        }
+        retained.push((candidate, original));
+    }
+
+    retained.into_iter().map(|(_, original)| original).collect()
 }
 
 fn append_mount_target_parent_dir_args(args: &mut Vec<String>, mount_target: &Path, anchor: &Path) {
@@ -2559,6 +2617,108 @@ mod tests {
                 && window[2] == "--ro-bind-data"
                 && window[4] == blocked_file_str
         }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nested_symlink_denies_collapse_to_the_parent_mount() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let secret_dir = temp_dir.path().join("projected-secret");
+        let version_dir = secret_dir.join("version");
+        std::fs::create_dir_all(&version_dir).expect("create version dir");
+        let target = version_dir.join("token");
+        std::fs::write(&target, "secret").expect("write token");
+        let token_file = secret_dir.join("token");
+        std::os::unix::fs::symlink("version/token", &token_file).expect("create token symlink");
+        let deny_entry = |path: &Path| FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::from_absolute_path(path).expect("absolute deny path"),
+            },
+            access: FileSystemAccessMode::Deny,
+        };
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            deny_entry(&secret_dir),
+            deny_entry(&token_file),
+            deny_entry(&target),
+        ]);
+
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
+        let secret_dir = path_to_string(&secret_dir);
+        let token_file = path_to_string(&token_file);
+        let target = path_to_string(&target);
+
+        assert!(
+            args.args
+                .windows(4)
+                .any(|window| window == ["--perms", "000", "--tmpfs", secret_dir.as_str()])
+        );
+        assert!(
+            !args.args.windows(5).any(|window| {
+                window[2] == "--ro-bind-data" && (window[4] == token_file || window[4] == target)
+            }),
+            "nested file masks should be covered by the denied parent: {:#?}",
+            args.args
+        );
+    }
+
+    #[test]
+    fn nested_deny_is_retained_below_a_writable_rebind() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let denied_parent = temp_dir.path().join("denied");
+        let writable_child = denied_parent.join("writable");
+        let denied_grandchild = writable_child.join("token");
+        std::fs::create_dir_all(&writable_child).expect("create writable child");
+        std::fs::write(&denied_grandchild, "secret").expect("write denied grandchild");
+
+        assert_eq!(
+            prune_redundant_unreadable_roots(
+                vec![denied_parent.clone(), denied_grandchild.clone()],
+                std::slice::from_ref(&writable_child),
+            ),
+            vec![denied_parent, denied_grandchild]
+        );
+    }
+
+    #[test]
+    fn pruned_nested_deny_is_not_readded_as_a_read_only_mount() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let writable_root = temp_dir.path().join("writable");
+        let denied_parent = writable_root.join("denied");
+        let denied_child = denied_parent.join("token");
+        std::fs::create_dir_all(&denied_parent).expect("create denied parent");
+        std::fs::write(&denied_child, "secret").expect("write denied child");
+        let entry = |path: &Path, access| FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::from_absolute_path(path).expect("absolute path"),
+            },
+            access,
+        };
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            entry(&writable_root, FileSystemAccessMode::Write),
+            entry(&denied_parent, FileSystemAccessMode::Deny),
+            entry(&denied_child, FileSystemAccessMode::Deny),
+        ]);
+
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
+        let denied_child = path_to_string(&denied_child);
+
+        assert!(
+            !args.args.windows(3).any(|window| {
+                window[0] == "--ro-bind" && window[1] == denied_child && window[2] == denied_child
+            }),
+            "deny-only paths must not be remounted read-only: {:#?}",
+            args.args
+        );
     }
 
     #[test]

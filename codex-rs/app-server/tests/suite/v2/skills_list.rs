@@ -8,6 +8,8 @@ use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
@@ -41,6 +43,48 @@ fn write_skill(root: &TempDir, name: &str) -> Result<()> {
     let content = format!("---\nname: {name}\ndescription: {name} description\n---\n\n# Body\n");
     std::fs::write(skill_dir.join("SKILL.md"), content)?;
     Ok(())
+}
+
+fn write_workload_identity_config(
+    codex_home: &std::path::Path,
+    server: &MockServer,
+    token_path: &std::path::Path,
+) -> std::io::Result<()> {
+    let token_path = toml::Value::String(token_path.to_string_lossy().into_owned());
+    let chatgpt_base_url = toml::Value::String(format!("{}/backend-api", server.uri()));
+    let token_url = toml::Value::String(format!("{}/oauth/token", server.uri()));
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"chatgpt_base_url = {chatgpt_base_url}
+
+[workload_identity]
+identity_provider_id = "idp_test"
+identity_provider_mapping_id = "idpm_test"
+audience = "api://codex-test"
+token_url = {token_url}
+
+[workload_identity.credential_source]
+type = "file"
+path = {token_path}
+"#,
+        ),
+    )
+}
+
+fn workload_identity_access_token() -> String {
+    let payload = URL_SAFE_NO_PAD.encode(
+        serde_json::json!({
+            "email": "workload@example.com",
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "workspace_test",
+                "chatgpt_plan_type": "enterprise",
+                "chatgpt_user_id": "user_test",
+            }
+        })
+        .to_string(),
+    );
+    format!("header.{payload}.signature")
 }
 
 async fn expect_skills_changed_notification(
@@ -152,6 +196,67 @@ fn write_cached_remote_plugin_with_skill(
         "---\nname: triage-issues\ndescription: Triage Linear issues\n---\n\n# Body\n",
     )?;
     Ok(skill_path)
+}
+
+#[tokio::test]
+async fn skills_list_local_succeeds_when_workload_identity_is_unavailable() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    let token_path = codex_home.path().join("projected-workload-token");
+    std::fs::write(&token_path, "external-subject-token\n")?;
+    write_skill(&codex_home, "home-skill")?;
+    write_workload_identity_config(codex_home.path(), &server, &token_path)?;
+
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": workload_identity_access_token(),
+            "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+            "token_type": "Bearer",
+            "expires_in": 2,
+            "user_id": "user_test",
+            "chatgpt_account_id": "workspace_test",
+            "chatgpt_plan_type": "enterprise",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/config/bundle"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    std::fs::remove_file(&token_path)?;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let request_id = mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: Vec::new(),
+            force_reload: true,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let SkillsListResponse { data } = to_response(response)?;
+
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].errors, Vec::new());
+    assert!(
+        data[0]
+            .skills
+            .iter()
+            .any(|skill| skill.name == "home-skill")
+    );
+    server.verify().await;
+    Ok(())
 }
 
 #[tokio::test]

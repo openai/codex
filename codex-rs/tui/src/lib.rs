@@ -956,6 +956,11 @@ pub async fn run_main(
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
+    let workload_identity = if cli.oss {
+        None
+    } else {
+        bootstrap_config_toml.workload_identity_for_cloud_config()
+    };
     let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
         codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
@@ -964,7 +969,7 @@ pub async fn run_main(
             .unwrap_or_default(),
         resolve_bootstrap_auth_keyring_backend_kind(&bootstrap_config)?,
         chatgpt_base_url,
-        bootstrap_config_toml.workload_identity.clone(),
+        workload_identity,
     )
     .await;
 
@@ -1423,13 +1428,18 @@ async fn run_ratatui_app(
         // and rebuild config. This avoids missing newly available cloud-managed policy due to login
         // status detection edge cases.
         if show_login_screen && !uses_remote_workspace {
+            let workload_identity = if initial_config.model_provider.requires_openai_auth {
+                initial_config.workload_identity.clone()
+            } else {
+                None
+            };
             cloud_config_bundle = cloud_config_bundle_loader_for_storage(
                 initial_config.codex_home.to_path_buf(),
                 /*enable_codex_api_key_env*/ false,
                 initial_config.cli_auth_credentials_store_mode,
                 initial_config.auth_keyring_backend_kind(),
                 initial_config.chatgpt_base_url.clone(),
-                initial_config.workload_identity.clone(),
+                workload_identity,
             )
             .await;
         }

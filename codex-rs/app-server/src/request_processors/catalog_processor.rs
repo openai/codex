@@ -245,6 +245,19 @@ impl CatalogRequestProcessor {
         }
     }
 
+    async fn auth_for_optional_workspace_settings(&self) -> Option<CodexAuth> {
+        match self.auth_manager.auth().await {
+            Ok(auth) => auth,
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    "failed to resolve auth for optional workspace settings; using defaults"
+                );
+                None
+            }
+        }
+    }
+
     async fn list_models(
         thread_manager: Arc<ThreadManager>,
         params: ModelListParams,
@@ -332,11 +345,7 @@ impl CatalogRequestProcessor {
             }
             None => self.load_latest_config(/*fallback_cwd*/ None).await?,
         };
-        let auth = self
-            .auth_manager
-            .auth()
-            .await
-            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
+        let auth = self.auth_for_optional_workspace_settings().await;
         let workspace_codex_plugins_enabled = self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
             .await;
@@ -511,11 +520,7 @@ impl CatalogRequestProcessor {
         };
 
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-        let auth = self
-            .auth_manager
-            .auth()
-            .await
-            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
+        let auth = self.auth_for_optional_workspace_settings().await;
         let workspace_codex_plugins_enabled = self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
             .await;
@@ -621,11 +626,7 @@ impl CatalogRequestProcessor {
             cwds
         };
 
-        let auth = self
-            .auth_manager
-            .auth()
-            .await
-            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
+        let auth = self.auth_for_optional_workspace_settings().await;
         let plugins_manager = self.thread_manager.plugins_manager();
         let mut data = Vec::new();
         for cwd in cwds {

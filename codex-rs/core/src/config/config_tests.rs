@@ -401,11 +401,21 @@ async fn rotating_workload_credential_denies_its_secret_directory() -> anyhow::R
     )
     .await?;
 
-    let file_system_policy = config.permissions.file_system_sandbox_policy();
+    let mut file_system_policy = config.permissions.file_system_sandbox_policy();
+    file_system_policy.entries.push(FileSystemSandboxEntry {
+        path: FileSystemPath::Path {
+            path: AbsolutePathBuf::try_from(token_file.clone())?,
+        },
+        access: FileSystemAccessMode::Write,
+    });
     let matcher = ReadDenyMatcher::new(&file_system_policy, config.cwd.as_path())
         .expect("workload credential should install a deny-read matcher");
     assert!(matcher.is_read_denied(&token_file));
     assert!(matcher.is_read_denied(&secret_dir.join("next-version/token")));
+    assert_eq!(
+        file_system_policy.resolve_access_with_cwd(&token_file, config.cwd.as_path()),
+        FileSystemAccessMode::Deny
+    );
     Ok(())
 }
 

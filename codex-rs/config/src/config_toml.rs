@@ -35,6 +35,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
@@ -728,6 +729,30 @@ pub struct GhostSnapshotToml {
 }
 
 impl ConfigToml {
+    /// Returns workload identity only when the provider selected by this raw
+    /// config needs OpenAI auth to fetch its cloud-managed config bundle.
+    ///
+    /// Unknown provider IDs fail closed here; normal config loading will emit
+    /// the more specific provider-not-found error later.
+    pub fn workload_identity_for_cloud_config(&self) -> Option<WorkloadIdentityConfig> {
+        let provider_id = self.model_provider.as_deref().unwrap_or(OPENAI_PROVIDER_ID);
+        let openai_base_url = self
+            .openai_base_url
+            .clone()
+            .filter(|value| !value.is_empty());
+        let built_in_providers = built_in_model_providers(openai_base_url);
+        let requires_openai_auth = built_in_providers
+            .get(provider_id)
+            .or_else(|| self.model_providers.get(provider_id))
+            .is_none_or(|provider| provider.requires_openai_auth);
+
+        if requires_openai_auth {
+            self.workload_identity.clone()
+        } else {
+            None
+        }
+    }
+
     /// Derive the effective permission profile from legacy sandbox config.
     ///
     /// Call this only after ruling out `default_permissions`: named
@@ -960,10 +985,71 @@ pub fn validate_oss_provider(provider: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_workload_identity::CredentialSourceConfig;
     use pretty_assertions::assert_eq;
 
     const WORKSPACE_ID_A: &str = "123e4567-e89b-42d3-a456-426614174000";
     const WORKSPACE_ID_B: &str = "123e4567-e89b-42d3-a456-426614174001";
+
+    fn workload_identity() -> WorkloadIdentityConfig {
+        WorkloadIdentityConfig {
+            identity_provider_id: "idp_test".to_string(),
+            identity_provider_mapping_id: "idpm_test".to_string(),
+            audience: "api://codex-test".to_string(),
+            token_url: "https://auth.example.com/oauth/token".to_string(),
+            credential_source: CredentialSourceConfig::Environment {
+                variable: "TEST_WORKLOAD_TOKEN".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn cloud_config_uses_workload_identity_for_default_openai_provider() {
+        let workload_identity = workload_identity();
+        let config = ConfigToml {
+            workload_identity: Some(workload_identity.clone()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.workload_identity_for_cloud_config(),
+            Some(workload_identity)
+        );
+    }
+
+    #[test]
+    fn cloud_config_skips_workload_identity_for_unauthenticated_provider() {
+        let config = ConfigToml {
+            model_provider: Some("local".to_string()),
+            model_providers: HashMap::from([(
+                "local".to_string(),
+                ModelProviderInfo {
+                    name: "Local".to_string(),
+                    requires_openai_auth: false,
+                    ..Default::default()
+                },
+            )]),
+            workload_identity: Some(workload_identity()),
+            ..Default::default()
+        };
+
+        assert_eq!(config.workload_identity_for_cloud_config(), None);
+    }
+
+    #[test]
+    fn cloud_config_workload_identity_fails_closed_for_unknown_provider() {
+        let workload_identity = workload_identity();
+        let config = ConfigToml {
+            model_provider: Some("missing".to_string()),
+            workload_identity: Some(workload_identity.clone()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.workload_identity_for_cloud_config(),
+            Some(workload_identity)
+        );
+    }
 
     #[test]
     fn forced_chatgpt_workspace_id_accepts_single_string() {
