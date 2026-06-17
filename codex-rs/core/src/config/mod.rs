@@ -89,7 +89,6 @@ use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
-use codex_protocol::config_types::StandaloneWebSearchMethod;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchConfig;
@@ -993,9 +992,6 @@ pub struct Config {
 
     /// Explicit or feature-derived web search mode.
     pub web_search_mode: Constrained<WebSearchMode>,
-
-    /// Resolved page-access method used by the standalone web search executor.
-    pub standalone_web_search_method: StandaloneWebSearchMethod,
 
     /// Additional parameters for the web search tool when it is enabled.
     pub web_search_config: Option<WebSearchConfig>,
@@ -3451,31 +3447,6 @@ impl Config {
             &mut constrained_web_search_mode,
             &mut startup_warnings,
         )?;
-        let default_standalone_web_search_method = match constrained_web_search_mode.value() {
-            WebSearchMode::Disabled | WebSearchMode::Cached => StandaloneWebSearchMethod::Offline,
-            WebSearchMode::IndexGated => StandaloneWebSearchMethod::IndexGated,
-            WebSearchMode::Live => StandaloneWebSearchMethod::Online,
-        };
-        let web_search_mode_constraint = constrained_web_search_mode.value.clone();
-        let mut constrained_standalone_web_search_method = ConstrainedWithSource::new(
-            Constrained::new(default_standalone_web_search_method, move |method| {
-                let corresponding_web_search_mode = match method {
-                    StandaloneWebSearchMethod::Offline => WebSearchMode::Disabled,
-                    StandaloneWebSearchMethod::IndexGated => WebSearchMode::IndexGated,
-                    StandaloneWebSearchMethod::Online => WebSearchMode::Live,
-                };
-                web_search_mode_constraint.can_set(&corresponding_web_search_mode)
-            })?,
-            constrained_web_search_mode.source.clone(),
-        );
-        apply_requirement_constrained_value(
-            "standalone_web_search_method",
-            cfg.standalone_web_search_method
-                .unwrap_or(default_standalone_web_search_method),
-            &mut constrained_standalone_web_search_method,
-            &mut startup_warnings,
-        )?;
-        let standalone_web_search_method = constrained_standalone_web_search_method.value();
 
         let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
@@ -3683,7 +3654,6 @@ impl Config {
             forced_chatgpt_workspace_id,
             forced_login_method,
             web_search_mode: constrained_web_search_mode.value,
-            standalone_web_search_method,
             web_search_config,
             experimental_request_user_input_enabled,
             code_mode,

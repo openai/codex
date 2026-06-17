@@ -18,7 +18,6 @@ use codex_extension_api::ToolContributor;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_protocol::config_types::StandaloneWebSearchMethod;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchMode;
 
@@ -44,12 +43,12 @@ impl From<&Config> for WebSearchExtensionConfig {
             available: config.model_provider.is_openai()
                 && web_search_mode != WebSearchMode::Disabled,
             provider: config.model_provider.clone(),
-            settings: search_settings(config),
+            settings: search_settings(config, web_search_mode),
         }
     }
 }
 
-fn search_settings(config: &Config) -> SearchSettings {
+fn search_settings(config: &Config, web_search_mode: WebSearchMode) -> SearchSettings {
     let web_search_config = config.web_search_config.as_ref();
     SearchSettings {
         user_location: web_search_config
@@ -75,10 +74,10 @@ fn search_settings(config: &Config) -> SearchSettings {
                 blocked_domains: None,
             }),
         allowed_callers: Some(vec![AllowedCaller::Direct]),
-        mode: Some(match config.standalone_web_search_method {
-            StandaloneWebSearchMethod::Offline => SearchMode::Offline,
-            StandaloneWebSearchMethod::IndexGated => SearchMode::IndexGated,
-            StandaloneWebSearchMethod::Online => SearchMode::Online,
+        mode: Some(match web_search_mode {
+            WebSearchMode::Disabled | WebSearchMode::Cached => SearchMode::Offline,
+            WebSearchMode::IndexGated => SearchMode::IndexGated,
+            WebSearchMode::Live => SearchMode::Online,
         }),
         ..Default::default()
     }

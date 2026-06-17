@@ -4974,25 +4974,6 @@ fn web_search_mode_disabled_overrides_legacy_request() {
     );
 }
 
-#[tokio::test]
-async fn standalone_web_search_method_defaults_to_online_for_live_search() -> std::io::Result<()> {
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            web_search: Some(WebSearchMode::Live),
-            ..Default::default()
-        },
-        ConfigOverrides::default(),
-        tempdir()?.abs(),
-    )
-    .await?;
-
-    assert_eq!(
-        config.standalone_web_search_method,
-        StandaloneWebSearchMethod::Online
-    );
-    Ok(())
-}
-
 #[test]
 fn index_gated_mode_survives_disabled_permissions() {
     let cfg = ConfigToml {
@@ -9268,12 +9249,12 @@ async fn permission_profile_override_preserves_split_write_roots() -> std::io::R
 }
 
 #[tokio::test]
-async fn requirements_web_search_mode_constrains_standalone_search() -> std::io::Result<()> {
+async fn requirements_web_search_mode_overrides_danger_full_access_default() -> std::io::Result<()>
+{
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"sandbox_mode = "danger-full-access"
-standalone_web_search_method = "online"
 "#,
     )?;
 
@@ -9289,10 +9270,6 @@ standalone_web_search_method = "online"
         .await?;
 
     assert_eq!(config.web_search_mode.value(), WebSearchMode::Cached);
-    assert_eq!(
-        config.standalone_web_search_method,
-        StandaloneWebSearchMethod::Offline
-    );
     assert_eq!(
         resolve_web_search_mode_for_turn(
             &config.web_search_mode,

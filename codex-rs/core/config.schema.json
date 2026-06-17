@@ -2699,14 +2699,6 @@
       },
       "type": "object"
     },
-    "StandaloneWebSearchMethod": {
-      "enum": [
-        "offline",
-        "index_gated",
-        "online"
-      ],
-      "type": "string"
-    },
     "ThreadStoreToml": {
       "oneOf": [
         {
@@ -5234,14 +5226,6 @@
         }
       ],
       "description": "Directory where Codex stores the SQLite state DB. Defaults to `$CODEX_SQLITE_HOME` when set. Otherwise uses `$CODEX_HOME`."
-    },
-    "standalone_web_search_method": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/StandaloneWebSearchMethod"
-        }
-      ],
-      "description": "Controls page access for the standalone web search executor. Defaults to the corresponding `web_search` mode when unset."
     },
     "suppress_unstable_features_warning": {
       "description": "Suppress warnings about unstable (under development) features.",
