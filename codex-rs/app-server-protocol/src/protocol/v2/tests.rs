@@ -197,6 +197,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
         sandbox: SandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        multi_agent_mode_available: false,
         initial_turns_page: Some(TurnsPage {
             data: Vec::new(),
             next_cursor: Some("cursor_next".to_string()),

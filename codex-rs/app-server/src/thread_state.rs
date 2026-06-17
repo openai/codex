@@ -241,6 +241,7 @@ mod tests {
                 },
             },
             multi_agent_mode: Default::default(),
+            multi_agent_mode_available: false,
             personality: None,
         }
     }

@@ -178,6 +178,9 @@ pub struct ThreadStartResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[experimental("thread/start.multiAgentModeAvailable")]
+    #[serde(default)]
+    pub multi_agent_mode_available: bool,
 }
 
 #[derive(
@@ -241,7 +244,7 @@ pub struct ThreadSettingsUpdateParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadSettingsUpdateResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadSettings {
@@ -258,6 +261,9 @@ pub struct ThreadSettings {
     pub collaboration_mode: CollaborationMode,
     #[serde(default)]
     pub multi_agent_mode: MultiAgentMode,
+    #[experimental("thread/settings.multiAgentModeAvailable")]
+    #[serde(default)]
+    pub multi_agent_mode_available: bool,
     pub personality: Option<Personality>,
 }
 
@@ -394,6 +400,9 @@ pub struct ThreadResumeResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[experimental("thread/resume.multiAgentModeAvailable")]
+    #[serde(default)]
+    pub multi_agent_mode_available: bool,
     /// `thread/turns/list` page returned when requested by `initialTurnsPage`.
     #[experimental("thread/resume.initialTurnsPage")]
     #[serde(default)]
@@ -542,6 +551,9 @@ pub struct ThreadForkResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[experimental("thread/fork.multiAgentModeAvailable")]
+    #[serde(default)]
+    pub multi_agent_mode_available: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

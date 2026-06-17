@@ -736,6 +736,21 @@ impl Session {
         &self,
         session_configuration: &SessionConfiguration,
     ) -> ConstraintResult<()> {
+        if !self.multi_agent_mode_available(session_configuration).await {
+            return Err(crate::config::ConstraintError::InvalidValue {
+                field_name: "multi_agent_mode",
+                candidate: session_configuration.multi_agent_mode.to_string(),
+                allowed: "multi-agent v2 session with usage hints enabled".to_string(),
+                requirement_source: codex_config::RequirementSource::Unknown,
+            });
+        }
+        Ok(())
+    }
+
+    pub(super) async fn multi_agent_mode_available(
+        &self,
+        session_configuration: &SessionConfiguration,
+    ) -> bool {
         let per_turn_config =
             Self::build_per_turn_config(session_configuration, session_configuration.cwd().clone());
         let model_info = self
@@ -750,21 +765,12 @@ impl Session {
             .multi_agent_version()
             .or(model_info.multi_agent_version)
             .unwrap_or_else(|| per_turn_config.multi_agent_version_from_features());
-        if multi_agents::usage_hint_text_for(
+        multi_agents::usage_hint_text_for(
             multi_agent_version,
             &per_turn_config.multi_agent_v2,
             &session_configuration.session_source,
         )
-        .is_none()
-        {
-            return Err(crate::config::ConstraintError::InvalidValue {
-                field_name: "multi_agent_mode",
-                candidate: session_configuration.multi_agent_mode.to_string(),
-                allowed: "multi-agent v2 session with usage hints enabled".to_string(),
-                requirement_source: codex_config::RequirementSource::Unknown,
-            });
-        }
-        Ok(())
+        .is_some()
     }
 
     async fn new_turn_from_configuration(

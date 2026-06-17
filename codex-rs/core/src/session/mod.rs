@@ -826,8 +826,16 @@ impl Codex {
     }
 
     pub(crate) async fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
-        let state = self.session.state.lock().await;
-        state.session_configuration.thread_config_snapshot()
+        let configuration = {
+            let state = self.session.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let mut snapshot = configuration.thread_config_snapshot();
+        snapshot.multi_agent_mode_available = self
+            .session
+            .multi_agent_mode_available(&configuration)
+            .await;
+        snapshot
     }
 
     pub(crate) async fn instruction_sources(&self) -> Vec<AbsolutePathBuf> {
@@ -1456,7 +1464,9 @@ impl Session {
         if updates.multi_agent_mode.is_some() {
             self.validate_multi_agent_mode(&configuration).await?;
         }
-        Ok(configuration.thread_config_snapshot())
+        let mut snapshot = configuration.thread_config_snapshot();
+        snapshot.multi_agent_mode_available = self.multi_agent_mode_available(&configuration).await;
+        Ok(snapshot)
     }
 
     pub(crate) async fn set_session_startup_prewarm(

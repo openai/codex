@@ -1247,6 +1247,7 @@ impl ThreadRequestProcessor {
             sandbox,
             active_permission_profile,
             reasoning_effort: config_snapshot.reasoning_effort,
+            multi_agent_mode_available: config_snapshot.multi_agent_mode_available,
         };
         let notif = thread_started_notification(thread);
         listener_task_context
@@ -2767,6 +2768,7 @@ impl ThreadRequestProcessor {
                     sandbox,
                     active_permission_profile,
                     reasoning_effort: session_configured.reasoning_effort,
+                    multi_agent_mode_available: config_snapshot.multi_agent_mode_available,
                     initial_turns_page,
                 };
 
@@ -3486,6 +3488,7 @@ impl ThreadRequestProcessor {
             sandbox,
             active_permission_profile,
             reasoning_effort: session_configured.reasoning_effort,
+            multi_agent_mode_available: config_snapshot.multi_agent_mode_available,
         };
 
         let notif = thread_started_notification(thread);

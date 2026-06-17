@@ -159,10 +159,12 @@ async fn thread_settings_update(
 }
 
 async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
-    let snapshot = {
+    let configuration = {
         let state = sess.state.lock().await;
-        state.session_configuration.thread_config_snapshot()
+        state.session_configuration.clone()
     };
+    let mut snapshot = configuration.thread_config_snapshot();
+    snapshot.multi_agent_mode_available = sess.multi_agent_mode_available(&configuration).await;
     let cwd = snapshot.cwd().clone();
     EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
         thread_settings: ThreadSettingsSnapshot {
@@ -179,6 +181,7 @@ async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
             personality: snapshot.personality,
             collaboration_mode: snapshot.collaboration_mode,
             multi_agent_mode: snapshot.multi_agent_mode,
+            multi_agent_mode_available: snapshot.multi_agent_mode_available,
         },
     })
 }

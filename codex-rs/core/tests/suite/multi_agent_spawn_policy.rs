@@ -86,6 +86,13 @@ async fn multi_agent_mode_is_sticky_and_emits_only_on_change() -> Result<()> {
         .build(&server)
         .await?;
 
+    assert!(
+        test.codex
+            .config_snapshot()
+            .await
+            .multi_agent_mode_available
+    );
+
     submit_turn(&test.codex, "turn one", None).await?;
     submit_turn(&test.codex, "turn two", Some(MultiAgentMode::Proactive)).await?;
     submit_turn(&test.codex, "turn three", None).await?;
@@ -133,6 +140,14 @@ async fn explicit_multi_agent_mode_is_rejected_without_multi_agent_v2() -> Resul
 
     let server = start_mock_server().await;
     let test = test_codex().build(&server).await?;
+
+    assert!(
+        !test
+            .codex
+            .config_snapshot()
+            .await
+            .multi_agent_mode_available
+    );
 
     test.codex
         .submit(Op::UserInput {

@@ -1997,6 +1997,8 @@ pub struct ThreadSettingsSnapshot {
     pub collaboration_mode: CollaborationMode,
     #[serde(default)]
     pub multi_agent_mode: MultiAgentMode,
+    #[serde(default)]
+    pub multi_agent_mode_available: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]
