@@ -18,9 +18,8 @@ use ts_rs::TS;
 
 use crate::GitSha;
 use crate::safe_git::DISABLED_HOOKS_PATH;
-use crate::safe_git::EXECUTABLE_GIT_CONFIG_PATTERN;
-use crate::safe_git::GitConfigOverride;
-use crate::safe_git::executable_git_config_overrides_from_output;
+use crate::safe_git::EXECUTABLE_FILTER_CONFIG_PATTERN;
+use crate::safe_git::config_output_has_entries;
 
 /// Return `true` if the project folder specified by the `Config` is inside a
 /// Git repository.
@@ -285,6 +284,9 @@ fn trim_git_suffix(value: &str) -> &str {
 
 pub async fn get_has_changes(cwd: &Path) -> Option<bool> {
     let git = Path::new("git");
+    if has_configured_executable_filters_from(git, cwd).await? {
+        return None;
+    }
     let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
     let output =
         run_git_command_with_timeout_from(git, &["status", "--porcelain"], cwd, fsmonitor).await?;
@@ -438,20 +440,17 @@ async fn run_git_command_with_timeout_from(
     cwd: &Path,
     fsmonitor: crate::FsmonitorOverride,
 ) -> Option<std::process::Output> {
-    let executable_git_config_overrides =
-        configured_executable_git_config_overrides_from(git, cwd).await?;
     let disabled_hooks = format!("core.hooksPath={DISABLED_HOOKS_PATH}");
     let mut command = Command::new(git);
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         // Keep internal Git commands independent of repository-selected hooks
-        // and executable Git helpers while preserving built-in fsmonitor acceleration.
+        // while preserving built-in fsmonitor acceleration.
         .args(["-c", &disabled_hooks])
         .args(["-c", fsmonitor.git_config_arg()])
+        .args(args)
         .current_dir(cwd)
         .kill_on_drop(true);
-    add_executable_git_config_overrides(&mut command, &executable_git_config_overrides);
-    command.args(args);
     let result = timeout(GIT_COMMAND_TIMEOUT, command.output()).await;
 
     match result {
@@ -460,10 +459,7 @@ async fn run_git_command_with_timeout_from(
     }
 }
 
-async fn configured_executable_git_config_overrides_from(
-    git: &Path,
-    cwd: &Path,
-) -> Option<Vec<GitConfigOverride>> {
+async fn has_configured_executable_filters_from(git: &Path, cwd: &Path) -> Option<bool> {
     let mut command = Command::new(git);
     command
         .args([
@@ -471,7 +467,7 @@ async fn configured_executable_git_config_overrides_from(
             "--null",
             "--name-only",
             "--get-regexp",
-            EXECUTABLE_GIT_CONFIG_PATTERN,
+            EXECUTABLE_FILTER_CONFIG_PATTERN,
         ])
         .current_dir(cwd)
         .kill_on_drop(true);
@@ -487,22 +483,7 @@ async fn configured_executable_git_config_overrides_from(
         return None;
     }
 
-    Some(executable_git_config_overrides_from_output(&output.stdout))
-}
-
-fn add_executable_git_config_overrides(
-    command: &mut Command,
-    config_overrides: &[GitConfigOverride],
-) {
-    if config_overrides.is_empty() {
-        return;
-    }
-    command.env("GIT_CONFIG_COUNT", config_overrides.len().to_string());
-    for (index, (key, value)) in config_overrides.iter().enumerate() {
-        command
-            .env(format!("GIT_CONFIG_KEY_{index}"), key)
-            .env(format!("GIT_CONFIG_VALUE_{index}"), value);
-    }
+    Some(config_output_has_entries(&output.stdout))
 }
 
 async fn get_git_remotes(cwd: &Path) -> Option<Vec<String>> {
@@ -783,6 +764,9 @@ async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -
 
 async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
     let git = Path::new("git");
+    if has_configured_executable_filters_from(git, cwd).await? {
+        return None;
+    }
     let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
     let output = run_git_command_with_timeout_from(
         git,
@@ -1070,17 +1054,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_has_changes_ignores_configured_clean_filter() {
+    async fn get_has_changes_rejects_configured_clean_filter_without_running_it() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let repo_path = create_test_git_repo(&temp_dir).await;
         configure_clean_filter(&repo_path, "test.txt").await;
 
-        assert_eq!(get_has_changes(&repo_path).await, Some(false));
+        assert_eq!(get_has_changes(&repo_path).await, None);
         assert!(!configured_filter_ran(&repo_path).await);
     }
 
     #[tokio::test]
-    async fn git_diff_to_remote_ignores_configured_clean_filter() {
+    async fn git_diff_to_remote_rejects_configured_clean_filter_without_running_it() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let repo_path = create_test_git_repo(&temp_dir).await;
         let remote_path = temp_dir.path().join("remote.git");
@@ -1110,10 +1094,7 @@ mod tests {
         configure_clean_filter(&repo_path, "test.txt").await;
         run_git(&repo_path, &["push", "origin", &branch]).await;
 
-        let state = git_diff_to_remote(&repo_path)
-            .await
-            .expect("collect working tree state");
-        assert!(state.diff.is_empty());
+        assert!(git_diff_to_remote(&repo_path).await.is_none());
         assert!(!configured_filter_ran(&repo_path).await);
     }
 
@@ -1167,9 +1148,6 @@ mod tests {
                 "config --null --get core.fsmonitor".to_string(),
                 "config --null --type=bool --fixed-value --get core.fsmonitor /tmp/fsmonitor-helper"
                     .to_string(),
-                format!(
-                    "config --null --name-only --get-regexp {EXECUTABLE_GIT_CONFIG_PATTERN}"
-                ),
                 format!("-c {disabled_hooks} -c core.fsmonitor=false status --porcelain"),
             ]
         );
@@ -1257,7 +1235,6 @@ mod tests {
             vec![
                 "config --null --get core.fsmonitor".to_string(),
                 "version --build-options".to_string(),
-                format!("config --null --name-only --get-regexp {EXECUTABLE_GIT_CONFIG_PATTERN}"),
                 format!("-c {disabled_hooks} -c core.fsmonitor=true status --porcelain"),
             ]
         );

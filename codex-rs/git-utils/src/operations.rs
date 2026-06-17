@@ -6,8 +6,6 @@ use std::process::Command;
 
 use crate::GitToolingError;
 use crate::safe_git::DISABLED_HOOKS_PATH;
-use crate::safe_git::GitConfigOverride;
-use crate::safe_git::configured_executable_git_config_overrides;
 
 pub(crate) fn ensure_git_repository(path: &Path) -> Result<(), GitToolingError> {
     match run_git_for_stdout(
@@ -110,7 +108,6 @@ where
     for arg in iterator {
         args_vec.push(OsString::from(arg.as_ref()));
     }
-    let executable_git_config_overrides = configured_executable_git_config_overrides(dir)?;
     let command_string = build_command_string(&args_vec);
     let mut command = Command::new("git");
     command.current_dir(dir);
@@ -119,7 +116,6 @@ where
             command.env(key, value);
         }
     }
-    add_executable_git_config_overrides(&mut command, &executable_git_config_overrides);
     command.args(&args_vec);
     let output = command.output()?;
     if !output.status.success() {
@@ -134,21 +130,6 @@ where
         command: command_string,
         output,
     })
-}
-
-fn add_executable_git_config_overrides(
-    command: &mut Command,
-    config_overrides: &[GitConfigOverride],
-) {
-    if config_overrides.is_empty() {
-        return;
-    }
-    command.env("GIT_CONFIG_COUNT", config_overrides.len().to_string());
-    for (index, (key, value)) in config_overrides.iter().enumerate() {
-        command
-            .env(format!("GIT_CONFIG_KEY_{index}"), key)
-            .env(format!("GIT_CONFIG_VALUE_{index}"), value);
-    }
 }
 
 fn build_command_string(args: &[OsString]) -> String {

@@ -14,8 +14,9 @@ use std::path::PathBuf;
 
 use crate::FsmonitorOverride;
 use crate::safe_git::DISABLED_HOOKS_PATH;
-use crate::safe_git::GitConfigOverride;
-use crate::safe_git::configured_executable_git_config_overrides;
+use crate::safe_git::EXECUTABLE_FILTER_CONFIG_PATTERN;
+use crate::safe_git::EXECUTABLE_PATCH_CONFIG_PATTERN;
+use crate::safe_git::ensure_no_executable_git_config;
 
 /// Parameters for invoking [`apply_git_patch`].
 #[derive(Debug, Clone)]
@@ -44,6 +45,7 @@ pub struct ApplyGitResult {
 /// leaves the working tree untouched while still parsing the command output for diagnostics.
 pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     let git_root = resolve_git_root(&req.cwd)?;
+    ensure_no_executable_git_config(&git_root, EXECUTABLE_PATCH_CONFIG_PATTERN)?;
 
     // Write unified diff into a temporary file
     let (tmpdir, patch_path) = write_temp_patch(&req.diff)?;
@@ -54,8 +56,6 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
         // Stage WT paths first to avoid index mismatch on revert.
         stage_paths(&git_root, &req.diff)?;
     }
-    let executable_git_config_overrides = configured_executable_git_config_overrides(&git_root)?;
-
     // Build git args
     let mut args: Vec<String> = vec!["apply".into(), "--3way".into()];
     if req.revert {
@@ -86,12 +86,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
         }
         check_args.push(patch_path.to_string_lossy().to_string());
         let rendered = render_command_for_log(&git_root, &cfg_parts, &check_args);
-        let (c_code, c_out, c_err) = run_git(
-            &git_root,
-            &cfg_parts,
-            &executable_git_config_overrides,
-            &check_args,
-        )?;
+        let (c_code, c_out, c_err) = run_git(&git_root, &cfg_parts, &check_args)?;
         let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
             parse_git_apply_output(&c_out, &c_err);
         applied_paths.sort();
@@ -112,12 +107,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     }
 
     let cmd_for_log = render_command_for_log(&git_root, &cfg_parts, &args);
-    let (code, stdout, stderr) = run_git(
-        &git_root,
-        &cfg_parts,
-        &executable_git_config_overrides,
-        &args,
-    )?;
+    let (code, stdout, stderr) = run_git(&git_root, &cfg_parts, &args)?;
 
     let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
         parse_git_apply_output(&stdout, &stderr);
@@ -164,12 +154,7 @@ fn write_temp_patch(diff: &str) -> io::Result<(tempfile::TempDir, PathBuf)> {
     Ok((dir, path))
 }
 
-fn run_git(
-    cwd: &Path,
-    git_cfg: &[String],
-    executable_git_config_overrides: &[GitConfigOverride],
-    args: &[String],
-) -> io::Result<(i32, String, String)> {
+fn run_git(cwd: &Path, git_cfg: &[String], args: &[String]) -> io::Result<(i32, String, String)> {
     let mut cmd = std::process::Command::new("git");
     for p in git_cfg {
         cmd.arg(p);
@@ -177,7 +162,6 @@ fn run_git(
     for a in args {
         cmd.arg(a);
     }
-    add_executable_git_config_overrides(&mut cmd, executable_git_config_overrides);
     let out = cmd.current_dir(cwd).output()?;
     let code = out.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -192,21 +176,6 @@ fn safe_git_config_parts() -> Vec<String> {
         "-c".to_string(),
         FsmonitorOverride::Disabled.git_config_arg().to_string(),
     ]
-}
-
-fn add_executable_git_config_overrides(
-    command: &mut std::process::Command,
-    config_overrides: &[GitConfigOverride],
-) {
-    if config_overrides.is_empty() {
-        return;
-    }
-    command.env("GIT_CONFIG_COUNT", config_overrides.len().to_string());
-    for (index, (key, value)) in config_overrides.iter().enumerate() {
-        command
-            .env(format!("GIT_CONFIG_KEY_{index}"), key)
-            .env(format!("GIT_CONFIG_VALUE_{index}"), value);
-    }
 }
 
 fn quote_shell(s: &str) -> String {
@@ -364,6 +333,7 @@ fn unescape_c_string(input: &str) -> String {
 
 /// Stage only the files that actually exist on disk for the given diff.
 pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
+    ensure_no_executable_git_config(git_root, EXECUTABLE_FILTER_CONFIG_PATTERN)?;
     let paths = extract_paths_from_patch(diff);
     let mut existing: Vec<String> = Vec::new();
     for p in paths {
@@ -378,13 +348,7 @@ pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
     let mut args = vec!["add".to_string(), "--".to_string()];
     args.extend(existing);
     let config_parts = safe_git_config_parts();
-    let executable_git_config_overrides = configured_executable_git_config_overrides(git_root)?;
-    let (_code, _, _) = run_git(
-        git_root,
-        &config_parts,
-        &executable_git_config_overrides,
-        &args,
-    )?;
+    let (_code, _, _) = run_git(git_root, &config_parts, &args)?;
     // We do not hard fail staging; best-effort is OK. Return Ok even on non-zero.
     Ok(())
 }
@@ -708,6 +672,28 @@ mod tests {
         code == 0
     }
 
+    fn configure_merge_driver(root: &Path, tracked_path: &str) {
+        std::fs::write(
+            root.join(".gitattributes"),
+            format!("{tracked_path} merge=codex-test\n"),
+        )
+        .expect("write attributes");
+        let (add_code, _, add_err) = run(root, &["git", "add", ".gitattributes"]);
+        assert_eq!(add_code, 0, "add attributes: {add_err}");
+        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "attributes"]);
+        assert_eq!(commit_code, 0, "commit attributes: {commit_err}");
+        let (config_code, _, config_err) = run(
+            root,
+            &[
+                "git",
+                "config",
+                "merge.codex-test.driver",
+                "git config codex.mergeran true && false",
+            ],
+        );
+        assert_eq!(config_code, 0, "configure merge driver: {config_err}");
+    }
+
     #[test]
     fn extract_paths_handles_quoted_headers() {
         let diff = "diff --git \"a/hello world.txt\" \"b/hello world.txt\"\nnew file mode 100644\n--- /dev/null\n+++ b/hello world.txt\n@@ -0,0 +1 @@\n+hi\n";
@@ -921,7 +907,7 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
     }
 
     #[test]
-    fn apply_ignores_configured_clean_filter() {
+    fn apply_rejects_configured_clean_filter_without_running_it() {
         let _g = env_lock().lock().unwrap();
         let repo = init_repo();
         let root = repo.path();
@@ -939,23 +925,39 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
             revert: false,
             preflight: true,
         };
-        let preflight = apply_git_patch(&preflight_req).expect("preflight apply");
-        assert_eq!(preflight.exit_code, 0, "preflight apply succeeded");
+        let error = apply_git_patch(&preflight_req).expect_err("reject configured filter");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
         assert!(!configured_filter_ran(root));
+        assert_eq!(read_file_normalized(&root.join("file.txt")), "orig\n");
 
-        let apply_req = ApplyGitRequest {
+        let stage_error = stage_paths(root, diff).expect_err("reject configured filter");
+        assert_eq!(stage_error.kind(), io::ErrorKind::Unsupported);
+        assert!(!configured_filter_ran(root));
+    }
+
+    #[test]
+    fn apply_rejects_configured_merge_driver_without_running_it() {
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        std::fs::write(root.join("file.txt"), "orig\n").expect("write file");
+        let (add_code, _, add_err) = run(root, &["git", "add", "file.txt"]);
+        assert_eq!(add_code, 0, "add file: {add_err}");
+        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "seed"]);
+        assert_eq!(commit_code, 0, "commit file: {commit_err}");
+        configure_merge_driver(root, "file.txt");
+
+        let diff = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n-orig\n+next\n";
+        let request = ApplyGitRequest {
             cwd: root.to_path_buf(),
             diff: diff.to_string(),
             revert: false,
             preflight: false,
         };
-        let applied = apply_git_patch(&apply_req).expect("apply");
-        assert_eq!(
-            applied.exit_code, 0,
-            "apply succeeded\nstdout:\n{}\nstderr:\n{}",
-            applied.stdout, applied.stderr
-        );
-        assert!(!configured_filter_ran(root));
-        assert_eq!(read_file_normalized(&root.join("file.txt")), "next\n");
+        let error = apply_git_patch(&request).expect_err("reject configured merge driver");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        let (marker_code, _, _) = run(root, &["git", "config", "--get", "codex.mergeran"]);
+        assert_ne!(marker_code, 0, "merge driver must not run");
+        assert_eq!(read_file_normalized(&root.join("file.txt")), "orig\n");
     }
 }
