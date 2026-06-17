@@ -186,3 +186,7 @@ pub fn request_plugin_install_picker_completed(
 ) -> bool {
     entries.iter().any(|entry| entry.completed)
 }
+
+#[cfg(test)]
+#[path = "validation_tests.rs"]
+mod tests;
