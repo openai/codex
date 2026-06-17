@@ -357,6 +357,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             .unwrap_or_default(),
         resolve_bootstrap_auth_keyring_backend_kind(&bootstrap_config)?,
         chatgpt_base_url,
+        bootstrap_config_toml.workload_identity.clone(),
     )
     .await;
     let run_cli_overrides = cli_kv_overrides.clone();

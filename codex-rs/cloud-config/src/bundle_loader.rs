@@ -7,6 +7,8 @@ use codex_config::CloudConfigBundleLoader;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
+use codex_login::AuthManagerConfig;
+use codex_login::WorkloadIdentityConfig;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -16,6 +18,40 @@ use tokio::task::JoinHandle;
 fn refresher_task_slot() -> &'static Mutex<Option<JoinHandle<()>>> {
     static REFRESHER_TASK: OnceLock<Mutex<Option<JoinHandle<()>>>> = OnceLock::new();
     REFRESHER_TASK.get_or_init(|| Mutex::new(None))
+}
+
+struct StorageAuthManagerConfig {
+    codex_home: PathBuf,
+    credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    chatgpt_base_url: String,
+    workload_identity: Option<WorkloadIdentityConfig>,
+}
+
+impl AuthManagerConfig for StorageAuthManagerConfig {
+    fn codex_home(&self) -> PathBuf {
+        self.codex_home.clone()
+    }
+
+    fn cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode {
+        self.credentials_store_mode
+    }
+
+    fn auth_keyring_backend_kind(&self) -> AuthKeyringBackendKind {
+        self.keyring_backend_kind
+    }
+
+    fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>> {
+        None
+    }
+
+    fn chatgpt_base_url(&self) -> String {
+        self.chatgpt_base_url.clone()
+    }
+
+    fn workload_identity(&self) -> Option<WorkloadIdentityConfig> {
+        self.workload_identity.clone()
+    }
 }
 
 pub fn cloud_config_bundle_loader(
@@ -58,14 +94,20 @@ pub async fn cloud_config_bundle_loader_for_storage(
     credentials_store_mode: AuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
     chatgpt_base_url: String,
+    workload_identity: Option<WorkloadIdentityConfig>,
 ) -> CloudConfigBundleLoader {
-    let auth_manager = AuthManager::shared(
-        codex_home.clone(),
-        enable_codex_api_key_env,
+    let auth_config = StorageAuthManagerConfig {
+        codex_home: codex_home.clone(),
         credentials_store_mode,
-        Some(chatgpt_base_url.clone()),
         keyring_backend_kind,
-    )
-    .await;
+        chatgpt_base_url: chatgpt_base_url.clone(),
+        workload_identity,
+    };
+    let auth_manager =
+        AuthManager::shared_from_config(&auth_config, enable_codex_api_key_env).await;
     cloud_config_bundle_loader(auth_manager, chatgpt_base_url, codex_home)
 }
+
+#[cfg(test)]
+#[path = "bundle_loader_tests.rs"]
+mod tests;

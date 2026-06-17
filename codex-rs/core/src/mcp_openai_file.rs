@@ -19,6 +19,17 @@ use codex_login::CodexAuth;
 use codex_utils_path_uri::PathUri;
 use serde_json::Value as JsonValue;
 
+const OPENAI_FILE_AUTH_RESOLUTION_FAILED_MESSAGE: &str =
+    "failed to resolve ChatGPT auth for OpenAI file upload";
+
+fn model_visible_auth_resolution_error(error: std::io::Error) -> String {
+    tracing::warn!(
+        error = %error,
+        "failed to resolve auth for OpenAI file upload"
+    );
+    OPENAI_FILE_AUTH_RESOLUTION_FAILED_MESSAGE.to_string()
+}
+
 pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
     sess: &Session,
     turn_context: &TurnContext,
@@ -40,7 +51,7 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
         .auth_manager
         .auth()
         .await
-        .map_err(|err| format!("failed to resolve auth for OpenAI file upload: {err}"))?;
+        .map_err(model_visible_auth_resolution_error)?;
     let mut rewritten_arguments = arguments.clone();
 
     for field_name in openai_file_input_params {
@@ -194,6 +205,17 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use tempfile::tempdir;
+
+    #[test]
+    fn auth_resolution_errors_hide_credential_source_details() {
+        let credential_path = "/run/secrets/codex-wif/subject-token";
+        let message = model_visible_auth_resolution_error(std::io::Error::other(format!(
+            "file credential source could not read {credential_path}"
+        )));
+
+        assert_eq!(message, OPENAI_FILE_AUTH_RESOLUTION_FAILED_MESSAGE);
+        assert!(!message.contains(credential_path));
+    }
 
     fn set_primary_environment_cwd(turn_context: &mut TurnContext, cwd: &Path) {
         let cwd = AbsolutePathBuf::try_from(cwd).expect("absolute path");

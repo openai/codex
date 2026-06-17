@@ -234,6 +234,7 @@ async fn plugin_list_local_succeeds_when_workload_identity_becomes_unavailable()
     let response: PluginListResponse = to_response(response)?;
 
     assert!(response.marketplace_load_errors.is_empty());
+    server.verify().await;
     Ok(())
 }
 

@@ -244,7 +244,8 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
 fn parent_turn_denied_reads_context(turn: &TurnContext) -> Option<String> {
     #[allow(deprecated)]
     let cwd = &turn.cwd;
-    let file_system_policy = turn.permission_profile.file_system_sandbox_policy();
+    let permission_profile = turn.model_visible_permission_profile();
+    let file_system_policy = permission_profile.file_system_sandbox_policy();
     let mut entries = file_system_policy
         .get_unreadable_roots_with_cwd(cwd)
         .into_iter()

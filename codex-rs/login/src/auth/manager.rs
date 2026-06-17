@@ -29,7 +29,7 @@ use super::access_token::CodexAccessToken;
 use super::access_token::classify_codex_access_token;
 use super::external_bearer::BearerTokenRefresher;
 use super::revoke::revoke_auth_tokens;
-use super::workload_identity::WorkloadIdentityExternalAuth;
+use super::workload_identity::shared_workload_identity_external_auth;
 pub use crate::auth::agent_identity::AgentIdentityAuth;
 pub use crate::auth::bedrock_api_key::BedrockApiKeyAuth;
 pub use crate::auth::personal_access_token::PersonalAccessTokenAuth;
@@ -51,7 +51,6 @@ use codex_protocol::auth::PlanType as InternalPlanType;
 use codex_protocol::auth::RefreshTokenFailedError;
 use codex_protocol::auth::RefreshTokenFailedReason;
 use codex_workload_identity_providers::WorkloadIdentityConfig;
-use codex_workload_identity_providers::build_client as build_workload_identity_client;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -1961,12 +1960,12 @@ impl AuthManager {
             .await,
         );
         if let Some(workload_identity) = config.workload_identity() {
-            let client = build_workload_identity_client(
+            let external_auth = shared_workload_identity_external_auth(
                 workload_identity,
                 oauth_client_id(),
                 build_reqwest_client(),
             );
-            auth_manager.set_external_auth(Arc::new(WorkloadIdentityExternalAuth::new(client)));
+            auth_manager.set_external_auth(external_auth);
         }
         auth_manager
     }
