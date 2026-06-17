@@ -30,6 +30,7 @@ use codex_protocol::protocol::TokenUsage;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
+use tokio::sync::SemaphorePermit;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -59,8 +60,8 @@ use super::prompt::guardian_policy_prompt_with_config;
 
 mod eager_compaction;
 
-use eager_compaction::GuardianEagerCompaction;
-use eager_compaction::GuardianEagerCompactionOutcome;
+use eager_compaction::GuardianMaintenanceLatch;
+use eager_compaction::GuardianMaintenanceOutcome;
 
 const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug)]
@@ -110,7 +111,8 @@ struct GuardianReviewSession {
     cancel_token: CancellationToken,
     reuse_key: GuardianReviewSessionReuseKey,
     review_lock: Semaphore,
-    eager_compaction: GuardianEagerCompaction,
+    maintenance_latch: GuardianMaintenanceLatch,
+    background_runtime: tokio::runtime::Handle,
     state: Mutex<GuardianReviewState>,
 }
 
@@ -145,6 +147,13 @@ struct GuardianReviewForkSnapshot {
     initial_history: InitialHistory,
     prior_review_count: usize,
     last_reviewed_transcript_cursor: Option<GuardianTranscriptCursor>,
+}
+
+enum GuardianTrunkReviewClaim<'a> {
+    Acquired(SemaphorePermit<'a>),
+    UseEphemeral {
+        fork_snapshot: Option<GuardianReviewForkSnapshot>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -221,13 +230,13 @@ pub(crate) fn prompt_cache_key_override_for_review_session(
 impl GuardianReviewSession {
     async fn shutdown(&self) {
         self.cancel_token.cancel();
-        self.wait_for_eager_compaction().await;
+        self.acquire_maintenance_latch().await;
         let _ = self.codex.shutdown_and_wait().await;
     }
 
     fn shutdown_in_background(self: &Arc<Self>) {
         let review_session = Arc::clone(self);
-        drop(tokio::spawn(async move {
+        drop(self.background_runtime.spawn(async move {
             review_session.shutdown().await;
         }));
     }
@@ -280,7 +289,8 @@ impl Drop for EphemeralReviewCleanup {
             return;
         };
         let state = Arc::clone(&self.state);
-        drop(tokio::spawn(async move {
+        let background_runtime = review_session.background_runtime.clone();
+        drop(background_runtime.spawn(async move {
             let review_session = {
                 let mut state = state.lock().await;
                 state
@@ -323,6 +333,58 @@ impl GuardianReviewSessionManager {
         for review_session in ephemeral_reviews {
             review_session.shutdown().await;
         }
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "trunk identity and review ownership must be decided atomically"
+    )]
+    async fn claim_trunk_for_review<'a>(
+        &self,
+        trunk: &'a Arc<GuardianReviewSession>,
+        params: &GuardianReviewSessionParams,
+    ) -> Result<GuardianTrunkReviewClaim<'a>, GuardianReviewSessionOutcome> {
+        let maintenance_guard = run_before_review_deadline(
+            params.deadline,
+            params.external_cancel.as_ref(),
+            trunk.acquire_maintenance_latch(),
+        )
+        .await?;
+        if *maintenance_guard == GuardianMaintenanceOutcome::DiscardSession {
+            let fork_snapshot = trunk.fork_snapshot().await;
+            let review_session = self.remove_trunk_if_current(trunk).await;
+            drop(maintenance_guard);
+            if let Some(review_session) = review_session {
+                review_session.shutdown_in_background();
+            }
+            return Ok(GuardianTrunkReviewClaim::UseEphemeral { fork_snapshot });
+        }
+
+        // Hold the maintenance latch until review ownership is decided.
+        let state = self.state.lock().await;
+        let trunk_pointer_is_current = state
+            .trunk
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, trunk));
+        let trunk_guard = if trunk_pointer_is_current {
+            trunk.review_lock.try_acquire().ok()
+        } else {
+            None
+        };
+        let Some(trunk_guard) = trunk_guard else {
+            drop(state);
+            drop(maintenance_guard);
+            let fork_snapshot = if trunk_pointer_is_current {
+                trunk.fork_snapshot().await
+            } else {
+                None
+            };
+            return Ok(GuardianTrunkReviewClaim::UseEphemeral { fork_snapshot });
+        };
+        drop(state);
+        drop(maintenance_guard);
+
+        Ok(GuardianTrunkReviewClaim::Acquired(trunk_guard))
     }
 
     #[expect(
@@ -416,62 +478,21 @@ impl GuardianReviewSessionManager {
             .await;
         }
 
-        let eager_compaction_guard = match run_before_review_deadline(
-            deadline,
-            params.external_cancel.as_ref(),
-            trunk.wait_for_eager_compaction(),
-        )
-        .await
-        {
-            Ok(guard) => guard,
+        let trunk_guard = match self.claim_trunk_for_review(&trunk, &params).await {
+            Ok(GuardianTrunkReviewClaim::Acquired(guard)) => guard,
+            Ok(GuardianTrunkReviewClaim::UseEphemeral { fork_snapshot }) => {
+                return Box::pin(self.run_ephemeral_review(
+                    params,
+                    next_reuse_key,
+                    deadline,
+                    fork_snapshot,
+                ))
+                .await;
+            }
             Err(outcome) => {
                 return (outcome, GuardianReviewAnalyticsResult::without_session());
             }
         };
-        if *eager_compaction_guard == GuardianEagerCompactionOutcome::DiscardSession {
-            let fork_snapshot = trunk.fork_snapshot().await;
-            let review_session = self.remove_trunk_if_current(&trunk).await;
-            drop(eager_compaction_guard);
-            if let Some(review_session) = review_session {
-                review_session.shutdown_in_background();
-            }
-            return Box::pin(self.run_ephemeral_review(
-                params,
-                next_reuse_key,
-                deadline,
-                fork_snapshot,
-            ))
-            .await;
-        }
-        // Hold the maintenance latch until review ownership is decided.
-        let state = self.state.lock().await;
-        let trunk_pointer_is_current = state
-            .trunk
-            .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, &trunk));
-        let trunk_guard = if trunk_pointer_is_current {
-            trunk.review_lock.try_acquire().ok()
-        } else {
-            None
-        };
-        let Some(trunk_guard) = trunk_guard else {
-            drop(state);
-            drop(eager_compaction_guard);
-            let fork_snapshot = if trunk_pointer_is_current {
-                trunk.fork_snapshot().await
-            } else {
-                None
-            };
-            return Box::pin(self.run_ephemeral_review(
-                params,
-                next_reuse_key,
-                deadline,
-                fork_snapshot,
-            ))
-            .await;
-        };
-        drop(state);
-        drop(eager_compaction_guard);
 
         let guardian_session_kind = if spawned_trunk {
             GuardianReviewSessionKind::TrunkNew
@@ -513,12 +534,14 @@ impl GuardianReviewSessionManager {
             codex.session.get_config().await.as_ref(),
             codex.session.user_instructions().await,
         );
+        let background_runtime = codex.session.services.runtime_handle.clone();
         self.state.lock().await.trunk = Some(Arc::new(GuardianReviewSession {
             reuse_key,
             codex,
             cancel_token: CancellationToken::new(),
             review_lock: Semaphore::new(/*permits*/ 1),
-            eager_compaction: GuardianEagerCompaction::default(),
+            maintenance_latch: GuardianMaintenanceLatch::default(),
+            background_runtime,
             state: Mutex::new(GuardianReviewState {
                 prior_review_count: 0,
                 last_reviewed_transcript_cursor: None,
@@ -533,6 +556,7 @@ impl GuardianReviewSessionManager {
             codex.session.get_config().await.as_ref(),
             codex.session.user_instructions().await,
         );
+        let background_runtime = codex.session.services.runtime_handle.clone();
         self.state
             .lock()
             .await
@@ -542,7 +566,8 @@ impl GuardianReviewSessionManager {
                 codex,
                 cancel_token: CancellationToken::new(),
                 review_lock: Semaphore::new(/*permits*/ 1),
-                eager_compaction: GuardianEagerCompaction::default(),
+                maintenance_latch: GuardianMaintenanceLatch::default(),
+                background_runtime,
                 state: Mutex::new(GuardianReviewState {
                     prior_review_count: 0,
                     last_reviewed_transcript_cursor: None,
@@ -697,7 +722,8 @@ async fn spawn_guardian_review_session(
         cancel_token,
         reuse_key,
         review_lock: Semaphore::new(/*permits*/ 1),
-        eager_compaction: GuardianEagerCompaction::default(),
+        maintenance_latch: GuardianMaintenanceLatch::default(),
+        background_runtime: params.parent_session.services.runtime_handle.clone(),
         state: Mutex::new(GuardianReviewState {
             prior_review_count,
             last_reviewed_transcript_cursor: initial_transcript_cursor,
@@ -1164,6 +1190,7 @@ mod tests {
             session.get_config().await.as_ref(),
             session.user_instructions().await,
         );
+        let background_runtime = session.services.runtime_handle.clone();
 
         (
             GuardianReviewSession {
@@ -1177,7 +1204,8 @@ mod tests {
                 cancel_token: CancellationToken::new(),
                 reuse_key,
                 review_lock: Semaphore::new(/*permits*/ 1),
-                eager_compaction: GuardianEagerCompaction::default(),
+                maintenance_latch: GuardianMaintenanceLatch::default(),
+                background_runtime,
                 state: Mutex::new(GuardianReviewState {
                     prior_review_count: 0,
                     last_reviewed_transcript_cursor: None,
@@ -1187,6 +1215,33 @@ mod tests {
             tx_event,
             rx_sub,
         )
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn guardian_background_runtime_outlives_temporary_review_runtime() {
+        let (review_session, _tx_event, _rx_sub) = test_review_session().await;
+        let background_runtime = review_session.background_runtime.clone();
+        let (completed_tx, completed_rx) = tokio::sync::oneshot::channel();
+
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build temporary runtime")
+                .block_on(async move {
+                    drop(background_runtime.spawn(async move {
+                        tokio::task::yield_now().await;
+                        let _ = completed_tx.send(());
+                    }));
+                });
+        })
+        .join()
+        .expect("temporary runtime thread should exit cleanly");
+
+        tokio::time::timeout(Duration::from_secs(1), completed_rx)
+            .await
+            .expect("background task should outlive the temporary runtime")
+            .expect("background task should report completion");
     }
 
     fn turn_complete_event(

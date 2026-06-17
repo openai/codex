@@ -3314,8 +3314,15 @@ mod tests {
     }
 
     #[test]
-    fn preserves_compaction_only_turn() {
+    fn preserves_guardian_compaction_inside_a_turn() {
         let items = vec![
+            RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    source: SessionSource::SubAgent(SubAgentSource::Other("guardian".to_string())),
+                    ..Default::default()
+                },
+                git: None,
+            }),
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-compact".into(),
                 trace_id: None,

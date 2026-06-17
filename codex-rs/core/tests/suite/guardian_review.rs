@@ -42,7 +42,7 @@ async fn guardian_compacts_between_reviews_before_the_next_request() -> Result<(
 
     const FIRST_REVIEW_TOTAL_TOKENS: i64 = 500_000;
     const AUTO_COMPACT_TOKEN_LIMIT: i64 = 200_000;
-    const COMPACT_RESPONSE_DELAY: Duration = Duration::from_secs(/*secs*/ 5);
+    const COMPACT_RESPONSE_DELAY: Duration = Duration::from_secs(/*secs*/ 1);
 
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
@@ -63,8 +63,8 @@ async fn guardian_compacts_between_reviews_before_the_next_request() -> Result<(
             config.model_auto_compact_token_limit_scope =
                 AutoCompactTokenLimitScope::BodyAfterPrefix;
             config.model_context_window = Some(400_000);
-            config.model_provider.request_max_retries = Some(u64::MAX);
-            config.model_provider.stream_max_retries = Some(u64::default());
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(0);
             config.model_provider.supports_websockets = false;
         })
         .build(&server)
