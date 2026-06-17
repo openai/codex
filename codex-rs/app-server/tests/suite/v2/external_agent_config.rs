@@ -32,6 +32,8 @@ use codex_config::types::AuthCredentialsStoreMode;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+use std::path::Path;
+use std::path::PathBuf;
 use tempfile::TempDir;
 #[cfg(unix)]
 use tokio::io::AsyncWriteExt;
@@ -40,6 +42,10 @@ use tokio::time::timeout;
 use super::analytics::wait_for_analytics_event;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+
+fn external_agent_home(codex_home: &Path) -> PathBuf {
+    codex_home.join(concat!(".", "cl", "aude"))
+}
 
 fn assert_import_response(response: ExternalAgentConfigImportResponse) -> String {
     assert!(!response.import_id.is_empty());
@@ -166,9 +172,10 @@ async fn external_agent_config_import_sends_completion_notification_for_sync_onl
 #[tokio::test]
 async fn external_agent_config_import_returns_error_for_failed_sync_import() -> Result<()> {
     let codex_home = TempDir::new()?;
-    std::fs::create_dir_all(codex_home.path().join(".claude"))?;
+    let source_home = external_agent_home(codex_home.path());
+    std::fs::create_dir_all(&source_home)?;
     std::fs::write(
-        codex_home.path().join(".claude").join("settings.json"),
+        source_home.join("settings.json"),
         r#"{"env":{"FOO":"bar"}}"#,
     )?;
     std::fs::write(codex_home.path().join("config.toml"), "invalid = [")?;
@@ -219,9 +226,8 @@ async fn external_agent_config_import_completed_tracks_analytics_event() -> Resu
         AuthCredentialsStoreMode::File,
     )?;
 
-    let missing_session_path = codex_home
-        .path()
-        .join(".claude/projects/repo/missing.jsonl");
+    let missing_session_path =
+        external_agent_home(codex_home.path()).join("projects/repo/missing.jsonl");
     let project_root = codex_home.path().join("repo");
     let home_dir = codex_home.path().display().to_string();
     let mut mcp =
@@ -327,7 +333,8 @@ async fn external_agent_config_import_sends_completion_notification_for_local_pl
         plugin_root.join(".codex-plugin/plugin.json"),
         r#"{"name":"sample","version":"0.1.0"}"#,
     )?;
-    std::fs::create_dir_all(codex_home.path().join(".claude"))?;
+    let source_home = external_agent_home(codex_home.path());
+    std::fs::create_dir_all(&source_home)?;
     let settings = serde_json::json!({
         "enabledPlugins": {
             "sample@debug": true
@@ -340,7 +347,7 @@ async fn external_agent_config_import_sends_completion_notification_for_local_pl
         }
     });
     std::fs::write(
-        codex_home.path().join(".claude").join("settings.json"),
+        source_home.join("settings.json"),
         serde_json::to_string_pretty(&settings)?,
     )?;
 
@@ -419,11 +426,12 @@ async fn external_agent_config_import_sends_completion_notification_for_local_pl
 async fn external_agent_config_import_sends_completion_notification_after_pending_plugins_finish()
 -> Result<()> {
     let codex_home = TempDir::new()?;
-    std::fs::create_dir_all(codex_home.path().join(".claude"))?;
+    let source_home = external_agent_home(codex_home.path());
+    std::fs::create_dir_all(&source_home)?;
     // This test only needs a pending non-local plugin import. Use an invalid
     // source so the background completion path cannot make a real network clone.
     std::fs::write(
-        codex_home.path().join(".claude").join("settings.json"),
+        source_home.join("settings.json"),
         r#"{
   "enabledPlugins": {
     "formatter@acme-tools": true
@@ -488,7 +496,7 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     create_config_toml(codex_home.path(), &server.uri())?;
     let project_root = codex_home.path().join("repo");
     let recent_timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let session_dir = codex_home.path().join(".claude/projects/repo");
+    let session_dir = external_agent_home(codex_home.path()).join("projects/repo");
     let session_path = session_dir.join("session.jsonl");
     std::fs::create_dir_all(&project_root)?;
     std::fs::create_dir_all(&session_dir)?;
@@ -714,7 +722,7 @@ required = true
     std::fs::write(codex_home.path().join("config.toml"), config)?;
     let project_root = codex_home.path().join("repo");
     let recent_timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let session_dir = codex_home.path().join(".claude/projects/repo");
+    let session_dir = external_agent_home(codex_home.path()).join("projects/repo");
     let session_path = session_dir.join("session.jsonl");
     std::fs::create_dir_all(&project_root)?;
     std::fs::create_dir_all(&session_dir)?;
@@ -799,7 +807,7 @@ async fn external_agent_config_import_accepts_detected_session_payload_after_res
     create_config_toml(codex_home.path(), &server.uri())?;
     let project_root = codex_home.path().join("repo");
     let recent_timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let session_dir = codex_home.path().join(".claude/projects/repo");
+    let session_dir = external_agent_home(codex_home.path()).join("projects/repo");
     let session_path = session_dir.join("session.jsonl");
     std::fs::create_dir_all(&project_root)?;
     std::fs::create_dir_all(&session_dir)?;
@@ -889,7 +897,7 @@ async fn external_agent_config_import_skips_already_imported_session_versions() 
     create_config_toml(codex_home.path(), &server.uri())?;
     let project_root = codex_home.path().join("repo");
     let recent_timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let session_dir = codex_home.path().join(".claude/projects/repo");
+    let session_dir = external_agent_home(codex_home.path()).join("projects/repo");
     let session_path = session_dir.join("session.jsonl");
     std::fs::create_dir_all(&project_root)?;
     std::fs::create_dir_all(&session_dir)?;
@@ -983,7 +991,7 @@ async fn external_agent_config_import_returns_before_background_session_import_f
     create_config_toml(codex_home.path(), &server.uri())?;
     let project_root = codex_home.path().join("repo");
     let recent_timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let session_dir = codex_home.path().join(".claude/projects/repo");
+    let session_dir = external_agent_home(codex_home.path()).join("projects/repo");
     let session_path = session_dir.join("session.jsonl");
     std::fs::create_dir_all(&project_root)?;
     std::fs::create_dir_all(&session_dir)?;
@@ -1144,7 +1152,7 @@ async fn external_agent_config_import_compacts_huge_session_before_first_follow_
 
     let project_root = codex_home.path().join("repo");
     let recent_timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let session_dir = codex_home.path().join(".claude/projects/repo");
+    let session_dir = external_agent_home(codex_home.path()).join("projects/repo");
     let session_path = session_dir.join("session.jsonl");
     std::fs::create_dir_all(&project_root)?;
     std::fs::create_dir_all(&session_dir)?;

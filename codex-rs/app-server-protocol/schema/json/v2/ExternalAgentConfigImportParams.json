@@ -186,7 +186,7 @@
       "type": "array"
     },
     "source": {
-      "description": "Source product that produced the migration items. Missing means Claude Code for compatibility with older clients.",
+      "description": "Source product that produced the migration items. Missing means unspecified.",
       "type": [
         "string",
         "null"

@@ -5,7 +5,6 @@ import type { ExternalAgentConfigMigrationItem } from "./ExternalAgentConfigMigr
 
 export type ExternalAgentConfigImportParams = { migrationItems: Array<ExternalAgentConfigMigrationItem>,
 /**
- * Source product that produced the migration items. Missing means Claude Code for
- * compatibility with older clients.
+ * Source product that produced the migration items. Missing means unspecified.
  */
 source?: string | null, };
