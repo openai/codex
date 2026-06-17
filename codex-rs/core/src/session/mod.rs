@@ -2966,6 +2966,30 @@ impl Session {
                 developer_sections.push(apps_instructions.render());
             }
         }
+        let context_contributors = self.services.extensions.context_contributors().to_vec();
+        for contributor in context_contributors {
+            for fragment in contributor
+                .contribute(ContextContributionContext {
+                    session_store: &self.services.session_extension_data,
+                    thread_store: &self.services.thread_extension_data,
+                    turn_store: turn_context.extension_data.as_ref(),
+                    model_context_window: turn_context.model_info.context_window,
+                })
+                .await
+            {
+                match fragment.slot() {
+                    PromptSlot::DeveloperPolicy | PromptSlot::DeveloperCapabilities => {
+                        developer_sections.push(fragment.text().to_string());
+                    }
+                    PromptSlot::ContextualUser => {
+                        contextual_user_sections.push(fragment.text().to_string());
+                    }
+                    PromptSlot::SeparateDeveloper => {
+                        separate_developer_sections.push(fragment.text().to_string());
+                    }
+                }
+            }
+        }
         let loaded_plugins = self
             .services
             .plugins_manager
@@ -2998,30 +3022,6 @@ impl Session {
             AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
         {
             developer_sections.push(plugin_instructions.render());
-        }
-        let context_contributors = self.services.extensions.context_contributors().to_vec();
-        for contributor in context_contributors {
-            for fragment in contributor
-                .contribute(ContextContributionContext {
-                    session_store: &self.services.session_extension_data,
-                    thread_store: &self.services.thread_extension_data,
-                    turn_store: turn_context.extension_data.as_ref(),
-                    model_context_window: turn_context.model_info.context_window,
-                })
-                .await
-            {
-                match fragment.slot() {
-                    PromptSlot::DeveloperPolicy | PromptSlot::DeveloperCapabilities => {
-                        developer_sections.push(fragment.text().to_string());
-                    }
-                    PromptSlot::ContextualUser => {
-                        contextual_user_sections.push(fragment.text().to_string());
-                    }
-                    PromptSlot::SeparateDeveloper => {
-                        separate_developer_sections.push(fragment.text().to_string());
-                    }
-                }
-            }
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             contextual_user_sections.push(user_instructions.to_string());
