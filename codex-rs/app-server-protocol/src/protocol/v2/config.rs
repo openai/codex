@@ -389,6 +389,20 @@ pub struct ConfigRequirements {
     pub enforce_residency: Option<ResidencyRequirement>,
     #[experimental("configRequirements/read.network")]
     pub network: Option<NetworkRequirements>,
+    pub sqlite_home: Option<AbsolutePathBuf>,
+    pub log_dir: Option<AbsolutePathBuf>,
+    pub model_catalog_json: Option<AbsolutePathBuf>,
+    pub check_for_update_on_startup: Option<bool>,
+    pub allow_login_shell: Option<bool>,
+    pub feedback: Option<FeedbackRequirements>,
+    pub windows_sandbox_private_desktop: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FeedbackRequirements {
+    pub enabled: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

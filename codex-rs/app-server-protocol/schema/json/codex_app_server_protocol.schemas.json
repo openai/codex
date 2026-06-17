@@ -8160,6 +8160,12 @@
               "null"
             ]
           },
+          "allowLoginShell": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "allowManagedHooksOnly": {
             "type": [
               "boolean",
@@ -8217,6 +8223,12 @@
               "null"
             ]
           },
+          "checkForUpdateOnStartup": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "computerUse": {
             "anyOf": [
               {
@@ -8249,6 +8261,52 @@
             },
             "type": [
               "object",
+              "null"
+            ]
+          },
+          "feedback": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/FeedbackRequirements"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "logDir": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "modelCatalogJson": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sqliteHome": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "windowsSandboxPrivateDesktop": {
+            "type": [
+              "boolean",
               "null"
             ]
           }
@@ -9248,6 +9306,17 @@
           "SESSIONS"
         ],
         "type": "string"
+      },
+      "FeedbackRequirements": {
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
       },
       "FeedbackUploadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
