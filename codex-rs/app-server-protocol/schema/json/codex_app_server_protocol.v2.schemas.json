@@ -898,6 +898,16 @@
             }
           ]
         },
+        "default_tools_approval_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "destructive_enabled": {
           "default": true,
           "type": "boolean"
@@ -11877,6 +11887,12 @@
     },
     "ResponseItemMetadata": {
       "properties": {
+        "source_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "turn_id": {
           "type": [
             "string",
@@ -14429,14 +14445,6 @@
           "description": "Usually the first user message in the thread, if available.",
           "type": "string"
         },
-        "recencyAt": {
-          "description": "Unix timestamp (in seconds) used for thread recency ordering.",
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "sessionId": {
           "description": "Session id shared by threads that belong to the same session tree.",
           "type": "string"
@@ -16696,8 +16704,7 @@
     "ThreadSortKey": {
       "enum": [
         "created_at",
-        "updated_at",
-        "recency_at"
+        "updated_at"
       ],
       "type": "string"
     },

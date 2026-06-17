@@ -475,6 +475,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         forced_login_method: config.forced_login_method,
         forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
         chatgpt_base_url: Some(config.chatgpt_base_url.clone()),
+        agent_identity_authapi_base_url: None,
     })
     .await
     {

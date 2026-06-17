@@ -1,6 +1,4 @@
 use super::*;
-use codex_core_skills::HostLoadedSkills;
-use codex_protocol::openai_models::ToolMode;
 use std::sync::atomic::AtomicBool;
 
 /// Spawn a review thread using the given prompt.
@@ -47,15 +45,14 @@ pub(super) async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
-    let tool_mode = model_info.tool_mode.unwrap_or_else(|| {
-        if per_turn_config.features.enabled(Feature::CodeModeOnly) {
-            ToolMode::CodeModeOnly
-        } else if per_turn_config.features.enabled(Feature::CodeMode) {
-            ToolMode::CodeMode
-        } else {
-            ToolMode::Direct
-        }
-    });
+    per_turn_config.permissions.shell_environment_policy = parent_turn_context
+        .config
+        .permissions
+        .shell_environment_policy
+        .clone();
+    per_turn_config.codex_linux_sandbox_exe =
+        parent_turn_context.config.codex_linux_sandbox_exe.clone();
+    per_turn_config.compact_prompt = parent_turn_context.config.compact_prompt.clone();
     if let Err(err) = per_turn_config.web_search_mode.set(review_web_search_mode) {
         let fallback_value = per_turn_config.web_search_mode.value();
         tracing::warn!(
@@ -102,9 +99,7 @@ pub(super) async fn spawn_review_thread(
     let extension_data = Arc::new(codex_extension_api::ExtensionData::new(
         review_turn_id.clone(),
     ));
-    extension_data.insert(HostLoadedSkills::new(
-        parent_turn_context.turn_skills.outcome.clone(),
-    ));
+    extension_data.insert(parent_turn_context.turn_skills.snapshot.clone());
 
     let review_turn_context = TurnContext {
         sub_id: review_turn_id.clone(),
@@ -113,26 +108,20 @@ pub(super) async fn spawn_review_thread(
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
         model_info: model_info.clone(),
-        comp_hash: model_info.comp_hash.clone(),
-        tool_mode,
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
         reasoning_effort,
         reasoning_summary,
         session_source,
         parent_thread_id: parent_turn_context.parent_thread_id,
-        thread_source: parent_turn_context.thread_source.clone(),
         environments: parent_turn_context.environments.clone(),
         available_models,
         unified_exec_shell_mode,
-        features: review_features,
-        ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         current_date: parent_turn_context.current_date.clone(),
         timezone: parent_turn_context.timezone.clone(),
         app_server_client_name: parent_turn_context.app_server_client_name.clone(),
         developer_instructions: None,
         user_instructions: None,
-        compact_prompt: parent_turn_context.compact_prompt.clone(),
         collaboration_mode: parent_turn_context.collaboration_mode.clone(),
         multi_agent_version: MultiAgentVersion::Disabled,
         personality: parent_turn_context.personality,
@@ -140,17 +129,13 @@ pub(super) async fn spawn_review_thread(
         permission_profile: parent_turn_context.permission_profile(),
         network: parent_turn_context.network.clone(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
-        shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         #[allow(deprecated)]
         cwd: parent_turn_context.cwd.clone(),
         final_output_json_schema: None,
-        codex_self_exe: parent_turn_context.codex_self_exe.clone(),
-        codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
-        truncation_policy: model_info.truncation_policy.into(),
         turn_metadata_state,
         extension_data,
-        turn_skills: TurnSkillsContext::new(parent_turn_context.turn_skills.outcome.clone()),
+        turn_skills: TurnSkillsContext::new(parent_turn_context.turn_skills.snapshot.clone()),
         turn_timing_state: Arc::new(TurnTimingState::default()),
         terminal_error: Arc::new(Mutex::new(None)),
         server_model_warning_emitted: AtomicBool::new(false),

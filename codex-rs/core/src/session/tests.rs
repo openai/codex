@@ -24,6 +24,7 @@ use codex_config::RequirementSource;
 use codex_config::Sourced;
 use codex_config::loader::project_trust_key;
 use codex_config::types::ToolSuggestDisabledTool;
+use codex_core_skills::HostSkillsSnapshot;
 use core_test_support::test_codex::local_selections;
 
 use codex_features::Feature;
@@ -1606,6 +1607,7 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
         phase: None,
         metadata: Some(ResponseItemMetadata {
             turn_id: Some("compact-turn".to_string()),
+            ..Default::default()
         }),
     };
     let replacement_history = vec![
@@ -3530,7 +3532,7 @@ async fn includes_timed_out_message() {
     };
     let (_, turn_context) = make_session_and_context().await;
 
-    let out = format_exec_output_str(&exec, turn_context.truncation_policy);
+    let out = format_exec_output_str(&exec, turn_context.model_info.truncation_policy.into());
 
     assert_eq!(
         out,
@@ -3568,10 +3570,6 @@ async fn turn_context_with_model_updates_model_fields() {
     assert_eq!(
         updated.config.model_reasoning_effort,
         Some(ReasoningEffortConfig::Medium)
-    );
-    assert_eq!(
-        updated.truncation_policy,
-        expected_model_info.truncation_policy.into()
     );
 }
 
@@ -4437,15 +4435,16 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
         .default_environment()
         .map(|environment| environment.get_filesystem())
         .unwrap_or_else(|| std::sync::Arc::clone(&codex_exec_server::LOCAL_FS));
-    let parent_outcome = session
+    let parent_snapshot = session
         .services
-        .skills_manager
-        .skills_for_cwd(
+        .skills_service
+        .snapshot_for_cwd(
             &crate::skills_load_input_from_config(&parent_config, Vec::new()),
             /*force_reload*/ true,
             Some(Arc::clone(&skill_fs)),
         )
         .await;
+    let parent_outcome = parent_snapshot.outcome();
     let parent_skill = parent_outcome
         .skills
         .iter()
@@ -4491,13 +4490,18 @@ enabled = false
         .await;
     let child_skill = child_turn
         .turn_skills
-        .outcome
+        .snapshot
+        .outcome()
         .skills
         .iter()
         .find(|skill| skill.name == "demo-skill")
         .expect("demo skill should be discovered");
     assert_eq!(
-        child_turn.turn_skills.outcome.is_skill_enabled(child_skill),
+        child_turn
+            .turn_skills
+            .snapshot
+            .outcome()
+            .is_skill_enabled(child_skill),
         false
     );
 }
@@ -4828,7 +4832,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(
+    let skills_service = Arc::new(SkillsService::new(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
@@ -4845,7 +4849,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         agent_status_tx,
         InitialHistory::New,
         SessionSource::Exec,
-        skills_manager,
+        skills_service,
         plugins_manager,
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
@@ -4964,7 +4968,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(
+    let skills_service = Arc::new(SkillsService::new(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
@@ -5003,7 +5007,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         guardian_rejections: Mutex::new(std::collections::HashMap::new()),
         guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
         runtime_handle: tokio::runtime::Handle::current(),
-        skills_manager,
+        skills_service,
         plugins_manager,
         mcp_manager,
         extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
@@ -5048,12 +5052,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let skills_input =
         crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
     let skill_fs = environment.get_filesystem();
-    let skills_outcome = Arc::new(
-        services
-            .skills_manager
-            .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
-            .await,
-    );
+    let skills_snapshot = services
+        .skills_service
+        .snapshot_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
+        .await;
     let turn_context = Session::make_turn_context(
         thread_id,
         SessionId::from(thread_id),
@@ -5072,7 +5074,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         resolved_turn_environments,
         session_configuration.cwd().clone(),
         "turn_id".to_string(),
-        skills_outcome,
+        skills_snapshot,
     );
 
     let session = Session {
@@ -5176,7 +5178,7 @@ async fn make_session_with_config_and_rx(
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(
+    let skills_service = Arc::new(SkillsService::new(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
@@ -5194,7 +5196,7 @@ async fn make_session_with_config_and_rx(
         agent_status_tx,
         InitialHistory::New,
         SessionSource::Exec,
-        skills_manager,
+        skills_service,
         plugins_manager,
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
@@ -5280,7 +5282,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(
+    let skills_service = Arc::new(SkillsService::new(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
@@ -5298,7 +5300,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         agent_status_tx,
         initial_history,
         session_source,
-        skills_manager,
+        skills_service,
         plugins_manager,
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
@@ -7009,7 +7011,7 @@ where
     );
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(
+    let skills_service = Arc::new(SkillsService::new(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
@@ -7048,7 +7050,7 @@ where
         guardian_rejections: Mutex::new(std::collections::HashMap::new()),
         guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
         runtime_handle: tokio::runtime::Handle::current(),
-        skills_manager,
+        skills_service,
         plugins_manager,
         mcp_manager,
         extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
@@ -7093,12 +7095,10 @@ where
     let skills_input =
         crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
     let skill_fs = environment.get_filesystem();
-    let skills_outcome = Arc::new(
-        services
-            .skills_manager
-            .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
-            .await,
-    );
+    let skills_snapshot = services
+        .skills_service
+        .snapshot_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
+        .await;
     let turn_context = Arc::new(Session::make_turn_context(
         thread_id,
         SessionId::from(thread_id),
@@ -7117,7 +7117,7 @@ where
         resolved_turn_environments,
         session_configuration.cwd().clone(),
         "turn_id".to_string(),
-        skills_outcome,
+        skills_snapshot,
     ));
 
     let session = Arc::new(Session {
@@ -7784,7 +7784,7 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
         },
     ];
     turn_context.model_info.context_window = Some(100);
-    turn_context.turn_skills = TurnSkillsContext::new(Arc::new(outcome));
+    turn_context.turn_skills = TurnSkillsContext::new(HostSkillsSnapshot::new(Arc::new(outcome)));
 
     let initial_context = session.build_initial_context(&turn_context).await;
     let developer_texts = developer_input_texts(&initial_context);
@@ -7935,7 +7935,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
         },
     ];
     turn_context.model_info.context_window = Some(100);
-    turn_context.turn_skills = TurnSkillsContext::new(Arc::new(outcome));
+    turn_context.turn_skills = TurnSkillsContext::new(HostSkillsSnapshot::new(Arc::new(outcome)));
 
     let _ = session.build_initial_context(&turn_context).await;
     let warning_event = timeout(Duration::from_secs(1), rx.recv())
@@ -8116,18 +8116,6 @@ fn file_system_policy_with_unreadable_glob(turn_context: &TurnContext) -> FileSy
         access: FileSystemAccessMode::Deny,
     });
     policy
-}
-
-#[tokio::test]
-async fn turn_context_item_uses_turn_context_comp_hash_snapshot() {
-    let (_session, mut turn_context) = make_session_and_context().await;
-    turn_context.comp_hash = Some("turn-context-hash".to_string());
-    turn_context.model_info.comp_hash = Some("model-info-hash".to_string());
-
-    assert_eq!(
-        turn_context.to_turn_context_item().comp_hash.as_deref(),
-        Some("turn-context-hash")
-    );
 }
 
 #[tokio::test]
@@ -9706,7 +9694,7 @@ async fn sample_rollout(
     }
     live_history.record_items(
         initial_context.iter(),
-        reconstruction_turn.truncation_policy,
+        reconstruction_turn.model_info.truncation_policy.into(),
     );
 
     let user1 = ResponseItem::Message {
@@ -9720,7 +9708,7 @@ async fn sample_rollout(
     };
     live_history.record_items(
         std::iter::once(&user1),
-        reconstruction_turn.truncation_policy,
+        reconstruction_turn.model_info.truncation_policy.into(),
     );
     rollout_items.push(RolloutItem::ResponseItem(user1.clone()));
 
@@ -9735,7 +9723,7 @@ async fn sample_rollout(
     };
     live_history.record_items(
         std::iter::once(&assistant1),
-        reconstruction_turn.truncation_policy,
+        reconstruction_turn.model_info.truncation_policy.into(),
     );
     rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
 
@@ -9763,7 +9751,7 @@ async fn sample_rollout(
     };
     live_history.record_items(
         std::iter::once(&user2),
-        reconstruction_turn.truncation_policy,
+        reconstruction_turn.model_info.truncation_policy.into(),
     );
     rollout_items.push(RolloutItem::ResponseItem(user2.clone()));
 
@@ -9778,7 +9766,7 @@ async fn sample_rollout(
     };
     live_history.record_items(
         std::iter::once(&assistant2),
-        reconstruction_turn.truncation_policy,
+        reconstruction_turn.model_info.truncation_policy.into(),
     );
     rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
 
@@ -9806,7 +9794,7 @@ async fn sample_rollout(
     };
     live_history.record_items(
         std::iter::once(&user3),
-        reconstruction_turn.truncation_policy,
+        reconstruction_turn.model_info.truncation_policy.into(),
     );
     rollout_items.push(RolloutItem::ResponseItem(user3));
 
@@ -9821,7 +9809,7 @@ async fn sample_rollout(
     };
     live_history.record_items(
         std::iter::once(&assistant3),
-        reconstruction_turn.truncation_policy,
+        reconstruction_turn.model_info.truncation_policy.into(),
     );
     rollout_items.push(RolloutItem::ResponseItem(assistant3));
 

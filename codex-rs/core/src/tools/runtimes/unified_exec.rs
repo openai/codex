@@ -83,6 +83,7 @@ pub struct UnifiedExecRequest {
 /// unified-exec launches.
 #[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct UnifiedExecApprovalKey {
+    pub environment_id: String,
     pub command: Vec<String>,
     pub cwd: AbsolutePathBuf,
     pub tty: bool,
@@ -135,6 +136,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
 
     fn approval_keys(&self, req: &UnifiedExecRequest) -> Vec<Self::ApprovalKey> {
         vec![UnifiedExecApprovalKey {
+            environment_id: req.turn_environment.environment_id.clone(),
             command: canonicalize_command_for_approval(&req.command),
             cwd: req.cwd.clone(),
             tty: req.tty,
@@ -154,6 +156,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let call_id = ctx.call_id.to_string();
         let command = req.command.clone();
         let cwd = req.cwd.clone();
+        let environment_id = Some(req.turn_environment.environment_id.clone());
         let retry_reason = ctx.retry_reason.clone();
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
         let guardian_review_id = ctx.guardian_review_id.clone();
@@ -183,6 +186,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                         turn,
                         call_id,
                         /*approval_id*/ None,
+                        environment_id,
                         command,
                         cwd.clone(),
                         reason,
@@ -461,6 +465,25 @@ mod tests {
             }
             other => panic!("expected timeout-or-cancellation expiration, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn approval_key_includes_environment_id() {
+        let manager = UnifiedExecProcessManager::default();
+        let runtime = UnifiedExecRuntime::new(&manager, UnifiedExecShellMode::Direct);
+        let mut request = test_request(
+            SandboxPermissions::UseDefault,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            },
+        );
+        request.turn_environment.environment_id = "remote".to_string();
+        let original_key = runtime.approval_keys(&request);
+        request.turn_environment.environment_id = "other".to_string();
+        let other_key = runtime.approval_keys(&request);
+
+        assert_ne!(original_key, other_key);
     }
 
     #[tokio::test]

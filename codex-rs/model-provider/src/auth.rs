@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use codex_agent_identity::AgentIdentityKey;
-use codex_agent_identity::AgentTaskAuthorizationTarget;
 use codex_agent_identity::authorization_header_for_agent_task;
 use codex_api::AuthProvider;
 use codex_api::SharedAuthProvider;
@@ -30,10 +29,7 @@ impl AuthProvider for AgentIdentityAuthProvider {
                 agent_runtime_id: &record.agent_runtime_id,
                 private_key_pkcs8_base64: &record.agent_private_key,
             },
-            AgentTaskAuthorizationTarget {
-                agent_runtime_id: &record.agent_runtime_id,
-                task_id: self.auth.process_task_id(),
-            },
+            self.auth.run_task_id(),
         )
         .map_err(std::io::Error::other);
 

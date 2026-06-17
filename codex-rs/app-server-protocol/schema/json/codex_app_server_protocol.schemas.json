@@ -2386,6 +2386,14 @@
           ],
           "description": "The command's working directory."
         },
+        "environmentId": {
+          "default": null,
+          "description": "Environment in which the command will run.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "itemId": {
           "type": "string"
         },
@@ -6690,6 +6698,16 @@
             "anyOf": [
               {
                 "$ref": "#/definitions/v2/ApprovalsReviewer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "default_tools_approval_mode": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppToolApproval"
               },
               {
                 "type": "null"
@@ -15424,6 +15442,12 @@
       },
       "ResponseItemMetadata": {
         "properties": {
+          "source_call_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "turn_id": {
             "type": [
               "string",
@@ -16620,14 +16644,6 @@
           "preview": {
             "description": "Usually the first user message in the thread, if available.",
             "type": "string"
-          },
-          "recencyAt": {
-            "description": "Unix timestamp (in seconds) used for thread recency ordering.",
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
           },
           "sessionId": {
             "description": "Session id shared by threads that belong to the same session tree.",
@@ -18888,8 +18904,7 @@
       "ThreadSortKey": {
         "enum": [
           "created_at",
-          "updated_at",
-          "recency_at"
+          "updated_at"
         ],
         "type": "string"
       },

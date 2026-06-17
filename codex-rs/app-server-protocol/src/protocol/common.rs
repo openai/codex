@@ -2501,7 +2501,6 @@ mod tests {
                     model_provider: "openai".to_string(),
                     created_at: 1,
                     updated_at: 2,
-                    recency_at: Some(3),
                     status: v2::ThreadStatus::Idle,
                     path: None,
                     cwd: cwd.clone(),
@@ -2545,7 +2544,6 @@ mod tests {
                         "modelProvider": "openai",
                         "createdAt": 1,
                         "updatedAt": 2,
-                        "recencyAt": 3,
                         "status": {
                             "type": "idle"
                         },
@@ -3540,6 +3538,7 @@ mod tests {
             item_id: "call_123".to_string(),
             started_at_ms: 0,
             approval_id: None,
+            environment_id: None,
             reason: None,
             network_approval_context: None,
             command: Some("cat file".to_string()),

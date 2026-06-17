@@ -143,7 +143,7 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
         call_id: invocation.call_id.clone(),
         tool_name: invocation.tool_name.clone(),
         model: invocation.turn.model_info.slug.clone(),
-        truncation_policy: invocation.turn.truncation_policy,
+        truncation_policy: invocation.turn.model_info.truncation_policy.into(),
         conversation_history,
         turn_item_emitter: Arc::new(CoreTurnItemEmitter {
             session: Arc::downgrade(&invocation.session),
@@ -315,7 +315,7 @@ mod tests {
         let weak_turn = Arc::downgrade(&turn);
         let turn_id = turn.sub_id.clone();
         let model = turn.model_info.slug.clone();
-        let truncation_policy = turn.truncation_policy;
+        let truncation_policy = turn.model_info.truncation_policy.into();
         let expected_sandbox_cwds = turn
             .environments
             .turn_environments

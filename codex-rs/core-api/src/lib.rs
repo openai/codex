@@ -45,7 +45,7 @@ pub use codex_core::config::ThreadStoreConfig;
 pub use codex_core::config::find_codex_home;
 pub use codex_core::init_state_db;
 pub use codex_core::resolve_installation_id;
-pub use codex_core::skills::SkillsManager;
+pub use codex_core::skills::SkillsService;
 pub use codex_core::thread_store_from_config;
 pub use codex_exec_server::EnvironmentManager;
 pub use codex_exec_server::EnvironmentRegistryHarnessKeyValidationRequest;
