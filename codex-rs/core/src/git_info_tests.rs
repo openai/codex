@@ -2,6 +2,7 @@ use codex_exec_server::LOCAL_FS;
 use codex_git_utils::GitInfo;
 use codex_git_utils::GitSha;
 use codex_git_utils::collect_git_info;
+use codex_git_utils::default_branch_name;
 use codex_git_utils::get_git_repo_root_with_fs;
 use codex_git_utils::get_has_changes;
 use codex_git_utils::git_diff_to_remote;
@@ -184,6 +185,76 @@ async fn create_test_git_repo_with_remote(temp_dir: &TempDir) -> (PathBuf, Strin
         .expect("Failed to push initial commit");
 
     (repo_path, branch)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_default_branch_discovery_does_not_invoke_remote_transport() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    let helper_path = temp_dir.path().join("ssh-helper.sh");
+    let marker_path = temp_dir.path().join("transport-ran");
+    fs::write(
+        &helper_path,
+        format!(
+            "#!/bin/sh\nprintf ran > \"{}\"\nexit 1\n",
+            marker_path.to_string_lossy()
+        ),
+    )
+    .expect("write transport helper");
+    let mut permissions = fs::metadata(&helper_path)
+        .expect("read helper metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&helper_path, permissions).expect("mark helper executable");
+
+    let add_remote = Command::new("git")
+        .args(["remote", "add", "origin", "ssh://example.invalid/repo"])
+        .current_dir(&repo_path)
+        .output()
+        .await
+        .expect("add remote");
+    assert!(
+        add_remote.status.success(),
+        "add remote: {}",
+        String::from_utf8_lossy(&add_remote.stderr)
+    );
+    let configure_helper = Command::new("git")
+        .args([
+            "config",
+            "core.sshCommand",
+            helper_path.to_string_lossy().as_ref(),
+        ])
+        .current_dir(&repo_path)
+        .output()
+        .await
+        .expect("configure transport helper");
+    assert!(
+        configure_helper.status.success(),
+        "configure transport helper: {}",
+        String::from_utf8_lossy(&configure_helper.stderr)
+    );
+    let branch_output = Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(&repo_path)
+        .output()
+        .await
+        .expect("read branch");
+    assert!(
+        branch_output.status.success(),
+        "read branch: {}",
+        String::from_utf8_lossy(&branch_output.stderr)
+    );
+    let branch = String::from_utf8(branch_output.stdout)
+        .expect("branch utf8")
+        .trim()
+        .to_string();
+
+    assert_eq!(default_branch_name(&repo_path).await, Some(branch));
+    assert!(
+        !marker_path.exists(),
+        "default branch discovery must stay on local refs"
+    );
 }
 
 #[tokio::test]

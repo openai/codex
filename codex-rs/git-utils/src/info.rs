@@ -474,8 +474,7 @@ async fn get_git_remotes(cwd: &Path) -> Option<Vec<String>> {
 ///
 /// Preference order:
 /// 1) The symbolic ref at `refs/remotes/<remote>/HEAD` for the first remote (origin prioritized)
-/// 2) `git remote show <remote>` parsed for "HEAD branch: <name>"
-/// 3) Local fallback to existing `main` or `master` if present
+/// 2) Local fallback to existing `main` or `master` if present
 async fn get_default_branch(cwd: &Path) -> Option<String> {
     // Prefer the first remote (with origin prioritized)
     let remotes = get_git_remotes(cwd).await.unwrap_or_default();
@@ -496,23 +495,6 @@ async fn get_default_branch(cwd: &Path) -> Option<String> {
             let trimmed = sym.trim();
             if let Some((_, name)) = trimmed.rsplit_once('/') {
                 return Some(name.to_string());
-            }
-        }
-
-        // Fall back to parsing `git remote show <remote>` output
-        if let Some(show_output) =
-            run_git_command_with_timeout(&["remote", "show", &remote], cwd).await
-            && show_output.status.success()
-            && let Ok(text) = String::from_utf8(show_output.stdout)
-        {
-            for line in text.lines() {
-                let line = line.trim();
-                if let Some(rest) = line.strip_prefix("HEAD branch:") {
-                    let name = rest.trim();
-                    if !name.is_empty() {
-                        return Some(name.to_string());
-                    }
-                }
             }
         }
     }
