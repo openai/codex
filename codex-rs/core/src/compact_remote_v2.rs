@@ -118,7 +118,7 @@ async fn run_remote_compact_task_inner(
         ..Default::default()
     };
     let attempt = CompactionAnalyticsAttempt::begin(
-        sess.as_ref(),
+        sess,
         turn_context.as_ref(),
         trigger,
         reason,
@@ -224,12 +224,7 @@ async fn run_remote_compact_task_inner_impl(
 
     let trace_input_history = history.raw_items().to_vec();
     let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
-    let tool_router = built_tools(
-        sess.as_ref(),
-        turn_context.as_ref(),
-        &CancellationToken::new(),
-    )
-    .await?;
+    let tool_router = built_tools(sess, turn_context.as_ref(), &CancellationToken::new()).await?;
     let mut input = prompt_input.clone();
     input.push(ResponseItem::CompactionTrigger { metadata: None });
     let prompt = Prompt {

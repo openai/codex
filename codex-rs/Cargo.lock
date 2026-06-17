@@ -2641,6 +2641,7 @@ dependencies = [
  "codex-network-proxy",
  "codex-otel",
  "codex-plugin",
+ "codex-plugin-installs-extension",
  "codex-prompts",
  "codex-protocol",
  "codex-response-debug-context",
