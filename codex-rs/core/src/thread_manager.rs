@@ -36,6 +36,7 @@ use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::openai_models::ModelPreset;
@@ -184,6 +185,7 @@ pub struct StartThreadOptions {
     pub thread_source: Option<ThreadSource>,
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     pub metrics_service_name: Option<String>,
+    pub multi_agent_mode: Option<MultiAgentMode>,
     pub parent_trace: Option<W3cTraceContext>,
     pub environments: Vec<TurnEnvironmentSelection>,
     pub thread_extension_init: ExtensionDataInit,
@@ -607,6 +609,7 @@ impl ThreadManager {
             thread_source: None,
             dynamic_tools,
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments,
             thread_extension_init: ExtensionDataInit::default(),
@@ -646,6 +649,7 @@ impl ThreadManager {
             thread_source,
             options.dynamic_tools,
             options.metrics_service_name,
+            options.multi_agent_mode,
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             options.parent_trace,
@@ -741,6 +745,7 @@ impl ThreadManager {
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
+            /*initial_multi_agent_mode*/ None,
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             parent_trace,
@@ -810,6 +815,7 @@ impl ThreadManager {
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
+            /*initial_multi_agent_mode*/ None,
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             /*parent_trace*/ None,
@@ -1132,16 +1138,12 @@ impl ThreadManagerState {
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
     ) -> Option<MultiAgentVersion> {
-        let inherited_thread_id = match session_source {
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id, ..
-            })) => Some(*parent_thread_id),
-            _ => match initial_history {
-                InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
-                InitialHistory::Forked(_) => forked_from_thread_id.or(parent_thread_id),
-                InitialHistory::New | InitialHistory::Cleared => parent_thread_id,
-            },
-        };
+        let inherited_thread_id = Self::inherited_thread_id_for_spawn(
+            initial_history,
+            session_source,
+            parent_thread_id,
+            forked_from_thread_id,
+        );
         let inherited_multi_agent_version = match inherited_thread_id {
             Some(thread_id) => self
                 .get_thread(thread_id)
@@ -1151,6 +1153,24 @@ impl ThreadManagerState {
             None => None,
         };
         resolve_multi_agent_version(initial_history, inherited_multi_agent_version)
+    }
+
+    fn inherited_thread_id_for_spawn(
+        initial_history: &InitialHistory,
+        session_source: Option<&SessionSource>,
+        parent_thread_id: Option<ThreadId>,
+        forked_from_thread_id: Option<ThreadId>,
+    ) -> Option<ThreadId> {
+        match session_source {
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id, ..
+            })) => Some(*parent_thread_id),
+            _ => match initial_history {
+                InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
+                InitialHistory::Forked(_) => forked_from_thread_id.or(parent_thread_id),
+                InitialHistory::New | InitialHistory::Cleared => parent_thread_id,
+            },
+        }
     }
 
     /// Resolves the provider snapshot for a newly spawned runtime.
@@ -1252,6 +1272,7 @@ impl ThreadManagerState {
             thread_source,
             Vec::new(),
             metrics_service_name,
+            /*initial_multi_agent_mode*/ None,
             inherited_environments,
             inherited_exec_policy,
             /*parent_trace*/ None,
@@ -1290,6 +1311,7 @@ impl ThreadManagerState {
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
+            /*initial_multi_agent_mode*/ None,
             inherited_environments,
             inherited_exec_policy,
             /*parent_trace*/ None,
@@ -1329,6 +1351,7 @@ impl ThreadManagerState {
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
+            /*initial_multi_agent_mode*/ None,
             inherited_environments,
             inherited_exec_policy,
             /*parent_trace*/ None,
@@ -1370,6 +1393,7 @@ impl ThreadManagerState {
             thread_source,
             dynamic_tools,
             metrics_service_name,
+            /*initial_multi_agent_mode*/ None,
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             parent_trace,
@@ -1394,6 +1418,7 @@ impl ThreadManagerState {
         thread_source: Option<ThreadSource>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         metrics_service_name: Option<String>,
+        initial_multi_agent_mode: Option<MultiAgentMode>,
         inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
@@ -1439,6 +1464,19 @@ impl ThreadManagerState {
                 forked_from_thread_id,
             )
             .await;
+        let inherited_multi_agent_mode = match Self::inherited_thread_id_for_spawn(
+            &initial_history,
+            Some(&session_source),
+            parent_thread_id,
+            forked_from_thread_id,
+        ) {
+            Some(thread_id) => match self.get_thread(thread_id).await {
+                Ok(thread) => thread.config_snapshot().await.multi_agent_mode,
+                Err(_) => None,
+            },
+            None => None,
+        };
+        let initial_multi_agent_mode = initial_multi_agent_mode.or(inherited_multi_agent_mode);
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Box::pin(Codex::spawn(CodexSpawnArgs {
@@ -1473,6 +1511,7 @@ impl ThreadManagerState {
             attestation_provider: self.attestation_provider.clone(),
             external_time_provider: self.external_time_provider.clone(),
             inherited_multi_agent_version: multi_agent_version,
+            initial_multi_agent_mode,
         }))
         .await?;
         let new_thread = self

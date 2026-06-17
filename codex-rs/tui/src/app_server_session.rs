@@ -2381,6 +2381,7 @@ mod tests {
                 .into(),
             active_permission_profile: None,
             reasoning_effort: None,
+            multi_agent_mode: Default::default(),
             initial_turns_page: None,
         };
 

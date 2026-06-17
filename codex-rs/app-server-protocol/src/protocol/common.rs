@@ -2583,6 +2583,7 @@ mod tests {
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
                 active_permission_profile: None,
                 reasoning_effort: None,
+                multi_agent_mode: None,
             },
         };
 
@@ -2630,7 +2631,8 @@ mod tests {
                         "type": "dangerFullAccess"
                     },
                     "activePermissionProfile": null,
-                    "reasoningEffort": null
+                    "reasoningEffort": null,
+                    "multiAgentMode": null
                 }
             }),
             serde_json::to_value(&response)?,
@@ -3545,6 +3547,7 @@ mod tests {
                             developer_instructions: None,
                         },
                     },
+                    multi_agent_mode: Default::default(),
                     personality: None,
                 },
             });
