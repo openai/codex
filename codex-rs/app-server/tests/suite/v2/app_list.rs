@@ -177,7 +177,7 @@ async fn list_apps_local_provider_does_not_resolve_workload_identity() -> Result
             "access_token": access_token.clone(),
             "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
             "token_type": "Bearer",
-            "expires_in": 3600,
+            "expires_in": 2,
             "user_id": "user_test",
             "chatgpt_account_id": "workspace_test",
             "chatgpt_plan_type": "enterprise",
@@ -205,6 +205,7 @@ async fn list_apps_local_provider_does_not_resolve_workload_identity() -> Result
         TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     std::fs::remove_file(&token_path)?;
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     let AppsListResponse { data, next_cursor } = request_apps_list(&mut mcp).await?;
     assert!(data.is_empty());

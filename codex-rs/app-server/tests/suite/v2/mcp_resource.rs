@@ -7,9 +7,12 @@ use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
 use app_test_support::configure_expiring_workload_identity;
+use app_test_support::configure_expiring_workload_identity_without_cloud_config_mock;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use axum::Json;
 use axum::Router;
+use axum::routing::get;
 use codex_app_server::in_process;
 use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server_protocol::ClientInfo;
@@ -492,6 +495,67 @@ apps = true
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_apps_resource_read_with_local_provider_does_not_resolve_wif() -> Result<()> {
+    let (apps_server_url, _apps_server_calls, apps_server_handle) =
+        start_resource_apps_mcp_server().await?;
+
+    let codex_home = TempDir::new()?;
+    let auth_server = MockServer::start().await;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"
+model_provider = "local"
+chatgpt_base_url = "{apps_server_url}"
+mcp_oauth_credentials_store = "file"
+
+[model_providers.local]
+name = "Local test provider"
+base_url = "http://127.0.0.1:9/v1"
+wire_api = "responses"
+requires_openai_auth = false
+supports_websockets = false
+
+[features]
+apps = true
+"#
+        ),
+    )?;
+    let workload_identity = configure_expiring_workload_identity_without_cloud_config_mock(
+        codex_home.path(),
+        &auth_server,
+    )
+    .await?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    workload_identity.remove_and_wait_for_expiry().await?;
+
+    let read_request_id = mcp
+        .send_mcp_resource_read_request(McpResourceReadParams {
+            thread_id: None,
+            server: "codex_apps".to_string(),
+            uri: TEST_RESOURCE_URI.to_string(),
+        })
+        .await?;
+    let read_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_request_id)),
+    )
+    .await??;
+
+    assert_eq!(
+        to_response::<McpResourceReadResponse>(read_response)?,
+        expected_resource_read_response()
+    );
+    auth_server.verify().await;
+
+    apps_server_handle.abort();
+    let _ = apps_server_handle.await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_resource_read_for_configured_server_survives_unavailable_wif() -> Result<()> {
     let (mcp_server_url, _mcp_server_calls, mcp_server_handle) =
         start_resource_apps_mcp_server().await?;
@@ -668,7 +732,12 @@ async fn start_resource_apps_mcp_server()
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
     );
-    let router = Router::new().nest_service("/api/codex/ps/mcp", mcp_service);
+    let router = Router::new()
+        .route(
+            "/api/codex/config/bundle",
+            get(|| async { Json(json!({})) }),
+        )
+        .nest_service("/api/codex/ps/mcp", mcp_service);
     let apps_server_handle = tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
     });

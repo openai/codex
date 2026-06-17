@@ -1,7 +1,11 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::unwrap_used)]
 
+use std::sync::Arc;
+
 use anyhow::Result;
+use base64::Engine;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::ToolSuggestDiscoverableType;
@@ -20,6 +24,8 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
+use codex_workload_identity::CredentialSourceConfig;
+use codex_workload_identity::WorkloadIdentityConfig;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -37,6 +43,7 @@ use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use serde_json::Value;
 use serde_json::json;
+use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
@@ -274,7 +281,7 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn endpoint_recommendation_adds_install_identity_only_to_elicitation_metadata() -> Result<()>
+async fn local_provider_recommends_and_installs_remote_plugin_without_resolving_wif() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
 
@@ -324,7 +331,56 @@ async fn endpoint_recommendation_adds_install_identity_only_to_elicitation_metad
         ],
     )
     .await;
-    let test = build_test(&server, &apps_server).await?;
+    let home = Arc::new(TempDir::new()?);
+    let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&json!({"alg": "none", "typ": "JWT"}))?);
+    let payload =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({
+            "email": "user@example.com",
+            "https://api.openai.com/auth": {
+                "chatgpt_plan_type": "enterprise",
+                "chatgpt_user_id": "user_id",
+                "chatgpt_account_id": "account_id"
+            }
+        }))?);
+    let id_token = format!("{header}.{payload}.c2ln");
+    std::fs::write(
+        home.path().join("auth.json"),
+        serde_json::to_vec_pretty(&json!({
+            "auth_mode": "chatgpt",
+            "OPENAI_API_KEY": null,
+            "tokens": {
+                "id_token": id_token,
+                "access_token": "chatgpt-token",
+                "refresh_token": "refresh-token",
+                "account_id": "account_id"
+            },
+            "last_refresh": chrono::Utc::now()
+        }))?,
+    )?;
+    let missing_token_path = home.path().join("missing-workload-token");
+    let token_url = format!("{}/oauth/token", server.uri());
+    let mut builder = test_codex()
+        .with_home(home)
+        .with_auth_manager_from_config()
+        .with_config({
+            let apps_base_url = apps_server.chatgpt_base_url.clone();
+            move |config| {
+                configure_apps_without_search_tool(config, apps_base_url.as_str());
+                config.cli_auth_credentials_store_mode = AuthCredentialsStoreMode::File;
+                config.model_provider.requires_openai_auth = false;
+                config.workload_identity = Some(WorkloadIdentityConfig {
+                    identity_provider_id: "idp_test".to_string(),
+                    identity_provider_mapping_id: "idpm_test".to_string(),
+                    audience: "api://codex-test".to_string(),
+                    token_url,
+                    credential_source: CredentialSourceConfig::File {
+                        path: missing_token_path,
+                    },
+                });
+            }
+        });
+    let test = builder.build(&server).await?;
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
 
@@ -372,7 +428,7 @@ async fn endpoint_recommendation_adds_install_identity_only_to_elicitation_metad
         .submit(Op::ResolveElicitation {
             server_name: elicitation.server_name,
             request_id: elicitation.id,
-            decision: ElicitationAction::Decline,
+            decision: ElicitationAction::Accept,
             content: None,
             meta: None,
         })
@@ -384,6 +440,15 @@ async fn endpoint_recommendation_adds_install_identity_only_to_elicitation_metad
 
     let requests = mock.requests();
     assert_eq!(requests.len(), 2);
+    let contextual_user_message = requests[0].message_input_texts("user").join("\n");
+    assert!(contextual_user_message.contains("<recommended_plugins>"));
+    assert!(contextual_user_message.contains("github@openai-curated-remote"));
+    let output = requests[1]
+        .function_call_output_text(call_id)
+        .expect("request tool output");
+    let output: Value = serde_json::from_str(&output)?;
+    assert_eq!(output["user_confirmed"], true);
+    assert_eq!(output["completed"], true);
     for request in requests {
         let body = request.body_json().to_string();
         assert!(!body.contains(REMOTE_PLUGIN_ID));

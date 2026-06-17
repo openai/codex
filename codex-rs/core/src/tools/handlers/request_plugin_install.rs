@@ -192,12 +192,20 @@ impl RequestPluginInstallHandler {
             .is_some_and(|response| response.action == ElicitationAction::Accept);
 
         let completed = if user_confirmed {
-            let auth = session
-                .services
-                .auth_manager
-                .auth()
-                .await
-                .map_err(model_safe_plugin_install_auth_error)?;
+            let auth = if plugin_install_verification_requires_apps_auth(&tool) {
+                if turn.config.model_provider.requires_openai_auth {
+                    session
+                        .services
+                        .auth_manager
+                        .auth()
+                        .await
+                        .map_err(model_safe_plugin_install_auth_error)?
+                } else {
+                    session.services.auth_manager.auth_for_optional_use().await
+                }
+            } else {
+                session.services.auth_manager.auth_cached()
+            };
             verify_request_plugin_install_completed(&session, &turn, &tool, auth.as_ref()).await
         } else {
             false
@@ -360,6 +368,15 @@ fn is_remote_plugin_install_suggestion(plugin_id: &str) -> bool {
     plugin_id
         .rsplit_once('@')
         .is_some_and(|(_, marketplace_name)| marketplace_name == REMOTE_GLOBAL_MARKETPLACE_NAME)
+}
+
+fn plugin_install_verification_requires_apps_auth(tool: &DiscoverableTool) -> bool {
+    match tool {
+        DiscoverableTool::Connector(_) => true,
+        DiscoverableTool::Plugin(plugin) => {
+            !is_remote_plugin_install_suggestion(&plugin.id) && !plugin.app_connector_ids.is_empty()
+        }
+    }
 }
 
 async fn refresh_missing_requested_connectors(

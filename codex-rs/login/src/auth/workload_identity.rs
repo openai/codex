@@ -15,7 +15,6 @@ use super::ExternalAuthTokens;
 
 pub(super) struct WorkloadIdentityExternalAuth {
     client: Result<ConfiguredWorkloadIdentityClient, String>,
-    process_isolation_error: Option<String>,
 }
 
 struct SharedWorkloadIdentityExternalAuth {
@@ -46,13 +45,14 @@ pub(super) fn shared_workload_identity_external_auth(
         return auth;
     }
 
-    let auth = Arc::new(WorkloadIdentityExternalAuth::new(
-        no_redirect_http
-            .map(|http| build_workload_identity_client(config.clone(), client_id.clone(), http))
-            .map_err(|error| {
+    let client = initialize_workload_identity_process_isolation()
+        .and_then(|()| {
+            no_redirect_http.map_err(|error| {
                 format!("workload identity HTTP client initialization failed: {error}")
-            }),
-    ));
+            })
+        })
+        .map(|http| build_workload_identity_client(config.clone(), client_id.clone(), http));
+    let auth = Arc::new(WorkloadIdentityExternalAuth::new(client));
     shared_auths.push(SharedWorkloadIdentityExternalAuth {
         config,
         client_id,
@@ -61,26 +61,25 @@ pub(super) fn shared_workload_identity_external_auth(
     auth
 }
 
+#[cfg(target_os = "windows")]
+fn initialize_workload_identity_process_isolation() -> Result<(), String> {
+    // Core config forces WIF sessions onto the Windows restricted-token sandbox, which keeps
+    // model-controlled child processes from opening the parent process.
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn initialize_workload_identity_process_isolation() -> Result<(), String> {
+    codex_process_hardening::disable_process_inspection()
+        .map_err(|error| format!("workload identity process isolation failed: {error}"))
+}
+
 impl WorkloadIdentityExternalAuth {
     pub(super) fn new(client: Result<ConfiguredWorkloadIdentityClient, String>) -> Self {
-        #[cfg(target_os = "windows")]
-        // Core config forces WIF sessions onto the Windows restricted-token sandbox, which keeps
-        // model-controlled child processes from opening the parent process.
-        let process_isolation_error = None;
-        #[cfg(not(target_os = "windows"))]
-        let process_isolation_error = codex_process_hardening::disable_process_inspection()
-            .err()
-            .map(|error| format!("workload identity process isolation failed: {error}"));
-        Self {
-            client,
-            process_isolation_error,
-        }
+        Self { client }
     }
 
     async fn tokens(&self, force_refresh: bool) -> std::io::Result<ExternalAuthTokens> {
-        if let Some(error) = self.process_isolation_error.as_ref() {
-            return Err(std::io::Error::other(error.clone()));
-        }
         let client = self
             .client
             .as_ref()

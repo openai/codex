@@ -69,6 +69,22 @@ fn remote_plugin_install_suggestions_skip_core_installed_verification() {
 }
 
 #[test]
+fn plugin_install_verification_only_requires_auth_for_apps_refresh() {
+    assert!(plugin_install_verification_requires_apps_auth(
+        &connector_tool("connector_calendar", "Google Calendar")
+    ));
+    assert!(!plugin_install_verification_requires_apps_auth(
+        &plugin_tool("slack@openai-curated", &[])
+    ));
+    assert!(plugin_install_verification_requires_apps_auth(
+        &plugin_tool("slack@openai-curated", &["connector_slack"])
+    ));
+    assert!(!plugin_install_verification_requires_apps_auth(
+        &plugin_tool("slack@openai-curated-remote", &["connector_slack"])
+    ));
+}
+
+#[test]
 fn plugin_install_auth_error_redacts_credential_details() {
     let error = model_safe_plugin_install_auth_error(std::io::Error::other(
         "failed to read /run/secrets/codex-wif/subject-token",
@@ -252,5 +268,20 @@ fn connector_tool(id: &str, name: &str) -> DiscoverableTool {
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
+    }))
+}
+
+fn plugin_tool(id: &str, app_connector_ids: &[&str]) -> DiscoverableTool {
+    DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
+        id: id.to_string(),
+        remote_plugin_id: None,
+        name: id.to_string(),
+        description: None,
+        has_skills: false,
+        mcp_server_names: Vec::new(),
+        app_connector_ids: app_connector_ids
+            .iter()
+            .map(|connector_id| (*connector_id).to_string())
+            .collect(),
     }))
 }
