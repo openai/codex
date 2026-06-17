@@ -735,6 +735,10 @@ impl ConfigToml {
     /// Unknown provider IDs fail closed here; normal config loading will emit
     /// the more specific provider-not-found error later.
     pub fn workload_identity_for_cloud_config(&self) -> Option<WorkloadIdentityConfig> {
+        if self.forced_login_method == Some(ForcedLoginMethod::Api) {
+            return None;
+        }
+
         let provider_id = self.model_provider.as_deref().unwrap_or(OPENAI_PROVIDER_ID);
         let openai_base_url = self
             .openai_base_url
@@ -1029,6 +1033,17 @@ mod tests {
                     ..Default::default()
                 },
             )]),
+            workload_identity: Some(workload_identity()),
+            ..Default::default()
+        };
+
+        assert_eq!(config.workload_identity_for_cloud_config(), None);
+    }
+
+    #[test]
+    fn cloud_config_skips_workload_identity_when_api_login_is_forced() {
+        let config = ConfigToml {
+            forced_login_method: Some(ForcedLoginMethod::Api),
             workload_identity: Some(workload_identity()),
             ..Default::default()
         };
