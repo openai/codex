@@ -1,3 +1,4 @@
+use crate::git_transport::NeutralGitCwd;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -17,8 +18,13 @@ pub(super) fn git_remote_revision(
     }
 
     let ref_name = ref_name.unwrap_or("HEAD");
+    let neutral_cwd = NeutralGitCwd::new()
+        .map_err(|err| format!("failed to create neutral Git working directory: {err}"))?;
     let output = run_git_command_with_timeout(
-        git_command().arg("ls-remote").arg(source).arg(ref_name),
+        git_command(&neutral_cwd)
+            .arg("ls-remote")
+            .arg(source)
+            .arg(ref_name),
         "git ls-remote marketplace source",
         timeout,
     )?;
@@ -47,17 +53,22 @@ pub(super) fn clone_git_source(
     destination: &Path,
     timeout: Duration,
 ) -> Result<String, String> {
+    let neutral_cwd = NeutralGitCwd::new()
+        .map_err(|err| format!("failed to create neutral Git working directory: {err}"))?;
     let git_destination = git_path_arg(destination);
     if sparse_paths.is_empty() {
         let output = run_git_command_with_timeout(
-            git_command().arg("clone").arg(source).arg(&git_destination),
+            git_command(&neutral_cwd)
+                .arg("clone")
+                .arg(source)
+                .arg(&git_destination),
             "git clone marketplace source",
             timeout,
         )?;
         ensure_git_success(&output, "git clone marketplace source")?;
         if let Some(ref_name) = ref_name {
             let output = run_git_command_with_timeout(
-                git_command()
+                git_command(&neutral_cwd)
                     .arg("-C")
                     .arg(&git_destination)
                     .arg("checkout")
@@ -67,11 +78,11 @@ pub(super) fn clone_git_source(
             )?;
             ensure_git_success(&output, "git checkout marketplace ref")?;
         }
-        return git_worktree_revision(&git_destination, timeout);
+        return git_worktree_revision(&git_destination, timeout, &neutral_cwd);
     }
 
     let output = run_git_command_with_timeout(
-        git_command()
+        git_command(&neutral_cwd)
             .arg("clone")
             .arg("--filter=blob:none")
             .arg("--no-checkout")
@@ -82,7 +93,7 @@ pub(super) fn clone_git_source(
     )?;
     ensure_git_success(&output, "git clone marketplace source")?;
 
-    let mut sparse_checkout = git_command();
+    let mut sparse_checkout = git_command(&neutral_cwd);
     sparse_checkout
         .arg("-C")
         .arg(&git_destination)
@@ -97,7 +108,7 @@ pub(super) fn clone_git_source(
     ensure_git_success(&output, "git sparse-checkout marketplace source")?;
 
     let output = run_git_command_with_timeout(
-        git_command()
+        git_command(&neutral_cwd)
             .arg("-C")
             .arg(&git_destination)
             .arg("checkout")
@@ -106,12 +117,16 @@ pub(super) fn clone_git_source(
         timeout,
     )?;
     ensure_git_success(&output, "git checkout marketplace ref")?;
-    git_worktree_revision(&git_destination, timeout)
+    git_worktree_revision(&git_destination, timeout, &neutral_cwd)
 }
 
-fn git_worktree_revision(destination: &Path, timeout: Duration) -> Result<String, String> {
+fn git_worktree_revision(
+    destination: &Path,
+    timeout: Duration,
+    neutral_cwd: &NeutralGitCwd,
+) -> Result<String, String> {
     let output = run_git_command_with_timeout(
-        git_command()
+        git_command(neutral_cwd)
             .arg("-C")
             .arg(destination)
             .arg("rev-parse")
@@ -133,11 +148,12 @@ fn is_full_git_sha(value: &str) -> bool {
     value.len() == 40 && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
-fn git_command() -> Command {
+fn git_command(neutral_cwd: &NeutralGitCwd) -> Command {
     let mut command = Command::new("git");
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0");
+    neutral_cwd.configure(&mut command);
     command
 }
 
@@ -226,6 +242,7 @@ mod tests {
     use super::git_command;
     use super::is_full_git_sha;
     use super::strip_windows_verbatim_path_prefix;
+    use crate::git_transport::NeutralGitCwd;
     use pretty_assertions::assert_eq;
     use std::ffi::OsStr;
 
@@ -238,7 +255,8 @@ mod tests {
 
     #[test]
     fn git_command_uses_path_lookup_with_stable_noninteractive_env() {
-        let command = git_command();
+        let neutral_cwd = NeutralGitCwd::new().expect("create neutral Git working directory");
+        let command = git_command(&neutral_cwd);
 
         assert_eq!(command.get_program(), OsStr::new("git"));
         assert_eq!(

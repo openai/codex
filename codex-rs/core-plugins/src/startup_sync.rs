@@ -1,3 +1,4 @@
+use crate::git_transport::NeutralGitCwd;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
@@ -595,11 +596,14 @@ fn read_local_git_or_sha_file(
 }
 
 fn git_ls_remote_head_sha(git_binary: &str) -> Result<String, String> {
+    let neutral_cwd = NeutralGitCwd::new()
+        .map_err(|err| format!("failed to create neutral Git working directory: {err}"))?;
     let mut command = git_command(git_binary);
     command
         .arg("ls-remote")
         .arg("https://github.com/openai/plugins.git")
         .arg("HEAD");
+    neutral_cwd.configure(&mut command);
     let output = run_git_command_with_timeout(
         &mut command,
         "git ls-remote curated plugins repo",

@@ -1,5 +1,6 @@
 mod app_mcp_routing;
 mod discoverable;
+mod git_transport;
 pub mod installed_marketplaces;
 pub mod loader;
 mod manager;

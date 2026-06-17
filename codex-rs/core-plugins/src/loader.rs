@@ -1,5 +1,6 @@
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::app_mcp_routing::apps_route_available;
+use crate::git_transport::NeutralGitCwd;
 use crate::is_openai_curated_marketplace_name;
 use crate::manifest::PluginManifest;
 use crate::manifest::PluginManifestHooks;
@@ -1493,9 +1494,12 @@ fn clone_git_plugin_source(
 }
 
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), String> {
+    let neutral_cwd = NeutralGitCwd::new()
+        .map_err(|err| format!("failed to create neutral Git working directory: {err}"))?;
     let mut command = Command::new("git");
     command.args(args);
     command.env("GIT_TERMINAL_PROMPT", "0");
+    neutral_cwd.configure(&mut command);
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }

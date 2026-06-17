@@ -1,4 +1,5 @@
 use super::MarketplaceAddError;
+use crate::git_transport::NeutralGitCwd;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -111,9 +112,15 @@ pub(super) fn marketplace_staging_root(install_root: &Path) -> PathBuf {
 }
 
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), MarketplaceAddError> {
+    let neutral_cwd = NeutralGitCwd::new().map_err(|err| {
+        MarketplaceAddError::Internal(format!(
+            "failed to create neutral Git working directory: {err}"
+        ))
+    })?;
     let mut command = Command::new("git");
     command.args(args);
     command.env("GIT_TERMINAL_PROMPT", "0");
+    neutral_cwd.configure(&mut command);
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
