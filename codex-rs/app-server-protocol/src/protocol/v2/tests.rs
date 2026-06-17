@@ -174,6 +174,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             model_provider: "openai".to_string(),
             created_at: 1,
             updated_at: 1,
+            recency_at: Some(1),
             status: ThreadStatus::Idle,
             path: None,
             cwd: absolute_path("tmp"),
@@ -375,6 +376,7 @@ fn external_agent_config_import_params_accept_legacy_plugin_details() {
                     ..Default::default()
                 }),
             }],
+            source: None,
         }
     );
 }
@@ -3600,12 +3602,21 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
 
     assert_eq!(start.instruction_sources, Vec::<AbsolutePathBuf>::new());
     assert_eq!(start.thread.parent_thread_id, None);
+    assert_eq!(start.thread.recency_at, None);
     assert_eq!(resume.instruction_sources, Vec::<AbsolutePathBuf>::new());
     assert_eq!(fork.instruction_sources, Vec::<AbsolutePathBuf>::new());
     assert_eq!(start.active_permission_profile, None);
     assert_eq!(resume.active_permission_profile, None);
     assert_eq!(resume.initial_turns_page, None);
     assert_eq!(fork.active_permission_profile, None);
+}
+
+#[test]
+fn thread_recency_sort_key_serializes_as_snake_case() {
+    assert_eq!(
+        serde_json::to_value(ThreadSortKey::RecencyAt).expect("sort key should serialize"),
+        json!("recency_at")
+    );
 }
 
 #[test]

@@ -204,6 +204,7 @@ async fn apply_metadata_update(
                     .map_err(|err| ThreadStoreError::Internal {
                         message: format!("failed to read thread metadata for {thread_id}: {err}"),
                     })?;
+            let advance_recency_at = patch.advance_recency_at;
             if existing.is_none() && rollout_path.is_none() {
                 let resolved = resolve_rollout_path(store, thread_id, include_archived).await?;
                 rollout_path_archived = resolved.archived;
@@ -260,6 +261,11 @@ async fn apply_metadata_update(
             if let Some(updated_at) = patch.updated_at {
                 metadata.updated_at = updated_at;
             }
+            if existing.is_none()
+                && let Some(recency_at) = advance_recency_at
+            {
+                metadata.recency_at = recency_at;
+            }
             if let Some(source) = patch.source {
                 metadata.source = enum_to_string(&source);
             }
@@ -310,6 +316,18 @@ async fn apply_metadata_update(
                 .map_err(|err| ThreadStoreError::Internal {
                     message: format!("failed to update thread metadata for {thread_id}: {err}"),
                 })?;
+            if existing.is_some()
+                && let Some(recency_at) = advance_recency_at
+            {
+                state_db
+                    .touch_thread_recency_at(thread_id, recency_at)
+                    .await
+                    .map_err(|err| ThreadStoreError::Internal {
+                        message: format!(
+                            "failed to advance thread recency_at for {thread_id}: {err}"
+                        ),
+                    })?;
+            }
             if let Some(memory_mode) = patch.memory_mode {
                 state_db
                     .set_thread_memory_mode(thread_id, memory_mode_as_str(memory_mode))

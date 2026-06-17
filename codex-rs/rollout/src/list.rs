@@ -77,6 +77,8 @@ pub struct ThreadItem {
     pub created_at: Option<String>,
     /// RFC3339 timestamp string for the most recent update (from file mtime).
     pub updated_at: Option<String>,
+    /// RFC3339 timestamp string used for product recency ordering.
+    pub recency_at: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -115,6 +117,7 @@ const USER_EVENT_SCAN_LIMIT: usize = 200;
 pub enum ThreadSortKey {
     CreatedAt,
     UpdatedAt,
+    RecencyAt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,19 +140,28 @@ pub struct ThreadListConfig<'a> {
     pub layout: ThreadListLayout,
 }
 
-/// Pagination cursor identifying the timestamp of the last item in a page.
+/// Pagination cursor identifying the last item in a page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cursor {
     ts: OffsetDateTime,
+    id: Option<ThreadId>,
 }
 
 impl Cursor {
-    fn new(ts: OffsetDateTime) -> Self {
-        Self { ts }
+    pub(crate) fn new(ts: OffsetDateTime) -> Self {
+        Self { ts, id: None }
+    }
+
+    pub(crate) fn with_thread_id(ts: OffsetDateTime, id: ThreadId) -> Self {
+        Self { ts, id: Some(id) }
     }
 
     pub(crate) fn timestamp(&self) -> OffsetDateTime {
         self.ts
+    }
+
+    pub(crate) fn thread_id(&self) -> Option<ThreadId> {
+        self.id
     }
 }
 
@@ -287,7 +299,10 @@ impl serde::Serialize for Cursor {
             .ts
             .format(&Rfc3339)
             .map_err(|e| serde::ser::Error::custom(format!("format error: {e}")))?;
-        serializer.serialize_str(&ts_str)
+        match self.id {
+            Some(id) => serializer.serialize_str(&format!("{ts_str}|{id}")),
+            None => serializer.serialize_str(&ts_str),
+        }
     }
 }
 
@@ -308,7 +323,7 @@ impl From<codex_state::Anchor> for Cursor {
             .timestamp_nanos_opt()
             .and_then(|nanos| OffsetDateTime::from_unix_timestamp_nanos(nanos as i128).ok())
             .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-        Self::new(ts)
+        Self { ts, id: anchor.id }
     }
 }
 
@@ -419,7 +434,7 @@ async fn traverse_directories_for_paths(
             )
             .await
         }
-        ThreadSortKey::UpdatedAt => {
+        ThreadSortKey::UpdatedAt | ThreadSortKey::RecencyAt => {
             traverse_directories_for_paths_updated(
                 root,
                 page_size,
@@ -454,7 +469,7 @@ async fn traverse_flat_paths(
             )
             .await
         }
-        ThreadSortKey::UpdatedAt => {
+        ThreadSortKey::UpdatedAt | ThreadSortKey::RecencyAt => {
             traverse_flat_paths_updated(
                 root,
                 page_size,
@@ -702,35 +717,48 @@ async fn traverse_flat_paths_updated(
     })
 }
 
-/// Pagination cursor token format: an RFC3339 timestamp.
+/// Pagination cursor token format: an RFC3339 timestamp with an optional thread ID tie-breaker.
 pub fn parse_cursor(token: &str) -> Option<Cursor> {
-    if token.contains('|') {
-        return None;
-    }
+    let (timestamp, id) = match token.rsplit_once('|') {
+        Some((timestamp, id)) => (timestamp, Some(ThreadId::from_string(id).ok()?)),
+        None => (token, None),
+    };
 
-    let ts = OffsetDateTime::parse(token, &Rfc3339).ok().or_else(|| {
-        let format: &[FormatItem] =
-            format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
-        PrimitiveDateTime::parse(token, format)
-            .ok()
-            .map(PrimitiveDateTime::assume_utc)
-    })?;
+    let ts = OffsetDateTime::parse(timestamp, &Rfc3339)
+        .ok()
+        .or_else(|| {
+            let format: &[FormatItem] =
+                format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+            PrimitiveDateTime::parse(timestamp, format)
+                .ok()
+                .map(PrimitiveDateTime::assume_utc)
+        })?;
 
-    Some(Cursor::new(ts))
+    Some(Cursor { ts, id })
 }
 
 fn build_next_cursor(items: &[ThreadItem], sort_key: ThreadSortKey) -> Option<Cursor> {
     let last = items.last()?;
     let file_name = last.path.file_name()?.to_string_lossy();
-    let (created_ts, _id) = parse_timestamp_uuid_from_filename(&file_name)?;
+    let (created_ts, id) = parse_timestamp_uuid_from_filename(&file_name)?;
     let ts = match sort_key {
         ThreadSortKey::CreatedAt => created_ts,
         ThreadSortKey::UpdatedAt => {
             let updated_at = last.updated_at.as_deref()?;
             OffsetDateTime::parse(updated_at, &Rfc3339).ok()?
         }
+        ThreadSortKey::RecencyAt => {
+            let recency_at = last.recency_at.as_deref().or(last.updated_at.as_deref())?;
+            OffsetDateTime::parse(recency_at, &Rfc3339).ok()?
+        }
     };
-    Some(Cursor::new(ts))
+    match sort_key {
+        ThreadSortKey::RecencyAt => Some(Cursor::with_thread_id(
+            ts,
+            ThreadId::from_string(&id.to_string()).ok()?,
+        )),
+        ThreadSortKey::CreatedAt | ThreadSortKey::UpdatedAt => Some(Cursor::new(ts)),
+    }
 }
 
 async fn build_thread_item(
@@ -806,6 +834,7 @@ async fn build_thread_item(
             model_provider,
             cli_version,
             created_at,
+            recency_at: summary_updated_at.clone(),
             updated_at: summary_updated_at,
         });
     }

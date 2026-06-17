@@ -391,7 +391,10 @@ impl AppServerSession {
             .client
             .request_typed(ClientRequest::ExternalAgentConfigImport {
                 request_id,
-                params: ExternalAgentConfigImportParams { migration_items },
+                params: ExternalAgentConfigImportParams {
+                    migration_items,
+                    source: None,
+                },
             })
             .await
             .wrap_err("externalAgentConfig/import failed during Claude Code import");
@@ -2319,6 +2322,7 @@ mod tests {
                 model_provider: "openai".to_string(),
                 created_at: 1,
                 updated_at: 2,
+                recency_at: Some(2),
                 status: ThreadStatus::Idle,
                 path: None,
                 cwd: test_path_buf("/tmp/project").abs(),
