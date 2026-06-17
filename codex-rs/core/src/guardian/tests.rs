@@ -1678,7 +1678,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
             "---\nname: {GUARDIAN_SKILL_NAME}\ndescription: Guardian skill injection probe.\n---\n\n{GUARDIAN_SKILL_BODY_PROBE}\n"
         ),
     )?;
-    session.services.skills_manager.clear_cache();
+    session.services.skills_service.clear_cache();
     turn.config = Arc::clone(&config);
     turn.provider = create_model_provider(config.model_provider.clone(), turn.auth_manager.clone());
     let session = Arc::new(session);

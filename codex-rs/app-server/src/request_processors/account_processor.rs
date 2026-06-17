@@ -219,7 +219,7 @@ impl AccountRequestProcessor {
     ) {
         tokio::spawn(async move {
             thread_manager.plugins_manager().clear_cache();
-            thread_manager.skills_manager().clear_cache();
+            thread_manager.skills_service().clear_cache();
             if thread_manager.list_thread_ids().await.is_empty() {
                 return;
             }

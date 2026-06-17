@@ -169,7 +169,7 @@ impl ConfigRequestProcessor {
 
     pub(crate) async fn handle_config_mutation(&self) {
         self.thread_manager.plugins_manager().clear_cache();
-        self.thread_manager.skills_manager().clear_cache();
+        self.thread_manager.skills_service().clear_cache();
     }
 
     async fn handle_config_mutation_result<T>(

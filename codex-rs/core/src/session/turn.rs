@@ -528,7 +528,7 @@ async fn build_skills_and_plugins(
     } else {
         Vec::new()
     };
-    let skills_outcome = turn_context.turn_skills.outcome.as_ref();
+    let skills_outcome = turn_context.turn_skills.snapshot.outcome();
     let connector_slug_counts = build_connector_slug_counts(&available_connectors);
     let extension_injection_items =
         build_extension_turn_input_items(sess, turn_context, &user_input, cancellation_token)
