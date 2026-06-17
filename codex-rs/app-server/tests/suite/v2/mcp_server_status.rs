@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::Result;
 use app_test_support::TestAppServer;
 use app_test_support::configure_expiring_workload_identity;
+use app_test_support::configure_expiring_workload_identity_without_cloud_config_mock;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
@@ -131,6 +132,10 @@ async fn mcp_server_status_list_succeeds_when_workload_identity_is_unavailable()
     )?;
     let config_path = codex_home.path().join("config.toml");
     let mut config_toml = std::fs::read_to_string(&config_path)?;
+    config_toml = config_toml.replace(
+        "supports_websockets = false\n",
+        "supports_websockets = false\nrequires_openai_auth = false\n",
+    );
     config_toml.insert_str(
         0,
         &format!("chatgpt_base_url = \"{}/backend-api\"\n", server.uri()),
@@ -174,6 +179,74 @@ url = "{mcp_server_url}/mcp"
 
     mcp_server_handle.abort();
     let _ = mcp_server_handle.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_server_status_list_resolves_fresh_wif_for_codex_apps() -> Result<()> {
+    let auth_server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let (apps_server_url, apps_server_handle) =
+        start_mcp_server_at_path("apps.lookup", "/api/codex/ps/mcp").await?;
+    let codex_home = TempDir::new()?;
+    let config_path = codex_home.path().join("config.toml");
+    std::fs::write(
+        config_path,
+        format!(
+            r#"
+model = "mock-model"
+model_provider = "mock_provider"
+chatgpt_base_url = "{apps_server_url}"
+
+[features]
+apps = true
+
+[model_providers.mock_provider]
+name = "Local provider"
+base_url = "{}/v1"
+wire_api = "responses"
+requires_openai_auth = false
+"#,
+            auth_server.uri(),
+        ),
+    )?;
+    let _workload_identity = configure_expiring_workload_identity_without_cloud_config_mock(
+        codex_home.path(),
+        &auth_server,
+    )
+    .await?;
+
+    let mut mcp = TestAppServer::new_without_managed_config_with_env(
+        codex_home.path(),
+        &[("OPENAI_API_KEY", None)],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: None,
+            limit: None,
+            detail: None,
+            thread_id: None,
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ListMcpServerStatusResponse = to_response(response)?;
+
+    let codex_apps = response
+        .data
+        .iter()
+        .find(|status| status.name == "codex_apps")
+        .expect("fresh WIF auth should enable Codex Apps status");
+    assert!(codex_apps.tools.contains_key("apps.lookup"));
+    auth_server.verify().await;
+
+    apps_server_handle.abort();
+    let _ = apps_server_handle.await;
     Ok(())
 }
 
@@ -514,6 +587,10 @@ url = "{underscore_server_url}/mcp"
 }
 
 async fn start_mcp_server(tool_name: &str) -> Result<(String, JoinHandle<()>)> {
+    start_mcp_server_at_path(tool_name, "/mcp").await
+}
+
+async fn start_mcp_server_at_path(tool_name: &str, path: &str) -> Result<(String, JoinHandle<()>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let tool_name = Arc::new(tool_name.to_string());
@@ -526,7 +603,12 @@ async fn start_mcp_server(tool_name: &str) -> Result<(String, JoinHandle<()>)> {
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
     );
-    let router = Router::new().nest_service("/mcp", mcp_service);
+    let router = Router::new()
+        .route(
+            "/api/codex/config/bundle",
+            axum::routing::get(|| async { axum::Json(json!({})) }),
+        )
+        .nest_service(path, mcp_service);
 
     let handle = tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;

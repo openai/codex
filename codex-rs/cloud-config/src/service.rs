@@ -494,7 +494,8 @@ where
             Ok(auth) => auth,
             Err(error) => {
                 tracing::error!(error = %error, "Failed to resolve auth while refreshing cloud config bundle");
-                return false;
+                emit_load_metric("refresh", "error", /*bundle*/ None);
+                return true;
             }
         };
         let Some(auth) = auth else {

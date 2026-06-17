@@ -29,6 +29,21 @@ pub async fn configure_expiring_workload_identity(
     codex_home: &Path,
     server: &MockServer,
 ) -> Result<ExpiringWorkloadIdentityFixture> {
+    configure_expiring_workload_identity_inner(codex_home, server, true).await
+}
+
+pub async fn configure_expiring_workload_identity_without_cloud_config_mock(
+    codex_home: &Path,
+    server: &MockServer,
+) -> Result<ExpiringWorkloadIdentityFixture> {
+    configure_expiring_workload_identity_inner(codex_home, server, false).await
+}
+
+async fn configure_expiring_workload_identity_inner(
+    codex_home: &Path,
+    server: &MockServer,
+    mock_cloud_config: bool,
+) -> Result<ExpiringWorkloadIdentityFixture> {
     let token_path = codex_home.join("projected-workload-token");
     tokio::fs::write(&token_path, "external-subject-token\n").await?;
     let token_path_toml = serde_json::to_string(token_path.to_string_lossy().as_ref())?;
@@ -72,12 +87,14 @@ path = {token_path_toml}
         .expect(1..)
         .mount(server)
         .await;
-    Mock::given(method("GET"))
-        .and(path("/backend-api/wham/config/bundle"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
-        .expect(1)
-        .mount(server)
-        .await;
+    if mock_cloud_config {
+        Mock::given(method("GET"))
+            .and(path("/backend-api/wham/config/bundle"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
     Mock::given(method("GET"))
         .and(path("/backend-api/accounts/workspace_test/settings"))
         .and(header("authorization", format!("Bearer {access_token}")))

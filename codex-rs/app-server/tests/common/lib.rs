@@ -50,6 +50,7 @@ pub use test_app_server::DISABLE_PLUGIN_STARTUP_TASKS_ARG;
 pub use test_app_server::TestAppServer;
 pub use workload_identity::ExpiringWorkloadIdentityFixture;
 pub use workload_identity::configure_expiring_workload_identity;
+pub use workload_identity::configure_expiring_workload_identity_without_cloud_config_mock;
 
 pub fn to_response<T: DeserializeOwned>(response: JSONRPCResponse) -> anyhow::Result<T> {
     let value = serde_json::to_value(response.result)?;

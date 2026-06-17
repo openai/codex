@@ -125,6 +125,20 @@ impl McpRequestProcessor {
         }
     }
 
+    async fn resolve_optional_mcp_auth(&self, operation: &'static str) -> Option<CodexAuth> {
+        match self.auth_manager.auth().await {
+            Ok(auth) => auth,
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    operation,
+                    "failed to resolve optional MCP auth; using cached auth"
+                );
+                self.auth_manager.auth_cached()
+            }
+        }
+    }
+
     async fn mcp_server_oauth_login_response(
         &self,
         params: McpServerOauthLoginParams,
@@ -245,7 +259,7 @@ impl McpRequestProcessor {
                     .await
             }
         };
-        let auth = self.auth_manager.auth_cached();
+        let auth = self.resolve_optional_mcp_auth("mcpServerStatus/list").await;
         let environment_manager = self.thread_manager.environment_manager();
         // This status path has no turn-selected environment. Use config cwd
         // as the local stdio fallback; named environment stdio MCPs must
