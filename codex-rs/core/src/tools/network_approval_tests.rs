@@ -237,6 +237,7 @@ async fn register_call_with_default_shell_trigger(
                 tty: None,
             },
             "curl https://example.com".to_string(),
+            "local".to_string(),
             cancellation_token.clone(),
         )
         .await;
@@ -263,6 +264,7 @@ async fn active_call_preserves_triggering_command_context() {
             "turn-1".to_string(),
             expected.clone(),
             "curl https://example.com".to_string(),
+            "local".to_string(),
             CancellationToken::new(),
         )
         .await;
@@ -274,6 +276,7 @@ async fn active_call_preserves_triggering_command_context() {
 
     assert_eq!(&call.trigger, &expected);
     assert_eq!(call.command, "curl https://example.com");
+    assert_eq!(call.environment_id, "local");
 }
 
 #[tokio::test]

@@ -20,6 +20,9 @@ startedAtMs: number, /**
  * (a UUID) used to disambiguate routing.
  */
 approvalId?: string | null, /**
+ * Environment in which the command will run.
+ */
+environmentId?: string | null, /**
  * Optional explanatory reason (e.g. request for network access).
  */
 reason?: string | null, /**

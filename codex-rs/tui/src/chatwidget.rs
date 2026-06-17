@@ -852,6 +852,7 @@ fn exec_approval_request_from_params(
         additional_permissions: params.additional_permissions,
         turn_id: params.turn_id,
         approval_id: params.approval_id,
+        environment_id: params.environment_id,
         proposed_execpolicy_amendment: params.proposed_execpolicy_amendment,
         proposed_network_policy_amendments: params.proposed_network_policy_amendments,
         available_decisions: params.available_decisions,
