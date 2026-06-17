@@ -294,10 +294,11 @@ fn remote_exec(script: &str) -> Result<()> {
     Ok(())
 }
 
-async fn exec_command_routing_output(
+async fn command_routing_output(
     test: &TestCodex,
     server: &wiremock::MockServer,
     call_id: &str,
+    tool_name: &str,
     arguments: Value,
     environments: Option<Vec<TurnEnvironmentSelection>>,
 ) -> Result<String> {
@@ -306,7 +307,7 @@ async fn exec_command_routing_output(
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_function_call(call_id, "exec_command", &serde_json::to_string(&arguments)?),
+                ev_function_call(call_id, tool_name, &serde_json::to_string(&arguments)?),
                 ev_completed("resp-1"),
             ]),
             sse(vec![
@@ -318,7 +319,7 @@ async fn exec_command_routing_output(
     )
     .await;
 
-    test.submit_turn_with_environments("route exec command", environments)
+    test.submit_turn_with_environments("route command", environments)
         .await?;
 
     response_mock
@@ -366,10 +367,11 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
         cwd: PathUri::from_abs_path(&remote_cwd),
     };
-    let multi_env_output = exec_command_routing_output(
+    let multi_env_output = command_routing_output(
         &test,
         &server,
         "call-multi-env",
+        "exec_command",
         json!({
             "shell": "/bin/sh",
             "cmd": format!("cat {remote_marker_name}"),
@@ -387,6 +389,84 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     assert!(
         !multi_env_output.contains("local-routing"),
         "multi-env command should not route to local: {multi_env_output}",
+    );
+
+    test.fs()
+        .remove(
+            &remote_cwd_uri,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_command_routes_to_primary_remote_environment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_wine_exec!(Ok(()), "requires the Docker-backed POSIX executor");
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .build_with_remote_and_local_env(&server)
+        .await?;
+    let local_cwd = TempDir::new()?;
+    fs::write(local_cwd.path().join("marker.txt"), "local-routing")?;
+    let remote_cwd = PathBuf::from(format!(
+        "/tmp/codex-shell-remote-routing-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    ))
+    .abs();
+    let remote_cwd_uri = PathUri::from_abs_path(&remote_cwd);
+    test.fs()
+        .create_directory(
+            &remote_cwd_uri,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+    test.fs()
+        .write_file(
+            &PathUri::from_path(remote_cwd.join("marker.txt"))?,
+            b"remote-routing".to_vec(),
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    let output = command_routing_output(
+        &test,
+        &server,
+        "call-shell-remote",
+        "shell_command",
+        json!({
+            "command": "cat marker.txt",
+            "login": false,
+            "timeout_ms": 10_000,
+        }),
+        Some(vec![
+            TurnEnvironmentSelection {
+                environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                cwd: remote_cwd_uri.clone(),
+            },
+            local(local_cwd.path().abs()),
+        ]),
+    )
+    .await?;
+    assert!(
+        output.contains("remote-routing"),
+        "unexpected shell_command output: {output}",
+    );
+    assert!(
+        !output.contains("local-routing"),
+        "shell_command should not route to local: {output}",
     );
 
     test.fs()

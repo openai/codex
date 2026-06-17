@@ -67,7 +67,7 @@ fn assert_safe(shell: &Shell, command: &str) {
 }
 
 #[tokio::test]
-async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_context() {
+async fn shell_command_handler_to_exec_params_uses_shell_and_cwd() {
     let (session, turn_context) = make_session_and_context().await;
 
     let command = "echo hello".to_string();
@@ -80,8 +80,7 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
     let expected_command = session
         .user_shell()
         .derive_exec_args(&command, /*use_login_shell*/ true);
-    #[allow(deprecated)]
-    let expected_cwd = turn_context.resolve_path(workdir.clone());
+    let expected_cwd = turn_context.config.cwd.join("subdir");
     let expected_env = create_env(
         &turn_context.config.permissions.shell_environment_policy,
         Some(session.thread_id),
@@ -100,9 +99,10 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
 
     let exec_params = ShellCommandHandler::to_exec_params(
         &params,
-        &session,
+        session.user_shell().as_ref(),
         &turn_context,
         session.thread_id,
+        expected_cwd.clone(),
         /*allow_login_shell*/ true,
     )
     .expect("login shells should be allowed");
@@ -162,9 +162,16 @@ async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
 
     let exec_params = ShellCommandHandler::to_exec_params(
         &params,
-        &session,
+        session.user_shell().as_ref(),
         &turn_context,
         session.thread_id,
+        turn_context
+            .environments
+            .primary()
+            .expect("turn environment")
+            .cwd()
+            .to_abs_path()
+            .expect("native cwd"),
         /*allow_login_shell*/ false,
     )
     .expect("non-login shells should still be allowed");

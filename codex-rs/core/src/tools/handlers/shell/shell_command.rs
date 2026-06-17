@@ -84,16 +84,14 @@ impl ShellCommandHandler {
 
     pub(super) fn to_exec_params(
         params: &ShellCommandToolCallParams,
-        session: &crate::session::session::Session,
+        shell: &Shell,
         turn_context: &TurnContext,
         thread_id: ThreadId,
+        cwd: codex_utils_absolute_path::AbsolutePathBuf,
         allow_login_shell: bool,
     ) -> Result<ExecParams, FunctionCallError> {
-        let shell = session.user_shell();
         let use_login_shell = Self::resolve_use_login_shell(params.login, allow_login_shell)?;
-        let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
-        #[allow(deprecated)]
-        let cwd = turn_context.resolve_path(params.workdir.clone());
+        let command = Self::base_command(shell, &params.command, use_login_shell);
 
         Ok(ExecParams {
             command,
@@ -170,27 +168,41 @@ impl ShellCommandHandler {
             )));
         };
 
-        #[allow(deprecated)]
-        let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
+        let Some(turn_environment) = turn.environments.primary() else {
+            return Err(FunctionCallError::RespondToModel(
+                "shell is unavailable in this session".to_string(),
+            ));
+        };
+        let environment_cwd = turn_environment.cwd().to_abs_path().map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "environment cwd `{}` is not native to the Codex host: {err}",
+                turn_environment.cwd()
+            ))
+        })?;
+        let cwd = resolve_workdir_base_path(&arguments, &environment_cwd)?;
         let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
-        #[allow(deprecated)]
-        let workdir = turn.resolve_path(params.workdir.clone());
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
             turn.as_ref(),
             &params.command,
-            &workdir,
+            &cwd,
         )
         .await;
         let prefix_rule = params.prefix_rule.clone();
+        let session_shell = session.user_shell();
+        let shell = turn_environment
+            .shell
+            .as_ref()
+            .unwrap_or(session_shell.as_ref());
         let exec_params = Self::to_exec_params(
             &params,
-            session.as_ref(),
+            shell,
             turn.as_ref(),
             session.thread_id,
+            cwd,
             turn.config.permissions.allow_login_shell,
         )?;
-        let shell_type = Some(session.user_shell().shell_type);
+        let shell_type = Some(shell.shell_type);
         run_exec_like(RunExecLikeArgs {
             tool_name,
             exec_params,

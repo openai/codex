@@ -10,10 +10,12 @@ pub(crate) mod zsh_fork_backend;
 
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecCapturePolicy;
+use crate::exec_env::create_env;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianNetworkAccessTrigger;
 use crate::guardian::review_approval_request;
 use crate::sandboxing::ExecOptions;
+use crate::sandboxing::ExecServerEnvConfig;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
 use crate::session::turn_context::TurnEnvironment;
@@ -40,6 +42,8 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
 use crate::tools::sandboxing::sandbox_permissions_preserving_denied_reads;
 use crate::tools::sandboxing::with_cached_approval;
+use crate::unified_exec::UnifiedExecContext;
+use crate::unified_exec::exec_env_policy_from_shell_policy;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -49,6 +53,7 @@ use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug)]
@@ -242,6 +247,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
         let session_shell = ctx.session.user_shell();
+        let environment_is_remote = req.turn_environment.environment.is_remote();
         let shell = req
             .turn_environment
             .shell
@@ -261,11 +267,14 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let (env, runtime_path_prepends) = {
             let mut env = env;
             let mut runtime_path_prepends = RuntimePathPrepends::default();
-            crate::tools::runtimes::apply_package_path_prepend(
-                &mut env,
-                &mut runtime_path_prepends,
-            );
-            if self.backend == ShellRuntimeBackend::ShellCommandZshFork
+            if !environment_is_remote {
+                crate::tools::runtimes::apply_package_path_prepend(
+                    &mut env,
+                    &mut runtime_path_prepends,
+                );
+            }
+            if !environment_is_remote
+                && self.backend == ShellRuntimeBackend::ShellCommandZshFork
                 && let Some(shell_zsh_path) = ctx.session.services.shell_zsh_path.as_deref()
             {
                 apply_zsh_fork_path_prepend(&mut env, &mut runtime_path_prepends, shell_zsh_path);
@@ -274,14 +283,18 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         };
         #[cfg(not(unix))]
         let runtime_path_prepends = RuntimePathPrepends::default();
-        let command = maybe_wrap_shell_lc_with_snapshot(
-            &req.command,
-            shell,
-            shell_snapshot_location.as_ref(),
-            &explicit_env_overrides,
-            &env,
-            &runtime_path_prepends,
-        );
+        let command = if environment_is_remote {
+            req.command.clone()
+        } else {
+            maybe_wrap_shell_lc_with_snapshot(
+                &req.command,
+                shell,
+                shell_snapshot_location.as_ref(),
+                &explicit_env_overrides,
+                &env,
+                &runtime_path_prepends,
+            )
+        };
         let command = disable_powershell_profile_for_elevated_windows_sandbox(
             &command,
             req.shell_type.as_ref(),
@@ -293,6 +306,12 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         } else {
             command
         };
+
+        if self.backend == ShellRuntimeBackend::ShellCommandZshFork && environment_is_remote {
+            return Err(ToolError::Rejected(
+                "shell_command zsh-fork is not supported for remote environments".to_string(),
+            ));
+        }
 
         if self.backend == ShellRuntimeBackend::ShellCommandZshFork {
             match zsh_fork_backend::maybe_run_shell_command(req, attempt, ctx, &command).await? {
@@ -316,12 +335,37 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             expiration,
             capture_policy: ExecCapturePolicy::ShellTool,
         };
-        let env = attempt
+        let mut exec_env = attempt
             .env_for(command, options, managed_network)
             .map_err(ToolError::Codex)?;
-        let out = execute_env(env, Self::stdout_stream(ctx))
-            .await
-            .map_err(ToolError::Codex)?;
+        if environment_is_remote {
+            let shell_environment_policy = &ctx.turn.config.permissions.shell_environment_policy;
+            exec_env.exec_server_env_config = Some(ExecServerEnvConfig {
+                policy: exec_env_policy_from_shell_policy(shell_environment_policy),
+                local_policy_env: create_env(shell_environment_policy, /*thread_id*/ None),
+            });
+        }
+        let out = if environment_is_remote {
+            let context = UnifiedExecContext::new(
+                Arc::clone(&ctx.session),
+                Arc::clone(&ctx.turn),
+                ctx.call_id.clone(),
+            );
+            ctx.session
+                .services
+                .unified_exec_manager
+                .execute_remote_shell(
+                    exec_env,
+                    req.turn_environment.environment.as_ref(),
+                    &context,
+                )
+                .await
+                .map_err(ToolError::Codex)?
+        } else {
+            execute_env(exec_env, Self::stdout_stream(ctx))
+                .await
+                .map_err(ToolError::Codex)?
+        };
         Ok(out)
     }
 }
