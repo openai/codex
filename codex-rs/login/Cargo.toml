@@ -4,6 +4,21 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["workload-identity-azure"]
+workload-identity-all-providers = [
+    "workload-identity-aws",
+    "workload-identity-azure",
+    "workload-identity-gcp",
+    "workload-identity-github-actions",
+    "workload-identity-spiffe",
+]
+workload-identity-aws = ["codex-workload-identity-providers/aws"]
+workload-identity-azure = ["codex-workload-identity-providers/azure"]
+workload-identity-gcp = ["codex-workload-identity-providers/gcp"]
+workload-identity-github-actions = ["codex-workload-identity-providers/github-actions"]
+workload-identity-spiffe = ["codex-workload-identity-providers/spiffe"]
+
 [lints]
 workspace = true
 
@@ -21,13 +36,7 @@ codex-protocol = { workspace = true }
 codex-secrets = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-utils-template = { workspace = true }
-codex-workload-identity-providers = { workspace = true, features = [
-    "aws",
-    "azure",
-    "gcp",
-    "github-actions",
-    "spiffe",
-] }
+codex-workload-identity-providers = { workspace = true }
 once_cell = { workspace = true }
 os_info = { workspace = true }
 rand = { workspace = true }

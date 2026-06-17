@@ -1206,6 +1206,7 @@ fn profile_user_layers_load_shared_hooks_json_once() {
         CommandShell {
             program: String::new(),
             args: Vec::new(),
+            excluded_environment_variables: Vec::new(),
         },
     );
 
@@ -1280,6 +1281,7 @@ fn malformed_hooks_json_is_reported_as_startup_warning() {
         CommandShell {
             program: String::new(),
             args: Vec::new(),
+            excluded_environment_variables: Vec::new(),
         },
     );
 

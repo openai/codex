@@ -69,6 +69,7 @@ use codex_features::NetworkProxyConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_install_context::InstallContext;
 use codex_login::AuthManagerConfig;
+use codex_mcp::McpCatalogBuilder;
 use codex_mcp::McpConfig;
 use codex_mcp::McpPluginAttribution;
 use codex_mcp::McpServerRegistration;
@@ -1487,43 +1488,7 @@ impl Config {
                 server.clone(),
             ));
         }
-
-        let sensitive_environment_variables = self
-            .workload_identity
-            .as_ref()
-            .map(|workload_identity| {
-                workload_identity
-                    .credential_source
-                    .sensitive_environment_variables()
-            })
-            .unwrap_or_default();
-        let is_sensitive = |name: &str| {
-            sensitive_environment_variables
-                .iter()
-                .any(|sensitive| name.eq_ignore_ascii_case(sensitive))
-        };
-        for server in configured_mcp_servers.values_mut() {
-            match &mut server.transport {
-                McpServerTransportConfig::Stdio { env, env_vars, .. } => {
-                    if let Some(env) = env {
-                        env.retain(|name, _| !is_sensitive(name));
-                    }
-                    env_vars.retain(|env_var| !is_sensitive(env_var.name()));
-                }
-                McpServerTransportConfig::StreamableHttp {
-                    bearer_token_env_var,
-                    env_http_headers,
-                    ..
-                } => {
-                    if bearer_token_env_var.as_deref().is_some_and(&is_sensitive) {
-                        *bearer_token_env_var = None;
-                    }
-                    if let Some(env_http_headers) = env_http_headers {
-                        env_http_headers.retain(|_, env_var| !is_sensitive(env_var));
-                    }
-                }
-            }
-        }
+        self.remove_workload_identity_environment_variables(&mut catalog);
 
         McpConfig {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
@@ -1554,6 +1519,26 @@ impl Config {
             mcp_server_catalog: catalog.build(),
             plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
         }
+    }
+
+    pub(crate) fn remove_workload_identity_environment_variables(
+        &self,
+        catalog: &mut McpCatalogBuilder,
+    ) {
+        let sensitive_environment_variables = self
+            .workload_identity
+            .as_ref()
+            .map(|workload_identity| {
+                workload_identity
+                    .credential_source
+                    .sensitive_environment_variables()
+            })
+            .unwrap_or_default();
+        catalog.retain_environment_variables(|name| {
+            !sensitive_environment_variables
+                .iter()
+                .any(|sensitive| name.eq_ignore_ascii_case(sensitive))
+        });
     }
 
     pub(crate) fn prefix_mcp_tool_names(&self) -> bool {
@@ -2358,6 +2343,47 @@ fn apply_managed_filesystem_constraints(
             file_system_sandbox_policy.entries.push(deny_entry);
         }
     }
+}
+
+fn apply_workload_identity_filesystem_constraints(
+    file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
+    workload_identity: &WorkloadIdentityConfig,
+) {
+    let entries = workload_identity
+        .credential_source
+        .credential_file_paths()
+        .into_iter()
+        .filter_map(workload_identity_credential_deny_path)
+        .map(|path| codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Path { path },
+            access: codex_protocol::permissions::FileSystemAccessMode::Deny,
+        })
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        return;
+    }
+
+    file_system_sandbox_policy
+        .preserve_deny_read_restrictions_from(&FileSystemSandboxPolicy::restricted(entries));
+}
+
+fn workload_identity_credential_deny_path(path: PathBuf) -> Option<AbsolutePathBuf> {
+    let path = AbsolutePathBuf::relative_to_current_dir(path).ok()?;
+    let Some(parent) = path.as_path().parent() else {
+        return Some(path);
+    };
+    let parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+
+    // Projected service-account tokens are symlinks whose targets rotate. Mask
+    // the containing secret directory so a rotation cannot expose a new target.
+    let deny_path = if std::fs::symlink_metadata(path.as_path())
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        parent
+    } else {
+        parent.join(path.as_path().file_name()?)
+    };
+    AbsolutePathBuf::from_absolute_path(deny_path).ok()
 }
 
 /// Optional overrides for user configuration (e.g., from CLI flags).
@@ -3560,6 +3586,21 @@ impl Config {
                 filesystem_requirements,
             );
         }
+        if let Some(workload_identity) = cfg.workload_identity.as_ref() {
+            if cfg.forced_login_method == Some(ForcedLoginMethod::Api) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "`workload_identity` requires ChatGPT auth but `forced_login_method` requires API key auth",
+                ));
+            }
+            workload_identity.validate().map_err(|error| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
+            })?;
+            apply_workload_identity_filesystem_constraints(
+                &mut effective_file_system_sandbox_policy,
+                workload_identity,
+            );
+        }
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
             .with_additional_readable_roots(resolved_cwd.as_path(), &helper_readable_roots);
         let effective_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
@@ -3577,11 +3618,6 @@ impl Config {
             profile_workspace_roots,
         )
         .map_err(std::io::Error::from)?;
-        if let Some(workload_identity) = cfg.workload_identity.as_ref() {
-            workload_identity.validate().map_err(|error| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
-            })?;
-        }
         let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
         let config = Self {
             model,

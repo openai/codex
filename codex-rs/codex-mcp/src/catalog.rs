@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 
 use codex_config::McpServerConfig;
+use codex_config::McpServerTransportConfig;
 
 /// Plugin identity retained with an MCP registration for tool attribution.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -226,6 +227,38 @@ impl McpCatalogBuilder {
     pub fn register(&mut self, registration: McpServerRegistration) {
         self.actions
             .push(CatalogAction::Register(Box::new(registration)));
+    }
+
+    /// Retains environment variables accepted by `retain` across every pending registration.
+    pub fn retain_environment_variables(&mut self, retain: impl Fn(&str) -> bool) {
+        for action in &mut self.actions {
+            let CatalogAction::Register(registration) = action else {
+                continue;
+            };
+            match &mut registration.config.transport {
+                McpServerTransportConfig::Stdio { env, env_vars, .. } => {
+                    if let Some(env) = env {
+                        env.retain(|name, _| retain(name));
+                    }
+                    env_vars.retain(|env_var| retain(env_var.name()));
+                }
+                McpServerTransportConfig::StreamableHttp {
+                    bearer_token_env_var,
+                    env_http_headers,
+                    ..
+                } => {
+                    if bearer_token_env_var
+                        .as_deref()
+                        .is_some_and(|name| !retain(name))
+                    {
+                        *bearer_token_env_var = None;
+                    }
+                    if let Some(env_http_headers) = env_http_headers {
+                        env_http_headers.retain(|_, env_var| retain(env_var));
+                    }
+                }
+            }
+        }
     }
 
     /// Applies the legacy name-scoped disabled veto after source resolution.

@@ -1,9 +1,11 @@
 use std::time::Duration;
 
+use codex_workload_identity::BoundedResponseBodyError;
 use codex_workload_identity::MAX_SUBJECT_TOKEN_BYTES;
 use codex_workload_identity::SubjectToken;
 use codex_workload_identity::SubjectTokenError;
 use codex_workload_identity::SubjectTokenProvider;
+use codex_workload_identity::read_bounded_response_body;
 use reqwest::header::HeaderValue;
 use url::Url;
 
@@ -83,14 +85,17 @@ impl SubjectTokenProvider for GcpSubjectTokenProvider {
         if !response.status().is_success() {
             return Err(SubjectTokenError::InvalidResponse { provider: "gcp" });
         }
-        let body = response
-            .bytes()
+        let body = read_bounded_response_body(response, MAX_SUBJECT_TOKEN_BYTES)
             .await
-            .map_err(|_| SubjectTokenError::InvalidResponse { provider: "gcp" })?;
-        if body.len() > MAX_SUBJECT_TOKEN_BYTES {
-            return Err(SubjectTokenError::TooLarge { provider: "gcp" });
-        }
-        let body = String::from_utf8(body.to_vec())
+            .map_err(|error| match error {
+                BoundedResponseBodyError::Request(_) => {
+                    SubjectTokenError::InvalidResponse { provider: "gcp" }
+                }
+                BoundedResponseBodyError::TooLarge => {
+                    SubjectTokenError::TooLarge { provider: "gcp" }
+                }
+            })?;
+        let body = String::from_utf8(body)
             .map_err(|_| SubjectTokenError::InvalidResponse { provider: "gcp" })?;
         SubjectToken::jwt(body, "gcp")
     }

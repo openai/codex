@@ -12,7 +12,6 @@ codex-workload-identity = { workspace = true }
 spiffe = { workspace = true, features = ["workload-api-jwt"] }
 
 [dev-dependencies]
-anyhow = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lib]

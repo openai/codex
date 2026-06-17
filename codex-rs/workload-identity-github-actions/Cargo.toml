@@ -11,12 +11,12 @@ workspace = true
 codex-workload-identity = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
 pretty_assertions = { workspace = true }
-serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 wiremock = { workspace = true }
 

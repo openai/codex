@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use thiserror::Error;
+use tokio::io::AsyncReadExt;
 
 pub const JWT_SUBJECT_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:jwt";
 pub const MAX_SUBJECT_TOKEN_BYTES: usize = 1024 * 1024;
@@ -151,14 +152,21 @@ impl FileSubjectTokenSource {
 
 impl SubjectTokenProvider for FileSubjectTokenSource {
     async fn subject_token(&self) -> Result<SubjectToken, SubjectTokenError> {
-        let metadata =
-            tokio::fs::metadata(&self.path)
-                .await
-                .map_err(|error| SubjectTokenError::ReadFile {
-                    provider: self.source,
-                    path: self.path.clone(),
-                    kind: error.kind(),
-                })?;
+        let file = tokio::fs::File::open(&self.path).await.map_err(|error| {
+            SubjectTokenError::ReadFile {
+                provider: self.source,
+                path: self.path.clone(),
+                kind: error.kind(),
+            }
+        })?;
+        let metadata = file
+            .metadata()
+            .await
+            .map_err(|error| SubjectTokenError::ReadFile {
+                provider: self.source,
+                path: self.path.clone(),
+                kind: error.kind(),
+            })?;
         if !metadata.is_file() {
             return Err(SubjectTokenError::NotAFile {
                 provider: self.source,
@@ -170,13 +178,25 @@ impl SubjectTokenProvider for FileSubjectTokenSource {
                 provider: self.source,
             });
         }
-        let value = tokio::fs::read_to_string(&self.path)
+        let mut bytes = Vec::new();
+        file.take(MAX_SUBJECT_TOKEN_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
             .await
             .map_err(|error| SubjectTokenError::ReadFile {
                 provider: self.source,
                 path: self.path.clone(),
                 kind: error.kind(),
             })?;
+        if bytes.len() > MAX_SUBJECT_TOKEN_BYTES {
+            return Err(SubjectTokenError::TooLarge {
+                provider: self.source,
+            });
+        }
+        let value = String::from_utf8(bytes).map_err(|_| SubjectTokenError::ReadFile {
+            provider: self.source,
+            path: self.path.clone(),
+            kind: std::io::ErrorKind::InvalidData,
+        })?;
         SubjectToken::jwt(value, self.source)
     }
 }

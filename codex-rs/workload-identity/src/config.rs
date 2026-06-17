@@ -8,8 +8,16 @@ use url::Host;
 use url::Url;
 
 const DEFAULT_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+const AWS_CONTAINER_AUTHORIZATION_TOKEN_ENV: &str = "AWS_CONTAINER_AUTHORIZATION_TOKEN";
+const AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE_ENV: &str = "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE";
+const AWS_CONTAINER_CREDENTIALS_FULL_URI_ENV: &str = "AWS_CONTAINER_CREDENTIALS_FULL_URI";
+const AWS_CONTAINER_CREDENTIALS_RELATIVE_URI_ENV: &str = "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI";
+const AWS_WEB_IDENTITY_TOKEN_FILE_ENV: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
+const AZURE_FEDERATED_TOKEN_FILE_ENV: &str = "AZURE_FEDERATED_TOKEN_FILE";
+const GCP_METADATA_HOST_ENV: &str = "GCE_METADATA_HOST";
 const GITHUB_ACTIONS_REQUEST_URL_ENV: &str = "ACTIONS_ID_TOKEN_REQUEST_URL";
 const GITHUB_ACTIONS_REQUEST_TOKEN_ENV: &str = "ACTIONS_ID_TOKEN_REQUEST_TOKEN";
+const SPIFFE_ENDPOINT_SOCKET_ENV: &str = "SPIFFE_ENDPOINT_SOCKET";
 
 /// Configuration for exchanging a workload credential for a Codex access token.
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Eq, Serialize)]
@@ -139,6 +147,15 @@ impl WorkloadIdentityConfig {
         if token_url.scheme() != "https" && !loopback_http {
             return Err(WorkloadIdentityConfigError::UnsupportedTokenUrlScheme);
         }
+        if token_url.host().is_none()
+            || !token_url.username().is_empty()
+            || token_url.password().is_some()
+            || token_url.fragment().is_some()
+        {
+            return Err(WorkloadIdentityConfigError::InvalidTokenUrl(
+                "host is required and user info and fragments are not allowed".to_string(),
+            ));
+        }
 
         match &self.credential_source {
             CredentialSourceConfig::Environment { variable }
@@ -179,7 +196,7 @@ impl WorkloadIdentityConfig {
             CredentialSourceConfig::Spiffe {
                 spiffe_id: Some(spiffe_id),
                 ..
-            } if !spiffe_id.starts_with("spiffe://") => {
+            } if !is_valid_spiffe_id(spiffe_id) => {
                 Err(WorkloadIdentityConfigError::InvalidSpiffeId)
             }
             CredentialSourceConfig::Spiffe { .. } => Ok(()),
@@ -209,17 +226,58 @@ impl CredentialSourceConfig {
     pub fn sensitive_environment_variables(&self) -> Vec<&str> {
         match self {
             Self::Environment { variable } => vec![variable.as_str()],
+            Self::Azure { .. } => vec![AZURE_FEDERATED_TOKEN_FILE_ENV],
+            Self::Gcp { .. } => vec![GCP_METADATA_HOST_ENV],
             Self::GithubActions {} => vec![
                 GITHUB_ACTIONS_REQUEST_URL_ENV,
                 GITHUB_ACTIONS_REQUEST_TOKEN_ENV,
             ],
-            Self::File { .. }
-            | Self::Azure { .. }
-            | Self::Gcp { .. }
-            | Self::Spiffe { .. }
-            | Self::Aws { .. } => Vec::new(),
+            Self::Spiffe { .. } => vec![SPIFFE_ENDPOINT_SOCKET_ENV],
+            Self::Aws { .. } => vec![
+                AWS_WEB_IDENTITY_TOKEN_FILE_ENV,
+                AWS_CONTAINER_CREDENTIALS_RELATIVE_URI_ENV,
+                AWS_CONTAINER_CREDENTIALS_FULL_URI_ENV,
+                AWS_CONTAINER_AUTHORIZATION_TOKEN_ENV,
+                AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE_ENV,
+            ],
+            Self::File { .. } => Vec::new(),
         }
     }
+
+    /// Files and Unix sockets that can be used to acquire the workload credential.
+    pub fn credential_file_paths(&self) -> Vec<PathBuf> {
+        match self {
+            Self::File { path } => vec![path.clone()],
+            Self::Azure { token_file } => token_file
+                .clone()
+                .or_else(|| std::env::var_os(AZURE_FEDERATED_TOKEN_FILE_ENV).map(PathBuf::from))
+                .into_iter()
+                .collect(),
+            Self::Spiffe {
+                endpoint_socket, ..
+            } => endpoint_socket
+                .clone()
+                .or_else(|| std::env::var(SPIFFE_ENDPOINT_SOCKET_ENV).ok())
+                .and_then(|endpoint| unix_socket_path(&endpoint))
+                .into_iter()
+                .collect(),
+            Self::Aws { .. } => [
+                AWS_WEB_IDENTITY_TOKEN_FILE_ENV,
+                AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE_ENV,
+            ]
+            .into_iter()
+            .filter_map(std::env::var_os)
+            .map(PathBuf::from)
+            .collect(),
+            Self::Environment { .. } | Self::Gcp { .. } | Self::GithubActions {} => Vec::new(),
+        }
+    }
+}
+
+fn unix_socket_path(endpoint: &str) -> Option<PathBuf> {
+    let endpoint = Url::parse(endpoint).ok()?;
+    (endpoint.scheme() == "unix" && !endpoint.path().is_empty())
+        .then(|| PathBuf::from(endpoint.path()))
 }
 
 fn is_valid_environment_variable_name(variable: &str) -> bool {
@@ -228,6 +286,17 @@ fn is_valid_environment_variable_name(variable: &str) -> bool {
         .next()
         .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
         && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
+}
+
+fn is_valid_spiffe_id(value: &str) -> bool {
+    Url::parse(value).ok().is_some_and(|url| {
+        url.scheme() == "spiffe"
+            && url.host().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none()
+    })
 }
 
 #[cfg(test)]

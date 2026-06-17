@@ -54,6 +54,31 @@ fn allows_loopback_http_token_endpoint_for_local_development() {
 }
 
 #[test]
+fn rejects_token_endpoint_user_info() {
+    let mut config = valid_config();
+    config.token_url = "https://user:secret@auth.openai.com/oauth/token".to_string();
+
+    assert!(matches!(
+        config.validate(),
+        Err(WorkloadIdentityConfigError::InvalidTokenUrl(_))
+    ));
+}
+
+#[test]
+fn rejects_malformed_spiffe_id() {
+    let mut config = valid_config();
+    config.credential_source = CredentialSourceConfig::Spiffe {
+        endpoint_socket: Some("unix:///tmp/spire.sock".to_string()),
+        spiffe_id: Some("spiffe://example.org/workload#fragment".to_string()),
+    };
+
+    assert_eq!(
+        config.validate(),
+        Err(WorkloadIdentityConfigError::InvalidSpiffeId)
+    );
+}
+
+#[test]
 fn rejects_relative_token_file() {
     let mut config = valid_config();
     config.credential_source = CredentialSourceConfig::Azure {
@@ -102,7 +127,7 @@ fn every_source_variant_has_a_stable_name() {
 }
 
 #[test]
-fn reports_only_secret_bearing_environment_inputs() {
+fn reports_credential_bearing_environment_inputs() {
     assert_eq!(
         CredentialSourceConfig::Environment {
             variable: "OPENAI_WIF_TOKEN".to_string(),
@@ -111,10 +136,39 @@ fn reports_only_secret_bearing_environment_inputs() {
         vec!["OPENAI_WIF_TOKEN"]
     );
     assert_eq!(
+        CredentialSourceConfig::Azure { token_file: None }.sensitive_environment_variables(),
+        vec!["AZURE_FEDERATED_TOKEN_FILE"]
+    );
+    assert_eq!(
+        CredentialSourceConfig::Gcp {
+            service_account: None
+        }
+        .sensitive_environment_variables(),
+        vec!["GCE_METADATA_HOST"]
+    );
+    assert_eq!(
         CredentialSourceConfig::GithubActions {}.sensitive_environment_variables(),
         vec![
             "ACTIONS_ID_TOKEN_REQUEST_URL",
             "ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+        ]
+    );
+    assert_eq!(
+        CredentialSourceConfig::Spiffe {
+            endpoint_socket: None,
+            spiffe_id: None,
+        }
+        .sensitive_environment_variables(),
+        vec!["SPIFFE_ENDPOINT_SOCKET"]
+    );
+    assert_eq!(
+        CredentialSourceConfig::Aws { region: None }.sensitive_environment_variables(),
+        vec![
+            "AWS_WEB_IDENTITY_TOKEN_FILE",
+            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+            "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+            "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
         ]
     );
     assert!(
@@ -123,5 +177,31 @@ fn reports_only_secret_bearing_environment_inputs() {
         }
         .sensitive_environment_variables()
         .is_empty()
+    );
+}
+
+#[test]
+fn reports_explicit_credential_file_and_unix_socket_paths() {
+    assert_eq!(
+        CredentialSourceConfig::File {
+            path: PathBuf::from("/var/run/openai/token")
+        }
+        .credential_file_paths(),
+        vec![PathBuf::from("/var/run/openai/token")]
+    );
+    assert_eq!(
+        CredentialSourceConfig::Azure {
+            token_file: Some(PathBuf::from("/var/run/azure/token"))
+        }
+        .credential_file_paths(),
+        vec![PathBuf::from("/var/run/azure/token")]
+    );
+    assert_eq!(
+        CredentialSourceConfig::Spiffe {
+            endpoint_socket: Some("unix:///var/run/spire/agent.sock".to_string()),
+            spiffe_id: None,
+        }
+        .credential_file_paths(),
+        vec![PathBuf::from("/var/run/spire/agent.sock")]
     );
 }

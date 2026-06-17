@@ -1,5 +1,6 @@
 mod client;
 mod config;
+mod response;
 mod source;
 
 pub use client::WorkloadIdentityAccessToken;
@@ -9,6 +10,8 @@ pub use config::CredentialSourceConfig;
 pub use config::WorkloadIdentityConfig;
 pub use config::WorkloadIdentityConfigError;
 pub use config::default_token_url;
+pub use response::BoundedResponseBodyError;
+pub use response::read_bounded_response_body;
 pub use source::EnvironmentSubjectTokenSource;
 pub use source::FileSubjectTokenSource;
 pub use source::MAX_SUBJECT_TOKEN_BYTES;

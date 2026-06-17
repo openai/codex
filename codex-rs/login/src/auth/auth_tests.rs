@@ -549,6 +549,19 @@ fn external_auth_tokens_without_chatgpt_metadata_cannot_seed_chatgpt_auth() {
     );
 }
 
+#[test]
+fn external_auth_tokens_debug_redacts_access_token() {
+    let tokens = ExternalAuthTokens::chatgpt(
+        "secret-access-token",
+        "workspace-id",
+        Some("team".to_string()),
+    );
+
+    let debug = format!("{tokens:?}");
+    assert!(!debug.contains("secret-access-token"));
+    assert!(debug.contains("[REDACTED]"));
+}
+
 struct TestExternalChatgptAuth {
     initial: ExternalAuthTokens,
     refreshed: ExternalAuthTokens,
@@ -557,40 +570,44 @@ struct TestExternalChatgptAuth {
 
 struct FailingExternalChatgptAuth;
 
-#[async_trait]
 impl ExternalAuth for FailingExternalChatgptAuth {
     fn auth_mode(&self) -> AuthMode {
         AuthMode::Chatgpt
     }
 
-    async fn resolve(&self) -> std::io::Result<Option<ExternalAuthTokens>> {
-        Err(std::io::Error::other("external token exchange failed"))
+    fn requires_successful_resolution(&self) -> bool {
+        true
     }
 
-    async fn refresh(
+    fn resolve(&self) -> ExternalAuthFuture<'_, Option<ExternalAuthTokens>> {
+        Box::pin(async { Err(std::io::Error::other("external token exchange failed")) })
+    }
+
+    fn refresh(
         &self,
         _context: ExternalAuthRefreshContext,
-    ) -> std::io::Result<ExternalAuthTokens> {
-        Err(std::io::Error::other("external token exchange failed"))
+    ) -> ExternalAuthFuture<'_, ExternalAuthTokens> {
+        Box::pin(async { Err(std::io::Error::other("external token exchange failed")) })
     }
 }
 
-#[async_trait]
 impl ExternalAuth for TestExternalChatgptAuth {
     fn auth_mode(&self) -> AuthMode {
         AuthMode::Chatgpt
     }
 
-    async fn resolve(&self) -> std::io::Result<Option<ExternalAuthTokens>> {
-        Ok(Some(self.initial.clone()))
+    fn resolve(&self) -> ExternalAuthFuture<'_, Option<ExternalAuthTokens>> {
+        Box::pin(async { Ok(Some(self.initial.clone())) })
     }
 
-    async fn refresh(
+    fn refresh(
         &self,
         _context: ExternalAuthRefreshContext,
-    ) -> std::io::Result<ExternalAuthTokens> {
-        self.refresh_count.fetch_add(1, Ordering::Relaxed);
-        Ok(self.refreshed.clone())
+    ) -> ExternalAuthFuture<'_, ExternalAuthTokens> {
+        Box::pin(async {
+            self.refresh_count.fetch_add(1, Ordering::Relaxed);
+            Ok(self.refreshed.clone())
+        })
     }
 }
 
@@ -622,6 +639,7 @@ async fn external_chatgpt_auth_resolves_and_refreshes_without_writing_auth_file(
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
     )
     .await;
     manager.set_external_auth(external.clone());
@@ -650,12 +668,57 @@ async fn external_chatgpt_auth_resolves_and_refreshes_without_writing_auth_file(
 }
 
 #[tokio::test]
+async fn external_chatgpt_auth_allows_host_to_change_account_during_refresh() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let token = fake_jwt_for_auth_file_params(&AuthFileParams {
+        openai_api_key: None,
+        chatgpt_plan_type: Some("enterprise".to_string()),
+        chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
+    })
+    .expect("build test access token");
+    let external = Arc::new(TestExternalChatgptAuth {
+        initial: ExternalAuthTokens::chatgpt(
+            token.clone(),
+            WORKSPACE_ID_ALLOWED,
+            Some("enterprise".to_string()),
+        ),
+        refreshed: ExternalAuthTokens::chatgpt(
+            token,
+            WORKSPACE_ID_DISALLOWED,
+            Some("enterprise".to_string()),
+        ),
+        refresh_count: AtomicUsize::new(0),
+    });
+    let manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+    )
+    .await;
+    manager.set_external_auth(external);
+    manager.auth().await.expect("initial auth should resolve");
+
+    manager
+        .refresh_token()
+        .await
+        .expect("host-managed account change should remain supported");
+
+    assert_eq!(
+        manager.auth_cached().and_then(|auth| auth.get_account_id()),
+        Some(WORKSPACE_ID_DISALLOWED.to_string())
+    );
+}
+
+#[tokio::test]
 async fn auth_result_preserves_external_auth_resolution_errors() {
     let manager = AuthManager::shared(
         PathBuf::from("non-existent"),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
     )
     .await;
     manager.set_external_auth(Arc::new(FailingExternalChatgptAuth));
@@ -714,6 +777,7 @@ async fn external_bearer_only_auth_manager_returns_none_when_command_fails() {
     let script = ProviderAuthScript::new_failing().unwrap();
     let manager = AuthManager::external_bearer_only(script.auth_config());
 
+    assert_eq!(manager.auth_result().await.unwrap(), None);
     assert_eq!(manager.auth().await, None);
 }
 

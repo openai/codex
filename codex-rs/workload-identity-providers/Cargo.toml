@@ -25,9 +25,7 @@ codex-workload-identity-spiffe = { workspace = true, optional = true }
 reqwest = { workspace = true }
 
 [dev-dependencies]
-anyhow = { workspace = true }
-tempfile = { workspace = true }
-tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lib]
 doctest = false

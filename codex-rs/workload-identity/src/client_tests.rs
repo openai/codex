@@ -54,6 +54,7 @@ fn exchange_response(access_token: &str) -> ResponseTemplate {
         "issued_token_type": ACCESS_TOKEN_TYPE,
         "token_type": "Bearer",
         "expires_in": 3600,
+        "user_id": "user_example",
         "chatgpt_account_id": "workspace_example",
         "chatgpt_plan_type": "enterprise",
     }))
@@ -73,6 +74,7 @@ async fn exchanges_azure_subject_token_and_caches_access_token() -> anyhow::Resu
 
     let expected = WorkloadIdentityAccessToken {
         access_token: "first.access.token".to_string(),
+        user_id: "user_example".to_string(),
         chatgpt_account_id: "workspace_example".to_string(),
         chatgpt_plan_type: Some("enterprise".to_string()),
     };
@@ -142,5 +144,111 @@ async fn forced_refresh_performs_a_new_exchange() -> anyhow::Result<()> {
 
     client.resolve().await?;
     client.refresh().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn refresh_rejects_a_changed_principal() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(exchange_response("first.access.token"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = test_client(&server).await?;
+    client.resolve().await?;
+
+    server.reset().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "second.access.token",
+            "issued_token_type": ACCESS_TOKEN_TYPE,
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "user_id": "different_user",
+            "chatgpt_account_id": "workspace_example",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    assert!(matches!(
+        client.refresh().await,
+        Err(WorkloadIdentityError::PrincipalChanged)
+    ));
+    assert!(client.cache.lock().expect("cache lock").token.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn reports_safe_nested_error_code() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": {
+                "code": "identity_provider_mapping_not_found",
+                "message": "untrusted diagnostic text",
+            },
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = test_client(&server).await?;
+
+    assert_eq!(
+        client
+            .resolve()
+            .await
+            .expect_err("exchange should fail")
+            .to_string(),
+        "workload identity token exchange was rejected with HTTP 400 Bad Request: identity_provider_mapping_not_found"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn rejection_does_not_echo_unstructured_server_text() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": "do not log secret subject token",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = test_client(&server).await?;
+
+    assert_eq!(
+        client
+            .resolve()
+            .await
+            .expect_err("exchange should fail")
+            .to_string(),
+        "workload identity token exchange was rejected with HTTP 401 Unauthorized: token endpoint rejected the request"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn rejects_oversized_token_endpoint_response() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_bytes(vec![b'x'; MAX_TOKEN_RESPONSE_BYTES + 1]),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = test_client(&server).await?;
+
+    assert!(matches!(
+        client.resolve().await,
+        Err(WorkloadIdentityError::ResponseTooLarge)
+    ));
     Ok(())
 }

@@ -169,6 +169,7 @@ impl McpManager {
                 } => catalog.remove_extension(name, contributor_id, contribution_order),
             }
         }
+        config.remove_workload_identity_environment_variables(&mut catalog);
         let catalog = catalog.build();
         for conflict in catalog.conflicts() {
             tracing::warn!(

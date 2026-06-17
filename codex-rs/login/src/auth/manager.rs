@@ -123,10 +123,20 @@ pub enum RefreshTokenError {
     Transient(#[from] std::io::Error),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ExternalAuthTokens {
     pub access_token: String,
     pub chatgpt_metadata: Option<ExternalAuthChatgptMetadata>,
+}
+
+impl Debug for ExternalAuthTokens {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExternalAuthTokens")
+            .field("access_token", &"[REDACTED]")
+            .field("chatgpt_metadata", &self.chatgpt_metadata)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -180,6 +190,11 @@ pub struct ExternalAuthRefreshContext {
 pub trait ExternalAuth: Send + Sync {
     /// Indicates which top-level auth mode this external provider supplies.
     fn auth_mode(&self) -> AuthMode;
+
+    /// Whether a resolution failure must prevent the caller from using fallback auth.
+    fn requires_successful_resolution(&self) -> bool {
+        false
+    }
 
     /// Returns cached or immediately available auth, if this provider can resolve it synchronously
     /// from the caller's perspective.
@@ -1700,8 +1715,17 @@ impl AuthManager {
 
     /// Resolves current auth while preserving errors from explicitly configured external auth.
     pub async fn auth_result(&self) -> std::io::Result<Option<CodexAuth>> {
-        if self.has_external_auth() {
-            return self.resolve_external_auth().await;
+        if let Some(external_auth) = self.external_auth() {
+            match self.resolve_external_auth(&external_auth).await {
+                Ok(Some(auth)) => return Ok(Some(auth)),
+                Ok(None) => {}
+                Err(error) if external_auth.requires_successful_resolution() => {
+                    return Err(error);
+                }
+                Err(error) => {
+                    tracing::error!("Failed to resolve optional external auth: {error}");
+                }
+            }
         }
 
         let Some(auth) = self.auth_cached() else {
@@ -1932,7 +1956,7 @@ impl AuthManager {
         if let Some(workload_identity) = config.workload_identity() {
             let client = build_workload_identity_client(
                 workload_identity,
-                CLIENT_ID,
+                oauth_client_id(),
                 build_reqwest_client(),
             );
             auth_manager.set_external_auth(Arc::new(WorkloadIdentityExternalAuth::new(client)));
@@ -1961,11 +1985,10 @@ impl AuthManager {
         self.external_auth_mode() == Some(AuthMode::ApiKey)
     }
 
-    async fn resolve_external_auth(&self) -> std::io::Result<Option<CodexAuth>> {
-        let Some(external_auth) = self.external_auth() else {
-            return Ok(None);
-        };
-
+    async fn resolve_external_auth(
+        &self,
+        external_auth: &Arc<dyn ExternalAuth>,
+    ) -> std::io::Result<Option<CodexAuth>> {
         match external_auth.resolve().await {
             Ok(Some(tokens)) if external_auth.auth_mode() == AuthMode::ApiKey => {
                 Ok(Some(CodexAuth::from_api_key(&tokens.access_token)))
@@ -1975,7 +1998,7 @@ impl AuthManager {
                 self.set_cached_auth(Some(auth.clone()));
                 Ok(Some(auth))
             }
-            Ok(None) => Ok(self.auth_cached()),
+            Ok(None) => Ok(None),
             Err(error) => Err(error),
         }
     }
@@ -2003,6 +2026,7 @@ impl AuthManager {
             auth_dot_json,
             AuthCredentialsStoreMode::Ephemeral,
             self.chatgpt_base_url.as_deref(),
+            self.keyring_backend_kind,
         )
         .await
     }
@@ -2216,31 +2240,11 @@ impl AuthManager {
         if external_auth.auth_mode() == AuthMode::ApiKey {
             return Ok(());
         }
-        let Some(chatgpt_metadata) = refreshed.chatgpt_metadata() else {
-            return Err(RefreshTokenError::Transient(std::io::Error::other(
-                "external auth refresh did not return ChatGPT metadata",
-            )));
-        };
-        if let Some(expected_workspace_ids) = forced_chatgpt_workspace_id.as_deref()
-            && !expected_workspace_ids.contains(&chatgpt_metadata.account_id)
-        {
-            return Err(RefreshTokenError::Transient(std::io::Error::other(
-                format!(
-                    "external auth refresh returned workspace {:?}, expected one of {:?}",
-                    chatgpt_metadata.account_id, expected_workspace_ids,
-                ),
-            )));
-        }
-        let auth_dot_json =
-            AuthDotJson::from_external_tokens(&refreshed).map_err(RefreshTokenError::Transient)?;
-        save_auth(
-            &self.codex_home,
-            &auth_dot_json,
-            AuthCredentialsStoreMode::Ephemeral,
-            AuthKeyringBackendKind::default(),
-        )
-        .map_err(RefreshTokenError::Transient)?;
-        self.reload().await;
+        let auth = self
+            .external_chatgpt_auth(&refreshed)
+            .await
+            .map_err(RefreshTokenError::Transient)?;
+        self.set_cached_auth(Some(auth));
         Ok(())
     }
 

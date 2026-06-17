@@ -4,6 +4,7 @@ use std::time::Duration;
 use codex_config::AppToolApproval;
 use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
 use codex_config::McpServerConfig;
+use codex_config::McpServerEnvVar;
 use codex_config::McpServerToolConfig;
 use codex_config::McpServerTransportConfig;
 use pretty_assertions::assert_eq;
@@ -47,6 +48,76 @@ fn server(url: &str) -> McpServerConfig {
 
 fn plugin(plugin_id: &str) -> McpPluginAttribution {
     McpPluginAttribution::new(plugin_id.to_string(), plugin_id.to_string())
+}
+
+#[test]
+fn environment_variable_filter_applies_to_every_pending_registration() {
+    let mut stdio = server("https://unused.example/mcp");
+    stdio.transport = McpServerTransportConfig::Stdio {
+        command: "mcp-server".to_string(),
+        args: Vec::new(),
+        env: Some(HashMap::from([
+            ("SECRET".to_string(), "secret".to_string()),
+            ("SAFE".to_string(), "safe".to_string()),
+        ])),
+        env_vars: vec![
+            McpServerEnvVar::from("SECRET"),
+            McpServerEnvVar::from("SAFE"),
+        ],
+        cwd: None,
+    };
+    let mut http = server("https://http.example/mcp");
+    http.transport = McpServerTransportConfig::StreamableHttp {
+        url: "https://http.example/mcp".to_string(),
+        bearer_token_env_var: Some("secret".to_string()),
+        http_headers: None,
+        env_http_headers: Some(HashMap::from([
+            ("X-Secret".to_string(), "SECRET".to_string()),
+            ("X-Safe".to_string(), "SAFE".to_string()),
+        ])),
+    };
+    let mut expected_stdio = stdio.clone();
+    expected_stdio.transport = McpServerTransportConfig::Stdio {
+        command: "mcp-server".to_string(),
+        args: Vec::new(),
+        env: Some(HashMap::from([("SAFE".to_string(), "safe".to_string())])),
+        env_vars: vec![McpServerEnvVar::from("SAFE")],
+        cwd: None,
+    };
+    let mut expected_http = http.clone();
+    expected_http.transport = McpServerTransportConfig::StreamableHttp {
+        url: "https://http.example/mcp".to_string(),
+        bearer_token_env_var: None,
+        http_headers: None,
+        env_http_headers: Some(HashMap::from([("X-Safe".to_string(), "SAFE".to_string())])),
+    };
+
+    let mut builder = ResolvedMcpCatalog::builder();
+    builder.register(McpServerRegistration::from_plugin(
+        "stdio".to_string(),
+        plugin("plugin@test"),
+        /*plugin_order*/ 0,
+        stdio,
+    ));
+    builder.register(McpServerRegistration::from_extension(
+        "http".to_string(),
+        "extension",
+        /*contribution_order*/ 0,
+        http,
+    ));
+    builder.retain_environment_variables(|name| !name.eq_ignore_ascii_case("SECRET"));
+
+    let catalog = builder.build();
+    assert_eq!(
+        catalog
+            .server("stdio")
+            .map(super::ResolvedMcpServer::config),
+        Some(&expected_stdio)
+    );
+    assert_eq!(
+        catalog.server("http").map(super::ResolvedMcpServer::config),
+        Some(&expected_http)
+    );
 }
 
 fn plugin_source(plugin_id: &str) -> McpServerSource {

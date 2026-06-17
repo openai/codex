@@ -4488,7 +4488,6 @@ dependencies = [
 name = "codex-workload-identity-providers"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "codex-workload-identity",
  "codex-workload-identity-aws",
  "codex-workload-identity-azure",
@@ -4496,7 +4495,6 @@ dependencies = [
  "codex-workload-identity-github-actions",
  "codex-workload-identity-spiffe",
  "reqwest 0.12.28",
- "tempfile",
  "tokio",
 ]
 
@@ -4504,7 +4502,6 @@ dependencies = [
 name = "codex-workload-identity-spiffe"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "codex-workload-identity",
  "spiffe",
  "tokio",

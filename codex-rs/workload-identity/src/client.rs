@@ -2,9 +2,11 @@ use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::BoundedResponseBodyError;
 use crate::SubjectTokenError;
 use crate::SubjectTokenProvider;
 use crate::WorkloadIdentityConfig;
+use crate::read_bounded_response_body;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
@@ -16,10 +18,12 @@ const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_token";
 const MAX_REFRESH_LEAD: Duration = Duration::from_secs(5 * 60);
 const TOKEN_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
 const FAILED_EXCHANGE_RETRY_DELAY: Duration = Duration::from_secs(5);
+const MAX_TOKEN_RESPONSE_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct WorkloadIdentityAccessToken {
     pub access_token: String,
+    pub user_id: String,
     pub chatgpt_account_id: String,
     pub chatgpt_plan_type: Option<String>,
 }
@@ -29,6 +33,7 @@ impl std::fmt::Debug for WorkloadIdentityAccessToken {
         formatter
             .debug_struct("WorkloadIdentityAccessToken")
             .field("access_token", &"[REDACTED]")
+            .field("user_id", &self.user_id)
             .field("chatgpt_account_id", &self.chatgpt_account_id)
             .field("chatgpt_plan_type", &self.chatgpt_plan_type)
             .finish()
@@ -47,12 +52,20 @@ pub enum WorkloadIdentityError {
     EmptyAccessToken,
     #[error("workload identity token exchange returned an empty ChatGPT account ID")]
     EmptyAccountId,
+    #[error("workload identity token exchange returned an empty user ID")]
+    EmptyUserId,
     #[error("workload identity token exchange returned a token with no usable lifetime")]
     InvalidLifetime,
     #[error("workload identity token exchange returned an unexpected token type")]
     UnexpectedTokenType,
+    #[error("workload identity token exchange returned an invalid response")]
+    InvalidResponse,
+    #[error("workload identity token exchange returned an oversized response")]
+    ResponseTooLarge,
     #[error("workload identity token exchange is unavailable")]
     ExchangeUnavailable,
+    #[error("workload identity token exchange changed the mapped principal during refresh")]
+    PrincipalChanged,
     #[error("{0}")]
     RecentFailure(String),
 }
@@ -71,6 +84,7 @@ struct CachedExchangeFailure {
 struct CacheState {
     token: Option<CachedAccessToken>,
     failure: Option<CachedExchangeFailure>,
+    principal: Option<(String, String)>,
 }
 
 pub struct WorkloadIdentityClient<S> {
@@ -186,16 +200,22 @@ where
             .send()
             .await?;
         let status = response.status();
+        let body = read_bounded_response_body(response, MAX_TOKEN_RESPONSE_BYTES)
+            .await
+            .map_err(|error| match error {
+                BoundedResponseBodyError::Request(error) => WorkloadIdentityError::Request(error),
+                BoundedResponseBodyError::TooLarge => WorkloadIdentityError::ResponseTooLarge,
+            })?;
         if !status.is_success() {
-            let message = response
-                .json::<TokenExchangeErrorResponse>()
-                .await
+            let message = serde_json::from_slice::<TokenExchangeErrorResponse>(&body)
                 .ok()
-                .and_then(|response| response.error)
+                .and_then(TokenExchangeErrorResponse::code)
+                .filter(|code| is_safe_error_code(code))
                 .unwrap_or_else(|| "token endpoint rejected the request".to_string());
             return Err(WorkloadIdentityError::Rejected { status, message });
         }
-        let response: TokenExchangeResponse = response.json().await?;
+        let response: TokenExchangeResponse =
+            serde_json::from_slice(&body).map_err(|_| WorkloadIdentityError::InvalidResponse)?;
         if !response.token_type.eq_ignore_ascii_case("bearer")
             || response.issued_token_type != ACCESS_TOKEN_TYPE
         {
@@ -207,12 +227,16 @@ where
         if response.chatgpt_account_id.trim().is_empty() {
             return Err(WorkloadIdentityError::EmptyAccountId);
         }
+        if response.user_id.trim().is_empty() {
+            return Err(WorkloadIdentityError::EmptyUserId);
+        }
         if response.expires_in == 0 {
             return Err(WorkloadIdentityError::InvalidLifetime);
         }
 
         let token = WorkloadIdentityAccessToken {
             access_token: response.access_token,
+            user_id: response.user_id,
             chatgpt_account_id: response.chatgpt_account_id,
             chatgpt_plan_type: response.chatgpt_plan_type,
         };
@@ -223,16 +247,24 @@ where
         let refresh_at = Instant::now()
             .checked_add(lifetime.saturating_sub(refresh_lead))
             .ok_or(WorkloadIdentityError::InvalidLifetime)?;
-        *self
+        let mut cache = self
             .cache
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = CacheState {
-            failure: None,
-            token: Some(CachedAccessToken {
-                token: token.clone(),
-                refresh_at,
-            }),
-        };
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((user_id, account_id)) = cache.principal.as_ref()
+            && (user_id != &token.user_id || account_id != &token.chatgpt_account_id)
+        {
+            cache.token = None;
+            return Err(WorkloadIdentityError::PrincipalChanged);
+        }
+        cache
+            .principal
+            .get_or_insert_with(|| (token.user_id.clone(), token.chatgpt_account_id.clone()));
+        cache.failure = None;
+        cache.token = Some(CachedAccessToken {
+            token: token.clone(),
+            refresh_at,
+        });
         Ok(token)
     }
 }
@@ -254,6 +286,7 @@ struct TokenExchangeResponse {
     issued_token_type: String,
     token_type: String,
     expires_in: u64,
+    user_id: String,
     chatgpt_account_id: String,
     #[serde(default)]
     chatgpt_plan_type: Option<String>,
@@ -262,7 +295,31 @@ struct TokenExchangeResponse {
 #[derive(Deserialize)]
 struct TokenExchangeErrorResponse {
     #[serde(default)]
-    error: Option<String>,
+    error: Option<TokenExchangeError>,
+}
+
+impl TokenExchangeErrorResponse {
+    fn code(self) -> Option<String> {
+        match self.error? {
+            TokenExchangeError::Code(code) => Some(code),
+            TokenExchangeError::Details { code } => code,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum TokenExchangeError {
+    Code(String),
+    Details { code: Option<String> },
+}
+
+fn is_safe_error_code(code: &str) -> bool {
+    !code.is_empty()
+        && code.len() <= 64
+        && code
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
 }
 
 #[cfg(test)]

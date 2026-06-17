@@ -1,8 +1,8 @@
-use async_trait::async_trait;
 use codex_app_server_protocol::AuthMode;
 use codex_workload_identity_providers::ConfiguredWorkloadIdentityClient;
 
 use super::ExternalAuth;
+use super::ExternalAuthFuture;
 use super::ExternalAuthRefreshContext;
 use super::ExternalAuthTokens;
 
@@ -31,20 +31,23 @@ impl WorkloadIdentityExternalAuth {
     }
 }
 
-#[async_trait]
 impl ExternalAuth for WorkloadIdentityExternalAuth {
     fn auth_mode(&self) -> AuthMode {
         AuthMode::Chatgpt
     }
 
-    async fn resolve(&self) -> std::io::Result<Option<ExternalAuthTokens>> {
-        self.tokens(false).await.map(Some)
+    fn requires_successful_resolution(&self) -> bool {
+        true
     }
 
-    async fn refresh(
+    fn resolve(&self) -> ExternalAuthFuture<'_, Option<ExternalAuthTokens>> {
+        Box::pin(async move { self.tokens(false).await.map(Some) })
+    }
+
+    fn refresh(
         &self,
         _context: ExternalAuthRefreshContext,
-    ) -> std::io::Result<ExternalAuthTokens> {
-        self.tokens(true).await
+    ) -> ExternalAuthFuture<'_, ExternalAuthTokens> {
+        Box::pin(async move { self.tokens(true).await })
     }
 }

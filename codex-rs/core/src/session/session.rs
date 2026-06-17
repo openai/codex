@@ -617,12 +617,7 @@ impl Session {
                 auth.as_ref(),
             )
             .await;
-            Ok::<_, std::io::Error>((
-                auth,
-                mcp_servers,
-                auth_statuses,
-                tool_plugin_provenance,
-            ))
+            Ok::<_, std::io::Error>((auth, mcp_servers, auth_statuses, tool_plugin_provenance))
         }
         .instrument(info_span!(
             "session_init.auth_mcp",
@@ -630,11 +625,8 @@ impl Session {
         ));
 
         // Join all independent futures.
-        let (
-            thread_persistence_result,
-            state_db_ctx,
-            auth_and_mcp_result,
-        ) = tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
+        let (thread_persistence_result, state_db_ctx, auth_and_mcp_result) =
+            tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
         let (auth, mcp_servers, auth_statuses, tool_plugin_provenance) = auth_and_mcp_result?;
 
         let mut live_thread_init =
@@ -810,10 +802,23 @@ impl Session {
                 shell::default_user_shell()
             };
             let shell_snapshot = if config.features.enabled(Feature::ShellSnapshot) {
+                let excluded_environment_variables = config
+                    .workload_identity
+                    .as_ref()
+                    .map(|workload_identity| {
+                        workload_identity
+                            .credential_source
+                            .sensitive_environment_variables()
+                            .into_iter()
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 ShellSnapshot::new(
                     config.codex_home.clone(),
                     thread_id,
                     session_telemetry.clone(),
+                    excluded_environment_variables,
                     state_db_ctx.clone(),
                 )
             } else {

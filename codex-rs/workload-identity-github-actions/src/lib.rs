@@ -1,8 +1,11 @@
 use std::time::Duration;
 
+use codex_workload_identity::BoundedResponseBodyError;
+use codex_workload_identity::MAX_SUBJECT_TOKEN_BYTES;
 use codex_workload_identity::SubjectToken;
 use codex_workload_identity::SubjectTokenError;
 use codex_workload_identity::SubjectTokenProvider;
+use codex_workload_identity::read_bounded_response_body;
 use serde::Deserialize;
 use url::Host;
 use url::Url;
@@ -53,7 +56,11 @@ impl GithubActionsSubjectTokenProvider {
                 Host::Ipv4(address) => address.is_loopback(),
                 Host::Ipv6(address) => address.is_loopback(),
             });
-        if !github_https && !loopback_http {
+        if (!github_https && !loopback_http)
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.fragment().is_some()
+        {
             return Err(SubjectTokenError::InvalidConfiguration {
                 provider: "github_actions",
             });
@@ -107,7 +114,17 @@ impl SubjectTokenProvider for GithubActionsSubjectTokenProvider {
                 provider: "github_actions",
             });
         }
-        let response = response.json::<OidcTokenResponse>().await.map_err(|_| {
+        let body = read_bounded_response_body(response, MAX_SUBJECT_TOKEN_BYTES)
+            .await
+            .map_err(|error| match error {
+                BoundedResponseBodyError::Request(_) => SubjectTokenError::InvalidResponse {
+                    provider: "github_actions",
+                },
+                BoundedResponseBodyError::TooLarge => SubjectTokenError::TooLarge {
+                    provider: "github_actions",
+                },
+            })?;
+        let response = serde_json::from_slice::<OidcTokenResponse>(&body).map_err(|_| {
             SubjectTokenError::InvalidResponse {
                 provider: "github_actions",
             }
@@ -181,5 +198,27 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(audiences, vec!["openai-audience"]);
         Ok(())
+    }
+
+    #[test]
+    fn rejects_request_url_user_info_and_fragments() {
+        for request_url in [
+            "https://user@actions.githubusercontent.com/token",
+            "https://actions.githubusercontent.com/token#fragment",
+        ] {
+            let source = GithubActionsSubjectTokenProvider {
+                request_url: Some(request_url.to_string()),
+                request_token: Some("runner-request-secret".to_string()),
+                audience: "openai-audience".to_string(),
+                http: reqwest::Client::new(),
+            };
+
+            assert!(matches!(
+                source.request_url(),
+                Err(SubjectTokenError::InvalidConfiguration {
+                    provider: "github_actions"
+                })
+            ));
+        }
     }
 }

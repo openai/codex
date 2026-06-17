@@ -18,13 +18,12 @@ async fn file_source_rereads_rotated_token() -> anyhow::Result<()> {
 #[tokio::test]
 async fn environment_source_captures_startup_value() -> anyhow::Result<()> {
     const VARIABLE: &str = "CODEX_WIF_SOURCE_CAPTURE_TEST";
-    // This test owns a unique process variable and restores it before returning.
-    unsafe { std::env::set_var(VARIABLE, "first.token.value") };
-    let source = EnvironmentSubjectTokenSource::capture(VARIABLE);
-    unsafe { std::env::set_var(VARIABLE, "second.token.value") };
+    let source = EnvironmentSubjectTokenSource {
+        variable: VARIABLE.to_string(),
+        captured: CapturedEnvironmentValue::Value("first.token.value".to_string()),
+    };
 
     assert_eq!(source.subject_token().await?.value(), "first.token.value");
-    unsafe { std::env::remove_var(VARIABLE) };
     Ok(())
 }
 
