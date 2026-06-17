@@ -193,11 +193,15 @@ mod tests {
             .mount(&server)
             .await;
         let record = agent_identity_record_with_generated_key();
-        AgentIdentityAuth::load(record.clone(), &server.uri(), /*auth_route_config*/ None)
-            .await
-            .expect_err("first registration should fail");
-        let auth = AgentIdentityAuth::load(record, &server.uri(), /*auth_route_config*/ None)
-            .await?;
+        AgentIdentityAuth::load(
+            record.clone(),
+            &server.uri(),
+            /*auth_route_config*/ None,
+        )
+        .await
+        .expect_err("first registration should fail");
+        let auth =
+            AgentIdentityAuth::load(record, &server.uri(), /*auth_route_config*/ None).await?;
 
         assert_eq!(request_count.load(Ordering::SeqCst), 2);
         assert_eq!(auth.run_task_id(), "task-run-1");

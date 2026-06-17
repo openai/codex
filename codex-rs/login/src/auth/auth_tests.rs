@@ -355,8 +355,10 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
-        /*agent_identity_authapi_base_url*/ None,
-        /*auth_route_config*/ None,
+        LoadAuthNetworkOptions {
+            agent_identity_authapi_base_url: None,
+            auth_route_config: None,
+        },
     )
     .await
     .unwrap()
@@ -417,8 +419,10 @@ async fn loads_api_key_from_auth_json() {
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
-        /*agent_identity_authapi_base_url*/ None,
-        /*auth_route_config*/ None,
+        LoadAuthNetworkOptions {
+            agent_identity_authapi_base_url: None,
+            auth_route_config: None,
+        },
     )
     .await
     .unwrap()
@@ -512,8 +516,10 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
-        /*agent_identity_authapi_base_url*/ None,
-        /*auth_route_config*/ None,
+        LoadAuthNetworkOptions {
+            agent_identity_authapi_base_url: None,
+            auth_route_config: None,
+        },
     )
     .await
     .expect("load auth")
@@ -921,8 +927,10 @@ async fn load_auth_reads_access_token_from_env() {
         /*forced_chatgpt_workspace_id*/ None,
         Some(&chatgpt_base_url),
         AuthKeyringBackendKind::Direct,
-        Some(&authapi_base_url),
-        /*auth_route_config*/ None,
+        LoadAuthNetworkOptions {
+            agent_identity_authapi_base_url: Some(&authapi_base_url),
+            auth_route_config: None,
+        },
     )
     .await
     .expect("env auth should load")
@@ -969,8 +977,10 @@ async fn load_auth_reads_personal_access_token_from_env() {
             /*forced_chatgpt_workspace_id*/ None,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
-            /*agent_identity_authapi_base_url*/ None,
-            /*auth_route_config*/ None,
+            LoadAuthNetworkOptions {
+                agent_identity_authapi_base_url: None,
+                auth_route_config: None,
+            },
         )
         .await
         .expect("env auth should load")
@@ -1143,8 +1153,10 @@ async fn load_auth_keeps_codex_api_key_env_precedence() {
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
-        /*agent_identity_authapi_base_url*/ None,
-        /*auth_route_config*/ None,
+        LoadAuthNetworkOptions {
+            agent_identity_authapi_base_url: None,
+            auth_route_config: None,
+        },
     )
     .await
     .expect("env auth should load")
@@ -1635,8 +1647,10 @@ async fn plan_type_maps_known_plan() {
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
-        /*agent_identity_authapi_base_url*/ None,
-        /*auth_route_config*/ None,
+        LoadAuthNetworkOptions {
+            agent_identity_authapi_base_url: None,
+            auth_route_config: None,
+        },
     )
     .await
     .expect("load auth")
@@ -1667,8 +1681,10 @@ async fn plan_type_maps_self_serve_business_usage_based_plan() {
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
-        /*agent_identity_authapi_base_url*/ None,
-        /*auth_route_config*/ None,
+        LoadAuthNetworkOptions {
+            agent_identity_authapi_base_url: None,
+            auth_route_config: None,
+        },
     )
     .await
     .expect("load auth")
@@ -1702,8 +1718,10 @@ async fn plan_type_maps_enterprise_cbp_usage_based_plan() {
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
-        /*agent_identity_authapi_base_url*/ None,
-        /*auth_route_config*/ None,
+        LoadAuthNetworkOptions {
+            agent_identity_authapi_base_url: None,
+            auth_route_config: None,
+        },
     )
     .await
     .expect("load auth")
@@ -1737,8 +1755,10 @@ async fn plan_type_maps_unknown_to_unknown() {
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
-        /*agent_identity_authapi_base_url*/ None,
-        /*auth_route_config*/ None,
+        LoadAuthNetworkOptions {
+            agent_identity_authapi_base_url: None,
+            auth_route_config: None,
+        },
     )
     .await
     .expect("load auth")
@@ -1769,8 +1789,10 @@ async fn missing_plan_type_maps_to_unknown() {
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
-        /*agent_identity_authapi_base_url*/ None,
-        /*auth_route_config*/ None,
+        LoadAuthNetworkOptions {
+            agent_identity_authapi_base_url: None,
+            auth_route_config: None,
+        },
     )
     .await
     .expect("load auth")

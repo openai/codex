@@ -305,8 +305,10 @@ impl CodexAuth {
             /*forced_chatgpt_workspace_id*/ None,
             chatgpt_base_url,
             keyring_backend_kind,
-            /*agent_identity_authapi_base_url*/ None,
-            auth_route_config,
+            LoadAuthNetworkOptions {
+                agent_identity_authapi_base_url: None,
+                auth_route_config,
+            },
         )
         .await
     }
@@ -825,8 +827,10 @@ pub async fn enforce_login_restrictions(
         /*forced_chatgpt_workspace_id*/ None,
         config.chatgpt_base_url.as_deref(),
         config.keyring_backend_kind,
-        config.agent_identity_authapi_base_url.as_deref(),
-        auth_route_config,
+        LoadAuthNetworkOptions {
+            agent_identity_authapi_base_url: config.agent_identity_authapi_base_url.as_deref(),
+            auth_route_config,
+        },
     )
     .await?
     else {
@@ -962,6 +966,11 @@ fn logout_all_stores(
     Ok(removed_ephemeral || removed_managed)
 }
 
+struct LoadAuthNetworkOptions<'a> {
+    agent_identity_authapi_base_url: Option<&'a str>,
+    auth_route_config: Option<&'a AuthRouteConfig>,
+}
+
 async fn load_auth(
     codex_home: &Path,
     enable_codex_api_key_env: bool,
@@ -969,9 +978,11 @@ async fn load_auth(
     forced_chatgpt_workspace_id: Option<&[String]>,
     chatgpt_base_url: Option<&str>,
     keyring_backend_kind: AuthKeyringBackendKind,
-    agent_identity_authapi_base_url: Option<&str>,
-    auth_route_config: Option<&AuthRouteConfig>,
+    network_options: LoadAuthNetworkOptions<'_>,
 ) -> std::io::Result<Option<CodexAuth>> {
+    let agent_identity_authapi_base_url = network_options.agent_identity_authapi_base_url;
+    let auth_route_config = network_options.auth_route_config;
+
     // API key via env var takes precedence over any other auth method.
     if enable_codex_api_key_env && let Some(api_key) = read_codex_api_key_from_env() {
         return Ok(Some(CodexAuth::from_api_key(api_key.as_str())));
@@ -1642,8 +1653,10 @@ impl AuthManager {
             forced_chatgpt_workspace_id.as_deref(),
             chatgpt_base_url.as_deref(),
             keyring_backend_kind,
-            /*agent_identity_authapi_base_url*/ None,
-            auth_route_config.as_ref(),
+            LoadAuthNetworkOptions {
+                agent_identity_authapi_base_url: None,
+                auth_route_config: auth_route_config.as_ref(),
+            },
         )
         .await
         .ok()
@@ -1874,8 +1887,10 @@ impl AuthManager {
             forced_chatgpt_workspace_id.as_deref(),
             self.chatgpt_base_url.as_deref(),
             self.keyring_backend_kind,
-            /*agent_identity_authapi_base_url*/ None,
-            self.auth_route_config.as_ref(),
+            LoadAuthNetworkOptions {
+                agent_identity_authapi_base_url: None,
+                auth_route_config: self.auth_route_config.as_ref(),
+            },
         )
         .await
         .ok()
