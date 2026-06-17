@@ -157,6 +157,7 @@ fn format_labeled_requests_snapshot(
 
 fn compacted_summary_only_output(summary: &str) -> Vec<ResponseItem> {
     vec![ResponseItem::Compaction {
+        id: None,
         encrypted_content: summary_with_prefix(summary),
         metadata: None,
     }]
@@ -329,6 +330,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     .await;
 
     let compacted_history = vec![ResponseItem::Compaction {
+        id: None,
         encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
         metadata: None,
     }];
@@ -2356,6 +2358,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
 
     let compacted_history = vec![
         ResponseItem::Compaction {
+            id: None,
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
             metadata: None,
         },
@@ -2511,6 +2514,7 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
             metadata: None,
         },
         ResponseItem::Compaction {
+            id: None,
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
             metadata: None,
         },
@@ -2653,6 +2657,7 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
             metadata: None,
         },
         ResponseItem::Compaction {
+            id: None,
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
             metadata: None,
         },
@@ -4059,6 +4064,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_summary_only_reinject
     .await;
 
     let compacted_history = vec![ResponseItem::Compaction {
+        id: None,
         encrypted_content: summary_with_prefix("REMOTE_SUMMARY_ONLY"),
         metadata: None,
     }];

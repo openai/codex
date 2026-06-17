@@ -878,7 +878,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                 assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
                 assistant_message("parent unknown phase", /*phase*/ None),
                 ResponseItem::Reasoning {
-                    id: "parent-reasoning".to_string(),
+                    id: Some("parent-reasoning".to_string()),
                     summary: Vec::new(),
                     content: None,
                     encrypted_content: None,

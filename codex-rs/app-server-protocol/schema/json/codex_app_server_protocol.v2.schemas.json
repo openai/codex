@@ -11236,13 +11236,6 @@
               },
               "type": "array"
             },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
-            },
             "metadata": {
               "anyOf": [
                 {
@@ -11384,14 +11377,6 @@
                 "null"
               ]
             },
-            "id": {
-              "description": "Legacy id field retained for compatibility with older payloads.",
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
-            },
             "metadata": {
               "anyOf": [
                 {
@@ -11428,13 +11413,6 @@
             },
             "call_id": {
               "type": "string"
-            },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
             },
             "metadata": {
               "anyOf": [
@@ -11483,13 +11461,6 @@
             },
             "execution": {
               "type": "string"
-            },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
             },
             "metadata": {
               "anyOf": [
@@ -11561,13 +11532,6 @@
           "properties": {
             "call_id": {
               "type": "string"
-            },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
             },
             "input": {
               "type": "string"
@@ -11705,13 +11669,6 @@
                 }
               ]
             },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
-            },
             "metadata": {
               "anyOf": [
                 {
@@ -11744,9 +11701,6 @@
         },
         {
           "properties": {
-            "id": {
-              "type": "string"
-            },
             "metadata": {
               "anyOf": [
                 {
@@ -11778,7 +11732,6 @@
             }
           },
           "required": [
-            "id",
             "result",
             "status",
             "type"

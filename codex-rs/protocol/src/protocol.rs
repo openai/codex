@@ -762,6 +762,7 @@ impl InterAgentCommunication {
             }],
         };
         ResponseItem::AgentMessage {
+            id: None,
             author: self.author.to_string(),
             recipient: self.recipient.to_string(),
             content,
@@ -4284,6 +4285,7 @@ mod tests {
         assert_eq!(
             communication.to_model_input_item(),
             ResponseItem::AgentMessage {
+                id: None,
                 author: "/root/worker".to_string(),
                 recipient: "/root".to_string(),
                 content: vec![
