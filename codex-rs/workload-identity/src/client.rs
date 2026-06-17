@@ -73,6 +73,7 @@ pub enum WorkloadIdentityError {
 struct CachedAccessToken {
     token: WorkloadIdentityAccessToken,
     refresh_at: Instant,
+    expires_at: Instant,
 }
 
 struct CachedExchangeFailure {
@@ -121,7 +122,7 @@ where
     }
 
     pub async fn resolve(&self) -> Result<WorkloadIdentityAccessToken, WorkloadIdentityError> {
-        if let Some(cached) = self.cached_result() {
+        if let Some(cached) = self.cached_resolve_result() {
             return cached;
         }
         let _permit = self
@@ -129,10 +130,13 @@ where
             .acquire()
             .await
             .map_err(|_| WorkloadIdentityError::ExchangeUnavailable)?;
-        if let Some(cached) = self.cached_result() {
+        if let Some(cached) = self.cached_resolve_result() {
             return cached;
         }
-        self.exchange_and_record().await
+        match self.exchange_and_record().await {
+            Ok(token) => Ok(token),
+            Err(error) => self.valid_cached_token().ok_or(error),
+        }
     }
 
     pub async fn refresh(&self) -> Result<WorkloadIdentityAccessToken, WorkloadIdentityError> {
@@ -141,27 +145,59 @@ where
             .acquire()
             .await
             .map_err(|_| WorkloadIdentityError::ExchangeUnavailable)?;
-        self.exchange_and_record().await
+        let result = self.exchange_and_record().await;
+        if result.is_err() {
+            self.cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .token = None;
+        }
+        result
     }
 
-    fn cached_result(&self) -> Option<Result<WorkloadIdentityAccessToken, WorkloadIdentityError>> {
+    fn cached_resolve_result(
+        &self,
+    ) -> Option<Result<WorkloadIdentityAccessToken, WorkloadIdentityError>> {
         let cache = self
             .cache
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = Instant::now();
+        if let Some(token) = cache
+            .token
+            .as_ref()
+            .filter(|cached| now < cached.refresh_at)
+        {
+            return Some(Ok(token.token.clone()));
+        }
         if let Some(failure) = cache.failure.as_ref()
             && now < failure.retry_at
         {
+            if let Some(token) = cache
+                .token
+                .as_ref()
+                .filter(|cached| now < cached.expires_at)
+            {
+                return Some(Ok(token.token.clone()));
+            }
             return Some(Err(WorkloadIdentityError::RecentFailure(
                 failure.message.clone(),
             )));
         }
+        None
+    }
+
+    fn valid_cached_token(&self) -> Option<WorkloadIdentityAccessToken> {
+        let cache = self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let now = Instant::now();
         cache
             .token
             .as_ref()
-            .filter(|cached| now < cached.refresh_at)
-            .map(|cached| Ok(cached.token.clone()))
+            .filter(|cached| now < cached.expires_at)
+            .map(|cached| cached.token.clone())
     }
 
     async fn exchange_and_record(
@@ -244,8 +280,12 @@ where
         let refresh_lead = MAX_REFRESH_LEAD.min(Duration::from_secs(
             response.expires_in.saturating_div(10).max(1),
         ));
-        let refresh_at = Instant::now()
+        let now = Instant::now();
+        let refresh_at = now
             .checked_add(lifetime.saturating_sub(refresh_lead))
+            .ok_or(WorkloadIdentityError::InvalidLifetime)?;
+        let expires_at = now
+            .checked_add(lifetime)
             .ok_or(WorkloadIdentityError::InvalidLifetime)?;
         let mut cache = self
             .cache
@@ -264,6 +304,7 @@ where
         cache.token = Some(CachedAccessToken {
             token: token.clone(),
             refresh_at,
+            expires_at,
         });
         Ok(token)
     }

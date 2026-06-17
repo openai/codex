@@ -1700,21 +1700,13 @@ impl AuthManager {
         })
     }
 
-    /// Current cached auth (clone). May be `None` if not logged in or load failed.
-    /// For managed ChatGPT auth that needs a proactive refresh, first performs
-    /// a guarded reload and then refreshes only if the on-disk auth is unchanged.
-    pub async fn auth(&self) -> Option<CodexAuth> {
-        match self.auth_result().await {
-            Ok(auth) => auth,
-            Err(error) => {
-                tracing::error!("Failed to resolve external auth: {error}");
-                None
-            }
-        }
-    }
-
-    /// Resolves current auth while preserving errors from explicitly configured external auth.
-    pub async fn auth_result(&self) -> std::io::Result<Option<CodexAuth>> {
+    /// Resolves current auth. May return `None` if not logged in or load failed.
+    ///
+    /// Errors from required external auth are preserved so callers cannot accidentally fall back
+    /// to another credential when workload identity resolution fails. For managed ChatGPT auth
+    /// that needs a proactive refresh, this first performs a guarded reload and then refreshes
+    /// only if the on-disk auth is unchanged.
+    pub async fn auth(&self) -> std::io::Result<Option<CodexAuth>> {
         if let Some(external_auth) = self.external_auth() {
             match self.resolve_external_auth(&external_auth).await {
                 Ok(Some(auth)) => return Ok(Some(auth)),
@@ -1738,6 +1730,11 @@ impl AuthManager {
             return Ok(Some(auth));
         }
         Ok(self.auth_cached())
+    }
+
+    /// Backwards-compatible explicit name for callers that already handle auth resolution errors.
+    pub async fn auth_result(&self) -> std::io::Result<Option<CodexAuth>> {
+        self.auth().await
     }
 
     /// Force a reload of the auth information from auth.json. Returns

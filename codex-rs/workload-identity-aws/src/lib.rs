@@ -1,7 +1,6 @@
 use std::env;
 
 use aws_config::ecs::EcsCredentialsProvider;
-use aws_config::imds::credentials::ImdsCredentialsProvider;
 use aws_config::meta::credentials::CredentialsProviderChain;
 use aws_config::provider_config::ProviderConfig;
 use aws_config::web_identity_token::WebIdentityTokenCredentialsProvider;
@@ -31,8 +30,9 @@ const STS_ACTION_QUERY: &str = "Action=GetCallerIdentity&Version=2011-06-15";
 /// Creates a SigV4-signed STS `GetCallerIdentity` proof from AWS workload credentials.
 ///
 /// The credential chain intentionally excludes environment access keys, shared profiles, SSO,
-/// credential processes, and AWS login credentials. It accepts only web identity, ECS/EKS
-/// container credentials, and EC2 IMDSv2 credentials.
+/// credential processes, AWS login credentials, and EC2 instance metadata. It accepts only web
+/// identity and ECS/EKS container credentials whose acquisition inputs can be removed from model
+/// subprocesses.
 #[derive(Clone, Debug)]
 pub struct AwsSubjectTokenProvider {
     identity_provider_id: String,
@@ -66,12 +66,6 @@ impl AwsSubjectTokenProvider {
         .or_else(
             "EcsContainer",
             EcsCredentialsProvider::builder()
-                .configure(&provider_config)
-                .build(),
-        )
-        .or_else(
-            "Ec2InstanceMetadata",
-            ImdsCredentialsProvider::builder()
                 .configure(&provider_config)
                 .build(),
         );
@@ -219,7 +213,7 @@ fn invalid_configuration() -> SubjectTokenError {
 fn missing_workload_credentials() -> SubjectTokenError {
     SubjectTokenError::MissingPrerequisite {
         provider: "aws",
-        prerequisite: "AWS web identity, container, or IMDSv2 workload credentials".to_string(),
+        prerequisite: "AWS web identity or container workload credentials".to_string(),
     }
 }
 

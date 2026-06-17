@@ -857,27 +857,6 @@
         },
         {
           "additionalProperties": false,
-          "description": "A GCE or GKE service-account identity token from the metadata service.",
-          "properties": {
-            "service_account": {
-              "default": null,
-              "description": "Service account email or `default` when omitted.",
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "gcp"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
           "description": "A GitHub Actions OIDC token requested from the runner token service.",
           "properties": {
             "type": {

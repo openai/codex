@@ -1256,7 +1256,12 @@ fn codex_apps_auth_failure_metadata() -> McpToolApprovalMetadata {
 }
 
 async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: &TurnContext) {
-    let auth = session.services.auth_manager.auth().await;
+    let auth = session
+        .services
+        .auth_manager
+        .auth()
+        .await
+        .expect("auth resolution should succeed");
     let manager = codex_mcp::McpConnectionManager::new(
         &HashMap::new(),
         turn_context.config.mcp_oauth_credentials_store_mode,

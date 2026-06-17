@@ -649,7 +649,11 @@ async fn external_chatgpt_auth_resolves_and_refreshes_without_writing_auth_file(
         manager.get_api_auth_mode(),
         Some(AuthMode::ChatgptAuthTokens)
     );
-    let auth = manager.auth().await.expect("external auth should resolve");
+    let auth = manager
+        .auth()
+        .await
+        .expect("external auth resolution should succeed")
+        .expect("external auth should resolve");
     assert!(manager.is_external_chatgpt_auth_active());
     assert_eq!(auth.get_token().unwrap(), token);
     assert_eq!(auth.get_account_id().as_deref(), Some(WORKSPACE_ID_ALLOWED));
@@ -698,7 +702,11 @@ async fn external_chatgpt_auth_allows_host_to_change_account_during_refresh() {
     )
     .await;
     manager.set_external_auth(external);
-    manager.auth().await.expect("initial auth should resolve");
+    manager
+        .auth()
+        .await
+        .expect("initial auth resolution should succeed")
+        .expect("initial auth should resolve");
 
     manager
         .refresh_token()
@@ -729,7 +737,7 @@ async fn auth_result_preserves_external_auth_resolution_errors() {
         .expect_err("external auth failure should be preserved");
 
     assert_eq!(error.to_string(), "external token exchange failed");
-    assert_eq!(manager.auth().await, None);
+    assert!(manager.auth().await.is_err());
 }
 
 #[tokio::test]
@@ -740,10 +748,12 @@ async fn external_bearer_only_auth_manager_uses_cached_provider_token() {
     let first = manager
         .auth()
         .await
+        .expect("provider auth resolution should succeed")
         .and_then(|auth| auth.api_key().map(str::to_string));
     let second = manager
         .auth()
         .await
+        .expect("provider auth resolution should succeed")
         .and_then(|auth| auth.api_key().map(str::to_string));
 
     assert_eq!(first.as_deref(), Some("provider-token"));
@@ -762,10 +772,12 @@ async fn external_bearer_only_auth_manager_disables_auto_refresh_when_interval_i
     let first = manager
         .auth()
         .await
+        .expect("provider auth resolution should succeed")
         .and_then(|auth| auth.api_key().map(str::to_string));
     let second = manager
         .auth()
         .await
+        .expect("provider auth resolution should succeed")
         .and_then(|auth| auth.api_key().map(str::to_string));
 
     assert_eq!(first.as_deref(), Some("provider-token"));
@@ -778,7 +790,7 @@ async fn external_bearer_only_auth_manager_returns_none_when_command_fails() {
     let manager = AuthManager::external_bearer_only(script.auth_config());
 
     assert_eq!(manager.auth_result().await.unwrap(), None);
-    assert_eq!(manager.auth().await, None);
+    assert_eq!(manager.auth().await.unwrap(), None);
 }
 
 #[tokio::test]
@@ -790,6 +802,7 @@ async fn unauthorized_recovery_uses_external_refresh_for_bearer_manager() {
     let initial_token = manager
         .auth()
         .await
+        .expect("provider auth resolution should succeed")
         .and_then(|auth| auth.api_key().map(str::to_string));
     let mut recovery = manager.unauthorized_recovery();
 
@@ -806,6 +819,7 @@ async fn unauthorized_recovery_uses_external_refresh_for_bearer_manager() {
     let refreshed_token = manager
         .auth()
         .await
+        .expect("provider auth resolution should succeed")
         .and_then(|auth| auth.api_key().map(str::to_string));
     assert_eq!(initial_token.as_deref(), Some("provider-token"));
     assert_eq!(refreshed_token.as_deref(), Some("refreshed-provider-token"));
@@ -1194,7 +1208,7 @@ async fn auth_manager_rejects_env_personal_access_token_workspace_mismatch() {
     )
     .await;
 
-    assert_eq!(manager.auth().await, None);
+    assert_eq!(manager.auth().await.unwrap(), None);
     server.verify().await;
 }
 
@@ -1245,7 +1259,7 @@ async fn auth_manager_rejects_stored_personal_access_token_workspace_mismatch() 
         )
         .await;
 
-        assert_eq!(manager.auth().await, None);
+        assert_eq!(manager.auth().await.unwrap(), None);
     }
     server.verify().await;
 }

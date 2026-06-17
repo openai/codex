@@ -18,7 +18,7 @@ pub(super) async fn load_remote_control_auth(
 ) -> io::Result<RemoteControlConnectionAuth> {
     let mut reloaded = false;
     let auth = loop {
-        let Some(auth) = auth_manager.auth().await else {
+        let Some(auth) = auth_manager.auth().await? else {
             if reloaded {
                 return Err(io::Error::new(
                     ErrorKind::PermissionDenied,

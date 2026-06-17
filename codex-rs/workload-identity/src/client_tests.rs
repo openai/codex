@@ -148,6 +148,92 @@ async fn forced_refresh_performs_a_new_exchange() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn proactive_refresh_failure_uses_token_until_expiry() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(exchange_response("still.valid.access.token"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = test_client(&server).await?;
+    let token = client.resolve().await?;
+    {
+        let mut cache = client.cache.lock().expect("cache lock");
+        cache.token.as_mut().expect("cached token").refresh_at = Instant::now();
+    }
+
+    server.reset().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    assert_eq!(client.resolve().await?, token);
+    assert_eq!(client.resolve().await?, token);
+    Ok(())
+}
+
+#[tokio::test]
+async fn proactive_refresh_failure_fails_after_cached_token_expires() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(exchange_response("expiring.access.token"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = test_client(&server).await?;
+    client.resolve().await?;
+    {
+        let mut cache = client.cache.lock().expect("cache lock");
+        let cached = cache.token.as_mut().expect("cached token");
+        cached.refresh_at = Instant::now();
+        cached.expires_at = Instant::now();
+    }
+
+    server.reset().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    assert!(client.resolve().await.is_err());
+    assert!(client.resolve().await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn forced_refresh_does_not_reuse_a_rejected_token() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(exchange_response("rejected.access.token"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = test_client(&server).await?;
+    client.resolve().await?;
+
+    server.reset().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    assert!(client.refresh().await.is_err());
+    assert!(client.cache.lock().expect("cache lock").token.is_none());
+    assert!(client.resolve().await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
 async fn refresh_rejects_a_changed_principal() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

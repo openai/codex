@@ -49,7 +49,12 @@ impl AccountRequestProcessor {
     }
 
     async fn rate_limit_reset_backend_client(&self) -> Result<BackendClient, JSONRPCErrorError> {
-        let Some(auth) = self.auth_manager.auth().await else {
+        let Some(auth) = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?
+        else {
             return Err(invalid_request(
                 "codex account authentication required for rate limit reset credits",
             ));

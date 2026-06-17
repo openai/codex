@@ -136,7 +136,7 @@ async fn rejects_static_credentials_without_a_session_token() {
             assert_eq!(provider, "aws");
             assert_eq!(
                 prerequisite,
-                "AWS web identity, container, or IMDSv2 workload credentials"
+                "AWS web identity or container workload credentials"
             );
         }
         other => panic!("unexpected error: {other}"),

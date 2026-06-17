@@ -9,13 +9,11 @@ default = ["workload-identity-azure"]
 workload-identity-all-providers = [
     "workload-identity-aws",
     "workload-identity-azure",
-    "workload-identity-gcp",
     "workload-identity-github-actions",
     "workload-identity-spiffe",
 ]
 workload-identity-aws = ["codex-workload-identity-providers/aws"]
 workload-identity-azure = ["codex-workload-identity-providers/azure"]
-workload-identity-gcp = ["codex-workload-identity-providers/gcp"]
 workload-identity-github-actions = ["codex-workload-identity-providers/github-actions"]
 workload-identity-spiffe = ["codex-workload-identity-providers/spiffe"]
 

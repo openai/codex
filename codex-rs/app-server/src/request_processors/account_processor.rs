@@ -781,10 +781,11 @@ impl AccountRequestProcessor {
             }
         } else {
             let auth = if do_refresh {
-                self.auth_manager.auth_cached()
+                Ok(self.auth_manager.auth_cached())
             } else {
                 self.auth_manager.auth().await
-            };
+            }
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
             match auth {
                 Some(auth) => {
                     let permanent_refresh_failure =
@@ -856,7 +857,12 @@ impl AccountRequestProcessor {
     async fn get_account_rate_limits_response(
         &self,
     ) -> Result<GetAccountRateLimitsResponse, JSONRPCErrorError> {
-        let Some(auth) = self.auth_manager.auth().await else {
+        let Some(auth) = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?
+        else {
             return Err(invalid_request(
                 "codex account authentication required to read rate limits",
             ));
@@ -919,7 +925,12 @@ impl AccountRequestProcessor {
     async fn get_account_token_usage_response(
         &self,
     ) -> Result<GetAccountTokenUsageResponse, JSONRPCErrorError> {
-        let Some(auth) = self.auth_manager.auth().await else {
+        let Some(auth) = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?
+        else {
             return Err(invalid_request(
                 "codex account authentication required to read token usage",
             ));
@@ -978,7 +989,12 @@ impl AccountRequestProcessor {
         &self,
         params: SendAddCreditsNudgeEmailParams,
     ) -> Result<AddCreditsNudgeEmailStatus, JSONRPCErrorError> {
-        let Some(auth) = self.auth_manager.auth().await else {
+        let Some(auth) = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?
+        else {
             return Err(invalid_request(
                 "codex account authentication required to notify workspace owner",
             ));

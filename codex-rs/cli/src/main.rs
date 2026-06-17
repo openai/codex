@@ -1815,13 +1815,13 @@ async fn load_exec_server_remote_auth(
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await;
 
-    let auth = match auth_manager.auth().await {
+    let auth = match auth_manager.auth().await? {
         Some(auth) => auth,
         None => {
             auth_manager.reload().await;
             auth_manager
                 .auth()
-                .await
+                .await?
                 .ok_or_else(|| anyhow::anyhow!(missing_auth_error))?
         }
     };

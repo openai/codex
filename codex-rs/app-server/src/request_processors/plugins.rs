@@ -544,7 +544,11 @@ impl PluginRequestProcessor {
         if !config.features.enabled(Feature::Plugins) {
             return Ok(empty_response());
         }
-        let auth = self.auth_manager.auth().await;
+        let auth = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
         if !self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
             .await
@@ -795,7 +799,11 @@ impl PluginRequestProcessor {
         if !config.features.enabled(Feature::Plugins) {
             return Ok(empty_response());
         }
-        let auth = self.auth_manager.auth().await;
+        let auth = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
         if !self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
             .await
@@ -992,7 +1000,11 @@ impl PluginRequestProcessor {
 
         let config = self.load_latest_config(config_cwd).await?;
         let plugins_input = config.plugins_config_input();
-        let auth = self.auth_manager.auth().await;
+        let auth = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
         plugins_manager.set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
 
         let plugin = match read_source {
@@ -1176,7 +1188,11 @@ impl PluginRequestProcessor {
             ));
         }
 
-        let auth = self.auth_manager.auth().await;
+        let auth = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
@@ -1397,7 +1413,11 @@ impl PluginRequestProcessor {
         if !config.features.enabled(Feature::Plugins) {
             return Err(invalid_request("plugin sharing is not enabled"));
         }
-        let auth = self.auth_manager.auth().await;
+        let auth = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
         Ok((config, auth))
     }
 
@@ -1425,7 +1445,11 @@ impl PluginRequestProcessor {
         };
         let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
         let config = self.load_latest_config(config_cwd.clone()).await?;
-        let auth = self.auth_manager.auth().await;
+        let auth = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
 
         if !self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
@@ -1499,7 +1523,11 @@ impl PluginRequestProcessor {
         }
         validate_remote_plugin_id(&remote_plugin_id)?;
 
-        let auth = self.auth_manager.auth().await;
+        let auth = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
@@ -1896,7 +1924,11 @@ impl PluginRequestProcessor {
         }
         validate_remote_plugin_id(&plugin_id)?;
 
-        let auth = self.auth_manager.auth().await;
+        let auth = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };

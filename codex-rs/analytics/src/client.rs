@@ -474,7 +474,7 @@ async fn send_track_events(
         return;
     }
 
-    let Some(auth) = auth_manager.auth().await else {
+    let Ok(Some(auth)) = auth_manager.auth().await else {
         return;
     };
     if !auth.uses_codex_backend() {

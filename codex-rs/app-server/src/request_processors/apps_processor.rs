@@ -64,7 +64,11 @@ impl AppsRequestProcessor {
                 .set_enabled(Feature::Apps, thread.enabled(Feature::Apps));
         }
 
-        let auth = self.auth_manager.auth().await;
+        let auth = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
         if !config
             .features
             .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))

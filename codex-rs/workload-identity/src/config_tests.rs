@@ -101,9 +101,6 @@ fn every_source_variant_has_a_stable_name() {
             path: PathBuf::from("/var/run/openai/token"),
         },
         CredentialSourceConfig::Azure { token_file: None },
-        CredentialSourceConfig::Gcp {
-            service_account: None,
-        },
         CredentialSourceConfig::GithubActions {},
         CredentialSourceConfig::Spiffe {
             endpoint_socket: None,
@@ -118,7 +115,6 @@ fn every_source_variant_has_a_stable_name() {
             "environment",
             "file",
             "azure",
-            "gcp",
             "github_actions",
             "spiffe",
             "aws",
@@ -138,13 +134,6 @@ fn reports_credential_bearing_environment_inputs() {
     assert_eq!(
         CredentialSourceConfig::Azure { token_file: None }.sensitive_environment_variables(),
         vec!["AZURE_FEDERATED_TOKEN_FILE"]
-    );
-    assert_eq!(
-        CredentialSourceConfig::Gcp {
-            service_account: None
-        }
-        .sensitive_environment_variables(),
-        vec!["GCE_METADATA_HOST"]
     );
     assert_eq!(
         CredentialSourceConfig::GithubActions {}.sensitive_environment_variables(),

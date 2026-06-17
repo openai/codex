@@ -53,6 +53,15 @@ fn cloud_config_eligible_auth(auth: &CodexAuth) -> bool {
             || matches!(plan_type, PlanType::Enterprise | PlanType::Edu))
 }
 
+fn auth_resolution_error(error: std::io::Error) -> CloudConfigBundleLoadError {
+    tracing::error!(error = %error, "Failed to resolve auth for cloud config bundle");
+    CloudConfigBundleLoadError::new(
+        CloudConfigBundleLoadErrorCode::Auth,
+        /*status_code*/ None,
+        CLOUD_CONFIG_BUNDLE_AUTH_RECOVERY_FAILED_MESSAGE,
+    )
+}
+
 fn optional_bundle(bundle: CloudConfigBundle) -> Option<CloudConfigBundle> {
     if bundle.is_empty() {
         None
@@ -171,7 +180,12 @@ where
     async fn load_startup_bundle(
         &self,
     ) -> Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError> {
-        let Some(auth) = self.auth_manager.auth().await else {
+        let Some(auth) = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(auth_resolution_error)?
+        else {
             return Ok(None);
         };
         if !cloud_config_eligible_auth(&auth) {
@@ -380,7 +394,12 @@ where
             );
             match auth_recovery.next().await {
                 Ok(_) => {
-                    let Some(refreshed_auth) = self.auth_manager.auth().await else {
+                    let Some(refreshed_auth) = self
+                        .auth_manager
+                        .auth()
+                        .await
+                        .map_err(auth_resolution_error)?
+                    else {
                         tracing::error!(
                             "Auth recovery succeeded but no auth is available for cloud config bundle"
                         );
@@ -471,7 +490,14 @@ where
     }
 
     async fn refresh_cache_once(&self) -> bool {
-        let Some(auth) = self.auth_manager.auth().await else {
+        let auth = match self.auth_manager.auth().await {
+            Ok(auth) => auth,
+            Err(error) => {
+                tracing::error!(error = %error, "Failed to resolve auth while refreshing cloud config bundle");
+                return false;
+            }
+        };
+        let Some(auth) = auth else {
             return false;
         };
         if !cloud_config_eligible_auth(&auth) {

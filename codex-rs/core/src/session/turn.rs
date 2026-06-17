@@ -1192,7 +1192,7 @@ pub(crate) async fn built_tools(
     };
     let tool_suggest_is_enabled = tool_suggest_enabled(turn_context);
     let auth = if tool_suggest_is_enabled {
-        sess.services.auth_manager.auth().await
+        sess.services.auth_manager.auth().await?
     } else {
         None
     };

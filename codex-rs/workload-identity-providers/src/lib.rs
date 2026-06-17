@@ -9,8 +9,6 @@ use codex_workload_identity::UnavailableSubjectTokenSource;
 use codex_workload_identity_aws::AwsSubjectTokenProvider;
 #[cfg(feature = "azure")]
 use codex_workload_identity_azure::AzureSubjectTokenProvider;
-#[cfg(feature = "gcp")]
-use codex_workload_identity_gcp::GcpSubjectTokenProvider;
 #[cfg(feature = "github-actions")]
 use codex_workload_identity_github_actions::GithubActionsSubjectTokenProvider;
 #[cfg(feature = "spiffe")]
@@ -28,8 +26,6 @@ pub enum ConfiguredSubjectTokenProvider {
     Aws(AwsSubjectTokenProvider),
     #[cfg(feature = "azure")]
     Azure(AzureSubjectTokenProvider),
-    #[cfg(feature = "gcp")]
-    Gcp(GcpSubjectTokenProvider),
     #[cfg(feature = "github-actions")]
     GithubActions(GithubActionsSubjectTokenProvider),
     #[cfg(feature = "spiffe")]
@@ -60,21 +56,6 @@ impl ConfiguredSubjectTokenProvider {
                 {
                     let _ = token_file;
                     Self::Unavailable(UnavailableSubjectTokenSource::new("azure"))
-                }
-            }
-            CredentialSourceConfig::Gcp { service_account } => {
-                #[cfg(feature = "gcp")]
-                {
-                    Self::Gcp(GcpSubjectTokenProvider::new(
-                        service_account.clone(),
-                        audience.to_string(),
-                        http,
-                    ))
-                }
-                #[cfg(not(feature = "gcp"))]
-                {
-                    let _ = (service_account, http);
-                    Self::Unavailable(UnavailableSubjectTokenSource::new("gcp"))
                 }
             }
             CredentialSourceConfig::GithubActions {} => {
@@ -139,8 +120,6 @@ impl SubjectTokenProvider for ConfiguredSubjectTokenProvider {
             Self::Aws(source) => source.subject_token().await,
             #[cfg(feature = "azure")]
             Self::Azure(source) => source.subject_token().await,
-            #[cfg(feature = "gcp")]
-            Self::Gcp(source) => source.subject_token().await,
             #[cfg(feature = "github-actions")]
             Self::GithubActions(source) => source.subject_token().await,
             #[cfg(feature = "spiffe")]
@@ -162,26 +141,4 @@ pub fn build_client(
         http.clone(),
     );
     ConfiguredWorkloadIdentityClient::new(config, client_id, http, source)
-}
-
-#[cfg(all(test, not(feature = "gcp")))]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn omitted_provider_has_stable_runtime_error() {
-        let provider = ConfiguredSubjectTokenProvider::from_config(
-            &CredentialSourceConfig::Gcp {
-                service_account: None,
-            },
-            "idp_example",
-            "openai-audience",
-            reqwest::Client::new(),
-        );
-
-        assert!(matches!(
-            provider.subject_token().await,
-            Err(SubjectTokenError::ProviderNotIncluded { provider: "gcp" })
-        ));
-    }
 }

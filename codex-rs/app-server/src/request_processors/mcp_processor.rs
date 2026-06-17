@@ -120,7 +120,11 @@ impl McpRequestProcessor {
             timeout_secs,
         } = params;
 
-        let auth = self.auth_manager.auth().await;
+        let auth = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
         let effective_servers = self
             .thread_manager
             .mcp_manager()
@@ -226,7 +230,11 @@ impl McpRequestProcessor {
                     .await
             }
         };
-        let auth = self.auth_manager.auth().await;
+        let auth = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
         let environment_manager = self.thread_manager.environment_manager();
         // This status path has no turn-selected environment. Use config cwd
         // as the local stdio fallback; named environment stdio MCPs must
@@ -379,7 +387,11 @@ impl McpRequestProcessor {
             .mcp_manager()
             .runtime_config(&config)
             .await;
-        let auth = self.auth_manager.auth().await;
+        let auth = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
         let environment_manager = self.thread_manager.environment_manager();
         // This threadless resource-read path has no turn cwd or turn-selected
         // environment. Use config cwd only as the local stdio fallback; named

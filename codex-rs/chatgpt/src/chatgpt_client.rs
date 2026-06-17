@@ -27,7 +27,7 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
     let auth = auth_manager
         .auth()
-        .await
+        .await?
         .ok_or_else(|| anyhow::anyhow!("ChatGPT auth not available"))?;
     anyhow::ensure!(
         auth.uses_codex_backend(),

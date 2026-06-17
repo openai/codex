@@ -615,7 +615,7 @@ impl ModelProvider for MockMemoryModelProvider {
         self.delegate.auth_manager()
     }
 
-    fn auth(&self) -> ModelProviderFuture<'_, Option<CodexAuth>> {
+    fn auth(&self) -> ModelProviderFuture<'_, codex_protocol::error::Result<Option<CodexAuth>>> {
         let delegate = Arc::clone(&self.delegate);
         Box::pin(async move { delegate.auth().await })
     }

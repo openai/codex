@@ -70,7 +70,7 @@ pub async fn build_chatgpt_headers() -> HeaderMap {
         HeaderValue::from_str(&ua).unwrap_or(HeaderValue::from_static("codex-cli")),
     );
     if let Some(am) = load_auth_manager(/*chatgpt_base_url*/ None).await
-        && let Some(auth) = am.auth().await
+        && let Ok(Some(auth)) = am.auth().await
         && auth.uses_codex_backend()
     {
         headers.extend(codex_model_provider::auth_provider_from_auth(&auth).to_auth_headers());

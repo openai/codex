@@ -2265,6 +2265,7 @@ mod tests {
             auth_manager
                 .auth()
                 .await
+                .expect("auth resolution should succeed")
                 .expect("auth should remain available")
                 .get_token()
                 .expect("token should be readable"),
@@ -2368,6 +2369,7 @@ mod tests {
             auth_manager
                 .auth()
                 .await
+                .expect("auth resolution should succeed")
                 .expect("auth should remain available")
                 .get_token()
                 .expect("token should be readable"),

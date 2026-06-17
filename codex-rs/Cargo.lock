@@ -3453,6 +3453,7 @@ version = "0.0.0"
 dependencies = [
  "codex-agent-identity",
  "codex-api",
+ "codex-app-server-protocol",
  "codex-aws-auth",
  "codex-client",
  "codex-feedback",
@@ -4457,19 +4458,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-workload-identity-gcp"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "codex-workload-identity",
- "pretty_assertions",
- "reqwest 0.12.28",
- "tokio",
- "url",
- "wiremock",
-]
-
-[[package]]
 name = "codex-workload-identity-github-actions"
 version = "0.0.0"
 dependencies = [
@@ -4491,7 +4479,6 @@ dependencies = [
  "codex-workload-identity",
  "codex-workload-identity-aws",
  "codex-workload-identity-azure",
- "codex-workload-identity-gcp",
  "codex-workload-identity-github-actions",
  "codex-workload-identity-spiffe",
  "reqwest 0.12.28",

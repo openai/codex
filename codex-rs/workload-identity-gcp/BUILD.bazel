@@ -1,6 +1,0 @@
-load("//:defs.bzl", "codex_rust_crate")
-
-codex_rust_crate(
-    name = "workload-identity-gcp",
-    crate_name = "codex_workload_identity_gcp",
-)

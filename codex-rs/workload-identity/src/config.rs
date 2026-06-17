@@ -14,7 +14,6 @@ const AWS_CONTAINER_CREDENTIALS_FULL_URI_ENV: &str = "AWS_CONTAINER_CREDENTIALS_
 const AWS_CONTAINER_CREDENTIALS_RELATIVE_URI_ENV: &str = "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI";
 const AWS_WEB_IDENTITY_TOKEN_FILE_ENV: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
 const AZURE_FEDERATED_TOKEN_FILE_ENV: &str = "AZURE_FEDERATED_TOKEN_FILE";
-const GCP_METADATA_HOST_ENV: &str = "GCE_METADATA_HOST";
 const GITHUB_ACTIONS_REQUEST_URL_ENV: &str = "ACTIONS_ID_TOKEN_REQUEST_URL";
 const GITHUB_ACTIONS_REQUEST_TOKEN_ENV: &str = "ACTIONS_ID_TOKEN_REQUEST_TOKEN";
 const SPIFFE_ENDPOINT_SOCKET_ENV: &str = "SPIFFE_ENDPOINT_SOCKET";
@@ -61,13 +60,6 @@ pub enum CredentialSourceConfig {
         /// Token path. When omitted, Codex reads `AZURE_FEDERATED_TOKEN_FILE`.
         #[serde(default)]
         token_file: Option<PathBuf>,
-    },
-
-    /// A GCE or GKE service-account identity token from the metadata service.
-    Gcp {
-        /// Service account email or `default` when omitted.
-        #[serde(default)]
-        service_account: Option<String>,
     },
 
     /// A GitHub Actions OIDC token requested from the runner token service.
@@ -180,12 +172,6 @@ impl WorkloadIdentityConfig {
                 token_file: Some(token_file),
             } if !token_file.is_absolute() => Err(WorkloadIdentityConfigError::RelativeTokenFile),
             CredentialSourceConfig::Azure { .. } => Ok(()),
-            CredentialSourceConfig::Gcp {
-                service_account: Some(service_account),
-            } if service_account.trim().is_empty() => Err(
-                WorkloadIdentityConfigError::EmptySourceField("service_account"),
-            ),
-            CredentialSourceConfig::Gcp { .. } => Ok(()),
             CredentialSourceConfig::GithubActions {} => Ok(()),
             CredentialSourceConfig::Spiffe {
                 endpoint_socket: Some(endpoint_socket),
@@ -216,7 +202,6 @@ impl CredentialSourceConfig {
             Self::Environment { .. } => "environment",
             Self::File { .. } => "file",
             Self::Azure { .. } => "azure",
-            Self::Gcp { .. } => "gcp",
             Self::GithubActions {} => "github_actions",
             Self::Spiffe { .. } => "spiffe",
             Self::Aws { .. } => "aws",
@@ -227,7 +212,6 @@ impl CredentialSourceConfig {
         match self {
             Self::Environment { variable } => vec![variable.as_str()],
             Self::Azure { .. } => vec![AZURE_FEDERATED_TOKEN_FILE_ENV],
-            Self::Gcp { .. } => vec![GCP_METADATA_HOST_ENV],
             Self::GithubActions {} => vec![
                 GITHUB_ACTIONS_REQUEST_URL_ENV,
                 GITHUB_ACTIONS_REQUEST_TOKEN_ENV,
@@ -269,7 +253,7 @@ impl CredentialSourceConfig {
             .filter_map(std::env::var_os)
             .map(PathBuf::from)
             .collect(),
-            Self::Environment { .. } | Self::Gcp { .. } | Self::GithubActions {} => Vec::new(),
+            Self::Environment { .. } | Self::GithubActions {} => Vec::new(),
         }
     }
 }
