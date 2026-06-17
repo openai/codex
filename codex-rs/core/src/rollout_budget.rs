@@ -40,13 +40,16 @@ impl RolloutBudget {
         });
     }
 
-    pub(crate) fn record_usage(&self, usage: &TokenUsage) {
+    /// Returns true when this usage update first exhausts the configured budget.
+    pub(crate) fn record_usage(&self, usage: &TokenUsage) -> bool {
         let Some(mut state) = self.lock() else {
-            return;
+            return false;
         };
+        let was_below_limit = state.weighted_tokens_used < state.config.limit_tokens as f64;
         state.weighted_tokens_used += usage.output_tokens.max(0) as f64
             * state.config.sampling_token_weight
             + usage.non_cached_input() as f64 * state.config.prefill_token_weight;
+        was_below_limit && state.weighted_tokens_used >= state.config.limit_tokens as f64
     }
 
     pub(crate) fn pending_reminder(

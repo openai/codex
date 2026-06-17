@@ -21,10 +21,17 @@ pub(super) async fn maybe_record_reminder(
 }
 
 impl Session {
-    pub(crate) fn record_rollout_budget_usage(&self, usage: &TokenUsage) {
-        self.services
+    pub(crate) async fn record_rollout_budget_usage(&self, usage: &TokenUsage) {
+        if self
+            .services
             .agent_control
             .rollout_budget()
-            .record_usage(usage);
+            .record_usage(usage)
+        {
+            self.services
+                .agent_control
+                .interrupt_session(self.thread_id())
+                .await;
+        }
     }
 }
