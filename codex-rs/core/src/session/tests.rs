@@ -8285,7 +8285,7 @@ async fn turn_context_item_preserves_user_deny_overlapping_workload_credential()
     let mut file_system_policy = file_system_policy_with_unreadable_glob(&turn_context);
     file_system_policy.entries.push(FileSystemSandboxEntry {
         path: FileSystemPath::Path {
-            path: credential_path.clone(),
+            path: credential_path,
         },
         access: FileSystemAccessMode::Deny,
     });
@@ -8298,10 +8298,9 @@ async fn turn_context_item_preserves_user_deny_overlapping_workload_credential()
     let item = turn_context.to_turn_context_item();
 
     assert_eq!(item.file_system_sandbox_policy, Some(file_system_policy));
-    assert!(
-        serde_json::to_string(&item)
-            .expect("serialize turn context item")
-            .contains(credential_path.to_string_lossy().as_ref())
+    assert_eq!(
+        item.permission_profile,
+        Some(turn_context.permission_profile())
     );
 }
 
