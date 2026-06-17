@@ -393,7 +393,7 @@ impl AppServerSession {
                 request_id,
                 params: ExternalAgentConfigImportParams {
                     migration_items,
-                    source: Some("claude_code".to_string()),
+                    source: None,
                 },
             })
             .await

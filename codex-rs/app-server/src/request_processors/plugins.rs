@@ -1527,7 +1527,7 @@ impl PluginRequestProcessor {
                 let error_type = remote_plugin_catalog_error_type(&err);
                 self.track_plugin_install_failed_for_remote_plugin(
                     &remote_plugin_id,
-                    REMOTE_GLOBAL_MARKETPLACE_NAME,
+                    &remote_marketplace_name,
                     error_type,
                     err.to_string(),
                 );
