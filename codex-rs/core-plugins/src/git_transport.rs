@@ -43,6 +43,8 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::ffi::OsStr;
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
 
     #[test]
@@ -80,7 +82,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn nested_neutral_directory_does_not_load_parent_repository_config() {
+    fn nested_neutral_directory_does_not_run_parent_repository_transport_helper() {
         let root = tempfile::tempdir().expect("create test root");
         let source = root.path().join("source");
         fs::create_dir(&source).expect("create source repository");
@@ -94,13 +96,23 @@ mod tests {
         let hostile_repo = root.path().join("hostile");
         fs::create_dir(&hostile_repo).expect("create hostile repository");
         run_git(&hostile_repo, &["init"]);
+        let marker = root.path().join("transport-ran");
+        let helper = root.path().join("transport-helper.sh");
+        fs::write(
+            &helper,
+            format!("#!/bin/sh\nprintf ran > \"{}\"\nexit 1\n", marker.display()),
+        )
+        .expect("write transport helper");
+        let mut permissions = fs::metadata(&helper)
+            .expect("read transport helper metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&helper, permissions).expect("mark transport helper executable");
+        run_git(&hostile_repo, &["config", "protocol.ext.allow", "always"]);
+        let rewrite_key = format!("url.ext::{}.insteadOf", helper.display());
         run_git(
             &hostile_repo,
-            &[
-                "config",
-                "url.file:///definitely-not-a-real-codex-test-repo.insteadOf",
-                source.to_string_lossy().as_ref(),
-            ],
+            &["config", &rewrite_key, source.to_string_lossy().as_ref()],
         );
 
         let directory = tempfile::Builder::new()
@@ -118,10 +130,14 @@ mod tests {
 
         assert!(
             output.status.success(),
-            "ls-remote should ignore the parent repository's URL rewrite: {}",
+            "ls-remote should ignore the parent repository's transport rewrite: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(!output.stdout.is_empty());
+        assert!(
+            !marker.exists(),
+            "repository-selected transport helper must not run"
+        );
     }
 
     #[cfg(unix)]
