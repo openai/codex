@@ -1425,8 +1425,8 @@ async fn esc_interrupt_pauses_active_goal_turn() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
-    assert_goal_paused_event(&mut rx, thread_id);
     assert_matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt { .. })));
+    assert_goal_paused_event(&mut rx, thread_id);
 }
 
 #[tokio::test]
