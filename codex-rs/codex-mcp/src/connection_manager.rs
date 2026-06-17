@@ -75,6 +75,7 @@ use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
 
+const CODEX_APPS_PARALLEL_TOOL_ALLOWLIST: &[&str] = &["library_create_library_file"];
 const MCP_UI_META_KEY: &str = "ui";
 const MCP_UI_VISIBILITY_META_KEY: &str = "visibility";
 const MCP_UI_MODEL_VISIBILITY: &str = "model";
@@ -797,12 +798,13 @@ impl McpConnectionManager {
 
     fn with_server_metadata(&self, mut tool: ToolInfo) -> ToolInfo {
         let Some(metadata) = self.server_metadata.get(&tool.server_name) else {
-            tool.supports_parallel_tool_calls = false;
+            tool.supports_parallel_tool_calls = codex_apps_tool_supports_parallel_tool_calls(&tool);
             tool.server_origin = None;
             return tool;
         };
 
-        tool.supports_parallel_tool_calls = metadata.supports_parallel_tool_calls;
+        tool.supports_parallel_tool_calls = metadata.supports_parallel_tool_calls
+            || codex_apps_tool_supports_parallel_tool_calls(&tool);
         tool.server_origin = metadata
             .origin
             .as_ref()
@@ -831,6 +833,11 @@ impl McpConnectionManager {
             prefix_mcp_tool_names,
         )
     }
+}
+
+fn codex_apps_tool_supports_parallel_tool_calls(tool: &ToolInfo) -> bool {
+    tool.server_name == CODEX_APPS_MCP_SERVER_NAME
+        && CODEX_APPS_PARALLEL_TOOL_ALLOWLIST.contains(&tool.tool.name.as_ref())
 }
 
 impl Drop for McpConnectionManager {

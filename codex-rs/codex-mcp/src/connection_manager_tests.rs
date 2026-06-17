@@ -1157,6 +1157,31 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
 }
 
 #[test]
+fn codex_apps_parallel_tool_allowlist_uses_raw_tool_name() {
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+
+    let allowlisted_tool = manager.with_server_metadata(create_test_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "library_create_library_file",
+    ));
+    assert!(allowlisted_tool.supports_parallel_tool_calls);
+
+    let other_codex_apps_tool =
+        manager.with_server_metadata(create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "search"));
+    assert!(!other_codex_apps_tool.supports_parallel_tool_calls);
+
+    let same_named_other_server_tool =
+        manager.with_server_metadata(create_test_tool("other", "library_create_library_file"));
+    assert!(!same_named_other_server_tool.supports_parallel_tool_calls);
+}
+
+#[test]
 fn server_metadata_preserves_tool_approval_policy() {
     let mut config = crate::codex_apps_mcp_server_config(
         "https://docs.example",
