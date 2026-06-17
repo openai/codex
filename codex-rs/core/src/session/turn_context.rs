@@ -1,7 +1,6 @@
 use super::*;
 use crate::SkillLoadOutcome;
 use crate::agents_md::LoadedAgentsMd;
-use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::shell_snapshot::ShellSnapshotFile;
 use codex_core_skills::HostLoadedSkills;
@@ -12,9 +11,7 @@ use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::MultiAgentVersion;
-use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
@@ -111,15 +108,12 @@ pub struct TurnContext {
     pub config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) model_info: ModelInfo,
-    pub(crate) comp_hash: Option<String>,
-    pub(crate) tool_mode: ToolMode,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: SharedModelProvider,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
     pub(crate) parent_thread_id: Option<ThreadId>,
-    pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) environments: TurnEnvironmentSnapshot,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
@@ -139,15 +133,9 @@ pub struct TurnContext {
     pub(crate) permission_profile: PermissionProfile,
     pub(crate) network: Option<NetworkProxy>,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
-    pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) available_models: Vec<ModelPreset>,
     pub(crate) unified_exec_shell_mode: UnifiedExecShellMode,
-    pub features: ManagedFeatures,
-    pub(crate) ghost_snapshot: GhostSnapshotConfig,
     pub(crate) final_output_json_schema: Option<Value>,
-    pub(crate) codex_self_exe: Option<PathBuf>,
-    pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
-    pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
     pub(crate) extension_data: Arc<codex_extension_api::ExtensionData>,
@@ -214,7 +202,9 @@ impl TurnContext {
             .auth_manager
             .as_deref()
             .is_some_and(AuthManager::current_auth_uses_codex_backend);
-        self.features.apps_enabled_for_auth(uses_codex_backend)
+        self.config
+            .features
+            .apps_enabled_for_auth(uses_codex_backend)
     }
 
     pub(crate) fn tool_environment_mode(&self) -> ToolEnvironmentMode {
@@ -231,16 +221,6 @@ impl TurnContext {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let tool_mode = model_info.tool_mode.unwrap_or_else(|| {
-            if config.features.enabled(Feature::CodeModeOnly) {
-                ToolMode::CodeModeOnly
-            } else if config.features.enabled(Feature::CodeMode) {
-                ToolMode::CodeMode
-            } else {
-                ToolMode::Direct
-            }
-        });
-        let truncation_policy = model_info.truncation_policy.into();
         let supported_reasoning_levels = model_info
             .supported_reasoning_levels
             .iter()
@@ -269,7 +249,6 @@ impl TurnContext {
             Some(reasoning_effort.clone()),
             /*developer_instructions*/ None,
         );
-        let features = self.features.clone();
         let available_models = models_manager
             .list_models(RefreshStrategy::OnlineIfUncached)
             .await;
@@ -281,8 +260,6 @@ impl TurnContext {
             config: Arc::new(config),
             auth_manager: self.auth_manager.clone(),
             model_info: model_info.clone(),
-            comp_hash: model_info.comp_hash.clone(),
-            tool_mode,
             session_telemetry: self
                 .session_telemetry
                 .clone()
@@ -292,7 +269,6 @@ impl TurnContext {
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
             parent_thread_id: self.parent_thread_id,
-            thread_source: self.thread_source.clone(),
             environments: self.environments.clone(),
             #[allow(deprecated)]
             cwd: self.cwd.clone(),
@@ -309,15 +285,9 @@ impl TurnContext {
             permission_profile: self.permission_profile.clone(),
             network: self.network.clone(),
             windows_sandbox_level: self.windows_sandbox_level,
-            shell_environment_policy: self.shell_environment_policy.clone(),
             available_models,
             unified_exec_shell_mode: self.unified_exec_shell_mode.clone(),
-            features,
-            ghost_snapshot: self.ghost_snapshot.clone(),
             final_output_json_schema: self.final_output_json_schema.clone(),
-            codex_self_exe: self.codex_self_exe.clone(),
-            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
-            truncation_policy,
             dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
             extension_data: Arc::clone(&self.extension_data),
@@ -368,7 +338,7 @@ impl TurnContext {
                 .config
                 .permissions
                 .windows_sandbox_private_desktop,
-            use_legacy_landlock: self.features.use_legacy_landlock(),
+            use_legacy_landlock: self.config.features.use_legacy_landlock(),
         }
     }
 
@@ -410,7 +380,7 @@ impl TurnContext {
             network: self.turn_context_network_item(),
             file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
             model: self.model_info.slug.clone(),
-            comp_hash: self.comp_hash.clone(),
+            comp_hash: self.model_info.comp_hash.clone(),
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),
             multi_agent_version: Some(self.multi_agent_version),
@@ -549,15 +519,6 @@ impl Session {
         );
 
         let mut per_turn_config = per_turn_config;
-        let tool_mode = model_info.tool_mode.unwrap_or_else(|| {
-            if per_turn_config.features.enabled(Feature::CodeModeOnly) {
-                ToolMode::CodeModeOnly
-            } else if per_turn_config.features.enabled(Feature::CodeMode) {
-                ToolMode::CodeMode
-            } else {
-                ToolMode::Direct
-            }
-        });
         per_turn_config.service_tier = get_service_tier(
             per_turn_config.service_tier,
             per_turn_config.features.enabled(Feature::FastMode),
@@ -586,15 +547,12 @@ impl Session {
             config: per_turn_config.clone(),
             auth_manager: auth_manager_for_context,
             model_info: model_info.clone(),
-            comp_hash: model_info.comp_hash.clone(),
-            tool_mode,
             session_telemetry: session_telemetry_for_context,
             provider: provider_for_context,
             reasoning_effort,
             reasoning_summary,
             session_source,
             parent_thread_id: session_configuration.parent_thread_id,
-            thread_source: session_configuration.thread_source.clone(),
             environments,
             #[allow(deprecated)]
             cwd,
@@ -614,15 +572,9 @@ impl Session {
             permission_profile: session_configuration.permission_profile(),
             network,
             windows_sandbox_level: session_configuration.windows_sandbox_level,
-            shell_environment_policy: per_turn_config.permissions.shell_environment_policy.clone(),
             available_models,
             unified_exec_shell_mode,
-            features: per_turn_config.features.clone(),
-            ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
             final_output_json_schema: None,
-            codex_self_exe: per_turn_config.codex_self_exe.clone(),
-            codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
-            truncation_policy: model_info.truncation_policy.into(),
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,
             extension_data,

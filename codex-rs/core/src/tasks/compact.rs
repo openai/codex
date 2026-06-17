@@ -31,6 +31,7 @@ impl SessionTask for CompactTask {
         let session = session.clone_session();
         let _ = if crate::compact::should_use_remote_compact_task(ctx.provider.info()) {
             if ctx
+                .config
                 .features
                 .enabled(codex_features::Feature::RemoteCompactionV2)
             {

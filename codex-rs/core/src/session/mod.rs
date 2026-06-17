@@ -149,7 +149,6 @@ use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
-use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use futures::future::Shared;
@@ -198,7 +197,6 @@ use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::McpServerConfig;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
@@ -1330,7 +1328,11 @@ impl Session {
         } = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
-        if turn_context.features.enabled(Feature::ResizeAllImages) {
+        if turn_context
+            .config
+            .features
+            .enabled(Feature::ResizeAllImages)
+        {
             // Keep the recorded rollout unchanged. Prepare its reconstructed history before
             // installing it, so legacy images are processed once for this resume or fork and
             // will be processed again if the rollout is reconstructed in a future session.
@@ -2630,7 +2632,11 @@ impl Session {
         turn_context: &TurnContext,
         items: &'a [ResponseItem],
     ) -> Cow<'a, [ResponseItem]> {
-        if !turn_context.features.enabled(Feature::ResizeAllImages) {
+        if !turn_context
+            .config
+            .features
+            .enabled(Feature::ResizeAllImages)
+        {
             return Cow::Borrowed(items);
         }
 
@@ -2644,7 +2650,11 @@ impl Session {
         turn_context: &TurnContext,
         input: Vec<UserInput>,
     ) -> ResponseItem {
-        let local_image_preparation = if turn_context.features.enabled(Feature::ResizeAllImages) {
+        let local_image_preparation = if turn_context
+            .config
+            .features
+            .enabled(Feature::ResizeAllImages)
+        {
             LocalImagePreparation::Defer
         } else {
             LocalImagePreparation::Process
@@ -2664,7 +2674,10 @@ impl Session {
         let items = items.as_ref();
         {
             let mut state = self.state.lock().await;
-            state.record_items(items.iter(), turn_context.truncation_policy);
+            state.record_items(
+                items.iter(),
+                turn_context.model_info.truncation_policy.into(),
+            );
         }
         self.persist_rollout_response_items(items).await;
         self.send_raw_response_items(turn_context, items).await;
@@ -2683,7 +2696,10 @@ impl Session {
         let items = items.as_ref();
         {
             let mut state = self.state.lock().await;
-            state.record_items(items.iter(), turn_context.truncation_policy);
+            state.record_items(
+                items.iter(),
+                turn_context.model_info.truncation_policy.into(),
+            );
         }
         self.persist_rollout_items(&[RolloutItem::InterAgentCommunication(communication)])
             .await;
@@ -2885,9 +2901,11 @@ impl Session {
                     #[allow(deprecated)]
                     &turn_context.cwd,
                     turn_context
+                        .config
                         .features
                         .enabled(Feature::ExecPermissionApprovals),
                     turn_context
+                        .config
                         .features
                         .enabled(Feature::RequestPermissionsTool),
                 )
@@ -3031,7 +3049,7 @@ impl Session {
             contextual_user_sections.push(user_instructions.to_string());
         }
         // This is full-context metadata. Steady-state context diffs should not re-emit it.
-        if turn_context.features.enabled(Feature::TokenBudget)
+        if turn_context.config.features.enabled(Feature::TokenBudget)
             && let Some(model_context_window) = turn_context.model_context_window()
         {
             developer_sections.push(
