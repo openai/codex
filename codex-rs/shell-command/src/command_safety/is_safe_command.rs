@@ -187,7 +187,12 @@ pub(crate) fn is_safe_git_command(command: &[String]) -> bool {
     let subcommand_args = &command[subcommand_idx + 1..];
 
     match subcommand {
-        "status" | "log" | "diff" | "show" => git_subcommand_args_are_read_only(subcommand_args),
+        "status" | "log" | "diff" | "show" => {
+            // These subcommands can consult repository-controlled configuration
+            // for external helpers, so argv-only classification is not enough to
+            // auto-approve them.
+            false
+        }
         "branch" => {
             git_subcommand_args_are_read_only(subcommand_args)
                 && git_branch_is_read_only(subcommand_args)
@@ -345,7 +350,6 @@ mod tests {
     #[test]
     fn known_safe_examples() {
         assert!(is_safe_to_call_with_exec(&vec_str(&["ls"])));
-        assert!(is_safe_to_call_with_exec(&vec_str(&["git", "status"])));
         assert!(is_safe_to_call_with_exec(&vec_str(&["git", "branch"])));
         assert!(is_safe_to_call_with_exec(&vec_str(&[
             "git",
@@ -373,6 +377,25 @@ mod tests {
         } else {
             assert!(!is_safe_to_call_with_exec(&vec_str(&["numfmt", "1000"])));
             assert!(!is_safe_to_call_with_exec(&vec_str(&["tac", "Cargo.toml"])));
+        }
+    }
+
+    #[test]
+    fn git_config_sensitive_subcommands_require_approval() {
+        for args in [
+            vec_str(&["git", "status"]),
+            vec_str(&["git", "log", "-1"]),
+            vec_str(&["git", "diff"]),
+            vec_str(&["git", "show", "HEAD"]),
+            vec_str(&["bash", "-lc", "git status"]),
+            vec_str(&["bash", "-lc", "git log -1"]),
+            vec_str(&["bash", "-lc", "git diff"]),
+            vec_str(&["bash", "-lc", "git show HEAD"]),
+        ] {
+            assert!(
+                !is_known_safe_command(&args),
+                "expected {args:?} to require approval because git may invoke repository-configured helpers",
+            );
         }
     }
 
@@ -461,13 +484,15 @@ mod tests {
     }
 
     #[test]
-    fn git_subcommand_patch_flags_remain_safe() {
-        assert!(is_known_safe_command(&vec_str(&["git", "log", "-p", "-1"])));
-        assert!(is_known_safe_command(&vec_str(&["git", "diff", "-p"])));
-        assert!(is_known_safe_command(&vec_str(&[
+    fn git_patch_display_subcommands_require_approval() {
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git", "log", "-p", "-1"
+        ])));
+        assert!(!is_known_safe_command(&vec_str(&["git", "diff", "-p"])));
+        assert!(!is_known_safe_command(&vec_str(&[
             "git", "show", "-p", "HEAD",
         ])));
-        assert!(is_known_safe_command(&vec_str(&[
+        assert!(!is_known_safe_command(&vec_str(&[
             "bash",
             "-lc",
             "git log -p -1",
@@ -651,11 +676,6 @@ mod tests {
     fn bash_lc_safe_examples() {
         assert!(is_known_safe_command(&vec_str(&["bash", "-lc", "ls"])));
         assert!(is_known_safe_command(&vec_str(&["bash", "-lc", "ls -1"])));
-        assert!(is_known_safe_command(&vec_str(&[
-            "bash",
-            "-lc",
-            "git status"
-        ])));
         assert!(is_known_safe_command(&vec_str(&[
             "bash",
             "-lc",

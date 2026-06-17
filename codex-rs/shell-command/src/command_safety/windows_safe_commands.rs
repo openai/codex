@@ -244,13 +244,6 @@ mod tests {
 
         assert!(is_safe_command_windows(&vec_str(&[
             "powershell.exe",
-            "-NoProfile",
-            "-Command",
-            "git status",
-        ])));
-
-        assert!(is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
             "Get-Content",
             "Cargo.toml",
         ])));
@@ -290,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn allows_read_only_pipelines_and_git_usage() {
+    fn allows_read_only_pipelines_and_git_branch_usage() {
         let Some(pwsh) = try_find_pwsh_executable_blocking() else {
             return;
         };
@@ -316,7 +309,7 @@ mod tests {
         assert!(is_safe_command_windows(&[
             pwsh.clone(),
             "-Command".to_string(),
-            "git show HEAD:foo.rs".to_string()
+            "git branch --show-current".to_string()
         ]));
 
         assert!(is_safe_command_windows(&[
@@ -330,6 +323,34 @@ mod tests {
             "-Command".to_string(),
             "Get-Item foo.rs | Select-Object Length".to_string()
         ]));
+    }
+
+    #[test]
+    fn rejects_git_config_sensitive_subcommands() {
+        let results: Vec<(&str, bool)> = ["git status", "git log -1", "git diff", "git show HEAD"]
+            .into_iter()
+            .map(|script| {
+                (
+                    script,
+                    is_safe_command_windows(&[
+                        "powershell.exe".to_string(),
+                        "-NoProfile".to_string(),
+                        "-Command".to_string(),
+                        script.to_string(),
+                    ]),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            vec![
+                ("git status", false),
+                ("git log -1", false),
+                ("git diff", false),
+                ("git show HEAD", false),
+            ],
+            results
+        );
     }
 
     #[test]
