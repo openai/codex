@@ -14,7 +14,7 @@ pub struct ToolSearchSourceInfo {
     pub description: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Hash, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DiscoverableToolType {
     Connector,
