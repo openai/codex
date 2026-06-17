@@ -233,7 +233,6 @@ async fn external_agent_config_import_completed_tracks_analytics_event() -> Resu
         .send_raw_request(
             "externalAgentConfig/import",
             Some(serde_json::json!({
-                "source": "claudeCowork",
                 "migrationItems": [{
                     "itemType": "SESSIONS",
                     "description": "Migrate recent sessions",
@@ -277,11 +276,26 @@ async fn external_agent_config_import_completed_tracks_analytics_event() -> Resu
     .await?;
     let event_params = &event["event_params"];
     assert_eq!(event_params["import_id"], serde_json::json!(import_id));
-    assert_eq!(event_params["source"], "claude_cowork");
+    assert_eq!(event_params["source"], "");
     assert_eq!(event_params["type"], "SESSIONS");
     assert_eq!(event_params["success_count"], 0);
     assert_eq!(event_params["failed_count"], 1);
     assert!(event_params.get("raw_errors").is_none());
+
+    let event = wait_for_analytics_event(
+        &analytics_server,
+        DEFAULT_TIMEOUT,
+        "codex_onboarding_external_agent_import_failure",
+    )
+    .await?;
+    let event_params = &event["event_params"];
+    assert_eq!(event_params["import_id"], serde_json::json!(import_id));
+    assert_eq!(event_params["source"], "");
+    assert_eq!(event_params["type"], "SESSIONS");
+    assert_eq!(event_params["failure_stage"], "session_missing");
+    assert_eq!(event_params["error_type"], "session_missing");
+    assert!(event_params.get("raw_errors").is_none());
+    assert!(event_params.get("message").is_none());
 
     Ok(())
 }

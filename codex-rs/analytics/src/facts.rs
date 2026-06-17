@@ -506,6 +506,7 @@ pub(crate) enum CustomAnalyticsFact {
     PluginStateChanged(PluginStateChangedInput),
     PluginInstallFailed(PluginInstallFailedInput),
     ExternalAgentConfigImportCompleted(ExternalAgentConfigImportCompletedInput),
+    ExternalAgentConfigImportFailure(ExternalAgentConfigImportFailureInput),
 }
 
 pub(crate) struct SkillInvokedInput {
@@ -555,6 +556,14 @@ pub struct ExternalAgentConfigImportCompletedInput {
     pub item_type: String,
     pub success_count: usize,
     pub failed_count: usize,
+}
+
+pub struct ExternalAgentConfigImportFailureInput {
+    pub import_id: String,
+    pub source: String,
+    pub item_type: String,
+    pub failure_stage: String,
+    pub error_type: String,
 }
 
 #[derive(Clone, Copy)]

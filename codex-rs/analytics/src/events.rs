@@ -85,6 +85,7 @@ pub(crate) enum TrackEventRequest {
     PluginDisabled(CodexPluginEventRequest),
     PluginInstallFailed(CodexPluginInstallFailedEventRequest),
     ExternalAgentConfigImportCompleted(CodexOnboardingExternalAgentImportCompleteEventRequest),
+    ExternalAgentConfigImportFailure(CodexOnboardingExternalAgentImportFailureEventRequest),
 }
 
 impl TrackEventRequest {
@@ -984,6 +985,23 @@ pub(crate) struct CodexOnboardingExternalAgentImportCompleteMetadata {
 pub(crate) struct CodexOnboardingExternalAgentImportCompleteEventRequest {
     pub(crate) event_type: &'static str,
     pub(crate) event_params: CodexOnboardingExternalAgentImportCompleteMetadata,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexOnboardingExternalAgentImportFailureMetadata {
+    pub(crate) import_id: String,
+    pub(crate) source: String,
+    #[serde(rename = "type")]
+    pub(crate) item_type: String,
+    pub(crate) failure_stage: String,
+    pub(crate) error_type: String,
+    pub(crate) product_client_id: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexOnboardingExternalAgentImportFailureEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexOnboardingExternalAgentImportFailureMetadata,
 }
 
 #[derive(Serialize)]

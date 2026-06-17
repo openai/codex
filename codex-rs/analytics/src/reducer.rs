@@ -23,6 +23,8 @@ use crate::events::CodexMcpToolCallEventParams;
 use crate::events::CodexMcpToolCallEventRequest;
 use crate::events::CodexOnboardingExternalAgentImportCompleteEventRequest;
 use crate::events::CodexOnboardingExternalAgentImportCompleteMetadata;
+use crate::events::CodexOnboardingExternalAgentImportFailureEventRequest;
+use crate::events::CodexOnboardingExternalAgentImportFailureMetadata;
 use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginInstallFailedEventRequest;
 use crate::events::CodexPluginInstallFailedMetadata;
@@ -71,6 +73,7 @@ use crate::facts::CodexCompactionEvent;
 use crate::facts::CodexGoalEvent;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::ExternalAgentConfigImportCompletedInput;
+use crate::facts::ExternalAgentConfigImportFailureInput;
 use crate::facts::HookRunInput;
 use crate::facts::PluginInstallFailedInput;
 use crate::facts::PluginState;
@@ -523,6 +526,9 @@ impl AnalyticsReducer {
                 CustomAnalyticsFact::ExternalAgentConfigImportCompleted(input) => {
                     self.ingest_external_agent_config_import_completed(input, out);
                 }
+                CustomAnalyticsFact::ExternalAgentConfigImportFailure(input) => {
+                    self.ingest_external_agent_config_import_failure(input, out);
+                }
             },
         }
     }
@@ -818,6 +824,26 @@ impl AnalyticsReducer {
                     item_type: input.item_type,
                     success_count: input.success_count,
                     failed_count: input.failed_count,
+                    product_client_id: Some(originator().value),
+                },
+            },
+        ));
+    }
+
+    fn ingest_external_agent_config_import_failure(
+        &mut self,
+        input: ExternalAgentConfigImportFailureInput,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        out.push(TrackEventRequest::ExternalAgentConfigImportFailure(
+            CodexOnboardingExternalAgentImportFailureEventRequest {
+                event_type: "codex_onboarding_external_agent_import_failure",
+                event_params: CodexOnboardingExternalAgentImportFailureMetadata {
+                    import_id: input.import_id,
+                    source: input.source,
+                    item_type: input.item_type,
+                    failure_stage: input.failure_stage,
+                    error_type: input.error_type,
                     product_client_id: Some(originator().value),
                 },
             },

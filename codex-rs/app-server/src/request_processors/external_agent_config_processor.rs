@@ -17,6 +17,7 @@ use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::ExternalAgentConfigImportCompletedInput;
+use codex_analytics::ExternalAgentConfigImportFailureInput;
 use codex_app_server_protocol::CommandMigration;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
@@ -205,10 +206,6 @@ impl ExternalAgentConfigRequestProcessor {
         params: ExternalAgentConfigImportParams,
     ) -> Result<(), JSONRPCErrorError> {
         let import_id = Uuid::new_v4().to_string();
-        let import_source = params
-            .source
-            .clone()
-            .unwrap_or_else(|| "claude_code".to_string());
         let needs_runtime_refresh = migration_items_need_runtime_refresh(&params.migration_items);
         let has_migration_items = !params.migration_items.is_empty();
         let has_plugin_imports = params.migration_items.iter().any(|item| {
@@ -254,7 +251,6 @@ impl ExternalAgentConfigRequestProcessor {
                 self.state_db.as_ref(),
                 &self.analytics_events_client,
                 import_id,
-                import_source,
                 &completed_item_results,
             )
             .await;
@@ -339,7 +335,6 @@ impl ExternalAgentConfigRequestProcessor {
                 state_db.as_ref(),
                 &analytics_events_client,
                 import_id,
-                import_source,
                 &completed_item_results,
             )
             .await;
@@ -568,12 +563,11 @@ async fn send_completed_import_notification(
     state_db: Option<&StateDbHandle>,
     analytics_events_client: &AnalyticsEventsClient,
     import_id: String,
-    import_source: String,
     item_results: &[CoreImportItemResult],
 ) {
     let notification = completed_notification(import_id, item_results);
     log_completed_import_failures(&notification);
-    track_completed_import_notification(analytics_events_client, import_source, &notification);
+    track_completed_import_notification(analytics_events_client, &notification);
     if let Some(state_db) = state_db
         && let Err(err) = record_completed_import_notification(state_db, &notification).await
     {
@@ -593,10 +587,11 @@ async fn send_completed_import_notification(
 fn log_completed_import_failures(notification: &ExternalAgentConfigImportCompletedNotification) {
     for type_result in &notification.item_type_results {
         for failure in &type_result.failures {
+            let error_type = import_failure_error_type(failure);
             tracing::warn!(
                 import_id = %notification.import_id,
                 item_type = ?failure.item_type,
-                error_type = ?failure.error_type,
+                error_type = %error_type,
                 failure_stage = %failure.failure_stage,
                 cwd = ?failure.cwd,
                 source = ?failure.source,
@@ -609,39 +604,51 @@ fn log_completed_import_failures(notification: &ExternalAgentConfigImportComplet
 
 fn track_completed_import_notification(
     analytics_events_client: &AnalyticsEventsClient,
-    import_source: String,
     notification: &ExternalAgentConfigImportCompletedNotification,
 ) {
-    let source = analytics_import_source(&import_source);
     for type_result in &notification.item_type_results {
+        let item_type = analytics_migration_item_type(type_result.item_type).to_string();
         analytics_events_client.track_external_agent_config_import_completed(
             ExternalAgentConfigImportCompletedInput {
                 import_id: notification.import_id.clone(),
-                source: source.clone(),
-                item_type: match type_result.item_type {
-                    ExternalAgentConfigMigrationItemType::AgentsMd => "AGENTS_MD",
-                    ExternalAgentConfigMigrationItemType::Config => "CONFIG",
-                    ExternalAgentConfigMigrationItemType::Skills => "SKILLS",
-                    ExternalAgentConfigMigrationItemType::Plugins => "PLUGINS",
-                    ExternalAgentConfigMigrationItemType::McpServerConfig => "MCP_SERVER_CONFIG",
-                    ExternalAgentConfigMigrationItemType::Subagents => "SUBAGENTS",
-                    ExternalAgentConfigMigrationItemType::Hooks => "HOOKS",
-                    ExternalAgentConfigMigrationItemType::Commands => "COMMANDS",
-                    ExternalAgentConfigMigrationItemType::Sessions => "SESSIONS",
-                }
-                .to_string(),
+                source: String::new(),
+                item_type: item_type.clone(),
                 success_count: type_result.successes.len(),
                 failed_count: type_result.failures.len(),
             },
         );
+        for failure in &type_result.failures {
+            analytics_events_client.track_external_agent_config_import_failure(
+                ExternalAgentConfigImportFailureInput {
+                    import_id: notification.import_id.clone(),
+                    source: String::new(),
+                    item_type: item_type.clone(),
+                    failure_stage: failure.failure_stage.clone(),
+                    error_type: import_failure_error_type(failure),
+                },
+            );
+        }
     }
 }
 
-fn analytics_import_source(source: &str) -> String {
-    match source {
-        "claudeCode" => "claude_code".to_string(),
-        "claudeCowork" => "claude_cowork".to_string(),
-        source => source.to_string(),
+fn import_failure_error_type(failure: &ProtocolImportFailure) -> String {
+    failure
+        .error_type
+        .clone()
+        .unwrap_or_else(|| failure.failure_stage.clone())
+}
+
+fn analytics_migration_item_type(item_type: ExternalAgentConfigMigrationItemType) -> &'static str {
+    match item_type {
+        ExternalAgentConfigMigrationItemType::AgentsMd => "AGENTS_MD",
+        ExternalAgentConfigMigrationItemType::Config => "CONFIG",
+        ExternalAgentConfigMigrationItemType::Skills => "SKILLS",
+        ExternalAgentConfigMigrationItemType::Plugins => "PLUGINS",
+        ExternalAgentConfigMigrationItemType::McpServerConfig => "MCP_SERVER_CONFIG",
+        ExternalAgentConfigMigrationItemType::Subagents => "SUBAGENTS",
+        ExternalAgentConfigMigrationItemType::Hooks => "HOOKS",
+        ExternalAgentConfigMigrationItemType::Commands => "COMMANDS",
+        ExternalAgentConfigMigrationItemType::Sessions => "SESSIONS",
     }
 }
 

@@ -9,4 +9,4 @@ Claude Code import finished. Run /import again to check for additional items.
 No Claude Code setup was found to import.
 Import from Claude Code is unavailable in remote sessions. Start Codex locally and run /import.
 Import from Claude Code is unavailable while Codex is connected to the local app-server daemon. Stop the daemon, restart Codex, and run /import.
-A previous Claude Code import is still running. Wait for it to finish before importing again.
+A previous import is still running. Wait for it to finish before importing again.

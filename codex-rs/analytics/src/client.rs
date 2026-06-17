@@ -12,6 +12,7 @@ use crate::facts::AppUsedInput;
 use crate::facts::CodexGoalEvent;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::ExternalAgentConfigImportCompletedInput;
+use crate::facts::ExternalAgentConfigImportFailureInput;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
 use crate::facts::PluginInstallFailedInput;
@@ -360,6 +361,15 @@ impl AnalyticsEventsClient {
     ) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::ExternalAgentConfigImportCompleted(input),
+        ));
+    }
+
+    pub fn track_external_agent_config_import_failure(
+        &self,
+        input: ExternalAgentConfigImportFailureInput,
+    ) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::ExternalAgentConfigImportFailure(input),
         ));
     }
 
