@@ -1,5 +1,4 @@
 use super::*;
-use crate::SkillLoadOutcome;
 use crate::agents_md::LoadedAgentsMd;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::shell_snapshot::ShellSnapshotFile;
@@ -26,14 +25,14 @@ use tracing::instrument;
 
 #[derive(Clone, Debug)]
 pub(crate) struct TurnSkillsContext {
-    pub(crate) outcome: Arc<SkillLoadOutcome>,
+    pub(crate) snapshot: HostSkillsSnapshot,
     pub(crate) implicit_invocation_seen_skills: Arc<Mutex<HashSet<String>>>,
 }
 
 impl TurnSkillsContext {
-    pub(crate) fn new(outcome: Arc<SkillLoadOutcome>) -> Self {
+    pub(crate) fn new(snapshot: HostSkillsSnapshot) -> Self {
         Self {
-            outcome,
+            snapshot,
             implicit_invocation_seen_skills: Arc::new(Mutex::new(HashSet::new())),
         }
     }
@@ -569,7 +568,7 @@ impl Session {
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,
             extension_data,
-            turn_skills: TurnSkillsContext::new(skills_snapshot.outcome_arc()),
+            turn_skills: TurnSkillsContext::new(skills_snapshot),
             turn_timing_state: Arc::new(TurnTimingState::default()),
             terminal_error: Arc::new(Mutex::new(None)),
             server_model_warning_emitted: AtomicBool::new(false),

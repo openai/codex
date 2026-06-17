@@ -52,7 +52,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
     workdir: &AbsolutePathBuf,
 ) {
     let Some(candidate) = detect_implicit_skill_invocation_for_command(
-        turn_context.turn_skills.outcome.as_ref(),
+        turn_context.turn_skills.snapshot.outcome(),
         command,
         workdir,
     ) else {

@@ -24,6 +24,7 @@ use codex_config::RequirementSource;
 use codex_config::Sourced;
 use codex_config::loader::project_trust_key;
 use codex_config::types::ToolSuggestDisabledTool;
+use codex_core_skills::HostSkillsSnapshot;
 use core_test_support::test_codex::local_selections;
 
 use codex_features::Feature;
@@ -4488,13 +4489,18 @@ enabled = false
         .await;
     let child_skill = child_turn
         .turn_skills
-        .outcome
+        .snapshot
+        .outcome()
         .skills
         .iter()
         .find(|skill| skill.name == "demo-skill")
         .expect("demo skill should be discovered");
     assert_eq!(
-        child_turn.turn_skills.outcome.is_skill_enabled(child_skill),
+        child_turn
+            .turn_skills
+            .snapshot
+            .outcome()
+            .is_skill_enabled(child_skill),
         false
     );
 }
@@ -7777,7 +7783,7 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
         },
     ];
     turn_context.model_info.context_window = Some(100);
-    turn_context.turn_skills = TurnSkillsContext::new(Arc::new(outcome));
+    turn_context.turn_skills = TurnSkillsContext::new(HostSkillsSnapshot::new(Arc::new(outcome)));
 
     let initial_context = session.build_initial_context(&turn_context).await;
     let developer_texts = developer_input_texts(&initial_context);
@@ -7928,7 +7934,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
         },
     ];
     turn_context.model_info.context_window = Some(100);
-    turn_context.turn_skills = TurnSkillsContext::new(Arc::new(outcome));
+    turn_context.turn_skills = TurnSkillsContext::new(HostSkillsSnapshot::new(Arc::new(outcome)));
 
     let _ = session.build_initial_context(&turn_context).await;
     let warning_event = timeout(Duration::from_secs(1), rx.recv())

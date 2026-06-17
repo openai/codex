@@ -87,7 +87,6 @@ mod session_prefix;
 mod session_startup_prewarm;
 pub mod skills;
 pub(crate) use skills::SkillInjections;
-pub(crate) use skills::SkillLoadOutcome;
 pub(crate) use skills::SkillMetadata;
 pub(crate) use skills::SkillsService;
 pub(crate) use skills::build_available_skills;
