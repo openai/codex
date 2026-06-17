@@ -4,4 +4,7 @@ codex_rust_crate(
     name = "otel",
     crate_name = "codex_otel",
     integration_test_args = ["--test-threads=1"],
+    test_sizes = {
+        "otel-unit-tests-windows-cross": "medium",
+    },
 )

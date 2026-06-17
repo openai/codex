@@ -3,4 +3,8 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "apply-patch",
     crate_name = "codex_apply_patch",
+    test_sizes = {
+        "apply-patch-all-test-windows-cross": "medium",
+        "apply-patch-unit-tests-windows-cross": "medium",
+    },
 )

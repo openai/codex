@@ -12,4 +12,7 @@ codex_rust_crate(
         ],
     ),
     crate_name = "codex_core_skills",
+    test_sizes = {
+        "core-skills-unit-tests-windows-cross": "medium",
+    },
 )

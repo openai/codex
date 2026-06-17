@@ -6,4 +6,7 @@ codex_rust_crate(
         "codex-windows-sandbox-setup.manifest",
     ],
     crate_name = "codex_windows_sandbox",
+    test_sizes = {
+        "windows-sandbox-rs-unit-tests-windows-cross": "medium",
+    },
 )

@@ -12,4 +12,7 @@ codex_rust_crate(
         ],
     ),
     crate_name = "codex_plugin",
+    test_sizes = {
+        "plugin-unit-tests-windows-cross": "medium",
+    },
 )
