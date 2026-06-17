@@ -19,15 +19,26 @@ use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
 use codex_tools::coalesce_loadable_tool_specs;
+use codex_tools::flatten_responses_api_namespace;
 
 pub struct ToolSearchHandler {
     entries: Vec<ToolSearchEntry>,
+    namespace_tool_spec_mode: NamespaceToolSpecMode,
     search_source_infos: Vec<ToolSearchSourceInfo>,
     search_engine: SearchEngine<usize>,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum NamespaceToolSpecMode {
+    Preserve,
+    Flatten,
+}
+
 impl ToolSearchHandler {
-    pub(crate) fn new(search_infos: Vec<ToolSearchInfo>) -> Self {
+    pub(crate) fn new(
+        search_infos: Vec<ToolSearchInfo>,
+        namespace_tool_spec_mode: NamespaceToolSpecMode,
+    ) -> Self {
         let mut entries = Vec::with_capacity(search_infos.len());
         let mut search_source_infos = Vec::new();
         for search_info in search_infos {
@@ -47,6 +58,7 @@ impl ToolSearchHandler {
 
         Self {
             entries,
+            namespace_tool_spec_mode,
             search_source_infos,
             search_engine,
         }
@@ -132,9 +144,27 @@ impl ToolSearchHandler {
         &self,
         results: impl IntoIterator<Item = &'a ToolSearchEntry>,
     ) -> Result<Vec<LoadableToolSpec>, FunctionCallError> {
-        Ok(coalesce_loadable_tool_specs(
-            results.into_iter().map(|entry| entry.output.clone()),
-        ))
+        let tools =
+            coalesce_loadable_tool_specs(results.into_iter().map(|entry| entry.output.clone()));
+        if matches!(
+            self.namespace_tool_spec_mode,
+            NamespaceToolSpecMode::Preserve
+        ) {
+            return Ok(tools);
+        }
+
+        Ok(tools
+            .into_iter()
+            .flat_map(|tool| match tool {
+                LoadableToolSpec::Function(tool) => vec![LoadableToolSpec::Function(tool)],
+                LoadableToolSpec::Namespace(namespace) => {
+                    flatten_responses_api_namespace(namespace)
+                        .into_iter()
+                        .map(LoadableToolSpec::Function)
+                        .collect()
+                }
+            })
+            .collect())
     }
 }
 
@@ -187,7 +217,7 @@ mod tests {
                 .search_info()
                 .expect("dynamic handler should return search info")
         }));
-        let handler = ToolSearchHandler::new(search_infos);
+        let handler = ToolSearchHandler::new(search_infos, NamespaceToolSpecMode::Preserve);
         let results = [
             &handler.entries[0],
             &handler.entries[2],
@@ -252,6 +282,35 @@ mod tests {
                     })],
                 }),
             ],
+        );
+    }
+
+    #[test]
+    fn search_results_flatten_mcp_namespaces_without_namespace_tools() {
+        let search_info = McpHandler::new(tool_info("calendar", "create_event", "Create events"))
+            .expect("MCP tool should convert")
+            .search_info()
+            .expect("MCP handler should return search info");
+        let handler = ToolSearchHandler::new(vec![search_info], NamespaceToolSpecMode::Flatten);
+
+        let tools = handler
+            .search_output_tools([&handler.entries[0]])
+            .expect("MCP search output should serialize");
+
+        assert_eq!(
+            tools,
+            vec![LoadableToolSpec::Function(ResponsesApiTool {
+                name: "mcp__calendar__create_event".to_string(),
+                description: "Create events desktop tool".to_string(),
+                strict: false,
+                defer_loading: Some(true),
+                parameters: codex_tools::JsonSchema::object(
+                    Default::default(),
+                    /*required*/ None,
+                    Some(false.into()),
+                ),
+                output_schema: None,
+            })],
         );
     }
 

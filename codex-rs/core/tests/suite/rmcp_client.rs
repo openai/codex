@@ -894,16 +894,14 @@ async fn stdio_mcp_tool_call_flattens_namespace_when_provider_disables_it() -> a
             tool.get("type").and_then(Value::as_str) == Some("function")
                 && tool.get("name").and_then(Value::as_str) == Some(flat_tool_name.as_str())
         }),
-        "MCP tool should be sent as a flat function: {:?}",
-        request_body
+        "MCP tool should be sent as a flat function: {request_body:?}"
     );
     assert!(
         tools.iter().all(|tool| {
             tool.get("type").and_then(Value::as_str) != Some("namespace")
                 || tool.get("name").and_then(Value::as_str) != Some("mcp__rmcp")
         }),
-        "MCP namespace wrapper should be omitted: {:?}",
-        request_body
+        "MCP namespace wrapper should be omitted: {request_body:?}"
     );
 
     let output = final_mock

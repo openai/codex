@@ -69,6 +69,7 @@ pub use request_user_input::RequestUserInputHandler;
 pub use shell::ShellCommandHandler;
 pub(crate) use shell::ShellCommandHandlerOptions;
 pub use test_sync::TestSyncHandler;
+pub(crate) use tool_search::NamespaceToolSpecMode;
 pub use tool_search::ToolSearchHandler;
 pub use unified_exec::ExecCommandHandler;
 pub(crate) use unified_exec::ExecCommandHandlerOptions;

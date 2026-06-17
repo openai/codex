@@ -14,6 +14,7 @@ use crate::tools::handlers::ListAvailablePluginsToInstallHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
 use crate::tools::handlers::McpHandler;
+use crate::tools::handlers::NamespaceToolSpecMode;
 use crate::tools::handlers::NewContextWindowHandler;
 use crate::tools::handlers::PlanHandler;
 use crate::tools::handlers::ReadMcpResourceHandler;
@@ -81,6 +82,7 @@ use codex_tools::can_request_original_image_detail;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
 use codex_tools::collect_request_plugin_install_entries;
 use codex_tools::default_namespace_description;
+use codex_tools::flatten_responses_api_namespace;
 use codex_tools::request_user_input_available_modes;
 use codex_tools::shell_command_backend_for_features;
 use codex_tools::shell_type_for_model_and_features;
@@ -230,29 +232,16 @@ fn build_model_visible_specs_and_registry(
         merged_specs
             .into_iter()
             .flat_map(|spec| match spec {
-                ToolSpec::Namespace(namespace) => flatten_namespace_spec(namespace),
+                ToolSpec::Namespace(namespace) => flatten_responses_api_namespace(namespace)
+                    .into_iter()
+                    .map(ToolSpec::Function)
+                    .collect(),
                 other => vec![other],
             })
             .collect()
     };
 
     (model_visible_specs, registry)
-}
-
-/// Flattens a namespace into plain `function` specs named `<namespace>__<tool>`.
-/// The canonical names match hooks and proxies, so the registry resolves them.
-fn flatten_namespace_spec(namespace: ResponsesApiNamespace) -> Vec<ToolSpec> {
-    namespace
-        .tools
-        .into_iter()
-        .map(|tool| match tool {
-            ResponsesApiNamespaceTool::Function(mut function) => {
-                let tool_name = ToolName::namespaced(namespace.name.as_str(), function.name);
-                function.name = tool_name.canonical_flat_name().into_owned();
-                ToolSpec::Function(function)
-            }
-        })
-        .collect()
 }
 
 fn spec_for_model_request(
@@ -778,12 +767,11 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
         } else {
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
-            let exposure =
-                if search_tool_enabled(turn_context) && namespace_tools_enabled(turn_context) {
-                    ToolExposure::Deferred
-                } else {
-                    ToolExposure::Direct
-                };
+            let exposure = if search_tool_enabled(turn_context) {
+                ToolExposure::Deferred
+            } else {
+                ToolExposure::Direct
+            };
             planned_tools.add_with_exposure(
                 SpawnAgentHandler::new(SpawnAgentToolOptions {
                     available_models: turn_context.available_models.clone(),
@@ -866,7 +854,7 @@ fn append_tool_search_executor(
     planned_tools: &mut PlannedTools,
 ) {
     let turn_context = context.turn_context;
-    if !(search_tool_enabled(turn_context) && namespace_tools_enabled(turn_context)) {
+    if !search_tool_enabled(turn_context) {
         return;
     }
 
@@ -880,7 +868,15 @@ fn append_tool_search_executor(
         return;
     }
 
-    planned_tools.add(ToolSearchHandler::new(search_infos));
+    let namespace_tool_spec_mode = if namespace_tools_enabled(turn_context) {
+        NamespaceToolSpecMode::Preserve
+    } else {
+        NamespaceToolSpecMode::Flatten
+    };
+    planned_tools.add(ToolSearchHandler::new(
+        search_infos,
+        namespace_tool_spec_mode,
+    ));
 }
 
 fn prepend_code_mode_executors(
@@ -914,7 +910,6 @@ fn append_extension_tool_executors(
         reserved_tool_names.insert(ToolName::plain(codex_code_mode::WAIT_TOOL_NAME));
     }
     if search_tool_enabled(turn_context)
-        && namespace_tools_enabled(turn_context)
         && planned_tools
             .runtimes()
             .iter()

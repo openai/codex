@@ -59,6 +59,7 @@ pub use responses_api::ResponsesApiTool;
 pub use responses_api::coalesce_loadable_tool_specs;
 pub use responses_api::default_namespace_description;
 pub use responses_api::dynamic_tool_to_responses_api_tool;
+pub use responses_api::flatten_responses_api_namespace;
 pub use responses_api::mcp_tool_to_deferred_responses_api_tool;
 pub use responses_api::mcp_tool_to_responses_api_tool;
 pub use responses_api::tool_definition_to_responses_api_tool;

@@ -104,6 +104,22 @@ pub fn coalesce_loadable_tool_specs(
     coalesced_specs
 }
 
+/// Flattens a namespace into plain Responses API functions named
+/// `<namespace>__<tool>`.
+pub fn flatten_responses_api_namespace(namespace: ResponsesApiNamespace) -> Vec<ResponsesApiTool> {
+    namespace
+        .tools
+        .into_iter()
+        .map(|tool| match tool {
+            ResponsesApiNamespaceTool::Function(mut function) => {
+                let tool_name = ToolName::namespaced(namespace.name.as_str(), function.name);
+                function.name = tool_name.canonical_flat_name().into_owned();
+                function
+            }
+        })
+        .collect()
+}
+
 pub fn mcp_tool_to_responses_api_tool(
     tool_name: &ToolName,
     tool: &rmcp::model::Tool,

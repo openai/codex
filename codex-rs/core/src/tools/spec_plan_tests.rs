@@ -692,13 +692,14 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         deferred_mcp_tools: Some(vec![mcp_tool("searchable", "mcp__searchable", "lookup")]),
         ..ToolPlanInputs::default()
     };
+    let searchable_deferred_mcp_tools = searchable_mcp.deferred_mcp_tools.clone();
 
     let missing_model_capability = probe_with(
         |turn| {
             turn.model_info.supports_search_tool = false;
         },
         ToolPlanInputs {
-            deferred_mcp_tools: searchable_mcp.deferred_mcp_tools.clone(),
+            deferred_mcp_tools: searchable_deferred_mcp_tools.clone(),
             ..ToolPlanInputs::default()
         },
     )
@@ -723,7 +724,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
             use_bedrock_provider(turn);
         },
         ToolPlanInputs {
-            deferred_mcp_tools: searchable_mcp.deferred_mcp_tools.clone(),
+            deferred_mcp_tools: searchable_deferred_mcp_tools.clone(),
             ..ToolPlanInputs::default()
         },
     )
@@ -739,6 +740,23 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     .await;
     enabled.assert_visible_contains(&["tool_search"]);
     enabled.assert_registered_contains(&[
+        "tool_search",
+        &ToolName::namespaced("mcp__searchable", "lookup").to_string(),
+    ]);
+
+    let namespace_tools_disabled = probe_with(
+        |turn| {
+            turn.model_info.supports_search_tool = true;
+            disable_namespace_tools(turn);
+        },
+        ToolPlanInputs {
+            deferred_mcp_tools: searchable_deferred_mcp_tools,
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    namespace_tools_disabled.assert_visible_contains(&["tool_search"]);
+    namespace_tools_disabled.assert_registered_contains(&[
         "tool_search",
         &ToolName::namespaced("mcp__searchable", "lookup").to_string(),
     ]);
