@@ -534,7 +534,7 @@ async fn persist_server_oauth_callback_url(
     let server = servers
         .get_mut(name)
         .ok_or_else(|| anyhow!("No MCP server named '{name}' found."))?;
-    let oauth = server.oauth.get_or_insert_with(|| McpServerOAuthConfig {
+    let oauth = server.oauth.get_or_insert(McpServerOAuthConfig {
         client_id: None,
         callback_url: None,
     });
