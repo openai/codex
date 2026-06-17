@@ -72,6 +72,46 @@ fn install_copies_plugin_into_default_marketplace() {
 }
 
 #[test]
+fn install_accepts_manifest_mcp_server_objects() {
+    let tmp = tempdir().unwrap();
+    let plugin_root = tmp.path().join("counter-sample");
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "counter-sample",
+  "version": "1.1.1",
+  "mcpServers": {
+    "counter": {
+      "type": "http",
+      "url": "https://sample.example/counter/mcp"
+    }
+  }
+}"#,
+    )
+    .unwrap();
+    let plugin_id = PluginId::new("counter-sample".to_string(), "debug".to_string()).unwrap();
+
+    let result = PluginStore::new(tmp.path().to_path_buf())
+        .install(
+            AbsolutePathBuf::try_from(plugin_root).unwrap(),
+            plugin_id.clone(),
+        )
+        .unwrap();
+
+    let installed_path = tmp.path().join("plugins/cache/debug/counter-sample/1.1.1");
+    assert_eq!(
+        result,
+        PluginInstallResult {
+            plugin_id,
+            plugin_version: "1.1.1".to_string(),
+            installed_path: AbsolutePathBuf::try_from(installed_path.clone()).unwrap(),
+        }
+    );
+    assert!(installed_path.join(".codex-plugin/plugin.json").is_file());
+}
+
+#[test]
 fn install_uses_manifest_name_for_destination_and_key() {
     let tmp = tempdir().unwrap();
     write_plugin(tmp.path(), "source-dir", "manifest-name");

@@ -15,6 +15,7 @@ use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
 use codex_plugin::ResolvedPlugin;
 use codex_plugin::manifest::PluginManifest;
+use codex_plugin::manifest::PluginManifestMcpServers;
 use codex_plugin::manifest::PluginManifestPaths;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -144,7 +145,10 @@ async fn reads_declared_config_only_through_executor_file_system() {
             .expect("absolute plugin root");
     assert!(!plugin_root.as_path().exists());
     let config_path = plugin_root.join("config/mcp.json");
-    let plugin = resolved_plugin(&plugin_root, Some(config_path.clone()));
+    let plugin = resolved_plugin(
+        &plugin_root,
+        Some(PluginManifestMcpServers::Path(config_path.clone())),
+    );
     let file_system = SyntheticExecutorFileSystem {
         config_path: config_path.clone(),
         config_contents: Some(MCP_CONFIG_CONTENTS),
@@ -188,6 +192,60 @@ async fn reads_declared_config_only_through_executor_file_system() {
 }
 
 #[tokio::test]
+async fn reads_manifest_object_config_without_executor_file_system_access() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let plugin_root = AbsolutePathBuf::from_absolute_path_checked(temp_dir.path().join("plugin"))
+        .expect("absolute plugin root");
+    let config_path = plugin_root.join(DEFAULT_MCP_CONFIG_FILE);
+    let plugin = resolved_plugin(
+        &plugin_root,
+        Some(PluginManifestMcpServers::Object(
+            r#"{"counter":{"command":"counter-mcp","environment_id":"local"}}"#.to_string(),
+        )),
+    );
+    let file_system = SyntheticExecutorFileSystem {
+        config_path,
+        config_contents: None,
+        reads: Mutex::new(Vec::new()),
+    };
+
+    let servers = load_from_file_system(&plugin, &plugin_root, &file_system)
+        .await
+        .expect("load manifest object executor MCP config");
+
+    assert_eq!(
+        servers,
+        vec![(
+            "counter".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "counter-mcp".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: Some(plugin_root.to_path_buf()),
+                },
+                environment_id: "executor-test".to_string(),
+                enabled: true,
+                required: false,
+                supports_parallel_tool_calls: false,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                default_tools_approval_mode: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
+            },
+        )]
+    );
+    assert_eq!(reads(&file_system), Vec::new());
+}
+
+#[tokio::test]
 async fn missing_default_config_is_empty() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let plugin_root = AbsolutePathBuf::from_absolute_path_checked(temp_dir.path().join("plugin"))
@@ -214,7 +272,10 @@ async fn malformed_declared_config_is_an_error() {
     let plugin_root = AbsolutePathBuf::from_absolute_path_checked(temp_dir.path().join("plugin"))
         .expect("absolute plugin root");
     let config_path = plugin_root.join("mcp.json");
-    let plugin = resolved_plugin(&plugin_root, Some(config_path.clone()));
+    let plugin = resolved_plugin(
+        &plugin_root,
+        Some(PluginManifestMcpServers::Path(config_path.clone())),
+    );
     let file_system = SyntheticExecutorFileSystem {
         config_path: config_path.clone(),
         config_contents: Some("{not-json"),
@@ -242,7 +303,7 @@ async fn malformed_declared_config_is_an_error() {
 
 fn resolved_plugin(
     plugin_root: &AbsolutePathBuf,
-    mcp_servers: Option<AbsolutePathBuf>,
+    mcp_servers: Option<PluginManifestMcpServers<AbsolutePathBuf>>,
 ) -> ResolvedPlugin {
     ResolvedPlugin::from_environment(
         "selected-root".to_string(),
