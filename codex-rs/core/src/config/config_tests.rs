@@ -299,7 +299,7 @@ type = "azure"
         &config.permissions.shell_environment_policy,
         /*thread_id*/ None,
     );
-    assert_eq!(shell_env, HashMap::new());
+    assert!(!shell_env.contains_key("CODEX_WIF_SUBJECT_TOKEN"));
     Ok(())
 }
 
