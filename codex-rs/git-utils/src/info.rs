@@ -19,7 +19,7 @@ use ts_rs::TS;
 use crate::GitSha;
 use crate::safe_git::DISABLED_HOOKS_PATH;
 use crate::safe_git::EXECUTABLE_FILTER_CONFIG_PATTERN;
-use crate::safe_git::config_output_has_entries;
+use crate::safe_git::config_output_has_untrusted_executable_helpers;
 
 /// Return `true` if the project folder specified by the `Config` is inside a
 /// Git repository.
@@ -465,7 +465,8 @@ async fn has_configured_executable_filters_from(git: &Path, cwd: &Path) -> Optio
         .args([
             "config",
             "--null",
-            "--name-only",
+            "--show-scope",
+            "--includes",
             "--get-regexp",
             EXECUTABLE_FILTER_CONFIG_PATTERN,
         ])
@@ -483,7 +484,9 @@ async fn has_configured_executable_filters_from(git: &Path, cwd: &Path) -> Optio
         return None;
     }
 
-    Some(config_output_has_entries(&output.stdout))
+    Some(config_output_has_untrusted_executable_helpers(
+        &output.stdout,
+    ))
 }
 
 async fn get_git_remotes(cwd: &Path) -> Option<Vec<String>> {

@@ -10,7 +10,14 @@ pub(crate) const EXECUTABLE_PATCH_CONFIG_PATTERN: &str =
 pub(crate) fn ensure_no_executable_git_config(cwd: &Path, pattern: &str) -> io::Result<()> {
     let output = Command::new("git")
         .env("GIT_OPTIONAL_LOCKS", "0")
-        .args(["config", "--null", "--name-only", "--get-regexp", pattern])
+        .args([
+            "config",
+            "--null",
+            "--show-scope",
+            "--includes",
+            "--get-regexp",
+            pattern,
+        ])
         .current_dir(cwd)
         .output()?;
     if !output
@@ -24,17 +31,36 @@ pub(crate) fn ensure_no_executable_git_config(cwd: &Path, pattern: &str) -> io::
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    if config_output_has_entries(&output.stdout) {
+    if config_output_has_untrusted_executable_helpers(&output.stdout) {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "refusing to run an internal Git worktree operation with executable Git helpers configured",
+            "refusing to run an internal Git worktree operation with repository- or command-scoped executable Git helpers configured",
         ));
     }
     Ok(())
 }
 
-pub(crate) fn config_output_has_entries(stdout: &[u8]) -> bool {
-    stdout.iter().any(|byte| *byte != 0)
+pub(crate) fn config_output_has_untrusted_executable_helpers(stdout: &[u8]) -> bool {
+    let mut fields = stdout.split(|byte| *byte == 0);
+    loop {
+        let Some(scope) = fields.next() else {
+            return false;
+        };
+        if scope.is_empty() {
+            return fields.any(|field| !field.is_empty());
+        }
+        let Some(entry) = fields.next() else {
+            return true;
+        };
+        let Some(value_separator) = entry.iter().position(|byte| *byte == b'\n') else {
+            return true;
+        };
+        let value = &entry[value_separator + 1..];
+        let trusted_scope = scope == b"system" || scope == b"global";
+        if !trusted_scope && !value.is_empty() {
+            return true;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -42,9 +68,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn detects_nonempty_null_delimited_config_output() {
-        assert!(!config_output_has_entries(b""));
-        assert!(!config_output_has_entries(b"\0"));
-        assert!(config_output_has_entries(b"filter.example.clean\0"));
+    fn rejects_untrusted_nonempty_helper_values() {
+        assert!(!config_output_has_untrusted_executable_helpers(b""));
+        assert!(!config_output_has_untrusted_executable_helpers(b"\0"));
+        assert!(config_output_has_untrusted_executable_helpers(
+            b"local\0filter.example.clean\nhelper\0"
+        ));
+        assert!(config_output_has_untrusted_executable_helpers(
+            b"command\0merge.example.driver\nhelper\0"
+        ));
+    }
+
+    #[test]
+    fn allows_trusted_or_disabled_helper_values() {
+        assert!(!config_output_has_untrusted_executable_helpers(
+            b"global\0filter.lfs.process\ngit-lfs filter-process\0"
+        ));
+        assert!(!config_output_has_untrusted_executable_helpers(
+            b"system\0merge.trusted.driver\ntrusted-driver\0"
+        ));
+        assert!(!config_output_has_untrusted_executable_helpers(
+            b"local\0filter.example.clean\n\0"
+        ));
+    }
+
+    #[test]
+    fn rejects_malformed_probe_output() {
+        assert!(config_output_has_untrusted_executable_helpers(b"local\0"));
+        assert!(config_output_has_untrusted_executable_helpers(
+            b"local\0filter.example.clean\0"
+        ));
     }
 }
