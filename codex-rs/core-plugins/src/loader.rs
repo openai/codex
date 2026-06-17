@@ -41,6 +41,7 @@ use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::find_plugin_manifest_path;
+use futures::FutureExt;
 use futures::StreamExt;
 use indexmap::IndexMap;
 use serde::Deserialize;
@@ -159,6 +160,7 @@ async fn load_plugins_from_layer_stack_with_scope(
                     load_plugin(configured_name.clone(), &plugin, store, scope).await;
                 (configured_name, loaded_plugin)
             }
+            .boxed()
         })
         .buffered(MAX_CONCURRENT_PLUGIN_LOADS)
         .collect::<Vec<_>>()

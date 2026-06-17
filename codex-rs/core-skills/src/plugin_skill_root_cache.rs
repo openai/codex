@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
+use futures::FutureExt;
 use futures::StreamExt;
 
 use crate::SkillLoadOutcome;
@@ -31,35 +32,39 @@ impl PluginSkillRootCache {
         I: IntoIterator<Item = SkillRoot>,
     {
         let snapshots = futures::stream::iter(roots)
-            .map(|root| async move {
-                // Plugin skill roots always use local filesystem and User scope, so the absolute
-                // skill root path is sufficient to share their snapshot between plugin and skill
-                // loading.
-                let cache_key = root.plugin_root.as_ref().map(|_| root.path.clone());
-                let cached_snapshot = cache_key
-                    .as_ref()
-                    .and_then(|root| match self.snapshots.read() {
-                        Ok(cache) => cache.get(root).cloned(),
-                        Err(err) => err.into_inner().get(root).cloned(),
-                    });
-                match cached_snapshot {
-                    Some(snapshot) => snapshot,
-                    None => {
-                        let snapshot = load_skill_root(root).await;
-                        if let Some(root) = cache_key {
-                            let mut cache = self
-                                .snapshots
-                                .write()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            if cache.len() < MAX_CACHED_PLUGIN_SKILL_ROOTS
-                                || cache.contains_key(&root)
-                            {
-                                cache.insert(root, snapshot.clone());
+            .map(|root| {
+                async move {
+                    // Plugin skill roots always use local filesystem and User scope, so the
+                    // absolute skill root path is sufficient to share their snapshot between
+                    // plugin and skill loading.
+                    let cache_key = root.plugin_root.as_ref().map(|_| root.path.clone());
+                    let cached_snapshot =
+                        cache_key
+                            .as_ref()
+                            .and_then(|root| match self.snapshots.read() {
+                                Ok(cache) => cache.get(root).cloned(),
+                                Err(err) => err.into_inner().get(root).cloned(),
+                            });
+                    match cached_snapshot {
+                        Some(snapshot) => snapshot,
+                        None => {
+                            let snapshot = load_skill_root(root).await;
+                            if let Some(root) = cache_key {
+                                let mut cache = self
+                                    .snapshots
+                                    .write()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                if cache.len() < MAX_CACHED_PLUGIN_SKILL_ROOTS
+                                    || cache.contains_key(&root)
+                                {
+                                    cache.insert(root, snapshot.clone());
+                                }
                             }
+                            snapshot
                         }
-                        snapshot
                     }
                 }
+                .boxed()
             })
             .buffered(MAX_CONCURRENT_SKILL_ROOT_LOADS)
             .collect::<Vec<_>>()
