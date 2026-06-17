@@ -217,7 +217,7 @@ impl ChatWidget {
         }
     }
 
-    fn plugins_cache_for_current_cwd(&self) -> PluginsCacheState {
+    pub(super) fn plugins_cache_for_current_cwd(&self) -> PluginsCacheState {
         if self.plugins_fetch_state.cache_cwd.as_deref() == Some(self.config.cwd.as_path()) {
             self.plugins_cache.clone()
         } else {
