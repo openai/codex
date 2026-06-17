@@ -59,6 +59,7 @@ use rmcp::transport::auth::InMemoryCredentialStore;
 use rmcp::transport::auth::StoredCredentials;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
+use tokio::time::timeout;
 
 use codex_utils_home_dir::find_codex_home;
 
@@ -66,7 +67,9 @@ const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const MCP_OAUTH_SECRET_PREFIX: &str = "MCP_OAUTH";
 const REFRESH_SKEW_MILLIS: u64 = 30_000;
 const REFRESH_LOCK_DIR: &str = "mcp-oauth-refresh-locks";
-const REFRESH_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(50);
+const REFRESH_LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(60);
+const REFRESH_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(500);
+const REFRESH_REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StoredOAuthTokens {
@@ -662,13 +665,25 @@ impl OAuthPersistor {
             .await
     }
 
+    async fn refresh_if_needed_with_keyring_store<K: KeyringStore + Clone + 'static>(
+        &self,
+        keyring_store: &K,
+    ) -> Result<()> {
+        self.refresh_if_needed_with_keyring_store_and_timeout(
+            keyring_store,
+            REFRESH_REQUEST_TIMEOUT,
+        )
+        .await
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "AuthorizationManager async access must be serialized through its mutex"
     )]
-    async fn refresh_if_needed_with_keyring_store<K: KeyringStore + Clone + 'static>(
+    async fn refresh_if_needed_with_keyring_store_and_timeout<K: KeyringStore + Clone + 'static>(
         &self,
         keyring_store: &K,
+        refresh_request_timeout: Duration,
     ) -> Result<()> {
         let expires_at = {
             let guard = self.inner.last_credentials.lock().await;
@@ -710,12 +725,20 @@ impl OAuthPersistor {
         {
             let manager = self.inner.authorization_manager.clone();
             let guard = manager.lock().await;
-            guard.refresh_token().await.with_context(|| {
-                format!(
-                    "failed to refresh OAuth tokens for server {}",
+            match timeout(refresh_request_timeout, guard.refresh_token()).await {
+                Ok(result) => {
+                    result.with_context(|| {
+                        format!(
+                            "failed to refresh OAuth tokens for server {}",
+                            self.inner.server_name
+                        )
+                    })?;
+                }
+                Err(_) => anyhow::bail!(
+                    "timed out after {refresh_request_timeout:?} refreshing OAuth tokens for server {}",
                     self.inner.server_name
-                )
-            })?;
+                ),
+            }
         }
 
         self.persist_if_needed_with_keyring_store(keyring_store)
@@ -743,10 +766,16 @@ struct RefreshCredentialLock {
 impl RefreshCredentialLock {
     async fn acquire_for_server(server_name: &str, url: &str) -> Result<Self> {
         let key = compute_store_key(server_name, url)?;
-        Self::acquire(&key).await
+        Self::acquire(&key)
+            .await
+            .with_context(|| format!("failed to acquire OAuth credential lock for {server_name}"))
     }
 
     async fn acquire(store_key: &str) -> Result<Self> {
+        Self::acquire_with_timeout(store_key, REFRESH_LOCK_ACQUIRE_TIMEOUT).await
+    }
+
+    async fn acquire_with_timeout(store_key: &str, acquire_timeout: Duration) -> Result<Self> {
         let path = refresh_lock_path(store_key)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -760,18 +789,29 @@ impl RefreshCredentialLock {
             .open(&path)
             .with_context(|| format!("failed to open OAuth refresh lock {}", path.display()))?;
 
-        loop {
-            match file.try_lock() {
-                Ok(()) => break,
-                Err(std::fs::TryLockError::WouldBlock) => {
-                    sleep(REFRESH_LOCK_RETRY_SLEEP).await;
-                }
-                Err(error) => {
-                    return Err(std::io::Error::from(error)).with_context(|| {
-                        format!("failed to lock OAuth refresh lock {}", path.display())
-                    });
+        match timeout(acquire_timeout, async {
+            loop {
+                match file.try_lock() {
+                    Ok(()) => return Ok(()),
+                    Err(std::fs::TryLockError::WouldBlock) => {
+                        sleep(REFRESH_LOCK_RETRY_SLEEP).await;
+                    }
+                    Err(error) => return Err(std::io::Error::from(error)),
                 }
             }
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                return Err(error).with_context(|| {
+                    format!("failed to lock OAuth refresh lock {}", path.display())
+                });
+            }
+            Err(_) => anyhow::bail!(
+                "timed out after {acquire_timeout:?} waiting for OAuth refresh lock {}",
+                path.display()
+            ),
         }
 
         Ok(Self { _file: file })
@@ -1587,6 +1627,108 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_lock_acquisition_times_out_without_stealing() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store_key = "test-store-key";
+        let held_lock =
+            RefreshCredentialLock::acquire_with_timeout(store_key, Duration::from_millis(100))
+                .await?;
+
+        let error =
+            match RefreshCredentialLock::acquire_with_timeout(store_key, Duration::from_millis(50))
+                .await
+            {
+                Ok(_) => panic!("contending lock acquisition should time out"),
+                Err(error) => error,
+            };
+        assert!(
+            error
+                .to_string()
+                .contains("timed out after 50ms waiting for OAuth refresh lock"),
+            "unexpected error: {error:#}"
+        );
+
+        drop(held_lock);
+        let _reacquired =
+            RefreshCredentialLock::acquire_with_timeout(store_key, Duration::from_millis(100))
+                .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn provider_refresh_timeout_releases_lock_without_persisting() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let server = MockServer::start().await;
+        mount_oauth_metadata(&server).await;
+        let refresh_started = mount_refresh_response_with_signal(
+            &server,
+            "refresh-token",
+            "late-access-token",
+            "late-refresh-token",
+            Duration::from_secs(1),
+        )
+        .await;
+
+        let store = MockKeyringStore::default();
+        let initial_tokens = expired_sample_tokens(&format!("{}/mcp", server.uri()));
+        super::save_oauth_tokens_with_keyring_store(
+            &store,
+            &initial_tokens.server_name,
+            &initial_tokens,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?;
+
+        let manager = authorization_manager_for(&initial_tokens).await?;
+        let persistor = OAuthPersistor::new(
+            initial_tokens.server_name.clone(),
+            initial_tokens.url.clone(),
+            manager,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+            Some(initial_tokens.clone()),
+        );
+        let refresh_task = tokio::spawn({
+            let persistor = persistor.clone();
+            let store = store.clone();
+            async move {
+                persistor
+                    .refresh_if_needed_with_keyring_store_and_timeout(
+                        &store,
+                        Duration::from_millis(200),
+                    )
+                    .await
+            }
+        });
+
+        wait_for_signal(refresh_started).await?;
+        let error = refresh_task
+            .await?
+            .expect_err("delayed provider response should time out");
+        assert_eq!(
+            error.to_string(),
+            "timed out after 200ms refreshing OAuth tokens for server test-server"
+        );
+
+        let store_key = super::compute_store_key(&initial_tokens.server_name, &initial_tokens.url)?;
+        let _lock =
+            RefreshCredentialLock::acquire_with_timeout(&store_key, Duration::from_millis(100))
+                .await?;
+        let stored = super::load_oauth_tokens_with_keyring_store(
+            &store,
+            &initial_tokens.server_name,
+            &initial_tokens.url,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?
+        .expect("original tokens should remain persisted");
+        assert_eq!(access_token(&stored), "access-token");
+        assert_eq!(refresh_token(&stored), Some("refresh-token".to_string()));
+        server.verify().await;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn locked_login_save_before_refresh_prevents_overwrite() -> Result<()> {
         let _env = TempCodexHome::new();
         let server = MockServer::start().await;
@@ -1661,6 +1803,7 @@ mod tests {
             "refresh-token",
             "refreshed-before-login",
             "rotated-before-login",
+            Duration::from_millis(200),
         )
         .await;
 
@@ -1794,6 +1937,7 @@ mod tests {
             "refresh-token",
             "refreshed-before-logout",
             "rotated-before-logout",
+            Duration::from_millis(200),
         )
         .await;
 
@@ -2191,6 +2335,7 @@ mod tests {
         request_refresh_token: &str,
         response_access_token: &str,
         response_refresh_token: &str,
+        response_delay: Duration,
     ) -> mpsc::Receiver<()> {
         let (tx, rx) = mpsc::channel();
         let response_access_token = response_access_token.to_string();
@@ -2206,7 +2351,7 @@ mod tests {
                 let access_token = response_access_token.clone();
                 let refresh_token = response_refresh_token.clone();
                 ResponseTemplate::new(200)
-                    .set_delay(Duration::from_millis(200))
+                    .set_delay(response_delay)
                     .set_body_json(json!({
                         "access_token": access_token,
                         "token_type": "Bearer",
