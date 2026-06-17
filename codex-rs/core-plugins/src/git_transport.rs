@@ -39,9 +39,11 @@ fn initialize_empty_repository(root: &std::path::Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::NeutralGitCwd;
+    #[cfg(unix)]
     use super::initialize_empty_repository;
     use pretty_assertions::assert_eq;
     use std::ffi::OsStr;
+    #[cfg(unix)]
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
