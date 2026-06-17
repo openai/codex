@@ -220,7 +220,10 @@ async fn restates_the_current_remainder_after_compaction() -> Result<()> {
     let test = test_codex()
         .with_config(move |config| {
             config.model_provider = model_provider;
-            config.rollout_budget = Some(ROLLOUT_BUDGET);
+            config.rollout_budget = Some(RolloutBudgetConfig {
+                reminder_interval_tokens: 50,
+                ..ROLLOUT_BUDGET
+            });
         })
         .build(&server)
         .await?;
