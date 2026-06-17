@@ -124,6 +124,31 @@ fn app_declaration(name: &str, connector_id: &str) -> AppDeclaration {
     }
 }
 
+fn streamable_http_server(url: &str) -> McpServerConfig {
+    McpServerConfig {
+        transport: McpServerTransportConfig::StreamableHttp {
+            url: url.to_string(),
+            bearer_token_env_var: None,
+            http_headers: None,
+            env_http_headers: None,
+        },
+        environment_id: "local".to_string(),
+        enabled: true,
+        required: false,
+        supports_parallel_tool_calls: false,
+        disabled_reason: None,
+        startup_timeout_sec: None,
+        tool_timeout_sec: None,
+        default_tools_approval_mode: None,
+        enabled_tools: None,
+        disabled_tools: None,
+        scopes: None,
+        oauth: None,
+        oauth_resource: None,
+        tools: HashMap::new(),
+    }
+}
+
 async fn auth_projection_config(codex_home: &Path) -> PluginsConfigInput {
     let config_toml = r#"[features]
 plugins = true
@@ -1292,9 +1317,9 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
         &plugin_root.join(".codex-plugin/plugin.json"),
         r#"{
   "name": "sample",
-  "skills": "./custom-skills/",
-  "mcpServers": "./config/custom.mcp.json",
-  "apps": "./config/custom.app.json"
+  "skills": ["./custom-skills/", "./extra-skills/"],
+  "mcpServers": ["./config/custom.mcp.json", "./config/extra.mcp.json"],
+  "apps": ["./config/custom.app.json", "./config/extra.app.json"]
 }"#,
     );
     write_file(
@@ -1304,6 +1329,10 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
     write_file(
         &plugin_root.join("custom-skills/custom-skill/SKILL.md"),
         "---\nname: custom-skill\ndescription: custom skill\n---\n",
+    );
+    write_file(
+        &plugin_root.join("extra-skills/extra-skill/SKILL.md"),
+        "---\nname: extra-skill\ndescription: extra skill\n---\n",
     );
     write_file(
         &plugin_root.join(".mcp.json"),
@@ -1328,6 +1357,17 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
 }"#,
     );
     write_file(
+        &plugin_root.join("config/extra.mcp.json"),
+        r#"{
+  "mcpServers": {
+    "extra": {
+      "type": "http",
+      "url": "https://extra.example/mcp"
+    }
+  }
+}"#,
+    );
+    write_file(
         &plugin_root.join(".app.json"),
         r#"{
   "apps": {
@@ -1347,6 +1387,16 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
   }
 }"#,
     );
+    write_file(
+        &plugin_root.join("config/extra.app.json"),
+        r#"{
+  "apps": {
+    "extra-app": {
+      "id": "connector_extra"
+    }
+  }
+}"#,
+    );
 
     let outcome = load_plugins_from_config(
         &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
@@ -1359,40 +1409,29 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
         outcome.plugins()[0].skill_roots,
         vec![
             plugin_root.join("custom-skills").abs(),
+            plugin_root.join("extra-skills").abs(),
             plugin_root.join("skills").abs()
         ]
     );
     assert_eq!(
         outcome.plugins()[0].mcp_servers,
-        HashMap::from([(
-            "custom".to_string(),
-            McpServerConfig {
-                transport: McpServerTransportConfig::StreamableHttp {
-                    url: "https://custom.example/mcp".to_string(),
-                    bearer_token_env_var: None,
-                    http_headers: None,
-                    env_http_headers: None,
-                },
-                environment_id: "local".to_string(),
-                enabled: true,
-                required: false,
-                supports_parallel_tool_calls: false,
-                disabled_reason: None,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                default_tools_approval_mode: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
-            },
-        )])
+        HashMap::from([
+            (
+                "custom".to_string(),
+                streamable_http_server("https://custom.example/mcp"),
+            ),
+            (
+                "extra".to_string(),
+                streamable_http_server("https://extra.example/mcp"),
+            ),
+        ])
     );
     assert_eq!(
         outcome.plugins()[0].apps,
-        vec![app_declaration("custom-app", "connector_custom")]
+        vec![
+            app_declaration("custom-app", "connector_custom"),
+            app_declaration("extra-app", "connector_extra")
+        ]
     );
 }
 
@@ -1521,7 +1560,7 @@ async fn load_plugins_ignores_invalid_manifest_skills_shape() {
         &plugin_root.join(".codex-plugin/plugin.json"),
         r#"{
   "name": "sample",
-  "skills": ["./custom-skills/"]
+  "skills": { "path": "./custom-skills/" }
 }"#,
     );
     write_file(

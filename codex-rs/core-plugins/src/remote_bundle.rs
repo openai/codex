@@ -494,7 +494,14 @@ fn overwrite_plugin_app_manifest(
     app_manifest: &JsonValue,
 ) -> Result<(), RemotePluginBundleInstallError> {
     let app_manifest_path = crate::manifest::load_plugin_manifest(plugin_root)
-        .and_then(|manifest| manifest.paths.apps.map(|path| path.to_path_buf()))
+        .and_then(|manifest| {
+            manifest
+                .paths
+                .apps
+                .into_iter()
+                .next()
+                .map(|path| path.to_path_buf())
+        })
         .unwrap_or_else(|| plugin_root.join(".app.json"));
     write_json_file(
         &app_manifest_path,

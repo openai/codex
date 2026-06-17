@@ -32,8 +32,7 @@ const MCP_CONFIG_CONTENTS: &str = r#"{
 }"#;
 
 struct SyntheticExecutorFileSystem {
-    config_path: AbsolutePathBuf,
-    config_contents: Option<&'static str>,
+    config_contents_by_path: HashMap<AbsolutePathBuf, &'static str>,
     reads: Mutex<Vec<AbsolutePathBuf>>,
 }
 
@@ -66,10 +65,8 @@ impl ExecutorFileSystem for SyntheticExecutorFileSystem {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(path.clone());
-            if path != self.config_path {
-                return Err(io::Error::new(io::ErrorKind::NotFound, "not found"));
-            }
-            self.config_contents
+            self.config_contents_by_path
+                .get(&path)
                 .map(|contents| contents.as_bytes().to_vec())
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "not found"))
         })
@@ -147,11 +144,10 @@ async fn reads_declared_config_only_through_executor_file_system() {
     let config_path = plugin_root.join("config/mcp.json");
     let plugin = resolved_plugin(
         &plugin_root,
-        Some(PluginManifestMcpServers::Path(config_path.clone())),
+        Some(PluginManifestMcpServers::Paths(vec![config_path.clone()])),
     );
     let file_system = SyntheticExecutorFileSystem {
-        config_path: config_path.clone(),
-        config_contents: Some(MCP_CONFIG_CONTENTS),
+        config_contents_by_path: HashMap::from([(config_path.clone(), MCP_CONFIG_CONTENTS)]),
         reads: Mutex::new(Vec::new()),
     };
 
@@ -192,11 +188,104 @@ async fn reads_declared_config_only_through_executor_file_system() {
 }
 
 #[tokio::test]
+async fn reads_multiple_declared_configs_through_executor_file_system() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let plugin_root =
+        AbsolutePathBuf::from_absolute_path_checked(temp_dir.path().join("executor-only-plugin"))
+            .expect("absolute plugin root");
+    assert!(!plugin_root.as_path().exists());
+    let first_config_path = plugin_root.join("config/first.mcp.json");
+    let second_config_path = plugin_root.join("config/second.mcp.json");
+    let plugin = resolved_plugin(
+        &plugin_root,
+        Some(PluginManifestMcpServers::Paths(vec![
+            first_config_path.clone(),
+            second_config_path.clone(),
+        ])),
+    );
+    let file_system = SyntheticExecutorFileSystem {
+        config_contents_by_path: HashMap::from([
+            (first_config_path.clone(), MCP_CONFIG_CONTENTS),
+            (
+                second_config_path.clone(),
+                r#"{"mcpServers":{"other":{"command":"other-mcp","args":["--fast"]}}}"#,
+            ),
+        ]),
+        reads: Mutex::new(Vec::new()),
+    };
+
+    let servers = load_from_file_system(&plugin, &plugin_root, &file_system)
+        .await
+        .expect("load executor MCP configs");
+
+    assert_eq!(
+        servers,
+        vec![
+            (
+                "demo".to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: "demo-mcp".to_string(),
+                        args: Vec::new(),
+                        env: None,
+                        env_vars: Vec::new(),
+                        cwd: Some(plugin_root.to_path_buf()),
+                    },
+                    environment_id: "executor-test".to_string(),
+                    enabled: true,
+                    required: false,
+                    supports_parallel_tool_calls: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: None,
+                    tool_timeout_sec: None,
+                    default_tools_approval_mode: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
+                },
+            ),
+            (
+                "other".to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: "other-mcp".to_string(),
+                        args: vec!["--fast".to_string()],
+                        env: None,
+                        env_vars: Vec::new(),
+                        cwd: Some(plugin_root.to_path_buf()),
+                    },
+                    environment_id: "executor-test".to_string(),
+                    enabled: true,
+                    required: false,
+                    supports_parallel_tool_calls: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: None,
+                    tool_timeout_sec: None,
+                    default_tools_approval_mode: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
+                },
+            ),
+        ]
+    );
+    assert_eq!(
+        reads(&file_system),
+        vec![first_config_path, second_config_path]
+    );
+}
+
+#[tokio::test]
 async fn reads_manifest_object_config_without_executor_file_system_access() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let plugin_root = AbsolutePathBuf::from_absolute_path_checked(temp_dir.path().join("plugin"))
         .expect("absolute plugin root");
-    let config_path = plugin_root.join(DEFAULT_MCP_CONFIG_FILE);
     let plugin = resolved_plugin(
         &plugin_root,
         Some(PluginManifestMcpServers::Object(
@@ -204,8 +293,7 @@ async fn reads_manifest_object_config_without_executor_file_system_access() {
         )),
     );
     let file_system = SyntheticExecutorFileSystem {
-        config_path,
-        config_contents: None,
+        config_contents_by_path: HashMap::new(),
         reads: Mutex::new(Vec::new()),
     };
 
@@ -253,8 +341,7 @@ async fn missing_default_config_is_empty() {
     let config_path = plugin_root.join(DEFAULT_MCP_CONFIG_FILE);
     let plugin = resolved_plugin(&plugin_root, /*mcp_servers*/ None);
     let file_system = SyntheticExecutorFileSystem {
-        config_path: config_path.clone(),
-        config_contents: None,
+        config_contents_by_path: HashMap::new(),
         reads: Mutex::new(Vec::new()),
     };
 
@@ -274,11 +361,10 @@ async fn malformed_declared_config_is_an_error() {
     let config_path = plugin_root.join("mcp.json");
     let plugin = resolved_plugin(
         &plugin_root,
-        Some(PluginManifestMcpServers::Path(config_path.clone())),
+        Some(PluginManifestMcpServers::Paths(vec![config_path.clone()])),
     );
     let file_system = SyntheticExecutorFileSystem {
-        config_path: config_path.clone(),
-        config_contents: Some("{not-json"),
+        config_contents_by_path: HashMap::from([(config_path.clone(), "{not-json")]),
         reads: Mutex::new(Vec::new()),
     };
 
@@ -316,9 +402,9 @@ fn resolved_plugin(
             description: None,
             keywords: Vec::new(),
             paths: PluginManifestPaths {
-                skills: None,
+                skills: Vec::new(),
                 mcp_servers,
-                apps: None,
+                apps: Vec::new(),
                 hooks: None,
             },
             interface: None,

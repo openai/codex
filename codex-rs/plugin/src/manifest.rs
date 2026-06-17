@@ -17,16 +17,16 @@ pub struct PluginManifest<Resource> {
 /// Component resources declared by a plugin manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginManifestPaths<Resource> {
-    pub skills: Option<Resource>,
+    pub skills: Vec<Resource>,
     pub mcp_servers: Option<PluginManifestMcpServers<Resource>>,
-    pub apps: Option<Resource>,
+    pub apps: Vec<Resource>,
     pub hooks: Option<PluginManifestHooks<Resource>>,
 }
 
 /// MCP server declarations embedded in or referenced by a plugin manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginManifestMcpServers<Resource> {
-    Path(Resource),
+    Paths(Vec<Resource>),
     Object(String),
 }
 
@@ -117,9 +117,12 @@ impl<Resource> PluginManifest<Resource> {
             None => None,
         };
         let mcp_servers = match mcp_servers {
-            Some(PluginManifestMcpServers::Path(path)) => {
-                Some(PluginManifestMcpServers::Path(map(path)?))
-            }
+            Some(PluginManifestMcpServers::Paths(paths)) => Some(PluginManifestMcpServers::Paths(
+                paths
+                    .into_iter()
+                    .map(&mut map)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
             Some(PluginManifestMcpServers::Object(servers)) => {
                 Some(PluginManifestMcpServers::Object(servers))
             }
@@ -172,9 +175,15 @@ impl<Resource> PluginManifest<Resource> {
             description,
             keywords,
             paths: PluginManifestPaths {
-                skills: skills.map(&mut map).transpose()?,
+                skills: skills
+                    .into_iter()
+                    .map(&mut map)
+                    .collect::<Result<Vec<_>, _>>()?,
                 mcp_servers,
-                apps: apps.map(&mut map).transpose()?,
+                apps: apps
+                    .into_iter()
+                    .map(&mut map)
+                    .collect::<Result<Vec<_>, _>>()?,
                 hooks,
             },
             interface,

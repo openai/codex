@@ -820,9 +820,7 @@ fn plugin_skill_roots(
     manifest_paths: &PluginManifestPaths,
 ) -> Vec<AbsolutePathBuf> {
     let mut paths = default_skill_roots(plugin_root);
-    if let Some(path) = &manifest_paths.skills {
-        paths.push(path.clone());
-    }
+    paths.extend(manifest_paths.skills.iter().cloned());
     paths.sort_unstable();
     paths.dedup();
     paths
@@ -841,8 +839,8 @@ fn plugin_mcp_config_paths(
     plugin_root: &Path,
     manifest_paths: &PluginManifestPaths,
 ) -> Vec<AbsolutePathBuf> {
-    if let Some(PluginManifestMcpServers::Path(path)) = &manifest_paths.mcp_servers {
-        return vec![path.clone()];
+    if let Some(PluginManifestMcpServers::Paths(paths)) = &manifest_paths.mcp_servers {
+        return paths.clone();
     }
     default_mcp_config_paths(plugin_root)
 }
@@ -885,8 +883,8 @@ fn plugin_app_config_paths(
     plugin_root: &Path,
     manifest_paths: &PluginManifestPaths,
 ) -> Vec<AbsolutePathBuf> {
-    if let Some(path) = &manifest_paths.apps {
-        return vec![path.clone()];
+    if !manifest_paths.apps.is_empty() {
+        return manifest_paths.apps.clone();
     }
     default_app_config_paths(plugin_root)
 }
@@ -1164,7 +1162,7 @@ async fn load_plugin_mcp_servers_from_manifest(
                 }
             }
         }
-        Some(PluginManifestMcpServers::Path(_)) | None => {
+        Some(PluginManifestMcpServers::Paths(_)) | None => {
             for mcp_config_path in plugin_mcp_config_paths(plugin_root, manifest_paths) {
                 let plugin_mcp = load_mcp_servers_from_file(plugin_root, &mcp_config_path).await;
                 for (name, mut config) in plugin_mcp.mcp_servers {

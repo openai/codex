@@ -57,84 +57,90 @@ async fn load_from_file_system(
 ) -> Result<Vec<(String, McpServerConfig)>, ExecutorPluginMcpProviderError> {
     let ResolvedPluginLocation::Environment { environment_id, .. } = plugin.location();
     let plugin_id = plugin.selected_root_id();
-    let (contents, config_path) = match plugin.manifest().paths.mcp_servers.as_ref() {
-        Some(PluginManifestMcpServers::Path(PluginResourceLocator::Environment {
-            path, ..
-        })) => {
-            let config_uri = PathUri::from_abs_path(path);
-            (
-                file_system
-                    .read_file_text(&config_uri, /*sandbox*/ None)
-                    .await
-                    .map_err(|source| ExecutorPluginMcpProviderError::ReadConfig {
-                        plugin_id: plugin_id.to_string(),
-                        path: path.clone(),
-                        source,
-                    })?,
-                path.clone(),
-            )
+    let config_sources = match plugin.manifest().paths.mcp_servers.as_ref() {
+        Some(PluginManifestMcpServers::Paths(paths)) => {
+            let mut config_sources = Vec::new();
+            for PluginResourceLocator::Environment { path, .. } in paths {
+                let contents = read_config_file(plugin_id, path, file_system).await?;
+                config_sources.push((contents, path.clone()));
+            }
+            config_sources
         }
-        Some(PluginManifestMcpServers::Object(object_config)) => (
-            object_config.clone(),
-            plugin_root.join(".codex-plugin/plugin.json"),
-        ),
+        Some(PluginManifestMcpServers::Object(object_config)) => {
+            vec![(
+                object_config.clone(),
+                plugin_root.join(".codex-plugin/plugin.json"),
+            )]
+        }
         None => {
             let config_path = plugin_root.join(DEFAULT_MCP_CONFIG_FILE);
-            let config_uri = PathUri::from_abs_path(&config_path);
-            let contents = match file_system
-                .read_file_text(&config_uri, /*sandbox*/ None)
-                .await
-            {
+            let contents = match read_config_file(plugin_id, &config_path, file_system).await {
                 Ok(contents) => contents,
-                Err(source) if source.kind() == io::ErrorKind::NotFound => {
+                Err(ExecutorPluginMcpProviderError::ReadConfig { source, .. })
+                    if source.kind() == io::ErrorKind::NotFound =>
+                {
                     return Ok(Vec::new());
                 }
-                Err(source) => {
-                    return Err(ExecutorPluginMcpProviderError::ReadConfig {
-                        plugin_id: plugin_id.to_string(),
-                        path: config_path.clone(),
-                        source,
-                    });
-                }
+                Err(err) => return Err(err),
             };
-            (contents, config_path)
+            vec![(contents, config_path)]
         }
     };
-    let parsed = parse_plugin_mcp_config(
-        plugin_root.as_path(),
-        &contents,
-        PluginMcpServerPlacement::Environment { environment_id },
-    )
-    .map_err(|source| ExecutorPluginMcpProviderError::ParseConfig {
-        plugin_id: plugin_id.to_string(),
-        path: config_path,
-        source,
-    })?;
 
-    for error in parsed.errors {
-        tracing::warn!(
-            plugin = plugin_id,
-            server = error.name,
-            error = error.message,
-            "ignoring invalid executor plugin MCP server"
-        );
+    let mut servers = Vec::new();
+    for (contents, config_path) in config_sources {
+        let parsed = parse_plugin_mcp_config(
+            plugin_root.as_path(),
+            &contents,
+            PluginMcpServerPlacement::Environment { environment_id },
+        )
+        .map_err(|source| ExecutorPluginMcpProviderError::ParseConfig {
+            plugin_id: plugin_id.to_string(),
+            path: config_path,
+            source,
+        })?;
+
+        for error in parsed.errors {
+            tracing::warn!(
+                plugin = plugin_id,
+                server = error.name,
+                error = error.message,
+                "ignoring invalid executor plugin MCP server"
+            );
+        }
+
+        servers.extend(parsed.servers.into_iter().filter_map(|(name, config)| {
+            match &config.transport {
+                McpServerTransportConfig::Stdio { .. } => Some((name, config)),
+                McpServerTransportConfig::StreamableHttp { .. } => {
+                    tracing::warn!(
+                        plugin = plugin_id,
+                        server = name,
+                        "ignoring HTTP MCP server from executor plugin"
+                    );
+                    None
+                }
+            }
+        }));
     }
 
-    Ok(parsed
-        .servers
-        .into_iter()
-        .filter_map(|(name, config)| match &config.transport {
-            McpServerTransportConfig::Stdio { .. } => Some((name, config)),
-            McpServerTransportConfig::StreamableHttp { .. } => {
-                tracing::warn!(
-                    plugin = plugin_id,
-                    server = name,
-                    "ignoring HTTP MCP server from executor plugin"
-                );
-                None
-            }
+    Ok(servers)
+}
+
+async fn read_config_file(
+    plugin_id: &str,
+    config_path: &AbsolutePathBuf,
+    file_system: &dyn ExecutorFileSystem,
+) -> Result<String, ExecutorPluginMcpProviderError> {
+    let config_uri = PathUri::from_abs_path(config_path);
+    file_system
+        .read_file_text(&config_uri, /*sandbox*/ None)
+        .await
+        .map_err(|source| ExecutorPluginMcpProviderError::ReadConfig {
+            plugin_id: plugin_id.to_string(),
+            path: config_path.clone(),
+            source,
         })
-        .collect())
 }
 
 #[cfg(test)]
