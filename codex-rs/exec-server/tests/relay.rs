@@ -34,6 +34,7 @@ use futures::StreamExt;
 use futures::future::BoxFuture;
 use http::HeaderMap;
 use http::HeaderValue;
+use http::StatusCode;
 use pretty_assertions::assert_eq;
 use prost::Message as ProstMessage;
 use relay_proto::RelayMessageFrame;
@@ -82,9 +83,11 @@ impl NoiseRendezvousConnectProvider for FailingNoiseConnectProvider {
     ) -> BoxFuture<'_, Result<NoiseRendezvousConnectBundle, ExecServerError>> {
         let _ = self.attempt_tx.send(());
         async {
-            Err(ExecServerError::Protocol(
-                "test registry connect failure".to_string(),
-            ))
+            Err(ExecServerError::EnvironmentRegistryHttp {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: None,
+                message: "test registry unavailable".to_string(),
+            })
         }
         .boxed()
     }
