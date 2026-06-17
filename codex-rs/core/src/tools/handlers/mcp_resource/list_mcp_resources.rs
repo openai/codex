@@ -113,9 +113,10 @@ impl ListMcpResourcesHandler {
             }
         }
         .await;
+        let truncation_policy = turn.model_info.truncation_policy.into();
 
         match payload_result {
-            Ok(payload) => match serialize_function_output(payload, turn.truncation_policy) {
+            Ok(payload) => match serialize_function_output(payload, truncation_policy) {
                 Ok(output) => {
                     let content = function_call_output_content_items_to_text(&output.body)
                         .unwrap_or_default();

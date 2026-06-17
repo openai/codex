@@ -11,7 +11,7 @@ pub(super) async fn maybe_record_token_budget_remaining_context(
     tokens_before_sampling: i64,
     tokens_after_sampling: i64,
 ) {
-    if !turn_context.features.enabled(Feature::TokenBudget) {
+    if !turn_context.config.features.enabled(Feature::TokenBudget) {
         return;
     }
     let Some(model_context_window) = turn_context.model_context_window() else {

@@ -11,7 +11,10 @@ fn user_shell_command_fragment(
     exec_output: &ExecToolCallOutput,
     turn_context: &TurnContext,
 ) -> UserShellCommand {
-    let output = format_exec_output_str(exec_output, turn_context.truncation_policy);
+    let output = format_exec_output_str(
+        exec_output,
+        turn_context.model_info.truncation_policy.into(),
+    );
     UserShellCommand::new(command, exec_output.exit_code, exec_output.duration, output)
 }
 

@@ -34,7 +34,6 @@ pub(super) async fn list_threads(
     let sort_key = match params.sort_key {
         ThreadSortKey::CreatedAt => codex_rollout::ThreadSortKey::CreatedAt,
         ThreadSortKey::UpdatedAt => codex_rollout::ThreadSortKey::UpdatedAt,
-        ThreadSortKey::RecencyAt => codex_rollout::ThreadSortKey::RecencyAt,
     };
     let sort_direction = match params.sort_direction {
         SortDirection::Asc => codex_rollout::SortDirection::Asc,
