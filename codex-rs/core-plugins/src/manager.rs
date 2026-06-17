@@ -88,9 +88,7 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tokio::sync::OnceCell;
 use tokio::sync::Semaphore;
-use tracing::Instrument;
 use tracing::instrument;
-use tracing::trace_span;
 use tracing::warn;
 
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
@@ -489,12 +487,7 @@ impl PluginsManager {
             return self.resolve_loaded_plugins_for_auth(plugins);
         }
 
-        let Ok(_load_permit) = self
-            .loaded_plugins_load_semaphore
-            .acquire()
-            .instrument(trace_span!("plugins_for_config.wait_for_load_permit"))
-            .await
-        else {
+        let Ok(_load_permit) = self.loaded_plugins_load_semaphore.acquire().await else {
             warn!("plugin load semaphore closed");
             return PluginLoadOutcome::default();
         };
