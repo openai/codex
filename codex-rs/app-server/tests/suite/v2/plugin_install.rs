@@ -289,6 +289,71 @@ async fn plugin_install_writes_remote_plugin_to_cloud_and_cache() -> Result<()> 
 }
 
 #[tokio::test]
+async fn plugin_install_uses_plugin_json_name_when_remote_detail_name_differs() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    let installed_path = codex_home
+        .path()
+        .join("plugins/cache/openai-curated-remote/manifest-linear/1.2.3");
+    let bundle_url = mount_remote_plugin_bundle(
+        &server,
+        /*status_code*/ 200,
+        remote_plugin_bundle_tar_gz_bytes_with_contents(
+            r#"{"name":"manifest-linear","version":"0.0.1"}"#,
+            /*app_manifest*/ None,
+        )?,
+    )
+    .await;
+    configure_remote_plugin_test(codex_home.path(), &server)?;
+    mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.2.3", Some(&bundle_url)).await;
+    mount_empty_remote_installed_plugins(&server).await;
+    mount_remote_plugin_install_after_cache_write(
+        &server,
+        REMOTE_PLUGIN_ID,
+        installed_path.join(".codex-plugin/plugin.json"),
+    )
+    .await;
+
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.path(),
+        &[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))],
+    )
+    .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginInstallResponse = to_response(response)?;
+
+    assert_eq!(
+        response,
+        PluginInstallResponse {
+            auth_policy: PluginAuthPolicy::OnUse,
+            apps_needing_auth: Vec::new(),
+        }
+    );
+    wait_for_remote_plugin_request_count(
+        &server,
+        "POST",
+        &format!("/ps/plugins/{REMOTE_PLUGIN_ID}/install"),
+        /*expected_count*/ 1,
+    )
+    .await?;
+    assert!(installed_path.join(".codex-plugin/plugin.json").is_file());
+    assert!(
+        !codex_home
+            .path()
+            .join("plugins/cache/openai-curated-remote/linear/1.2.3")
+            .exists()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_install_uses_remote_apps_needing_auth_response() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;

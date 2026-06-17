@@ -244,6 +244,10 @@ pub async fn sync_remote_installed_plugin_bundles_once(
             .await
             {
                 Ok(result) => {
+                    installed_plugin_names_by_marketplace
+                        .entry(result.plugin_id.marketplace_name.clone())
+                        .or_default()
+                        .insert(result.plugin_id.plugin_name.clone());
                     installed_plugin_ids.insert(result.plugin_id.as_key());
                 }
                 Err(err) => {

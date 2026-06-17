@@ -122,12 +122,9 @@ impl PluginStore {
         }
 
         let plugin_name = plugin_name_for_source(source_path.as_path())?;
-        if plugin_name != plugin_id.plugin_name {
-            return Err(PluginStoreError::Invalid(format!(
-                "plugin.json name `{plugin_name}` does not match marketplace plugin name `{}`",
-                plugin_id.plugin_name
-            )));
-        }
+        let plugin_id = PluginId::new(plugin_name, plugin_id.marketplace_name).map_err(|err| {
+            PluginStoreError::Invalid(format!("invalid plugin id from plugin.json: {err}"))
+        })?;
         validate_plugin_version_segment(&plugin_version).map_err(PluginStoreError::Invalid)?;
         let installed_path = self.plugin_root(&plugin_id, &plugin_version);
         replace_plugin_root_atomically(

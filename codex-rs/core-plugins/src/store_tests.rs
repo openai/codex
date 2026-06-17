@@ -422,19 +422,28 @@ fn install_rejects_marketplace_names_with_path_separators() {
 }
 
 #[test]
-fn install_rejects_manifest_names_that_do_not_match_marketplace_plugin_name() {
+fn install_uses_manifest_name_when_marketplace_plugin_name_differs() {
     let tmp = tempdir().unwrap();
     write_plugin(tmp.path(), "source-dir", "manifest-name");
+    let marketplace_plugin_id =
+        PluginId::new("different-name".to_string(), "debug".to_string()).unwrap();
 
-    let err = PluginStore::new(tmp.path().to_path_buf())
+    let result = PluginStore::new(tmp.path().to_path_buf())
         .install(
             AbsolutePathBuf::try_from(tmp.path().join("source-dir")).unwrap(),
-            PluginId::new("different-name".to_string(), "debug".to_string()).unwrap(),
+            marketplace_plugin_id,
         )
-        .unwrap_err();
+        .unwrap();
 
     assert_eq!(
-        err.to_string(),
-        "plugin.json name `manifest-name` does not match marketplace plugin name `different-name`"
+        result,
+        PluginInstallResult {
+            plugin_id: PluginId::new("manifest-name".to_string(), "debug".to_string()).unwrap(),
+            plugin_version: "local".to_string(),
+            installed_path: AbsolutePathBuf::try_from(
+                tmp.path().join("plugins/cache/debug/manifest-name/local"),
+            )
+            .unwrap(),
+        }
     );
 }

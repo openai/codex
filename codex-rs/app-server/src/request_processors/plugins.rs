@@ -1552,6 +1552,14 @@ impl PluginRequestProcessor {
         )
         .await
         .map_err(remote_plugin_bundle_install_error_to_jsonrpc)?;
+        let _manifest_plugin_cache_mutation =
+            (result.plugin_id.plugin_name != remote_detail.summary.name).then(|| {
+                codex_core_plugins::remote::mark_remote_plugin_cache_mutation_in_flight(
+                    config.codex_home.as_path(),
+                    &actual_remote_marketplace_name,
+                    &result.plugin_id.plugin_name,
+                )
+            });
 
         // Cache first so a backend install cannot succeed when local materialization fails.
         // If this backend call fails, the cache entry is harmless because remote installed state

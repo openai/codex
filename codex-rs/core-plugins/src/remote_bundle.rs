@@ -385,7 +385,7 @@ fn install_remote_plugin_bundle(
 }
 
 fn extract_remote_plugin_bundle_to_path(
-    bundle: ValidatedRemotePluginBundle,
+    _bundle: ValidatedRemotePluginBundle,
     bundle_bytes: Vec<u8>,
     destination: AbsolutePathBuf,
 ) -> Result<AbsolutePathBuf, RemotePluginBundleInstallError> {
@@ -418,17 +418,11 @@ fn extract_remote_plugin_bundle_to_path(
 
     extract_plugin_bundle_tar_gz(&bundle_bytes, extract_dir.path())?;
     let plugin_root = find_extracted_plugin_root(extract_dir.path())?;
-    let manifest = crate::manifest::load_plugin_manifest(&plugin_root).ok_or_else(|| {
+    crate::manifest::load_plugin_manifest(&plugin_root).ok_or_else(|| {
         RemotePluginBundleInstallError::InvalidBundle(
             "remote plugin bundle did not contain a valid plugin.json".to_string(),
         )
     })?;
-    if manifest.name != bundle.plugin_id.plugin_name {
-        return Err(RemotePluginBundleInstallError::InvalidBundle(format!(
-            "plugin.json name `{}` does not match remote plugin name `{}`",
-            manifest.name, bundle.plugin_id.plugin_name
-        )));
-    }
 
     let staged_path = extract_dir.keep();
     fs::rename(&staged_path, destination.as_path()).map_err(|source| {
@@ -790,6 +784,52 @@ mod tests {
                     },
                 },
             })
+        );
+    }
+
+    #[test]
+    fn install_uses_plugin_json_name_when_remote_detail_name_differs() {
+        let codex_home = tempdir().expect("tempdir");
+        let bundle = validate_remote_plugin_bundle(
+            REMOTE_PLUGIN_ID,
+            "openai-curated-remote",
+            "marketplace-name",
+            Some("1.2.3"),
+            Some("https://example.com/linear.tar.gz"),
+            /*app_manifest*/ None,
+        )
+        .expect("valid install plan");
+
+        let result = install_remote_plugin_bundle(
+            codex_home.path().to_path_buf(),
+            bundle,
+            tar_gz_bytes(&[(
+                ".codex-plugin/plugin.json",
+                br#"{"name":"manifest-name"}"#,
+                /*mode*/ 0o644,
+            )]),
+        )
+        .expect("install bundle");
+
+        assert_eq!(
+            result.plugin_id,
+            PluginId::new(
+                "manifest-name".to_string(),
+                "openai-curated-remote".to_string()
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            result.installed_path.as_path(),
+            codex_home
+                .path()
+                .join("plugins/cache/openai-curated-remote/manifest-name/1.2.3")
+        );
+        assert!(
+            !codex_home
+                .path()
+                .join("plugins/cache/openai-curated-remote/marketplace-name/1.2.3")
+                .exists()
         );
     }
 

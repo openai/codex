@@ -345,6 +345,60 @@ fn find_marketplace_plugin_reports_missing_plugin() {
 }
 
 #[test]
+fn find_marketplace_plugin_skips_invalid_unmatched_manifest_names() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::create_dir_all(repo_root.join("invalid-plugin/.codex-plugin")).unwrap();
+    fs::write(
+        repo_root.join("invalid-plugin/.codex-plugin/plugin.json"),
+        r#"{"name":"invalid.plugin"}"#,
+    )
+    .unwrap();
+    fs::create_dir_all(repo_root.join("valid-plugin/.codex-plugin")).unwrap();
+    fs::write(
+        repo_root.join("valid-plugin/.codex-plugin/plugin.json"),
+        r#"{"name":"valid-plugin"}"#,
+    )
+    .unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "invalid-entry",
+      "source": {
+        "source": "local",
+        "path": "./invalid-plugin"
+      }
+    },
+    {
+      "name": "valid-entry",
+      "source": {
+        "source": "local",
+        "path": "./valid-plugin"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let resolved = find_marketplace_plugin(
+        &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
+        "valid-plugin",
+    )
+    .unwrap();
+
+    assert_eq!(
+        resolved.plugin_id,
+        PluginId::new("valid-plugin".to_string(), "codex-curated".to_string()).unwrap()
+    );
+}
+
+#[test]
 fn list_marketplaces_supports_alternate_manifest_layout() {
     let tmp = tempdir().unwrap();
     let repo_root = tmp.path().join("repo");
@@ -400,6 +454,95 @@ fn list_marketplaces_supports_alternate_manifest_layout() {
                 },
                 interface: Some(PluginManifestInterface {
                     display_name: Some("String Source Plugin".to_string()),
+                    short_description: None,
+                    long_description: None,
+                    developer_name: None,
+                    category: None,
+                    capabilities: Vec::new(),
+                    website_url: None,
+                    privacy_policy_url: None,
+                    terms_of_service_url: None,
+                    default_prompt: None,
+                    brand_color: None,
+                    composer_icon: None,
+                    logo: None,
+                    screenshots: Vec::new(),
+                }),
+                keywords: Vec::new(),
+            }],
+        }]
+    );
+}
+
+#[test]
+fn list_marketplaces_uses_local_plugin_manifest_name_when_marketplace_entry_differs() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    let plugin_root = repo_root.join("plugins/source-dir");
+
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    write_alternate_plugin_manifest(
+        &plugin_root,
+        r#"{
+  "name":"manifest-name",
+  "interface": {
+    "displayName": "Manifest Name"
+  }
+}"#,
+    );
+    let marketplace_path = write_alternate_marketplace(
+        &repo_root,
+        r#"{
+  "name": "alternate-marketplace",
+  "plugins": [
+    {
+      "name": "marketplace-entry-name",
+      "source": "./plugins/source-dir"
+    }
+  ]
+}"#,
+    );
+
+    let resolved_by_manifest_name =
+        find_marketplace_plugin(&marketplace_path, "manifest-name").unwrap();
+    let resolved_by_entry_name =
+        find_marketplace_plugin(&marketplace_path, "marketplace-entry-name").unwrap();
+    assert_eq!(resolved_by_manifest_name, resolved_by_entry_name);
+    assert_eq!(
+        resolved_by_manifest_name.plugin_id,
+        PluginId::new(
+            "manifest-name".to_string(),
+            "alternate-marketplace".to_string()
+        )
+        .unwrap()
+    );
+
+    let marketplaces = list_marketplaces_with_home(
+        &[AbsolutePathBuf::try_from(repo_root.clone()).unwrap()],
+        /*home_dir*/ None,
+    )
+    .unwrap()
+    .marketplaces;
+
+    assert_eq!(
+        marketplaces,
+        vec![Marketplace {
+            name: "alternate-marketplace".to_string(),
+            path: marketplace_path,
+            interface: None,
+            plugins: vec![MarketplacePlugin {
+                name: "manifest-name".to_string(),
+                local_version: None,
+                source: MarketplacePluginSource::Local {
+                    path: AbsolutePathBuf::try_from(repo_root.join("plugins/source-dir")).unwrap(),
+                },
+                policy: MarketplacePluginPolicy {
+                    installation: MarketplacePluginInstallPolicy::Available,
+                    authentication: MarketplacePluginAuthPolicy::OnInstall,
+                    products: None,
+                },
+                interface: Some(PluginManifestInterface {
+                    display_name: Some("Manifest Name".to_string()),
                     short_description: None,
                     long_description: None,
                     developer_name: None,

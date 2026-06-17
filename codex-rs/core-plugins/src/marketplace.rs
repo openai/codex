@@ -177,14 +177,27 @@ pub fn find_marketplace_plugin(
     let marketplace_name = marketplace.name;
     let marketplace_name_for_not_found = marketplace_name.clone();
     for plugin in marketplace.plugins {
-        if plugin.name != plugin_name {
-            continue;
-        }
-
-        if let Some(plugin) =
-            resolve_marketplace_plugin_entry(marketplace_path, &marketplace_name, plugin)?
-        {
-            return Ok(plugin);
+        let marketplace_plugin_name = plugin.name.clone();
+        match resolve_marketplace_plugin_entry(marketplace_path, &marketplace_name, plugin) {
+            Ok(Some(plugin))
+                if plugin.plugin_id.plugin_name == plugin_name
+                    || marketplace_plugin_name == plugin_name =>
+            {
+                return Ok(plugin);
+            }
+            Ok(Some(_)) | Ok(None) => {}
+            Err(MarketplaceError::InvalidPlugin(message))
+                if marketplace_plugin_name != plugin_name =>
+            {
+                warn!(
+                    path = %marketplace_path.display(),
+                    marketplace = %marketplace_name,
+                    plugin = %marketplace_plugin_name,
+                    error = %message,
+                    "skipping invalid marketplace plugin"
+                );
+            }
+            Err(err) => return Err(err),
         }
     }
 
@@ -443,6 +456,10 @@ fn resolve_marketplace_plugin_entry(
         MarketplacePluginSource::Local { path } => load_plugin_manifest(path.as_path()),
         MarketplacePluginSource::Git { .. } => None,
     };
+    let plugin_name = manifest
+        .as_ref()
+        .map(|manifest| manifest.name.clone())
+        .unwrap_or(name);
     let interface = plugin_interface_with_marketplace_category(
         manifest
             .as_ref()
@@ -451,9 +468,11 @@ fn resolve_marketplace_plugin_entry(
     );
 
     Ok(Some(ResolvedMarketplacePlugin {
-        plugin_id: PluginId::new(name, marketplace_name.to_string()).map_err(|err| match err {
-            PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
-        })?,
+        plugin_id: PluginId::new(plugin_name, marketplace_name.to_string()).map_err(
+            |err| match err {
+                PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
+            },
+        )?,
         source,
         policy: MarketplacePluginPolicy {
             installation: policy.installation,
