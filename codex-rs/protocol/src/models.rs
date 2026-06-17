@@ -909,6 +909,9 @@ pub struct ResponseItemMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub source_call_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
@@ -2072,6 +2075,7 @@ mod tests {
     fn response_item_metadata(turn_id: &str) -> ResponseItemMetadata {
         ResponseItemMetadata {
             turn_id: Some(turn_id.to_string()),
+            ..Default::default()
         }
     }
 
