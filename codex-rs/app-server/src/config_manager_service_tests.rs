@@ -699,7 +699,7 @@ async fn reserved_builtin_provider_override_rejected() {
 }
 
 #[tokio::test]
-async fn write_value_rejects_feature_requirement_conflict() {
+async fn write_value_allows_feature_requirement_conflict() {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "").unwrap();
 
@@ -717,7 +717,7 @@ async fn write_value_rejects_feature_requirement_conflict() {
         }),
     );
 
-    let error = service
+    let response = service
         .write_value(ConfigValueWriteParams {
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
             key_path: "features.personality".to_string(),
@@ -726,21 +726,53 @@ async fn write_value_rejects_feature_requirement_conflict() {
             expected_version: None,
         })
         .await
-        .expect_err("conflicting feature write should fail");
+        .expect("conflicting feature write should be persisted");
 
-    assert_eq!(
-        error.write_error_code(),
-        Some(ConfigWriteErrorCode::ConfigValidationError)
-    );
-    assert!(
-        error
-            .to_string()
-            .contains("invalid value for `features`: `features.personality=false`"),
-        "{error}"
-    );
+    assert_eq!(response.status, WriteStatus::Ok);
     assert_eq!(
         std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).unwrap(),
-        ""
+        "[features]\npersonality = false\n"
+    );
+}
+
+#[tokio::test]
+async fn write_value_allows_unrelated_write_with_feature_requirement_conflict() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        "[features]\npersonality = false\n",
+    )
+    .unwrap();
+
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![],
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudRequirementsLoader::new(async {
+            Ok(Some(ConfigRequirementsToml {
+                feature_requirements: Some(FeatureRequirementsToml {
+                    entries: BTreeMap::from([("personality".to_string(), true)]),
+                }),
+                ..Default::default()
+            }))
+        }),
+    );
+
+    let response = service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
+            key_path: "model".to_string(),
+            value: serde_json::json!("gpt-5.4"),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect("unrelated write should not be blocked by feature conflict");
+
+    assert_eq!(response.status, WriteStatus::Ok);
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).unwrap(),
+        "model = \"gpt-5.4\"\n[features]\npersonality = false\n"
     );
 }
 

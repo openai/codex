@@ -251,68 +251,6 @@ fn push_feature_requirement_warning(
     }
 }
 
-fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature, bool)> {
-    let mut explicit_settings = Vec::new();
-
-    if let Some(features) = cfg.features.as_ref() {
-        for (key, enabled) in features.entries() {
-            if let Some(feature) = feature_for_key(&key) {
-                explicit_settings.push((format!("features.{key}"), feature, enabled));
-            }
-        }
-    }
-    if let Some(enabled) = cfg.experimental_use_unified_exec_tool {
-        explicit_settings.push((
-            "experimental_use_unified_exec_tool".to_string(),
-            Feature::UnifiedExec,
-            enabled,
-        ));
-    }
-    explicit_settings
-}
-
-pub(crate) fn validate_explicit_feature_settings_in_config_toml(
-    cfg: &ConfigToml,
-    feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
-) -> std::io::Result<()> {
-    let Some(Sourced {
-        value: feature_requirements,
-        source,
-    }) = feature_requirements
-    else {
-        return Ok(());
-    };
-
-    let pinned_features = parse_feature_requirements(
-        feature_requirements.clone(),
-        source,
-        /*startup_warnings*/ None,
-    );
-    if pinned_features.is_empty() {
-        return Ok(());
-    }
-
-    let allowed = feature_requirements_display(&pinned_features);
-    for (path, feature, enabled) in explicit_feature_settings_in_config(cfg) {
-        if pinned_features
-            .get(&feature)
-            .is_some_and(|required| *required != enabled)
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                ConstraintError::InvalidValue {
-                    field_name: "features",
-                    candidate: format!("{path}={enabled}"),
-                    allowed,
-                    requirement_source: source.clone(),
-                },
-            ));
-        }
-    }
-
-    Ok(())
-}
-
 pub(crate) fn validate_feature_requirements_in_config_toml(
     cfg: &ConfigToml,
     feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
