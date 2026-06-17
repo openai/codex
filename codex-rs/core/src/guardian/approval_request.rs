@@ -17,6 +17,7 @@ use super::prompt::guardian_truncate_text;
 pub(crate) enum GuardianApprovalRequest {
     Shell {
         id: String,
+        environment_id: Option<String>,
         command: Vec<String>,
         cwd: AbsolutePathBuf,
         sandbox_permissions: crate::sandboxing::SandboxPermissions,
@@ -25,6 +26,7 @@ pub(crate) enum GuardianApprovalRequest {
     },
     ExecCommand {
         id: String,
+        environment_id: Option<String>,
         command: Vec<String>,
         cwd: AbsolutePathBuf,
         sandbox_permissions: crate::sandboxing::SandboxPermissions,
@@ -35,6 +37,7 @@ pub(crate) enum GuardianApprovalRequest {
     #[cfg(unix)]
     Execve {
         id: String,
+        environment_id: Option<String>,
         source: GuardianCommandSource,
         program: String,
         argv: Vec<String>,
@@ -50,6 +53,7 @@ pub(crate) enum GuardianApprovalRequest {
     NetworkAccess {
         id: String,
         turn_id: String,
+        environment_id: Option<String>,
         target: String,
         host: String,
         protocol: NetworkApprovalProtocol,
@@ -105,6 +109,8 @@ pub(crate) struct GuardianMcpAnnotations {
 #[derive(Serialize)]
 struct CommandApprovalAction<'a> {
     tool: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    environment_id: Option<&'a String>,
     command: &'a [String],
     cwd: &'a Path,
     sandbox_permissions: crate::sandboxing::SandboxPermissions,
@@ -120,6 +126,8 @@ struct CommandApprovalAction<'a> {
 #[derive(Serialize)]
 struct ExecveApprovalAction<'a> {
     tool: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    environment_id: Option<&'a String>,
     program: &'a str,
     argv: &'a [String],
     cwd: &'a Path,
@@ -152,6 +160,8 @@ struct McpToolCallApprovalAction<'a> {
 #[serde(rename_all = "camelCase")]
 struct NetworkAccessApprovalAction<'a> {
     tool: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    environment_id: Option<&'a String>,
     target: &'a str,
     host: &'a str,
     protocol: NetworkApprovalProtocol,
@@ -173,8 +183,10 @@ fn serialize_guardian_action(value: impl Serialize) -> serde_json::Result<Value>
     serde_json::to_value(value)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn serialize_command_guardian_action(
     tool: &'static str,
+    environment_id: Option<&String>,
     command: &[String],
     cwd: &Path,
     sandbox_permissions: crate::sandboxing::SandboxPermissions,
@@ -184,6 +196,7 @@ fn serialize_command_guardian_action(
 ) -> serde_json::Result<Value> {
     serialize_guardian_action(CommandApprovalAction {
         tool,
+        environment_id,
         command,
         cwd,
         sandbox_permissions,
@@ -262,6 +275,7 @@ pub(crate) fn guardian_approval_request_to_json(
     match action {
         GuardianApprovalRequest::Shell {
             id: _,
+            environment_id,
             command,
             cwd,
             sandbox_permissions,
@@ -269,6 +283,7 @@ pub(crate) fn guardian_approval_request_to_json(
             justification,
         } => serialize_command_guardian_action(
             "shell",
+            environment_id.as_ref(),
             command,
             cwd,
             *sandbox_permissions,
@@ -278,6 +293,7 @@ pub(crate) fn guardian_approval_request_to_json(
         ),
         GuardianApprovalRequest::ExecCommand {
             id: _,
+            environment_id,
             command,
             cwd,
             sandbox_permissions,
@@ -286,6 +302,7 @@ pub(crate) fn guardian_approval_request_to_json(
             tty,
         } => serialize_command_guardian_action(
             "exec_command",
+            environment_id.as_ref(),
             command,
             cwd,
             *sandbox_permissions,
@@ -296,6 +313,7 @@ pub(crate) fn guardian_approval_request_to_json(
         #[cfg(unix)]
         GuardianApprovalRequest::Execve {
             id: _,
+            environment_id,
             source,
             program,
             argv,
@@ -303,6 +321,7 @@ pub(crate) fn guardian_approval_request_to_json(
             additional_permissions,
         } => serialize_guardian_action(ExecveApprovalAction {
             tool: guardian_command_source_tool_name(*source),
+            environment_id: environment_id.as_ref(),
             program,
             argv,
             cwd,
@@ -322,6 +341,7 @@ pub(crate) fn guardian_approval_request_to_json(
         GuardianApprovalRequest::NetworkAccess {
             id: _,
             turn_id: _,
+            environment_id,
             target,
             host,
             protocol,
@@ -329,6 +349,7 @@ pub(crate) fn guardian_approval_request_to_json(
             trigger,
         } => serialize_guardian_action(NetworkAccessApprovalAction {
             tool: "network_access",
+            environment_id: environment_id.as_ref(),
             target,
             host,
             protocol: *protocol,
@@ -404,6 +425,7 @@ pub(crate) fn guardian_assessment_action(
         GuardianApprovalRequest::NetworkAccess {
             id: _id,
             turn_id: _turn_id,
+            environment_id: _environment_id,
             target,
             host,
             protocol,

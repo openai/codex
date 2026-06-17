@@ -4830,6 +4830,20 @@ fn lines_to_single_string(lines: &[Line<'_>]) -> String {
         .join("\n")
 }
 
+#[test]
+fn fullscreen_exec_approval_includes_environment() {
+    let lines = event_dispatch::fullscreen_exec_approval_lines(
+        Some("remote"),
+        &["bash".into(), "-lc".into(), "echo hello world".into()],
+    );
+
+    insta::assert_snapshot!(lines_to_single_string(&lines), @r"
+    Environment: remote
+
+    echo hello world
+    ");
+}
+
 fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
     let model_info =
         construct_model_info_offline_for_tests(model, &config.to_models_manager_config());

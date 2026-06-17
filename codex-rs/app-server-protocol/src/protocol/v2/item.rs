@@ -1323,7 +1323,6 @@ pub struct CommandExecutionRequestApprovalParams {
     pub approval_id: Option<String>,
     /// Environment in which the command will run.
     #[serde(default)]
-    #[ts(optional = nullable)]
     pub environment_id: Option<String>,
     /// Optional explanatory reason (e.g. request for network access).
     #[serde(default, skip_serializing_if = "Option::is_none")]

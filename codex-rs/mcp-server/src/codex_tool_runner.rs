@@ -220,7 +220,7 @@ async fn run_codex_tool_session_inner(
                         let approval_id = ev.effective_approval_id();
                         let ExecApprovalRequestEvent {
                             turn_id: _,
-                            environment_id: _,
+                            environment_id,
                             started_at_ms: _,
                             command,
                             cwd,
@@ -237,6 +237,7 @@ async fn run_codex_tool_session_inner(
                         handle_exec_approval_request(
                             command,
                             cwd.to_path_buf(),
+                            environment_id,
                             outgoing.clone(),
                             thread.clone(),
                             request_id.clone(),

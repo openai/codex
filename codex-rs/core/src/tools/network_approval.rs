@@ -512,6 +512,7 @@ impl NetworkApprovalService {
                     turn_id: owner_call
                         .as_ref()
                         .map_or_else(|| turn_context.sub_id.clone(), |call| call.turn_id.clone()),
+                    environment_id: owner_call.as_ref().map(|call| call.environment_id.clone()),
                     target,
                     host: request.host,
                     protocol,

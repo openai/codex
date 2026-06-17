@@ -159,6 +159,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                     review_id,
                     GuardianApprovalRequest::Shell {
                         id: call_id,
+                        environment_id: Some(req.turn_environment.environment_id.clone()),
                         command,
                         cwd: cwd.clone(),
                         sandbox_permissions: req.sandbox_permissions,
