@@ -571,7 +571,6 @@ async fn plugin_install_rejects_remote_plugin_disabled_by_admin_before_download(
     )
     .await;
     mount_empty_remote_installed_plugins(&server).await;
-    mount_backend_analytics_events(&server).await;
 
     let mut mcp = TestAppServer::new_with_env(
         codex_home.path(),
@@ -603,19 +602,6 @@ async fn plugin_install_rejects_remote_plugin_disabled_by_admin_before_download(
         /*expected_count*/ 0,
     )
     .await?;
-    let payload = wait_for_plugin_analytics_payload(&server).await?;
-    let event_params = &payload["events"][0]["event_params"];
-    assert_eq!(
-        payload["events"][0]["event_type"],
-        "codex_plugin_install_failed"
-    );
-    assert_eq!(event_params["plugin_id"], REMOTE_PLUGIN_ID);
-    assert_eq!(event_params["plugin_name"], "unknown");
-    assert_eq!(event_params["marketplace_name"], "openai-curated-remote");
-    assert_eq!(
-        event_params["error_type"],
-        "remote_plugin_disabled_by_admin"
-    );
     assert!(
         !codex_home
             .path()
@@ -626,7 +612,7 @@ async fn plugin_install_rejects_remote_plugin_disabled_by_admin_before_download(
 }
 
 #[tokio::test]
-async fn plugin_install_tracks_analytics_when_remote_plugin_not_available() -> Result<()> {
+async fn plugin_install_rejects_remote_plugin_not_available() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     configure_remote_plugin_test(codex_home.path(), &server)?;
@@ -638,7 +624,6 @@ async fn plugin_install_tracks_analytics_when_remote_plugin_not_available() -> R
     )
     .await;
     mount_empty_remote_installed_plugins(&server).await;
-    mount_backend_analytics_events(&server).await;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -659,15 +644,6 @@ async fn plugin_install_tracks_analytics_when_remote_plugin_not_available() -> R
         /*expected_count*/ 0,
     )
     .await?;
-    let payload = wait_for_plugin_analytics_payload(&server).await?;
-    let event_params = &payload["events"][0]["event_params"];
-    assert_eq!(
-        payload["events"][0]["event_type"],
-        "codex_plugin_install_failed"
-    );
-    assert_eq!(event_params["plugin_id"], REMOTE_PLUGIN_ID);
-    assert_eq!(event_params["marketplace_name"], "openai-curated-remote");
-    assert_eq!(event_params["error_type"], "remote_plugin_not_available");
     Ok(())
 }
 

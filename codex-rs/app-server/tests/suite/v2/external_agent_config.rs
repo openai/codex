@@ -14,7 +14,6 @@ use codex_app_server_protocol::ExternalAgentConfigImportHistoriesReadResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportProgressNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
-use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
@@ -170,7 +169,7 @@ async fn external_agent_config_import_sends_completion_notification_for_sync_onl
 }
 
 #[tokio::test]
-async fn external_agent_config_import_returns_error_for_failed_sync_import() -> Result<()> {
+async fn external_agent_config_import_reports_failed_sync_import_in_completion() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_chatgpt_auth(
         codex_home.path(),
@@ -208,27 +207,66 @@ async fn external_agent_config_import_returns_error_for_failed_sync_import() -> 
             "externalAgentConfig/import",
             Some(serde_json::json!({
                 "source": "test_import",
-                "migrationItems": [{
-                    "itemType": "CONFIG",
-                    "description": "Import config",
-                    "cwd": null
-                }]
+                "migrationItems": [
+                    {
+                        "itemType": "CONFIG",
+                        "description": "Import config",
+                        "cwd": null
+                    },
+                    {
+                        "itemType": "COMMANDS",
+                        "description": "Import commands",
+                        "cwd": null
+                    }
+                ]
             })),
         )
         .await?;
 
-    let error: JSONRPCError = timeout(
+    let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    assert_eq!(error.error.code, -32603);
-    assert!(
-        error.error.message.contains("invalid existing config.toml"),
-        "unexpected error: {error:?}"
-    );
+    let response: ExternalAgentConfigImportResponse = to_response(response)?;
+    let import_id = assert_import_response(response);
 
-    let event = timeout(DEFAULT_TIMEOUT, async {
+    let notification = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
+    )
+    .await??;
+    let completed: ExternalAgentConfigImportCompletedNotification =
+        serde_json::from_value(notification.params.expect("completed params"))?;
+    assert_eq!(completed.import_id, import_id);
+    let config_result = completed
+        .item_type_results
+        .iter()
+        .find(|result| result.item_type == ExternalAgentConfigMigrationItemType::Config)
+        .expect("config result");
+    assert!(config_result.successes.is_empty());
+    assert_eq!(config_result.failures.len(), 1);
+    let config_failure = &config_result.failures[0];
+    assert_eq!(
+        config_failure.error_type.as_deref(),
+        Some("invalid_existing_config")
+    );
+    assert_eq!(config_failure.failure_stage, "import_request_failed");
+    assert!(
+        config_failure
+            .message
+            .contains("invalid existing config.toml"),
+        "unexpected failure: {config_failure:?}"
+    );
+    let commands_result = completed
+        .item_type_results
+        .iter()
+        .find(|result| result.item_type == ExternalAgentConfigMigrationItemType::Commands)
+        .expect("commands result");
+    assert!(commands_result.successes.is_empty());
+    assert!(commands_result.failures.is_empty());
+
+    let events = timeout(DEFAULT_TIMEOUT, async {
         loop {
             let contents = match std::fs::read_to_string(&analytics_capture_file) {
                 Ok(contents) => contents,
@@ -238,34 +276,43 @@ async fn external_agent_config_import_returns_error_for_failed_sync_import() -> 
                 }
                 Err(err) => return Err(err.into()),
             };
+            let mut captured_events = Vec::new();
             for line in contents.lines() {
                 let payload: serde_json::Value = serde_json::from_str(line)?;
                 let Some(events) = payload["events"].as_array() else {
                     continue;
                 };
-                if let Some(event) = events.iter().find(|event| {
-                    event["event_type"] == "codex_onboarding_external_agent_import_failure"
-                }) {
-                    return Ok::<serde_json::Value, anyhow::Error>(event.clone());
-                }
+                captured_events.extend(events.iter().cloned());
+            }
+            if captured_events.iter().any(|event| {
+                event["event_type"] == "codex_onboarding_external_agent_import_complete"
+                    && event["event_params"]["type"] == "COMMANDS"
+            }) {
+                return Ok::<Vec<serde_json::Value>, anyhow::Error>(captured_events);
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     })
     .await??;
+    let event = events
+        .iter()
+        .find(|event| {
+            event["event_type"] == "codex_onboarding_external_agent_import_failure"
+                && event["event_params"]["type"] == "CONFIG"
+        })
+        .expect("config failure analytics event");
     let event_params = &event["event_params"];
-    assert!(
-        !event_params["import_id"]
-            .as_str()
-            .unwrap_or_default()
-            .is_empty()
-    );
+    assert_eq!(event_params["import_id"], import_id);
     assert_eq!(event_params["source"], "test_import");
     assert_eq!(event_params["type"], "CONFIG");
     assert_eq!(event_params["failure_stage"], "import_request_failed");
     assert_eq!(event_params["error_type"], "invalid_existing_config");
     assert!(event_params.get("raw_errors").is_none());
     assert!(event_params.get("message").is_none());
+    assert!(!events.iter().any(|event| {
+        event["event_type"] == "codex_onboarding_external_agent_import_failure"
+            && event["event_params"]["type"] == "COMMANDS"
+    }));
 
     Ok(())
 }

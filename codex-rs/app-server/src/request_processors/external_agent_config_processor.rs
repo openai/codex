@@ -207,17 +207,6 @@ impl ExternalAgentConfigRequestProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         let import_id = Uuid::new_v4().to_string();
         let analytics_source = params.source.clone().unwrap_or_default();
-        let analytics_item_types = params
-            .migration_items
-            .iter()
-            .filter(|migration_item| {
-                !matches!(
-                    migration_item.item_type,
-                    ExternalAgentConfigMigrationItemType::Sessions
-                )
-            })
-            .map(|migration_item| analytics_migration_item_type(migration_item.item_type))
-            .collect::<Vec<_>>();
         let needs_runtime_refresh = migration_items_need_runtime_refresh(&params.migration_items);
         let has_migration_items = !params.migration_items.is_empty();
         let has_plugin_imports = params.migration_items.iter().any(|item| {
@@ -228,36 +217,7 @@ impl ExternalAgentConfigRequestProcessor {
         });
         let (pending_session_imports, session_validation_result) =
             self.validate_pending_session_imports(&params);
-        let import_outcome = match self.import_external_agent_config(params).await {
-            Ok(import_outcome) => import_outcome,
-            Err(err) => {
-                let error_type = if err.message.contains("invalid existing config.toml") {
-                    "invalid_existing_config"
-                } else {
-                    "external_agent_config_import_error"
-                };
-                tracing::warn!(
-                    import_id = %import_id,
-                    source = %analytics_source,
-                    error_type = %error_type,
-                    error = %err.message,
-                    "external agent config import failed before completion"
-                );
-                for item_type in analytics_item_types {
-                    self.analytics_events_client
-                        .track_external_agent_config_import_failure(
-                            ExternalAgentConfigImportFailureInput {
-                                import_id: import_id.clone(),
-                                source: analytics_source.clone(),
-                                item_type: item_type.to_string(),
-                                failure_stage: "import_request_failed".to_string(),
-                                error_type: error_type.to_string(),
-                            },
-                        );
-                }
-                return Err(err);
-            }
-        };
+        let import_outcome = self.import_external_agent_config(params).await;
         if needs_runtime_refresh {
             self.config_processor.handle_config_mutation().await;
         }
@@ -474,7 +434,7 @@ impl ExternalAgentConfigRequestProcessor {
     async fn import_external_agent_config(
         &self,
         params: ExternalAgentConfigImportParams,
-    ) -> Result<CoreImportOutcome, JSONRPCErrorError> {
+    ) -> CoreImportOutcome {
         self.migration_service
             .import(
                 params
@@ -569,7 +529,6 @@ impl ExternalAgentConfigRequestProcessor {
                     .collect(),
             )
             .await
-            .map_err(|err| internal_error(err.to_string()))
     }
 
     async fn complete_pending_plugin_import(

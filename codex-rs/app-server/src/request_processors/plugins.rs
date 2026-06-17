@@ -1539,24 +1539,14 @@ impl PluginRequestProcessor {
         let actual_remote_marketplace_name = remote_detail.marketplace_name.clone();
         let remote_plugin_name = remote_detail.summary.name.clone();
         if remote_detail.summary.availability == PluginAvailability::DisabledByAdmin {
-            let message = format!("remote plugin {remote_plugin_id} is disabled by admin");
-            self.track_plugin_install_failed_for_remote_plugin(
-                &remote_plugin_id,
-                &actual_remote_marketplace_name,
-                "remote_plugin_disabled_by_admin",
-                message.clone(),
-            );
-            return Err(invalid_request(message));
+            return Err(invalid_request(format!(
+                "remote plugin {remote_plugin_id} is disabled by admin"
+            )));
         }
         if remote_detail.summary.install_policy == PluginInstallPolicy::NotAvailable {
-            let message = format!("remote plugin {remote_plugin_id} is not available for install");
-            self.track_plugin_install_failed_for_remote_plugin(
-                &remote_plugin_id,
-                &actual_remote_marketplace_name,
-                "remote_plugin_not_available",
-                message.clone(),
-            );
-            return Err(invalid_request(message));
+            return Err(invalid_request(format!(
+                "remote plugin {remote_plugin_id} is not available for install"
+            )));
         }
         // Direct install writes the same cache tree that installed-plugin sync
         // prunes before the backend installed snapshot can include this plugin.
