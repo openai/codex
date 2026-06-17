@@ -106,7 +106,6 @@ pub(super) fn stored_thread_from_rollout_item(
         .or_else(|| thread_id_from_rollout_path(item.path.as_path()))?;
     let created_at = parse_rfc3339(item.created_at.as_deref()).unwrap_or_else(Utc::now);
     let updated_at = parse_rfc3339(item.updated_at.as_deref()).unwrap_or(created_at);
-    let recency_at = parse_rfc3339(item.recency_at.as_deref()).unwrap_or(updated_at);
     let archived_at = archived.then_some(updated_at);
     let git_info = git_info_from_parts(
         item.git_sha.clone(),
@@ -137,7 +136,6 @@ pub(super) fn stored_thread_from_rollout_item(
         reasoning_effort: None,
         created_at,
         updated_at,
-        recency_at,
         archived_at,
         cwd: item.cwd.unwrap_or_default(),
         cli_version: item.cli_version.unwrap_or_default(),

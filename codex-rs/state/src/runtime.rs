@@ -160,7 +160,6 @@ pub struct StateRuntime {
     thread_goals: GoalStore,
     memories: MemoryStore,
     thread_updated_at_millis: Arc<AtomicI64>,
-    thread_recency_at_millis: Arc<AtomicI64>,
 }
 
 impl StateRuntime {
@@ -263,36 +262,32 @@ impl StateRuntime {
             return Err(err);
         }
         let started = Instant::now();
-        let thread_timestamp_millis_result: anyhow::Result<(Option<i64>, Option<i64>)> =
-            sqlx::query_as(
-                "SELECT MAX(threads.updated_at_ms), MAX(threads.recency_at_ms) FROM threads",
-            )
-            .fetch_one(pool.as_ref())
-            .await
-            .map_err(anyhow::Error::from);
+        let thread_updated_at_millis_result: anyhow::Result<Option<i64>> =
+            sqlx::query_scalar("SELECT MAX(threads.updated_at_ms) FROM threads")
+                .fetch_one(pool.as_ref())
+                .await
+                .map_err(anyhow::Error::from);
         crate::telemetry::record_init_result(
             telemetry_override,
             DbKind::State,
             "post_init_query",
             started.elapsed(),
-            &thread_timestamp_millis_result,
+            &thread_updated_at_millis_result,
         );
-        let (thread_updated_at_millis, thread_recency_at_millis) =
-            match thread_timestamp_millis_result {
-                Ok(value) => value,
-                Err(err) => {
-                    close_sqlite_pools(&[
-                        pool.as_ref(),
-                        logs_pool.as_ref(),
-                        goals_pool.as_ref(),
-                        memories_pool.as_ref(),
-                    ])
-                    .await;
-                    return Err(err);
-                }
-            };
+        let thread_updated_at_millis = match thread_updated_at_millis_result {
+            Ok(value) => value,
+            Err(err) => {
+                close_sqlite_pools(&[
+                    pool.as_ref(),
+                    logs_pool.as_ref(),
+                    goals_pool.as_ref(),
+                    memories_pool.as_ref(),
+                ])
+                .await;
+                return Err(err);
+            }
+        };
         let thread_updated_at_millis = thread_updated_at_millis.unwrap_or(0);
-        let thread_recency_at_millis = thread_recency_at_millis.unwrap_or(0);
         let runtime = Arc::new(Self {
             thread_goals: GoalStore::new(Arc::clone(&goals_pool)),
             memories: MemoryStore::new(Arc::clone(&memories_pool), Arc::clone(&pool)),
@@ -301,7 +296,6 @@ impl StateRuntime {
             codex_home,
             default_provider,
             thread_updated_at_millis: Arc::new(AtomicI64::new(thread_updated_at_millis)),
-            thread_recency_at_millis: Arc::new(AtomicI64::new(thread_recency_at_millis)),
         });
         if let Err(err) = runtime.run_logs_startup_maintenance().await {
             warn!(
