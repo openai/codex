@@ -1863,11 +1863,33 @@ mod tests {
         let computer_use = ComputerUseRequirementsToml {
             allow_locked_computer_use: Some(false),
         };
+        let sqlite_home = AbsolutePathBuf::try_from(std::env::temp_dir().join("managed-state"))
+            .expect("managed sqlite home should be absolute");
+        let log_dir = AbsolutePathBuf::try_from(std::env::temp_dir().join("managed-logs"))
+            .expect("managed log dir should be absolute");
+        let model_catalog_json =
+            AbsolutePathBuf::try_from(std::env::temp_dir().join("managed-models.json"))
+                .expect("managed model catalog path should be absolute");
+        let feedback = FeedbackConfigToml {
+            enabled: Some(false),
+        };
+        let windows = WindowsRequirementsToml {
+            allowed_sandbox_implementations: None,
+            sandbox_private_desktop: Some(true),
+        };
         let enforce_residency = ResidencyRequirement::Us;
         let enforce_source = source.clone();
         let guardian_policy_config = "Use the company-managed guardian policy.".to_string();
 
+        // Intentionally constructed without `..Default::default()` so adding a new field to
+        // `ConfigRequirementsToml` forces this test to be updated.
         let other = ConfigRequirementsToml {
+            sqlite_home: Some(sqlite_home.clone()),
+            log_dir: Some(log_dir.clone()),
+            model_catalog_json: Some(model_catalog_json.clone()),
+            check_for_update_on_startup: Some(false),
+            allow_login_shell: Some(false),
+            feedback: Some(feedback.clone()),
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
             allowed_approvals_reviewers: Some(allowed_approvals_reviewers.clone()),
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
@@ -1879,7 +1901,7 @@ mod tests {
             allow_appshots: Some(false),
             allow_remote_control: Some(false),
             computer_use: Some(computer_use.clone()),
-            windows: None,
+            windows: Some(windows.clone()),
             feature_requirements: Some(feature_requirements.clone()),
             hooks: None,
             mcp_servers: None,
@@ -1890,7 +1912,6 @@ mod tests {
             network: None,
             permissions: None,
             guardian_policy_config: Some(guardian_policy_config.clone()),
-            ..Default::default()
         };
 
         target.merge_unset_fields(source.clone(), other);
@@ -1898,6 +1919,15 @@ mod tests {
         assert_eq!(
             target,
             ConfigRequirementsWithSources {
+                sqlite_home: Some(Sourced::new(sqlite_home, source.clone())),
+                log_dir: Some(Sourced::new(log_dir, source.clone())),
+                model_catalog_json: Some(Sourced::new(model_catalog_json, source.clone())),
+                check_for_update_on_startup: Some(Sourced::new(
+                    /*value*/ false,
+                    source.clone(),
+                )),
+                allow_login_shell: Some(Sourced::new(/*value*/ false, source.clone())),
+                feedback: Some(Sourced::new(feedback, source.clone())),
                 allowed_approval_policies: Some(Sourced::new(
                     allowed_approval_policies,
                     source.clone()
@@ -1926,7 +1956,7 @@ mod tests {
                     enforce_source.clone(),
                 )),
                 computer_use: Some(Sourced::new(computer_use, enforce_source.clone())),
-                windows: None,
+                windows: Some(Sourced::new(windows, enforce_source.clone())),
                 feature_requirements: Some(Sourced::new(
                     feature_requirements,
                     enforce_source.clone(),
@@ -1940,7 +1970,6 @@ mod tests {
                 network: None,
                 permissions: None,
                 guardian_policy_config: Some(Sourced::new(guardian_policy_config, source)),
-                ..Default::default()
             }
         );
     }
