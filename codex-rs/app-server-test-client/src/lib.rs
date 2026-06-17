@@ -1722,6 +1722,7 @@ impl CodexClient {
         let request = ClientRequest::LoginAccount {
             request_id: request_id.clone(),
             params: codex_app_server_protocol::LoginAccountParams::Chatgpt {
+                app_brand: None,
                 codex_streamlined_login: false,
                 use_hosted_login_success_page: false,
             },

@@ -255,6 +255,7 @@ impl AccountRequestProcessor {
                     .await;
             }
             LoginAccountParams::Chatgpt {
+                app_brand,
                 codex_streamlined_login,
                 use_hosted_login_success_page,
             } => {
@@ -262,7 +263,10 @@ impl AccountRequestProcessor {
                     request_id,
                     codex_streamlined_login,
                     if use_hosted_login_success_page {
-                        LoginSuccessPage::hosted()
+                        LoginSuccessPage::hosted(match app_brand.unwrap_or(LoginAppBrand::Codex) {
+                            LoginAppBrand::Codex => LoginSuccessPageBrand::Codex,
+                            LoginAppBrand::Chatgpt => LoginSuccessPageBrand::Chatgpt,
+                        })
                     } else {
                         LoginSuccessPage::Local
                     },
@@ -387,11 +391,11 @@ impl AccountRequestProcessor {
             {
                 opts.issuer = issuer;
             }
-            if matches!(opts.login_success_page, LoginSuccessPage::Hosted(_))
+            if let LoginSuccessPage::Hosted { app_brand, .. } = &opts.login_success_page
                 && let Ok(open_app_url) = std::env::var(LOGIN_OPEN_APP_URL_OVERRIDE_ENV_VAR)
                 && !open_app_url.trim().is_empty()
             {
-                opts.login_success_page = LoginSuccessPage::hosted_at(&open_app_url)
+                opts.login_success_page = LoginSuccessPage::hosted_at(&open_app_url, *app_brand)
                     .map_err(|err| internal_error(err.to_string()))?;
             }
             opts

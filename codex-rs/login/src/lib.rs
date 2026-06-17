@@ -15,6 +15,7 @@ pub use device_code_auth::request_device_code;
 pub use device_code_auth::run_device_code_login;
 pub use server::LoginServer;
 pub use server::LoginSuccessPage;
+pub use server::LoginSuccessPageBrand;
 pub use server::ServerOptions;
 pub use server::ShutdownHandle;
 pub use server::run_login_server;

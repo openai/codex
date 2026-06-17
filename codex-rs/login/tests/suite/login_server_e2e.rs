@@ -11,6 +11,7 @@ use base64::Engine;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::LoginSuccessPage;
+use codex_login::LoginSuccessPageBrand;
 use codex_login::ServerOptions;
 use codex_login::run_login_server;
 use core_test_support::skip_if_no_network;
@@ -190,6 +191,7 @@ async fn hosted_login_redirects_to_configured_open_app_url() -> Result<()> {
         codex_streamlined_login: false,
         login_success_page: LoginSuccessPage::hosted_at(
             "http://localhost:3000/codex/open-app?source=old",
+            LoginSuccessPageBrand::Chatgpt,
         )?,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
     })?;
@@ -208,7 +210,7 @@ async fn hosted_login_redirects_to_configured_open_app_url() -> Result<()> {
     assert_eq!(response.status(), 302);
     assert_eq!(
         response.headers()["location"].to_str()?,
-        "http://localhost:3000/codex/open-app?source=login"
+        "http://localhost:3000/codex/open-app?source=login&app_brand=chatgpt"
     );
     tokio::time::timeout(Duration::from_secs(1), server.block_until_done()).await??;
 

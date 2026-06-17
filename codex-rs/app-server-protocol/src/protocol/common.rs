@@ -2714,6 +2714,7 @@ mod tests {
         let request = ClientRequest::LoginAccount {
             request_id: RequestId::Integer(3),
             params: v2::LoginAccountParams::Chatgpt {
+                app_brand: None,
                 codex_streamlined_login: false,
                 use_hosted_login_success_page: false,
             },
@@ -2736,6 +2737,7 @@ mod tests {
         let request = ClientRequest::LoginAccount {
             request_id: RequestId::Integer(3),
             params: v2::LoginAccountParams::Chatgpt {
+                app_brand: None,
                 codex_streamlined_login: true,
                 use_hosted_login_success_page: false,
             },
@@ -2759,6 +2761,7 @@ mod tests {
         let request = ClientRequest::LoginAccount {
             request_id: RequestId::Integer(3),
             params: v2::LoginAccountParams::Chatgpt {
+                app_brand: Some(v2::LoginAppBrand::Chatgpt),
                 codex_streamlined_login: true,
                 use_hosted_login_success_page: true,
             },
@@ -2769,6 +2772,7 @@ mod tests {
                 "id": 3,
                 "params": {
                     "type": "chatgpt",
+                    "appBrand": "chatgpt",
                     "codexStreamlinedLogin": true,
                     "useHostedLoginSuccessPage": true
                 }

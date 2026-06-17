@@ -63,22 +63,42 @@ static LOGIN_ERROR_PAGE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum LoginSuccessPage {
     Local,
-    Hosted(url::Url),
+    Hosted {
+        url: url::Url,
+        app_brand: LoginSuccessPageBrand,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum LoginSuccessPageBrand {
+    Codex,
+    Chatgpt,
+}
+
+impl LoginSuccessPageBrand {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::Chatgpt => "chatgpt",
+        }
+    }
 }
 
 impl LoginSuccessPage {
-    pub fn hosted() -> Self {
-        Self::hosted_at(CODEX_OPEN_APP_URL)
+    pub fn hosted(app_brand: LoginSuccessPageBrand) -> Self {
+        Self::hosted_at(CODEX_OPEN_APP_URL, app_brand)
             .unwrap_or_else(|err| panic!("default Codex open app URL must parse: {err}"))
     }
 
-    pub fn hosted_at(url: &str) -> io::Result<Self> {
-        url::Url::parse(url).map(Self::Hosted).map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("invalid Codex open app URL: {err}"),
-            )
-        })
+    pub fn hosted_at(url: &str, app_brand: LoginSuccessPageBrand) -> io::Result<Self> {
+        url::Url::parse(url)
+            .map(|url| Self::Hosted { url, app_brand })
+            .map_err(|err| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid Codex open app URL: {err}"),
+                )
+            })
     }
 }
 
@@ -954,10 +974,13 @@ fn compose_success_url(
         .and_then(JsonValue::as_bool)
         .unwrap_or(false);
     let needs_setup = (!completed_onboarding) && is_org_owner;
-    if !needs_setup && let LoginSuccessPage::Hosted(success_url) = login_success_page {
-        let mut success_url = success_url.clone();
+    if !needs_setup && let LoginSuccessPage::Hosted { url, app_brand } = login_success_page {
+        let mut success_url = url.clone();
         success_url.set_query(None);
-        success_url.query_pairs_mut().append_pair("source", "login");
+        success_url
+            .query_pairs_mut()
+            .append_pair("source", "login")
+            .append_pair("app_brand", app_brand.as_str());
         return LoginSuccessRedirect::Hosted(success_url.into());
     }
 
@@ -1273,6 +1296,7 @@ mod tests {
 
     use super::DEFAULT_ISSUER;
     use super::LoginSuccessPage;
+    use super::LoginSuccessPageBrand;
     use super::LoginSuccessRedirect;
     use super::TokenEndpointErrorDetail;
     use super::compose_success_url;
@@ -1436,10 +1460,10 @@ mod tests {
                 "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
                 "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
                 /*codex_streamlined_login*/ false,
-                &LoginSuccessPage::hosted(),
+                &LoginSuccessPage::hosted(LoginSuccessPageBrand::Chatgpt),
             ),
             LoginSuccessRedirect::Hosted(
-                "https://chatgpt.com/codex/open-app?source=login".to_string()
+                "https://chatgpt.com/codex/open-app?source=login&app_brand=chatgpt".to_string()
             )
         );
     }
@@ -1475,7 +1499,7 @@ mod tests {
             &id_token,
             &format!("e30.{access_payload}.sig"),
             /*codex_streamlined_login*/ true,
-            &LoginSuccessPage::hosted(),
+            &LoginSuccessPage::hosted(LoginSuccessPageBrand::Codex),
         ) else {
             panic!("expected local success redirect");
         };
