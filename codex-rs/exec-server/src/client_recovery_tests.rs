@@ -21,13 +21,13 @@ fn registry_recovery_retry_delay_exponentially_backs_off_and_caps() {
         (20, Duration::from_secs(5)),
     ];
 
-    for (attempt, maximum) in cases {
+    for (attempt, base) in cases {
         let delay = registry_recovery_retry_delay("session-1", attempt);
+        assert!(delay >= base, "delay {delay:?} for attempt {attempt}");
         assert!(
-            delay >= maximum / 2,
+            delay <= base + base / 2,
             "delay {delay:?} for attempt {attempt}"
         );
-        assert!(delay <= maximum, "delay {delay:?} for attempt {attempt}");
     }
 }
 

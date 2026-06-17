@@ -20,6 +20,7 @@ use super::disconnected_message;
 use super::fail_all_in_flight_work;
 use super::handle_server_notification;
 use super::is_transport_closed_error;
+use crate::client_transport::ExecServerReconnectStrategy;
 use crate::process::ExecProcessEvent;
 use crate::protocol::EXEC_READ_METHOD;
 use crate::protocol::EXEC_TERMINATE_METHOD;
@@ -290,36 +291,33 @@ impl Inner {
             self.fail(message).await;
             return;
         };
+        let uses_registry_backoff = matches!(
+            self.reconnect_strategy.as_ref(),
+            Some(ExecServerReconnectStrategy::NoiseRendezvous { .. })
+        );
         let mut registry_retry_attempt = 0;
         let last_error = loop {
-            let retry_delay = match timeout_at(deadline, self.resume_once(&session_id)).await {
-                Ok(Ok(candidate)) if !candidate.is_disconnected() => {
-                    if self.install_recovered_client(candidate) {
+            match timeout_at(deadline, self.resume_once(&session_id)).await {
+                Ok(Ok(candidate)) => {
+                    if !candidate.is_disconnected() && self.install_recovered_client(candidate) {
                         return;
                     }
-                    registry_retry_attempt = 0;
-                    SESSION_RECOVERY_RETRY_INTERVAL
                 }
-                Ok(Ok(_)) => {
-                    registry_retry_attempt = 0;
-                    SESSION_RECOVERY_RETRY_INTERVAL
+                Ok(Err(error)) if !is_retryable_recovery_error(&error) => {
+                    break error.to_string();
                 }
-                Ok(Err(error)) => {
-                    if !is_retryable_recovery_error(&error) {
-                        break error.to_string();
-                    } else if is_retryable_registry_error(&error) {
-                        let delay =
-                            registry_recovery_retry_delay(&session_id, registry_retry_attempt);
-                        registry_retry_attempt = registry_retry_attempt.saturating_add(1);
-                        delay
-                    } else {
-                        registry_retry_attempt = 0;
-                        SESSION_RECOVERY_RETRY_INTERVAL
-                    }
-                }
+                Ok(Err(_)) => {}
                 Err(_) => {
                     break format!("recovery timed out after {SESSION_RECOVERY_TIMEOUT:?}");
                 }
+            }
+
+            let retry_delay = if uses_registry_backoff {
+                let delay = registry_recovery_retry_delay(&session_id, registry_retry_attempt);
+                registry_retry_attempt = registry_retry_attempt.saturating_add(1);
+                delay
+            } else {
+                SESSION_RECOVERY_RETRY_INTERVAL
             };
 
             let now = Instant::now();
@@ -548,7 +546,7 @@ fn registry_recovery_retry_delay(session_id: &str, attempt: u32) -> Duration {
     session_id.hash(&mut hasher);
     attempt.hash(&mut hasher);
 
-    Duration::from_millis(base_millis / 2 + hasher.finish() % (base_millis / 2 + 1))
+    Duration::from_millis(base_millis + hasher.finish() % (base_millis / 2 + 1))
 }
 
 #[cfg(test)]
