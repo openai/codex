@@ -1237,9 +1237,11 @@ pub async fn start_websocket_server_with_headers(
                 Ok(value) => value,
                 Err(_) => return,
             };
+            // Ordinary HTTP probes can share this listener with websocket tests. Only a
+            // successful websocket handshake should consume a scripted connection.
             let connection = {
-                let mut pending = connections.lock().unwrap();
-                pending.pop_front()
+                let pending = connections.lock().unwrap();
+                pending.front().cloned()
             };
 
             let Some(connection) = connection else {
@@ -1291,6 +1293,7 @@ pub async fn start_websocket_server_with_headers(
                 Ok(ws) => ws,
                 Err(_) => continue,
             };
+            connections.lock().unwrap().pop_front();
 
             let connection_index = {
                 let mut log = requests.lock().unwrap();
