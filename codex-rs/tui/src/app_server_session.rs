@@ -782,6 +782,7 @@ impl AppServerSession {
                     personality,
                     output_schema,
                     collaboration_mode,
+                    multi_agent_mode: None,
                 },
             })
             .await
