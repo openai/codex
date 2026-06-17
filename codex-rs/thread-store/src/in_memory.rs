@@ -535,9 +535,6 @@ fn stored_thread_from_state(
         updated_at: metadata
             .and_then(|metadata| metadata.updated_at)
             .unwrap_or_else(Utc::now),
-        recency_at: metadata
-            .and_then(|metadata| metadata.advance_recency_at.or(metadata.updated_at))
-            .unwrap_or_else(Utc::now),
         archived_at: None,
         cwd: metadata
             .and_then(|metadata| metadata.cwd.clone())
