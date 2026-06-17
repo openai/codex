@@ -177,6 +177,7 @@ pub struct AppsDefaultConfig {
     pub destructive_enabled: bool,
     #[serde(default = "default_enabled")]
     pub open_world_enabled: bool,
+    pub default_tools_approval_mode: Option<AppToolApproval>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

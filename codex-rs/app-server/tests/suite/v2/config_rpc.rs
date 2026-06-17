@@ -363,6 +363,7 @@ async fn config_read_includes_apps() -> Result<()> {
         r#"
 [apps._default]
 approvals_reviewer = "auto_review"
+default_tools_approval_mode = "approve"
 
 [apps.app1]
 enabled = false
@@ -402,6 +403,7 @@ default_tools_approval_mode = "prompt"
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
                 destructive_enabled: true,
                 open_world_enabled: true,
+                default_tools_approval_mode: Some(AppToolApproval::Approve),
             }),
             apps: std::collections::HashMap::from([(
                 "app1".to_string(),
@@ -420,6 +422,16 @@ default_tools_approval_mode = "prompt"
     assert_eq!(
         origins
             .get("apps._default.approvals_reviewer")
+            .expect("origin")
+            .name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+            profile: None,
+        }
+    );
+    assert_eq!(
+        origins
+            .get("apps._default.default_tools_approval_mode")
             .expect("origin")
             .name,
         ConfigLayerSource::User {
