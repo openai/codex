@@ -15,7 +15,6 @@ use chrono::Datelike;
 use chrono::Local;
 use chrono::Utc;
 use codex_async_utils::CancelErr;
-use codex_utils_path_uri::PathUriParseError;
 use codex_utils_string::truncate_middle_chars;
 use codex_utils_string::truncate_middle_with_token_budget;
 use reqwest::StatusCode;
@@ -162,8 +161,6 @@ pub enum CodexErr {
     TokioJoin(#[from] JoinError),
     #[error("{0}")]
     EnvVar(EnvVarError),
-    #[error("{0}")]
-    ParseForeignPath(#[from] PathUriParseError),
 }
 
 impl From<CancelErr> for CodexErr {
@@ -206,7 +203,6 @@ impl CodexErr {
             | CodexErr::InternalAgentDied
             | CodexErr::Io(_)
             | CodexErr::Json(_)
-            | CodexErr::ParseForeignPath(_)
             | CodexErr::TokioJoin(_) => true,
             #[cfg(target_os = "linux")]
             CodexErr::LandlockRuleset(_) | CodexErr::LandlockPathFd(_) => false,
