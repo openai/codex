@@ -31,6 +31,7 @@ use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SubAgentActivityKind as CoreSubAgentActivityKind;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -256,7 +257,7 @@ pub enum ThreadItem {
         /// The command to be executed.
         command: String,
         /// The command's working directory.
-        cwd: AbsolutePathBuf,
+        cwd: LegacyAppPathString,
         /// Identifier for the underlying PTY process (when available).
         process_id: Option<String>,
         #[serde(default)]
@@ -1339,7 +1340,7 @@ pub struct CommandExecutionRequestApprovalParams {
     /// The command's working directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
-    pub cwd: Option<AbsolutePathBuf>,
+    pub cwd: Option<LegacyAppPathString>,
     /// Best-effort parsed command actions for friendly display.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]

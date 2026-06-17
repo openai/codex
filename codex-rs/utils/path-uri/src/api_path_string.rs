@@ -111,6 +111,12 @@ impl From<AbsolutePathBuf> for LegacyAppPathString {
     }
 }
 
+impl From<PathUri> for LegacyAppPathString {
+    fn from(path: PathUri) -> Self {
+        Self(path.inferred_native_path_string())
+    }
+}
+
 fn render_opaque_fallback(
     path: &PathUri,
     path_bytes: &[u8],

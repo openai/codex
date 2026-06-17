@@ -113,6 +113,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestU
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::shlex_join;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -129,8 +130,20 @@ enum CommandExecutionApprovalPresentation {
 #[derive(Debug, PartialEq)]
 struct CommandExecutionCompletionItem {
     command: String,
-    cwd: AbsolutePathBuf,
+    cwd: LegacyAppPathString,
     command_actions: Vec<V2ParsedCommand>,
+}
+
+async fn send_item_event_notification(
+    msg: EventMsg,
+    conversation_id: &ThreadId,
+    event_turn_id: &str,
+    outgoing: &ThreadScopedOutgoingMessageSender,
+) {
+    match item_event_to_server_notification(msg, &conversation_id.to_string(), event_turn_id) {
+        Ok(notification) => outgoing.send_server_notification(notification).await,
+        Err(error) => error!(%error, "failed to map item event to app-server notification"),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -575,7 +588,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let command_string = shlex_join(&command);
                 let completion_item = CommandExecutionCompletionItem {
                     command: command_string,
-                    cwd: cwd.clone(),
+                    cwd: cwd.clone().into(),
                     command_actions: command_actions.clone(),
                 };
                 CommandExecutionApprovalPresentation::Command(completion_item)
@@ -860,12 +873,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         | EventMsg::ReasoningContentDelta(_)
         | EventMsg::ReasoningRawContentDelta(_)
         | EventMsg::AgentReasoningSectionBreak(_)) => {
-            let notification = item_event_to_server_notification(
-                msg,
-                &conversation_id.to_string(),
-                &event_turn_id,
-            );
-            outgoing.send_server_notification(notification).await;
+            send_item_event_notification(msg, &conversation_id, &event_turn_id, &outgoing).await;
         }
         EventMsg::SubAgentActivity(activity) => {
             if activity.kind == SubAgentActivityKind::Interrupted
@@ -878,12 +886,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .remove_thread(&activity.agent_thread_id.to_string())
                     .await;
             }
-            let notification = item_event_to_server_notification(
+            send_item_event_notification(
                 EventMsg::SubAgentActivity(activity),
-                &conversation_id.to_string(),
+                &conversation_id,
                 &event_turn_id,
-            );
-            outgoing.send_server_notification(notification).await;
+                &outgoing,
+            )
+            .await;
         }
         EventMsg::CollabCloseEnd(end_event) => {
             if thread_manager
@@ -895,12 +904,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .remove_thread(&end_event.receiver_thread_id.to_string())
                     .await;
             }
-            let notification = item_event_to_server_notification(
+            send_item_event_notification(
                 EventMsg::CollabCloseEnd(end_event),
-                &conversation_id.to_string(),
+                &conversation_id,
                 &event_turn_id,
-            );
-            outgoing.send_server_notification(notification).await;
+                &outgoing,
+            )
+            .await;
         }
         EventMsg::ContextCompacted(..) => {
             // Core still fans out this deprecated event for legacy clients;
@@ -1010,12 +1020,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         | EventMsg::ItemCompleted(_)
         | EventMsg::PatchApplyUpdated(_)
         | EventMsg::TerminalInteraction(_)) => {
-            let notification = item_event_to_server_notification(
-                msg,
-                &conversation_id.to_string(),
-                &event_turn_id,
-            );
-            outgoing.send_server_notification(notification).await;
+            send_item_event_notification(msg, &conversation_id, &event_turn_id, &outgoing).await;
         }
         EventMsg::HookStarted(event) => {
             let notification = HookStartedNotification {
@@ -1104,21 +1109,23 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .insert(item_id.clone())
             };
             if first_start {
-                let notification = item_event_to_server_notification(
+                send_item_event_notification(
                     EventMsg::ExecCommandBegin(exec_command_begin_event),
-                    &conversation_id.to_string(),
+                    &conversation_id,
                     &event_turn_id,
-                );
-                outgoing.send_server_notification(notification).await;
+                    &outgoing,
+                )
+                .await;
             }
         }
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
-            let notification = item_event_to_server_notification(
+            send_item_event_notification(
                 EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event),
-                &conversation_id.to_string(),
+                &conversation_id,
                 &event_turn_id,
-            );
-            outgoing.send_server_notification(notification).await;
+                &outgoing,
+            )
+            .await;
         }
         EventMsg::ExecCommandEnd(exec_command_end_event) => {
             let call_id = exec_command_end_event.call_id.clone();
@@ -1138,12 +1145,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                 // emitted for unified exec interactions.
                 return;
             }
-            let notification = item_event_to_server_notification(
+            send_item_event_notification(
                 EventMsg::ExecCommandEnd(exec_command_end_event),
-                &conversation_id.to_string(),
+                &conversation_id,
                 &event_turn_id,
-            );
-            outgoing.send_server_notification(notification).await;
+                &outgoing,
+            )
+            .await;
         }
         // If this is a TurnAborted, reply to any pending interrupt requests.
         EventMsg::TurnAborted(turn_aborted_event) => {
@@ -1354,7 +1362,7 @@ async fn start_command_execution_item(
     turn_id: String,
     item_id: String,
     command: String,
-    cwd: AbsolutePathBuf,
+    cwd: LegacyAppPathString,
     command_actions: Vec<V2ParsedCommand>,
     source: CommandExecutionSource,
     outgoing: &ThreadScopedOutgoingMessageSender,
@@ -1398,7 +1406,7 @@ async fn complete_command_execution_item(
     turn_id: String,
     item_id: String,
     command: String,
-    cwd: AbsolutePathBuf,
+    cwd: LegacyAppPathString,
     process_id: Option<String>,
     source: CommandExecutionSource,
     command_actions: Vec<V2ParsedCommand>,
@@ -2323,7 +2331,7 @@ mod tests {
     fn command_execution_completion_item(command: &str) -> CommandExecutionCompletionItem {
         CommandExecutionCompletionItem {
             command: command.to_string(),
-            cwd: test_path_buf("/tmp").abs(),
+            cwd: test_path_buf("/tmp").abs().into(),
             command_actions: vec![V2ParsedCommand::Unknown {
                 command: command.to_string(),
             }],
