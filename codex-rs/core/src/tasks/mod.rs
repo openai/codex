@@ -54,6 +54,8 @@ use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::WarningEvent;
 
 use codex_features::Feature;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
 pub(crate) use compact::CompactTask;
 pub(crate) use regular::RegularTask;
@@ -64,6 +66,8 @@ pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 const TASK_COMPACT_METRIC: &str = "codex.task.compact";
+
+pub(crate) type SessionTaskResult = CodexResult<Option<String>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InterruptedTurnHistoryMarker {
@@ -222,14 +226,16 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     /// provided `cancellation_token` is cancelled when the session requests an
     /// abort; implementers should watch for it and terminate quickly once it
     /// fires. Returning [`Some`] yields a final message that
-    /// [`Session::on_task_finished`] will emit to the client.
+    /// [`Session::on_task_finished`] will emit to the client. Returning
+    /// [`CodexErr::TurnAborted`] suppresses normal completion because the
+    /// interrupt path owns abort cleanup and lifecycle events.
     fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
         input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
-    ) -> impl std::future::Future<Output = Option<String>> + Send;
+    ) -> impl std::future::Future<Output = SessionTaskResult> + Send;
 
     /// Gives the task a chance to perform cleanup after an abort.
     ///
@@ -258,7 +264,7 @@ pub(crate) trait AnySessionTask: Send + Sync + 'static {
         ctx: Arc<TurnContext>,
         input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
-    ) -> BoxFuture<'static, Option<String>>;
+    ) -> BoxFuture<'static, SessionTaskResult>;
 
     fn abort<'a>(
         &'a self,
@@ -285,7 +291,7 @@ where
         ctx: Arc<TurnContext>,
         input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
-    ) -> BoxFuture<'static, Option<String>> {
+    ) -> BoxFuture<'static, SessionTaskResult> {
         Box::pin(SessionTask::run(
             self,
             session,
@@ -395,7 +401,7 @@ impl Session {
         let handle = tokio::spawn(
             async move {
                 let ctx_for_finish = Arc::clone(&ctx);
-                let last_agent_message = task_for_run
+                let task_result = task_for_run
                     .run(
                         Arc::clone(&session_ctx),
                         ctx,
@@ -418,9 +424,20 @@ impl Session {
                     .await;
                 }
                 if !task_cancellation_token.is_cancelled() {
-                    // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
-                    sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
-                        .await;
+                    match task_result {
+                        Ok(last_agent_message) => {
+                            // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
+                            sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
+                                .await;
+                        }
+                        // The queued interrupt owns abort cleanup and emits TurnAborted.
+                        Err(CodexErr::TurnAborted) => {}
+                        Err(err) => {
+                            warn!(%err, "session task returned an unexpected error");
+                            sess.on_task_finished(Arc::clone(&ctx_for_finish), None)
+                                .await;
+                        }
+                    }
                 }
                 done_clone.notify_waiters();
             }

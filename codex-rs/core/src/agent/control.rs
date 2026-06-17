@@ -136,23 +136,27 @@ impl AgentControl {
         self.rollout_budget.as_ref()
     }
 
-    /// Interrupt all threads in this agent tree, interrupting the triggering thread last.
-    pub(crate) async fn interrupt_all_threads(&self, triggering_thread_id: ThreadId) {
-        let mut thread_ids = self
+    /// Interrupt every thread in this agent tree, enqueueing the triggering thread last.
+    pub(crate) async fn interrupt_all_threads(
+        &self,
+        triggering_thread_id: ThreadId,
+    ) -> CodexResult<()> {
+        let other_thread_ids = self
             .state
             .live_agents()
             .into_iter()
             .filter_map(|metadata| metadata.agent_id)
-            .collect::<Vec<_>>();
-        thread_ids.push(ThreadId::from(self.session_id));
-        thread_ids.retain(|thread_id| *thread_id != triggering_thread_id);
-        thread_ids.push(triggering_thread_id);
+            .chain(std::iter::once(ThreadId::from(self.session_id)))
+            .filter(|thread_id| *thread_id != triggering_thread_id);
 
-        for thread_id in thread_ids {
+        for thread_id in other_thread_ids {
             if let Err(err) = self.interrupt_agent(thread_id).await {
                 warn!(%thread_id, %err, "failed to interrupt thread after rollout budget exhaustion");
             }
         }
+
+        self.interrupt_agent(triggering_thread_id).await?;
+        Ok(())
     }
 
     /// Send rich user input items to an existing agent thread.

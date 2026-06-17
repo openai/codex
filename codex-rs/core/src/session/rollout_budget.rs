@@ -1,6 +1,8 @@
 use super::session::Session;
 use super::turn_context::TurnContext;
 use crate::context::ContextualUserFragment;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::TokenUsage;
 
 pub(super) async fn maybe_record_reminder(
@@ -21,17 +23,20 @@ pub(super) async fn maybe_record_reminder(
 }
 
 impl Session {
-    pub(crate) async fn record_rollout_budget_usage(&self, usage: &TokenUsage) {
-        if self
+    pub(crate) async fn record_rollout_budget_usage(&self, usage: &TokenUsage) -> CodexResult<()> {
+        if !self
             .services
             .agent_control
             .rollout_budget()
             .record_usage(usage)
         {
-            self.services
-                .agent_control
-                .interrupt_all_threads(self.thread_id())
-                .await;
+            return Ok(());
         }
+
+        self.services
+            .agent_control
+            .interrupt_all_threads(self.thread_id())
+            .await?;
+        Err(CodexErr::TurnAborted)
     }
 }

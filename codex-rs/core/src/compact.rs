@@ -651,7 +651,7 @@ async fn drain_to_completed(
             }
             Ok(ResponseEvent::Completed { token_usage, .. }) => {
                 sess.update_token_usage_info(turn_context, token_usage.as_ref())
-                    .await;
+                    .await?;
                 return Ok(());
             }
             Ok(_) => continue,

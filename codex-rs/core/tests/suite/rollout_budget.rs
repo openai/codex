@@ -195,7 +195,7 @@ async fn subagent_usage_draws_from_the_shared_budget() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn exhaustion_interrupts_the_root_and_running_subagents() -> Result<()> {
+async fn exhaustion_aborts_the_triggering_thread_and_interrupts_subagents() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     const ROOT_PROMPT: &str = "spawn a long-running budget worker";
@@ -297,8 +297,12 @@ async fn exhaustion_interrupts_the_root_and_running_subagents() -> Result<()> {
         })
         .await?;
 
-    let root_abort = wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnAborted(_))
+    let root_abort = wait_for_event(&test.codex, |event| match event {
+        EventMsg::TurnAborted(_) => true,
+        EventMsg::TurnComplete(_) => {
+            panic!("budget-exhausting turn completed instead of aborting")
+        }
+        _ => false,
     })
     .await;
     let child_abort = wait_for_event(child_thread.as_ref(), |event| {
