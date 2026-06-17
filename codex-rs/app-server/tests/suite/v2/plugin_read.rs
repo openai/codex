@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
+use app_test_support::configure_expiring_workload_identity;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use axum::Json;
@@ -923,6 +924,59 @@ enabled = true
     assert_eq!(response.plugin.marketplace_path, Some(marketplace_path));
     assert_eq!(response.plugin.summary.id, "demo-plugin@openai-curated");
     assert_eq!(response.plugin.summary.name, "demo-plugin");
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_read_local_succeeds_when_workload_identity_is_unavailable() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    let repo_root = TempDir::new()?;
+    write_plugin_marketplace(
+        repo_root.path(),
+        "debug",
+        "sample-plugin",
+        "./sample-plugin",
+    )?;
+    write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"chatgpt_base_url = "{}/backend-api"
+
+[features]
+plugins = true
+"#,
+            server.uri()
+        ),
+    )?;
+    let workload_identity =
+        configure_expiring_workload_identity(codex_home.path(), &server).await?;
+
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    workload_identity.remove_and_wait_for_expiry().await?;
+
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: Some(marketplace_path),
+            remote_marketplace_name: None,
+            plugin_name: "sample-plugin".to_string(),
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginReadResponse = to_response(response)?;
+
+    assert_eq!(response.plugin.summary.id, "sample-plugin@debug");
+    assert_eq!(response.plugin.summary.name, "sample-plugin");
+    server.verify().await;
     Ok(())
 }
 

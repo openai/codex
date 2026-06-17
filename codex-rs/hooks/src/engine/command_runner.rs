@@ -113,6 +113,9 @@ fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
         command.arg(&handler.command);
     }
     command.envs(&handler.env);
+    for variable in &shell.excluded_environment_variables {
+        command.env_remove(variable);
+    }
     command
 }
 
@@ -133,3 +136,7 @@ fn default_shell_command() -> Command {
         command
     }
 }
+
+#[cfg(test)]
+#[path = "command_runner_tests.rs"]
+mod tests;

@@ -86,10 +86,12 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::permissions::ReadDenyMatcher;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_workload_identity::CredentialSourceConfig;
 use serde::Deserialize;
 use tempfile::tempdir;
 
@@ -160,6 +162,420 @@ fn http_mcp(url: &str) -> McpServerConfig {
         oauth_resource: None,
         tools: HashMap::new(),
     }
+}
+
+#[tokio::test]
+async fn workload_assertion_environment_is_excluded_from_model_processes() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+workload_identity = { identity_provider_id = "idp_example", identity_provider_mapping_id = "idpm_example", audience = "openai-audience", credential_source = { type = "environment", variable = "CODEX_WIF_ASSERTION" } }
+
+[shell_environment_policy]
+inherit = "all"
+ignore_default_excludes = true
+
+[shell_environment_policy.set]
+CODEX_WIF_ASSERTION = "configured-override"
+
+[mcp_servers.local]
+command = "env"
+env_vars = ["CODEX_WIF_ASSERTION", "SAFE_VAR"]
+
+[mcp_servers.local.env]
+CODEX_WIF_ASSERTION = "configured-override"
+SAFE_VAR = "safe"
+
+[mcp_servers.http]
+url = "https://mcp.example.test"
+bearer_token_env_var = "CODEX_WIF_ASSERTION"
+
+[mcp_servers.http.env_http_headers]
+X-Assertion = "CODEX_WIF_ASSERTION"
+X-Safe = "SAFE_VAR"
+"#,
+    )?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    let shell_env = codex_protocol::shell_environment::create_env_from_vars(
+        [
+            (
+                "CODEX_WIF_ASSERTION".to_string(),
+                "secret.assertion".to_string(),
+            ),
+            ("SAFE_VAR".to_string(), "safe".to_string()),
+        ],
+        &config.permissions.shell_environment_policy,
+        /*thread_id*/ None,
+    );
+    assert_eq!(shell_env.get("SAFE_VAR").map(String::as_str), Some("safe"));
+    assert!(!shell_env.contains_key("CODEX_WIF_ASSERTION"));
+
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+    let configured_mcp_servers = mcp_config.mcp_server_catalog.configured_servers();
+    let local = configured_mcp_servers
+        .get("local")
+        .expect("local MCP config");
+    let McpServerTransportConfig::Stdio { env, env_vars, .. } = &local.transport else {
+        panic!("expected stdio MCP config");
+    };
+    assert_eq!(
+        env,
+        &Some(HashMap::from([(
+            "SAFE_VAR".to_string(),
+            "safe".to_string()
+        )]))
+    );
+    assert_eq!(env_vars, &vec![McpServerEnvVar::from("SAFE_VAR")]);
+
+    let http = configured_mcp_servers.get("http").expect("HTTP MCP config");
+    let McpServerTransportConfig::StreamableHttp {
+        bearer_token_env_var,
+        env_http_headers,
+        ..
+    } = &http.transport
+    else {
+        panic!("expected HTTP MCP config");
+    };
+    assert_eq!(bearer_token_env_var, &None);
+    assert_eq!(
+        env_http_headers,
+        &Some(HashMap::from([(
+            "X-Safe".to_string(),
+            "SAFE_VAR".to_string()
+        )]))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn workload_assertion_cli_override_is_excluded_from_model_processes() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[workload_identity]
+identity_provider_id = "idp_example"
+identity_provider_mapping_id = "idpm_example"
+audience = "openai-audience"
+
+[workload_identity.credential_source]
+type = "azure"
+"#,
+    )?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(vec![
+            (
+                "workload_identity.credential_source.type".to_string(),
+                toml::Value::String("environment".to_string()),
+            ),
+            (
+                "workload_identity.credential_source.variable".to_string(),
+                toml::Value::String("CODEX_WIF_SUBJECT_TOKEN".to_string()),
+            ),
+        ])
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    let shell_env = codex_protocol::shell_environment::create_env_from_vars(
+        [(
+            "CODEX_WIF_SUBJECT_TOKEN".to_string(),
+            "secret.assertion".to_string(),
+        )],
+        &config.permissions.shell_environment_policy,
+        /*thread_id*/ None,
+    );
+    assert!(!shell_env.contains_key("CODEX_WIF_SUBJECT_TOKEN"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn workload_credential_file_is_denied_even_with_danger_full_access() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let token_file = codex_home.path().join("azure-token");
+    std::fs::write(&token_file, "subject-token")?;
+    let cfg = ConfigToml {
+        workload_identity: Some(WorkloadIdentityConfig {
+            identity_provider_id: "idp_example".to_string(),
+            identity_provider_mapping_id: "idpm_example".to_string(),
+            audience: "openai-audience".to_string(),
+            token_url: "https://auth.openai.com/oauth/token".to_string(),
+            credential_source: CredentialSourceConfig::Azure {
+                token_file: Some(token_file.clone()),
+            },
+        }),
+        ..Default::default()
+    };
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            sandbox_mode: Some(SandboxMode::DangerFullAccess),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let file_system_policy = config.permissions.file_system_sandbox_policy();
+    let matcher = ReadDenyMatcher::new(&file_system_policy, config.cwd.as_path())
+        .expect("workload credential should install a deny-read matcher");
+    assert!(matcher.is_read_denied(&token_file));
+    assert_eq!(
+        config.permissions.permission_profile().enforcement(),
+        SandboxEnforcement::Managed
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn workload_credential_deny_preserves_an_existing_user_deny() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let token_file = codex_home.path().join("subject-token");
+    let token_path = AbsolutePathBuf::try_from(token_file.clone())?;
+    let user_deny = FileSystemSandboxEntry {
+        path: FileSystemPath::Path {
+            path: token_path.clone(),
+        },
+        access: FileSystemAccessMode::Deny,
+    };
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![user_deny.clone()]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let cfg = ConfigToml {
+        workload_identity: Some(WorkloadIdentityConfig {
+            identity_provider_id: "idp_example".to_string(),
+            identity_provider_mapping_id: "idpm_example".to_string(),
+            audience: "openai-audience".to_string(),
+            token_url: "https://auth.openai.com/oauth/token".to_string(),
+            credential_source: CredentialSourceConfig::File { path: token_file },
+        }),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            permission_profile: Some(permission_profile),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(
+        config
+            .permissions
+            .file_system_sandbox_policy()
+            .entries
+            .contains(&user_deny)
+    );
+    assert!(
+        !config
+            .workload_identity_credential_deny_paths
+            .contains(&token_path)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn workload_identity_rejects_forced_api_key_login() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        forced_login_method: Some(ForcedLoginMethod::Api),
+        workload_identity: Some(WorkloadIdentityConfig {
+            identity_provider_id: "idp_example".to_string(),
+            identity_provider_mapping_id: "idpm_example".to_string(),
+            audience: "openai-audience".to_string(),
+            token_url: "https://auth.openai.com/oauth/token".to_string(),
+            credential_source: CredentialSourceConfig::Environment {
+                variable: "WORKLOAD_IDENTITY_TOKEN".to_string(),
+            },
+        }),
+        ..Default::default()
+    };
+
+    let error = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("forced API key login must reject ChatGPT workload identity");
+
+    assert!(error.to_string().contains(
+        "`workload_identity` requires ChatGPT auth but `forced_login_method` requires API key auth"
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn workload_identity_rejects_external_filesystem_enforcement() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        workload_identity: Some(WorkloadIdentityConfig {
+            identity_provider_id: "idp_example".to_string(),
+            identity_provider_mapping_id: "idpm_example".to_string(),
+            audience: "openai-audience".to_string(),
+            token_url: "https://auth.openai.com/oauth/token".to_string(),
+            credential_source: CredentialSourceConfig::File {
+                path: codex_home.path().join("subject-token"),
+            },
+        }),
+        ..Default::default()
+    };
+
+    let error = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            permission_profile: Some(PermissionProfile::External {
+                network: NetworkSandboxPolicy::Restricted,
+            }),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("external filesystem enforcement must reject workload identity");
+
+    assert_eq!(
+        error.to_string(),
+        "`workload_identity` requires Codex-managed filesystem enforcement so credential paths can be denied"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn rotating_workload_credential_denies_its_secret_directory() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let secret_dir = codex_home.path().join("projected-secret");
+    let version_dir = secret_dir.join("version");
+    std::fs::create_dir_all(&version_dir)?;
+    std::fs::write(version_dir.join("token"), "subject-token")?;
+    let token_file = secret_dir.join("token");
+    std::os::unix::fs::symlink("version/token", &token_file)?;
+
+    let cfg = ConfigToml {
+        workload_identity: Some(WorkloadIdentityConfig {
+            identity_provider_id: "idp_example".to_string(),
+            identity_provider_mapping_id: "idpm_example".to_string(),
+            audience: "openai-audience".to_string(),
+            token_url: "https://auth.openai.com/oauth/token".to_string(),
+            credential_source: CredentialSourceConfig::Azure {
+                token_file: Some(token_file.clone()),
+            },
+        }),
+        ..Default::default()
+    };
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+    let next_token = secret_dir.join("next-version/token");
+    std::fs::create_dir_all(next_token.parent().expect("next token has parent"))?;
+    std::fs::write(&next_token, "rotated-subject-token")?;
+
+    let mut file_system_policy = config.permissions.file_system_sandbox_policy();
+    file_system_policy.entries.push(FileSystemSandboxEntry {
+        path: FileSystemPath::Path {
+            path: AbsolutePathBuf::try_from(token_file.clone())?,
+        },
+        access: FileSystemAccessMode::Write,
+    });
+    let matcher = ReadDenyMatcher::new(&file_system_policy, config.cwd.as_path())
+        .expect("workload credential should install a deny-read matcher");
+    assert!(matcher.is_read_denied(&token_file));
+    assert!(matcher.is_read_denied(&next_token));
+    assert_eq!(
+        file_system_policy.resolve_access_with_cwd(&token_file, config.cwd.as_path()),
+        FileSystemAccessMode::Deny
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn workload_credential_symlink_denies_external_target() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let secret_dir = codex_home.path().join("projected-secret");
+    let external_dir = codex_home.path().join("external-secret");
+    std::fs::create_dir_all(&secret_dir)?;
+    std::fs::create_dir_all(&external_dir)?;
+    let target = external_dir.join("token");
+    std::fs::write(&target, "subject-token")?;
+    let token_file = secret_dir.join("token");
+    std::os::unix::fs::symlink(&target, &token_file)?;
+
+    let cfg = ConfigToml {
+        workload_identity: Some(WorkloadIdentityConfig {
+            identity_provider_id: "idp_example".to_string(),
+            identity_provider_mapping_id: "idpm_example".to_string(),
+            audience: "openai-audience".to_string(),
+            token_url: "https://auth.openai.com/oauth/token".to_string(),
+            credential_source: CredentialSourceConfig::File {
+                path: token_file.clone(),
+            },
+        }),
+        ..Default::default()
+    };
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    let file_system_policy = config.permissions.file_system_sandbox_policy();
+    let matcher = ReadDenyMatcher::new(&file_system_policy, config.cwd.as_path())
+        .expect("workload credential should install a deny-read matcher");
+    assert!(matcher.is_read_denied(&token_file));
+    assert!(matcher.is_read_denied(&target));
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn workload_identity_enables_windows_restricted_token_sandbox() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        workload_identity: Some(WorkloadIdentityConfig {
+            identity_provider_id: "idp_example".to_string(),
+            identity_provider_mapping_id: "idpm_example".to_string(),
+            audience: "openai-audience".to_string(),
+            token_url: "https://auth.openai.com/oauth/token".to_string(),
+            credential_source: CredentialSourceConfig::Environment {
+                variable: "WORKLOAD_IDENTITY_TOKEN".to_string(),
+            },
+        }),
+        ..Default::default()
+    };
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.permissions.windows_sandbox_mode,
+        Some(WindowsSandboxModeToml::Unelevated)
+    );
+    Ok(())
 }
 
 async fn derive_legacy_sandbox_policy_for_test(

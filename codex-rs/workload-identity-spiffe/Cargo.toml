@@ -1,0 +1,20 @@
+[package]
+name = "codex-workload-identity-spiffe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-workload-identity = { workspace = true }
+spiffe = { workspace = true, features = ["workload-api-jwt"] }
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "time"] }
+
+[lib]
+doctest = false

@@ -78,6 +78,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
+use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
@@ -694,7 +695,13 @@ async fn refresh_codex_apps_after_connector_auth(sess: &Session, turn_context: &
 
     match mcp_tools_result {
         Ok(mcp_tools) => {
-            let auth = sess.services.auth_manager.auth().await;
+            let auth = match sess.services.auth_manager.auth().await {
+                Ok(auth) => auth,
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to resolve auth after connector authorization");
+                    return;
+                }
+            };
             connectors::refresh_accessible_connectors_cache_from_mcp_tools(
                 &turn_context.config,
                 auth.as_ref(),
@@ -724,9 +731,15 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
         return Ok(meta);
     }
 
+    let permission_profile = turn_context.model_visible_permission_profile();
+    let sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
+        &permission_profile,
+        #[allow(deprecated)]
+        &turn_context.cwd,
+    );
     let sandbox_state = serde_json::to_value(SandboxState {
-        permission_profile: Some(turn_context.permission_profile()),
-        sandbox_policy: turn_context.sandbox_policy(),
+        permission_profile: Some(permission_profile),
+        sandbox_policy,
         codex_linux_sandbox_exe: turn_context.config.codex_linux_sandbox_exe.clone(),
         #[allow(deprecated)]
         sandbox_cwd: turn_context.cwd.to_path_buf(),
@@ -1445,17 +1458,18 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         .into_iter()
         .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?;
     let connector_description = if server == CODEX_APPS_MCP_SERVER_NAME {
+        let auth = sess.services.auth_manager.auth_cached();
         let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
             turn_context.config.as_ref(),
-        )
-        .await
-        {
+            auth.as_ref(),
+        ) {
             Some(connectors) => Some(connectors),
-            None => {
-                connectors::list_accessible_connectors_from_mcp_tools(turn_context.config.as_ref())
-                    .await
-                    .ok()
-            }
+            None => connectors::list_accessible_connectors_from_mcp_tools(
+                turn_context.config.as_ref(),
+                auth.as_ref(),
+            )
+            .await
+            .ok(),
         };
         connectors.and_then(|connectors| {
             let connector_id = tool_info.connector_id.as_deref()?;

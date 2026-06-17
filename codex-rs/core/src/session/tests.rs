@@ -29,6 +29,9 @@ use core_test_support::test_codex::local_selections;
 
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_login::ExternalAuth;
+use codex_login::ExternalAuthFuture;
+use codex_login::ExternalAuthRefreshContext;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info;
@@ -81,6 +84,7 @@ use crate::tools::registry::ToolExecutor;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::McpElicitationSchema;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
@@ -4767,18 +4771,33 @@ async fn absolute_cwd_update_with_turn_environment_is_allowed() {
     assert_eq!(turn_context.environments.turn_environments.len(), 1);
 }
 
-#[tokio::test]
-async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
-    let codex_home = tempfile::tempdir().expect("create temp dir");
-    let mut config = build_test_config(codex_home.path()).await;
-    config
-        .features
-        .enable(Feature::ShellZshFork)
-        .expect("test config should allow shell_zsh_fork");
-    config.zsh_path = None;
-    let config = Arc::new(config);
+struct FailingRequiredExternalAuth;
 
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+impl ExternalAuth for FailingRequiredExternalAuth {
+    fn auth_mode(&self) -> AuthMode {
+        AuthMode::Chatgpt
+    }
+
+    fn requires_successful_resolution(&self) -> bool {
+        true
+    }
+
+    fn resolve(&self) -> ExternalAuthFuture<'_, Option<codex_login::ExternalAuthTokens>> {
+        Box::pin(async { Err(std::io::Error::other("required external auth failed")) })
+    }
+
+    fn refresh(
+        &self,
+        _context: ExternalAuthRefreshContext,
+    ) -> ExternalAuthFuture<'_, codex_login::ExternalAuthTokens> {
+        Box::pin(async { Err(std::io::Error::other("required external auth failed")) })
+    }
+}
+
+async fn start_test_session(
+    config: Arc<Config>,
+    auth_manager: Arc<AuthManager>,
+) -> anyhow::Result<Arc<Session>> {
     let models_manager = models_manager_with_provider(
         config.codex_home.to_path_buf(),
         auth_manager.clone(),
@@ -4787,17 +4806,16 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
     let model = get_model_offline_for_tests(config.model.as_deref());
     let model_info =
         construct_model_info_offline_for_tests(model.as_str(), &config.to_models_manager_config());
-    let collaboration_mode = CollaborationMode {
-        mode: ModeKind::Default,
-        settings: Settings {
-            model,
-            reasoning_effort: config.model_reasoning_effort.clone(),
-            developer_instructions: None,
-        },
-    };
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
-        collaboration_mode,
+        collaboration_mode: CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model,
+                reasoning_effort: config.model_reasoning_effort.clone(),
+                developer_instructions: None,
+            },
+        },
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         loaded_agents_md: None,
@@ -4827,7 +4845,6 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         dynamic_tools: Vec::new(),
         user_shell_override: None,
     };
-
     let (tx_event, _rx_event) = async_channel::unbounded();
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
@@ -4837,7 +4854,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         /*bundled_skills_enabled*/ true,
     ));
     let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
-    let result = Session::new(
+    Session::new(
         session_configuration,
         Arc::clone(&config),
         /*user_instructions*/ None,
@@ -4866,7 +4883,22 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         /*attestation_provider*/ None,
         Some(config.multi_agent_version_from_features()),
     )
-    .await;
+    .await
+}
+
+#[tokio::test]
+async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let mut config = build_test_config(codex_home.path()).await;
+    config
+        .features
+        .enable(Feature::ShellZshFork)
+        .expect("test config should allow shell_zsh_fork");
+    config.zsh_path = None;
+    let config = Arc::new(config);
+
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let result = start_test_session(config, auth_manager).await;
 
     let err = match result {
         Ok(_) => panic!("expected startup to fail"),
@@ -4874,6 +4906,39 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
     };
     let msg = format!("{err:#}");
     assert!(msg.contains("zsh fork feature enabled, but no packaged zsh fork is available"));
+}
+
+#[tokio::test]
+async fn session_new_skips_required_wif_for_unauthenticated_provider() {
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let mut config = build_test_config(codex_home.path()).await;
+    config.model_provider.requires_openai_auth = false;
+    let auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+    assert_eq!(auth_manager.auth_cached(), None);
+    auth_manager.set_external_auth(Arc::new(FailingRequiredExternalAuth));
+
+    let _session = start_test_session(Arc::new(config), auth_manager)
+        .await
+        .expect("unauthenticated provider should not resolve WIF during session startup");
+}
+
+#[tokio::test]
+async fn session_new_propagates_required_wif_failure_for_authenticated_provider() {
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let config = build_test_config(codex_home.path()).await;
+    assert!(config.model_provider.requires_openai_auth);
+    let auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+    assert_eq!(auth_manager.auth_cached(), None);
+    auth_manager.set_external_auth(Arc::new(FailingRequiredExternalAuth));
+
+    let error = match start_test_session(Arc::new(config), auth_manager).await {
+        Ok(_) => panic!("authenticated provider should require successful WIF resolution"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("required external auth failed"));
 }
 
 // todo: use online model info
@@ -8164,6 +8229,75 @@ async fn turn_context_item_stores_split_file_system_sandbox_policy_when_differen
         item.file_system_sandbox_policy,
         Some(file_system_sandbox_policy)
     );
+    assert_eq!(
+        item.permission_profile,
+        Some(turn_context.permission_profile())
+    );
+}
+
+#[tokio::test]
+async fn turn_context_item_redacts_enforcement_only_paths_from_split_policy() {
+    let (_session, mut turn_context) = make_session_and_context().await;
+    let credential_path = turn_context.config.codex_home.join("workload-token");
+    let mut config = (*turn_context.config).clone();
+    config.workload_identity_credential_deny_paths = vec![credential_path.clone()];
+    turn_context.config = Arc::new(config);
+
+    let visible_file_system_policy = file_system_policy_with_unreadable_glob(&turn_context);
+    let mut enforced_file_system_policy = visible_file_system_policy.clone();
+    enforced_file_system_policy
+        .entries
+        .push(FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: credential_path.clone(),
+            },
+            access: FileSystemAccessMode::Deny,
+        });
+    let visible_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        turn_context.permission_profile.enforcement(),
+        &visible_file_system_policy,
+        turn_context.network_sandbox_policy(),
+    );
+    turn_context.permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        turn_context.permission_profile.enforcement(),
+        &enforced_file_system_policy,
+        turn_context.network_sandbox_policy(),
+    );
+
+    let item = turn_context.to_turn_context_item();
+
+    assert_eq!(
+        item.file_system_sandbox_policy,
+        Some(visible_file_system_policy)
+    );
+    assert_eq!(item.permission_profile, Some(visible_permission_profile));
+    assert!(
+        !serde_json::to_string(&item)
+            .expect("serialize turn context item")
+            .contains(credential_path.to_string_lossy().as_ref())
+    );
+}
+
+#[tokio::test]
+async fn turn_context_item_preserves_user_deny_overlapping_workload_credential() {
+    let (_session, mut turn_context) = make_session_and_context().await;
+    let credential_path = turn_context.config.codex_home.join("workload-token");
+    let mut file_system_policy = file_system_policy_with_unreadable_glob(&turn_context);
+    file_system_policy.entries.push(FileSystemSandboxEntry {
+        path: FileSystemPath::Path {
+            path: credential_path,
+        },
+        access: FileSystemAccessMode::Deny,
+    });
+    turn_context.permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        turn_context.permission_profile.enforcement(),
+        &file_system_policy,
+        turn_context.network_sandbox_policy(),
+    );
+
+    let item = turn_context.to_turn_context_item();
+
+    assert_eq!(item.file_system_sandbox_policy, Some(file_system_policy));
     assert_eq!(
         item.permission_profile,
         Some(turn_context.permission_profile())

@@ -463,6 +463,7 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
     session.thread_id = fixed_guardian_parent_session_id();
     let denied_root = test_path_buf("/repo/private").abs();
     let denied_glob = test_path_buf("/repo/private/**").display().to_string();
+    let credential_path = test_path_buf("/run/secrets/codex-wif/token").abs();
     turn.permission_profile = PermissionProfile::from_runtime_permissions(
         &FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
@@ -483,9 +484,17 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
                 },
                 access: FileSystemAccessMode::Deny,
             },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: credential_path.clone(),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
         ]),
         NetworkSandboxPolicy::Restricted,
     );
+    Arc::make_mut(&mut turn.config).workload_identity_credential_deny_paths =
+        vec![credential_path.clone()];
     let session = Arc::new(session);
     let turn = Arc::new(turn);
     seed_guardian_parent_history(&session, &turn).await;
@@ -511,6 +520,7 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
     assert!(text.contains("do not approve escalation whose purpose is to read them"));
     assert!(text.contains(denied_root.to_string_lossy().as_ref()));
     assert!(text.contains(&format!("glob `{denied_glob}`")));
+    assert!(!text.contains(credential_path.to_string_lossy().as_ref()));
 
     Ok(())
 }

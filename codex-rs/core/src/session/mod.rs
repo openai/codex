@@ -2894,9 +2894,10 @@ impl Session {
             developer_sections.push(model_switch_message);
         }
         if turn_context.config.include_permissions_instructions {
+            let model_visible_permission_profile = turn_context.model_visible_permission_profile();
             developer_sections.push(
                 PermissionsInstructions::from_permission_profile(
-                    &turn_context.permission_profile,
+                    &model_visible_permission_profile,
                     turn_context.approval_policy.value(),
                     turn_context.config.approvals_reviewer,
                     self.services.exec_policy.current().as_ref(),
@@ -2997,23 +2998,40 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&turn_context.config.plugins_config_input())
             .await;
-        let recommended_plugin_candidates =
-            if crate::tools::spec_plan::tool_suggest_enabled(turn_context) {
-                let auth = self.services.auth_manager.auth().await;
-                let plugins_config = turn_context.config.plugins_config_input();
-                self.services
-                    .plugins_manager
-                    .recommended_plugin_candidates_for_config(RecommendedPluginCandidatesInput {
-                        plugins_config: &plugins_config,
-                        loaded_plugins: &loaded_plugins,
-                        auth: auth.as_ref(),
-                        disabled_tools: &turn_context.config.tool_suggest.disabled_tools,
-                        app_server_client_name: turn_context.app_server_client_name.as_deref(),
-                    })
-                    .await
+        let recommended_plugin_candidates = if crate::tools::spec_plan::tool_suggest_enabled(
+            turn_context,
+        ) {
+            let auth = if turn_context.config.model_provider.requires_openai_auth {
+                self.services.auth_manager.auth().await
             } else {
-                None
+                Ok(self.services.auth_manager.auth_cached())
             };
+            match auth {
+                Ok(auth) => {
+                    let plugins_config = turn_context.config.plugins_config_input();
+                    self.services
+                        .plugins_manager
+                        .recommended_plugin_candidates_for_config(
+                            RecommendedPluginCandidatesInput {
+                                plugins_config: &plugins_config,
+                                loaded_plugins: &loaded_plugins,
+                                auth: auth.as_ref(),
+                                disabled_tools: &turn_context.config.tool_suggest.disabled_tools,
+                                app_server_client_name: turn_context
+                                    .app_server_client_name
+                                    .as_deref(),
+                            },
+                        )
+                        .await
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to resolve auth for plugin recommendations");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         if let Some(recommended_plugins) = recommended_plugin_candidates
             .as_deref()
             .and_then(RecommendedPluginsInstructions::from_plugins)
@@ -3627,6 +3645,21 @@ async fn build_hooks_for_config(
         plugin_hook_load_warnings,
         shell_program: hook_shell_program,
         shell_args: hook_shell_argv,
+        // Hooks are explicitly trusted user/admin code, not model sandbox processes. Removing
+        // credential-bearing environment variables avoids accidental propagation without
+        // pretending to isolate same-user hook code from Codex-owned files or process memory.
+        excluded_environment_variables: config
+            .workload_identity
+            .as_ref()
+            .map(|workload_identity| {
+                workload_identity
+                    .credential_source
+                    .sensitive_environment_variables()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 

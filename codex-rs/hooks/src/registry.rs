@@ -36,6 +36,7 @@ pub struct HooksConfig {
     pub plugin_hook_load_warnings: Vec<String>,
     pub shell_program: Option<String>,
     pub shell_args: Vec<String>,
+    pub excluded_environment_variables: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -58,10 +59,16 @@ impl Default for Hooks {
 
 impl Hooks {
     pub fn new(config: HooksConfig) -> Self {
+        let excluded_environment_variables = config.excluded_environment_variables;
         let after_agent = config
             .legacy_notify_argv
             .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
-            .map(crate::notify_hook)
+            .map(|argv| {
+                crate::legacy_notify::notify_hook_with_env_exclusions(
+                    argv,
+                    excluded_environment_variables.clone(),
+                )
+            })
             .into_iter()
             .collect();
         let engine = ClaudeHooksEngine::new(
@@ -73,6 +80,7 @@ impl Hooks {
             CommandShell {
                 program: config.shell_program.unwrap_or_default(),
                 args: config.shell_args,
+                excluded_environment_variables,
             },
         );
         Self {

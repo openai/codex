@@ -82,10 +82,33 @@ impl AwsAuthContext {
         let credentials_provider = config::credentials_provider(&sdk_config)?;
         let region = config::resolved_region(&sdk_config)?;
 
+        Self::from_provider(credentials_provider, region, config.service)
+    }
+
+    /// Builds a signing context from an explicit credential provider.
+    ///
+    /// Callers that need a restricted credential chain can construct it themselves instead of
+    /// using the AWS SDK default chain selected by [`Self::load`].
+    pub fn from_provider(
+        credentials_provider: SharedCredentialsProvider,
+        region: impl Into<String>,
+        service: impl Into<String>,
+    ) -> Result<Self, AwsAuthError> {
+        let region = region.into();
+        let region = region.trim();
+        if region.is_empty() {
+            return Err(AwsAuthError::MissingRegion);
+        }
+        let service = service.into();
+        let service = service.trim();
+        if service.is_empty() {
+            return Err(AwsAuthError::EmptyService);
+        }
+
         Ok(Self {
             credentials_provider,
-            region,
-            service: config.service.trim().to_string(),
+            region: region.to_string(),
+            service: service.to_string(),
         })
     }
 

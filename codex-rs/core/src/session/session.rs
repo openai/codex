@@ -602,9 +602,15 @@ impl Session {
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
+        let plugins_manager_for_mcp = Arc::clone(&plugins_manager);
         let mcp_thread_init_for_startup = &mcp_thread_init;
         let auth_and_mcp_fut = async move {
-            let auth = auth_manager_clone.auth().await;
+            let auth = if config_for_mcp.model_provider.requires_openai_auth {
+                auth_manager_clone.auth_result().await?
+            } else {
+                auth_manager_clone.auth_for_optional_use().await
+            };
+            plugins_manager_for_mcp.set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
             let mcp_config = mcp_manager_for_mcp
                 .runtime_config_for_thread(&config_for_mcp, mcp_thread_init_for_startup)
                 .await;
@@ -617,7 +623,7 @@ impl Session {
                 auth.as_ref(),
             )
             .await;
-            (auth, mcp_servers, auth_statuses, tool_plugin_provenance)
+            Ok::<_, std::io::Error>((auth, mcp_servers, auth_statuses, tool_plugin_provenance))
         }
         .instrument(info_span!(
             "session_init.auth_mcp",
@@ -625,11 +631,9 @@ impl Session {
         ));
 
         // Join all independent futures.
-        let (
-            thread_persistence_result,
-            state_db_ctx,
-            (auth, mcp_servers, auth_statuses, tool_plugin_provenance),
-        ) = tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
+        let (thread_persistence_result, state_db_ctx, auth_and_mcp_result) =
+            tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
+        let (auth, mcp_servers, auth_statuses, tool_plugin_provenance) = auth_and_mcp_result?;
 
         let mut live_thread_init =
             LiveThreadInitGuard::new(thread_persistence_result.map_err(|e| {
@@ -804,10 +808,23 @@ impl Session {
                 shell::default_user_shell()
             };
             let shell_snapshot = if config.features.enabled(Feature::ShellSnapshot) {
+                let excluded_environment_variables = config
+                    .workload_identity
+                    .as_ref()
+                    .map(|workload_identity| {
+                        workload_identity
+                            .credential_source
+                            .sensitive_environment_variables()
+                            .into_iter()
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 ShellSnapshot::new(
                     config.codex_home.clone(),
                     thread_id,
                     session_telemetry.clone(),
+                    excluded_environment_variables,
                     state_db_ctx.clone(),
                 )
             } else {

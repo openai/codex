@@ -69,6 +69,7 @@ use codex_features::NetworkProxyConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_install_context::InstallContext;
 use codex_login::AuthManagerConfig;
+use codex_mcp::McpCatalogBuilder;
 use codex_mcp::McpConfig;
 use codex_mcp::McpPluginAttribution;
 use codex_mcp::McpServerRegistration;
@@ -82,6 +83,7 @@ use codex_model_provider_info::merge_configured_model_providers;
 use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
+use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
@@ -108,6 +110,7 @@ pub use codex_thread_store::ExtraConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use codex_utils_path_uri::PathUri;
+use codex_workload_identity::WorkloadIdentityConfig;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::FormElicitationCapability;
 use rmcp::model::UrlElicitationCapability;
@@ -804,6 +807,14 @@ pub struct Config {
     /// auto: Use the OS-specific keyring service if available, otherwise use a file.
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 
+    /// Workload identity federation configuration for external ChatGPT auth.
+    pub workload_identity: Option<WorkloadIdentityConfig>,
+
+    /// Runtime-only paths added to the sandbox solely for workload credential isolation.
+    /// Pre-existing user or managed denies are excluded so they remain model-visible.
+    #[doc(hidden)]
+    pub workload_identity_credential_deny_paths: Vec<AbsolutePathBuf>,
+
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     pub mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
 
@@ -1146,6 +1157,10 @@ impl AuthManagerConfig for Config {
     fn chatgpt_base_url(&self) -> String {
         self.chatgpt_base_url.clone()
     }
+
+    fn workload_identity(&self) -> Option<WorkloadIdentityConfig> {
+        self.workload_identity.clone()
+    }
 }
 
 #[derive(Clone, Default)]
@@ -1478,6 +1493,7 @@ impl Config {
                 server.clone(),
             ));
         }
+        self.remove_workload_identity_environment_variables(&mut catalog);
 
         McpConfig {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
@@ -1508,6 +1524,26 @@ impl Config {
             mcp_server_catalog: catalog.build(),
             plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
         }
+    }
+
+    pub(crate) fn remove_workload_identity_environment_variables(
+        &self,
+        catalog: &mut McpCatalogBuilder,
+    ) {
+        let sensitive_environment_variables = self
+            .workload_identity
+            .as_ref()
+            .map(|workload_identity| {
+                workload_identity
+                    .credential_source
+                    .sensitive_environment_variables()
+            })
+            .unwrap_or_default();
+        catalog.retain_environment_variables(|name| {
+            !sensitive_environment_variables
+                .iter()
+                .any(|sensitive| name.eq_ignore_ascii_case(sensitive))
+        });
     }
 
     pub(crate) fn prefix_mcp_tool_names(&self) -> bool {
@@ -2314,6 +2350,97 @@ fn apply_managed_filesystem_constraints(
     }
 }
 
+fn apply_workload_identity_filesystem_constraints(
+    file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
+    credential_deny_paths: &[AbsolutePathBuf],
+) {
+    let entries = credential_deny_paths
+        .iter()
+        .cloned()
+        .map(|path| codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Path { path },
+            access: codex_protocol::permissions::FileSystemAccessMode::Deny,
+        })
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        return;
+    }
+
+    file_system_sandbox_policy
+        .preserve_deny_read_restrictions_from(&FileSystemSandboxPolicy::restricted(entries));
+}
+
+fn file_system_policy_has_exact_deny_path(
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    path: &AbsolutePathBuf,
+) -> bool {
+    file_system_sandbox_policy.entries.iter().any(|entry| {
+        entry.access == codex_protocol::permissions::FileSystemAccessMode::Deny
+            && matches!(
+                &entry.path,
+                codex_protocol::permissions::FileSystemPath::Path {
+                    path: denied_path,
+                } if denied_path == path
+            )
+    })
+}
+
+fn workload_identity_credential_deny_paths(
+    workload_identity: &WorkloadIdentityConfig,
+) -> Vec<AbsolutePathBuf> {
+    workload_identity
+        .credential_source
+        .credential_file_paths()
+        .into_iter()
+        .flat_map(workload_identity_credential_path_deny_paths)
+        .collect()
+}
+
+fn workload_identity_credential_path_deny_paths(path: PathBuf) -> Vec<AbsolutePathBuf> {
+    let Ok(path) = AbsolutePathBuf::relative_to_current_dir(path) else {
+        return Vec::new();
+    };
+    let Some(parent) = path.as_path().parent() else {
+        return vec![path];
+    };
+    let original_parent = parent.to_path_buf();
+    let parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+
+    // Projected service-account tokens are symlinks whose targets rotate. Mask
+    // the containing secret directory so a rotation cannot expose a new target.
+    let is_symlink = std::fs::symlink_metadata(path.as_path())
+        .is_ok_and(|metadata| metadata.file_type().is_symlink());
+    if !is_symlink {
+        return path
+            .as_path()
+            .file_name()
+            .and_then(|file_name| AbsolutePathBuf::from_absolute_path(parent.join(file_name)).ok())
+            .into_iter()
+            .collect();
+    }
+
+    let mut deny_paths = vec![path.clone()];
+    if let Some(file_name) = path.as_path().file_name()
+        && let Ok(canonical_link_path) = AbsolutePathBuf::from_absolute_path(parent.join(file_name))
+    {
+        deny_paths.push(canonical_link_path);
+    }
+    if let Ok(original_parent) = AbsolutePathBuf::from_absolute_path(original_parent) {
+        deny_paths.push(original_parent);
+    }
+    if let Ok(parent) = AbsolutePathBuf::from_absolute_path(&parent) {
+        deny_paths.push(parent);
+    }
+    if let Ok(target) = std::fs::canonicalize(path.as_path())
+        && !target.starts_with(&parent)
+        && let Ok(target) = AbsolutePathBuf::from_absolute_path(target)
+    {
+        deny_paths.push(target);
+    }
+    dedupe_absolute_paths(&mut deny_paths);
+    deny_paths
+}
+
 /// Optional overrides for user configuration (e.g., from CLI flags).
 #[derive(Default, Debug, Clone)]
 pub struct ConfigOverrides {
@@ -2683,6 +2810,7 @@ impl Config {
 
         validate_model_providers(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+        let forced_chatgpt_workspace_id = cfg.forced_chatgpt_workspace_ids();
         // Ensure that every field of ConfigRequirements is applied to the final
         // Config.
         let ConfigRequirements {
@@ -2796,7 +2924,12 @@ impl Config {
         )?;
         let respect_system_proxy = features.enabled(Feature::RespectSystemProxy);
         let enable_network_proxy = features.enabled(Feature::NetworkProxy);
-        let configured_windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg);
+        // A restricted child token is the Windows boundary that prevents model-controlled
+        // processes from inspecting WIF credentials held by the parent process.
+        let configured_windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg).or_else(|| {
+            (cfg!(target_os = "windows") && cfg.workload_identity.is_some())
+                .then_some(WindowsSandboxModeToml::Unelevated)
+        });
         // Keep the configured mode separate so a requirement-constrained mode
         // does not look like it was explicitly selected in config.
         let selected_windows_sandbox_mode = configured_windows_sandbox_mode.or_else(|| {
@@ -2813,6 +2946,15 @@ impl Config {
             &mut startup_warnings,
         )?;
         let effective_windows_sandbox_mode = *constrained_windows_sandbox_mode.get();
+        if cfg!(target_os = "windows")
+            && cfg.workload_identity.is_some()
+            && effective_windows_sandbox_mode.is_none()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "`workload_identity` requires the Windows restricted-token sandbox",
+            ));
+        }
         let windows_sandbox_mode = if constrained_windows_sandbox_mode.source.is_some() {
             effective_windows_sandbox_mode
         } else {
@@ -3171,7 +3313,20 @@ impl Config {
             })?
             .clone();
 
-        let shell_environment_policy = cfg.shell_environment_policy.into();
+        let mut shell_environment_policy: ShellEnvironmentPolicy = cfg.shell_environment_policy.into();
+        if let Some(workload_identity) = cfg.workload_identity.as_ref() {
+            for variable in workload_identity
+                .credential_source
+                .sensitive_environment_variables()
+            {
+                shell_environment_policy
+                    .exclude
+                    .push(EnvironmentVariablePattern::new_case_insensitive(variable));
+                shell_environment_policy
+                    .r#set
+                    .retain(|name, _| !name.eq_ignore_ascii_case(variable));
+            }
+        }
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
 
         let history = cfg.history.unwrap_or_default();
@@ -3286,19 +3441,6 @@ impl Config {
         };
 
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
-
-        let forced_chatgpt_workspace_id = cfg
-            .forced_chatgpt_workspace_id
-            .clone()
-            .map(codex_config::config_toml::ForcedChatgptWorkspaceIds::into_vec)
-            .map(|values| {
-                values
-                    .into_iter()
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .filter(|values| !values.is_empty());
 
         let forced_login_method = cfg.forced_login_method;
 
@@ -3501,6 +3643,44 @@ impl Config {
                 filesystem_requirements,
             );
         }
+        let workload_identity_credential_deny_paths = if let Some(workload_identity) =
+            cfg.workload_identity.as_ref()
+        {
+            if cfg.forced_login_method == Some(ForcedLoginMethod::Api) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "`workload_identity` requires ChatGPT auth but `forced_login_method` requires API key auth",
+                ));
+            }
+            workload_identity.validate().map_err(|error| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
+            })?;
+            if effective_permission_profile.enforcement() == SandboxEnforcement::External {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "`workload_identity` requires Codex-managed filesystem enforcement so credential paths can be denied",
+                ));
+            }
+            let credential_deny_paths =
+                workload_identity_credential_deny_paths(workload_identity);
+            let enforcement_only_paths = credential_deny_paths
+                .iter()
+                .filter(|path| {
+                    !file_system_policy_has_exact_deny_path(
+                        &effective_file_system_sandbox_policy,
+                        path,
+                    )
+                })
+                .cloned()
+                .collect();
+            apply_workload_identity_filesystem_constraints(
+                &mut effective_file_system_sandbox_policy,
+                &credential_deny_paths,
+            );
+            enforcement_only_paths
+        } else {
+            Vec::new()
+        };
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
             .with_additional_readable_roots(resolved_cwd.as_path(), &helper_readable_roots);
         let effective_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
@@ -3564,6 +3744,8 @@ impl Config {
                 cfg.cli_auth_credentials_store.unwrap_or_default(),
                 env!("CARGO_PKG_VERSION"),
             ),
+            workload_identity: cfg.workload_identity.clone(),
+            workload_identity_credential_deny_paths,
             mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.

@@ -41,11 +41,20 @@ pub fn legacy_notify_json(payload: &HookPayload) -> Result<String, serde_json::E
 }
 
 pub fn notify_hook(argv: Vec<String>) -> Hook {
+    notify_hook_with_env_exclusions(argv, Vec::new())
+}
+
+pub(crate) fn notify_hook_with_env_exclusions(
+    argv: Vec<String>,
+    excluded_environment_variables: Vec<String>,
+) -> Hook {
     let argv = Arc::new(argv);
+    let excluded_environment_variables = Arc::new(excluded_environment_variables);
     Hook {
         name: "legacy_notify".to_string(),
         func: Arc::new(move |payload: &HookPayload| {
             let argv = Arc::clone(&argv);
+            let excluded_environment_variables = Arc::clone(&excluded_environment_variables);
             Box::pin(async move {
                 let mut command = match command_from_argv(&argv) {
                     Some(command) => command,
@@ -53,6 +62,9 @@ pub fn notify_hook(argv: Vec<String>) -> Hook {
                 };
                 if let Ok(notify_payload) = legacy_notify_json(payload) {
                     command.arg(notify_payload);
+                }
+                for variable in excluded_environment_variables.iter() {
+                    command.env_remove(variable);
                 }
 
                 command

@@ -8,6 +8,7 @@ use crate::cache::CloudConfigBundleCache;
 use crate::metrics::bundle_shape_tag;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use codex_app_server_protocol::AuthMode;
 use codex_backend_client::ConfigBundleResponse;
 use codex_backend_client::DeliveredTomlFragment;
 use codex_config::AbsolutePathBuf;
@@ -17,6 +18,10 @@ use codex_config::CloudRequirementsFragment;
 use codex_config::CloudRequirementsTomlBundle;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
+use codex_login::auth::ExternalAuth;
+use codex_login::auth::ExternalAuthFuture;
+use codex_login::auth::ExternalAuthRefreshContext;
+use codex_login::auth::ExternalAuthTokens;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::VecDeque;
@@ -235,6 +240,29 @@ impl BundleClient for PendingBundleClient {
     async fn get_bundle(&self, _auth: &CodexAuth) -> Result<CloudConfigBundle, BundleRequestError> {
         pending::<()>().await;
         Ok(CloudConfigBundle::default())
+    }
+}
+
+struct FailingRequiredExternalAuth;
+
+impl ExternalAuth for FailingRequiredExternalAuth {
+    fn auth_mode(&self) -> AuthMode {
+        AuthMode::Chatgpt
+    }
+
+    fn requires_successful_resolution(&self) -> bool {
+        true
+    }
+
+    fn resolve(&self) -> ExternalAuthFuture<'_, Option<ExternalAuthTokens>> {
+        Box::pin(async { Err(std::io::Error::other("transient WIF failure")) })
+    }
+
+    fn refresh(
+        &self,
+        _context: ExternalAuthRefreshContext,
+    ) -> ExternalAuthFuture<'_, ExternalAuthTokens> {
+        Box::pin(async { Err(std::io::Error::other("transient WIF failure")) })
     }
 }
 
@@ -960,6 +988,32 @@ async fn refresh_from_remote_updates_cached_bundle() {
         .await
         .expect("load cache");
     assert_eq!(signed_payload.bundle, replacement_bundle);
+}
+
+#[tokio::test]
+async fn refresh_continues_after_required_external_auth_resolution_error() {
+    let codex_home = tempdir().expect("tempdir");
+    let auth_manager = Arc::new(
+        AuthManager::new(
+            codex_home.path().to_path_buf(),
+            /*enable_codex_api_key_env*/ false,
+            AuthCredentialsStoreMode::File,
+            /*chatgpt_base_url*/ None,
+            AuthKeyringBackendKind::default(),
+        )
+        .await,
+    );
+    auth_manager.set_external_auth(Arc::new(FailingRequiredExternalAuth));
+    let fetcher = Arc::new(StaticBundleClient::new(test_bundle()));
+    let service = CloudConfigBundleService::new(
+        auth_manager,
+        fetcher.clone(),
+        codex_home.path().to_path_buf(),
+        CLOUD_CONFIG_BUNDLE_TIMEOUT,
+    );
+
+    assert!(service.refresh_cache_once().await);
+    assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
 }
 
 #[test]

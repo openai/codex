@@ -49,7 +49,8 @@ fn build_permissions_update_item(
     }
 
     let prev = previous?;
-    if prev.permission_profile() == next.permission_profile()
+    let model_visible_permission_profile = next.model_visible_permission_profile();
+    if prev.permission_profile() == model_visible_permission_profile
         && prev.approval_policy == next.approval_policy.value()
     {
         return None;
@@ -57,7 +58,7 @@ fn build_permissions_update_item(
 
     Some(
         PermissionsInstructions::from_permission_profile(
-            &next.permission_profile,
+            &model_visible_permission_profile,
             next.approval_policy.value(),
             next.config.approvals_reviewer,
             exec_policy,

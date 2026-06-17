@@ -70,7 +70,7 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
 
     let auth_manager = util::load_auth_manager(Some(base_url.clone())).await;
     let auth = match auth_manager.as_ref() {
-        Some(manager) => manager.auth().await,
+        Some(manager) => manager.auth().await?,
         None => None,
     };
     let auth = match auth {

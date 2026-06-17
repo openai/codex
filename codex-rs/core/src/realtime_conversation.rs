@@ -694,7 +694,7 @@ async fn prepare_realtime_start(
         .model_client
         .auth_manager()
         .unwrap_or_else(|| Arc::clone(&sess.services.auth_manager));
-    let auth = auth_manager.auth().await;
+    let auth = auth_manager.auth().await?;
     let config = sess.get_config().await;
     let transport = params
         .transport

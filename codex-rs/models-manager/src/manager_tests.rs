@@ -726,6 +726,7 @@ impl TestAuthAwareModelsEndpoint {
             Some(auth_manager) => auth_manager
                 .auth()
                 .await
+                .expect("auth resolution should succeed")
                 .as_ref()
                 .is_some_and(CodexAuth::uses_codex_backend),
             None => false,

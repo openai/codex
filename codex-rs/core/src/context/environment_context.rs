@@ -430,8 +430,9 @@ impl EnvironmentContext {
             Self::network_from_turn_context(turn_context),
             /*subagents*/ None,
         );
+        let model_visible_permission_profile = turn_context.model_visible_permission_profile();
         context.filesystem = Some(FileSystemContext::from_permission_profile(
-            &turn_context.permission_profile,
+            &model_visible_permission_profile,
             &turn_context.config.effective_workspace_roots(),
         ));
         context

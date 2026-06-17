@@ -38,12 +38,16 @@ use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cargo_bin::cargo_bin;
 use codex_utils_path_uri::PathUri;
 use core_test_support::assert_regex_match;
@@ -768,9 +772,14 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
     )
     .await;
 
+    let credential_root = tempdir()?;
+    let credential_path =
+        AbsolutePathBuf::try_from(credential_root.path().join("projected-workload-token"))?;
+    let credential_path_for_config = credential_path.clone();
     let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
     let fixture = test_codex()
         .with_config(move |config| {
+            config.workload_identity_credential_deny_paths = vec![credential_path_for_config];
             insert_mcp_server(
                 config,
                 server_name,
@@ -786,10 +795,25 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
 
     wait_for_mcp_server(&fixture.codex, server_name).await?;
 
+    let visible_permission_profile = PermissionProfile::read_only();
+    let mut enforced_file_system_policy = visible_permission_profile.file_system_sandbox_policy();
+    enforced_file_system_policy
+        .entries
+        .push(FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: credential_path.clone(),
+            },
+            access: FileSystemAccessMode::Deny,
+        });
+    let enforced_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        visible_permission_profile.enforcement(),
+        &enforced_file_system_policy,
+        visible_permission_profile.network_sandbox_policy(),
+    );
     fixture
         .submit_turn_with_permission_profile(
             "call the rmcp sandbox_meta tool",
-            PermissionProfile::read_only(),
+            enforced_permission_profile,
         )
         .await?;
 
@@ -815,18 +839,28 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
     let sandbox_meta = meta
         .get(MCP_SANDBOX_STATE_META_CAPABILITY)
         .expect("sandbox state metadata should be present");
-    let (sandbox_policy, _) =
-        turn_permission_fields(PermissionProfile::read_only(), fixture.config.cwd.as_path());
+    let (sandbox_policy, _) = turn_permission_fields(
+        visible_permission_profile.clone(),
+        fixture.config.cwd.as_path(),
+    );
     let expected_sandbox_policy = serde_json::to_value(&sandbox_policy)?;
     assert_eq!(
         sandbox_meta.get("sandboxPolicy"),
         Some(&expected_sandbox_policy)
     );
     assert_eq!(
+        sandbox_meta.get("permissionProfile"),
+        Some(&serde_json::to_value(&visible_permission_profile)?)
+    );
+    assert_eq!(
         sandbox_meta.get("sandboxCwd").and_then(Value::as_str),
         fixture.config.cwd.as_path().to_str()
     );
     assert_eq!(sandbox_meta.get("useLegacyLandlock"), Some(&json!(false)));
+    assert!(
+        !serde_json::to_string(sandbox_meta)?.contains(credential_path.to_string_lossy().as_ref()),
+        "enforcement-only workload credential path leaked into MCP metadata"
+    );
 
     server.verify().await;
 

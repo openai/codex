@@ -207,6 +207,51 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
     );
 }
 
+#[tokio::test]
+async fn cached_accessible_connectors_require_caller_supplied_codex_auth() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+    let _ = config.features.set_enabled(Feature::Apps, /*enabled*/ true);
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let tools = vec![codex_app_tool(
+        "calendar_list_events",
+        "calendar",
+        Some("Calendar"),
+        &[],
+    )];
+
+    with_accessible_connectors_cache_cleared(|| {
+        refresh_accessible_connectors_cache_from_mcp_tools(&config, Some(&auth), &tools);
+
+        assert_eq!(
+            list_cached_accessible_connectors_from_mcp_tools(&config, /*auth*/ None),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            list_cached_accessible_connectors_from_mcp_tools(&config, Some(&auth)),
+            Some(vec![AppInfo {
+                id: "calendar".to_string(),
+                name: "Calendar".to_string(),
+                description: None,
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some(connector_install_url("Calendar", "calendar")),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: Vec::new(),
+            }])
+        );
+    });
+}
+
 #[test]
 fn accessible_connectors_from_mcp_tools_preserves_description() {
     let mcp_tools = vec![ToolInfo {

@@ -126,8 +126,8 @@ impl ModelProvider for AmazonBedrockModelProvider {
             .and_then(|_| self.auth_manager.as_ref().cloned())
     }
 
-    fn auth(&self) -> ModelProviderFuture<'_, Option<CodexAuth>> {
-        Box::pin(AmazonBedrockModelProvider::auth(self))
+    fn auth(&self) -> ModelProviderFuture<'_, Result<Option<CodexAuth>>> {
+        Box::pin(async { Ok(AmazonBedrockModelProvider::auth(self).await) })
     }
 
     fn account_state(&self) -> ProviderAccountResult {

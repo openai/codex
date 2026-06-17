@@ -4,6 +4,7 @@ use anyhow::Result;
 use anyhow::bail;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
+use app_test_support::configure_expiring_workload_identity;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -126,6 +127,93 @@ async fn plugin_list_skips_invalid_marketplace_file_and_reports_error() -> Resul
         "unexpected error: {:?}",
         response.marketplace_load_errors
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_local_succeeds_when_workload_identity_becomes_unavailable() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_remote_plugin_catalog_config(
+        codex_home.path(),
+        &format!("{}/backend-api", server.uri()),
+    )?;
+    let workload_identity =
+        configure_expiring_workload_identity(codex_home.path(), &server).await?;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    workload_identity.remove_and_wait_for_expiry().await?;
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: None,
+            marketplace_kinds: None,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginListResponse = to_response(response)?;
+
+    assert!(response.marketplace_load_errors.is_empty());
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_installed_local_succeeds_when_workload_identity_becomes_unavailable() -> Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_openai_curated_marketplace(codex_home.path(), &["linear"])?;
+    write_installed_plugin(&codex_home, "openai-curated", "linear")?;
+    write_remote_plugin_catalog_config(
+        codex_home.path(),
+        &format!("{}/backend-api", server.uri()),
+    )?;
+    let config_path = codex_home.path().join("config.toml");
+    let mut config = std::fs::read_to_string(&config_path)?;
+    config.push_str(
+        r#"
+
+[plugins."linear@openai-curated"]
+enabled = true
+"#,
+    );
+    std::fs::write(config_path, config)?;
+    let workload_identity =
+        configure_expiring_workload_identity(codex_home.path(), &server).await?;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    workload_identity.remove_and_wait_for_expiry().await?;
+
+    let request_id = mcp
+        .send_plugin_installed_request(PluginInstalledParams {
+            cwds: None,
+            install_suggestion_plugin_names: None,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginInstalledResponse = to_response(response)?;
+
+    assert!(response.marketplace_load_errors.is_empty());
+    assert!(response.marketplaces.iter().any(|marketplace| {
+        marketplace
+            .plugins
+            .iter()
+            .any(|plugin| plugin.id == "linear@openai-curated" && plugin.installed)
+    }));
+    server.verify().await;
     Ok(())
 }
 

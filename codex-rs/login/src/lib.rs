@@ -52,4 +52,5 @@ pub use auth::read_openai_api_key_from_env;
 pub use auth::save_auth;
 pub use auth_env_telemetry::AuthEnvTelemetry;
 pub use auth_env_telemetry::collect_auth_env_telemetry;
+pub use codex_workload_identity_providers::WorkloadIdentityConfig;
 pub use token_data::TokenData;

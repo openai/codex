@@ -83,7 +83,13 @@ fn assert_posix_snapshot_sections(snapshot: &str) {
 async fn get_snapshot(shell_type: ShellType) -> Result<String> {
     let dir = tempdir()?;
     let path = dir.path().join("snapshot.sh");
-    write_shell_snapshot(shell_type, &path.abs(), &dir.path().abs()).await?;
+    write_shell_snapshot(
+        shell_type,
+        &path.abs(),
+        &dir.path().abs(),
+        /*excluded_environment_variables*/ &[],
+    )
+    .await?;
     let content = fs::read_to_string(&path).await?;
     Ok(content)
 }
@@ -128,7 +134,7 @@ fn snapshot_file_name_parser_supports_legacy_and_suffixed_names() {
 fn bash_snapshot_filters_invalid_exports() -> Result<()> {
     let output = Command::new("/bin/bash")
         .arg("-c")
-        .arg(bash_snapshot_script())
+        .arg(bash_snapshot_script(&[]))
         .env("BASH_ENV", "/dev/null")
         .env("VALID_NAME", "ok")
         .env("PWD", "/tmp/stale")
@@ -149,11 +155,32 @@ fn bash_snapshot_filters_invalid_exports() -> Result<()> {
 
 #[cfg(unix)]
 #[test]
+fn bash_snapshot_excludes_configured_exports() -> Result<()> {
+    let output = Command::new("/bin/bash")
+        .arg("-c")
+        .arg(bash_snapshot_script(&[
+            "CODEX_WIF_SUBJECT_TOKEN".to_string()
+        ]))
+        .env("BASH_ENV", "/dev/null")
+        .env("CODEX_WIF_SUBJECT_TOKEN", "secret.assertion")
+        .env("SAFE_VAR", "safe")
+        .output()?;
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("CODEX_WIF_SUBJECT_TOKEN"));
+    assert!(stdout.contains("SAFE_VAR"));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
 fn bash_snapshot_preserves_multiline_exports() -> Result<()> {
     let multiline_cert = "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----";
     let output = Command::new("/bin/bash")
         .arg("-c")
-        .arg(bash_snapshot_script())
+        .arg(bash_snapshot_script(&[]))
         .env("BASH_ENV", "/dev/null")
         .env("MULTILINE_CERT", multiline_cert)
         .output()?;
@@ -201,6 +228,7 @@ async fn try_create_creates_and_deletes_snapshot_file() -> Result<()> {
         ThreadId::new(),
         &dir.path().abs(),
         &shell,
+        /*excluded_environment_variables*/ &[],
         /*state_db*/ None,
     )
     .await
@@ -230,6 +258,7 @@ async fn try_create_uses_distinct_generation_paths() -> Result<()> {
         session_id,
         &dir.path().abs(),
         &shell,
+        /*excluded_environment_variables*/ &[],
         /*state_db*/ None,
     )
     .await
@@ -239,6 +268,7 @@ async fn try_create_uses_distinct_generation_paths() -> Result<()> {
         session_id,
         &dir.path().abs(),
         &shell,
+        /*excluded_environment_variables*/ &[],
         /*state_db*/ None,
     )
     .await
@@ -283,7 +313,7 @@ async fn snapshot_shell_does_not_inherit_stdin() -> Result<()> {
     let home_display = home.display();
     let script = format!(
         "HOME=\"{home_display}\"; export HOME; {}",
-        bash_snapshot_script()
+        bash_snapshot_script(&[])
     );
     let output = run_script_with_timeout(
         &shell,
@@ -291,6 +321,7 @@ async fn snapshot_shell_does_not_inherit_stdin() -> Result<()> {
         Duration::from_secs(2),
         /*use_login_shell*/ true,
         &home,
+        /*excluded_environment_variables*/ &[],
     )
     .await
     .context("run snapshot command")?;
@@ -334,6 +365,7 @@ async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
         Duration::from_secs(1),
         /*use_login_shell*/ true,
         &dir.path().abs(),
+        /*excluded_environment_variables*/ &[],
     )
     .await
     .expect_err("snapshot shell should time out");
@@ -366,6 +398,22 @@ async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[test]
+fn snapshot_command_removes_configured_environment_variables() {
+    let variable = "CODEX_WIF_SNAPSHOT_ASSERTION";
+    let mut command = tokio::process::Command::new("true");
+    command.env(variable, "secret.assertion");
+
+    remove_environment_variables(&mut command, &[variable.to_string()]);
+
+    assert!(
+        command
+            .as_std()
+            .get_envs()
+            .any(|(name, value)| name == variable && value.is_none())
+    );
 }
 
 #[cfg(target_os = "macos")]

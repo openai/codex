@@ -30,6 +30,7 @@ use codex_extension_api::UserInstructionsProvider;
 use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_home::CodexHomeUserInstructionsProvider;
+use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
@@ -250,6 +251,7 @@ pub fn turn_permission_fields(
 pub struct TestCodexBuilder {
     config_mutators: Vec<Box<ConfigMutator>>,
     auth: CodexAuth,
+    auth_manager_from_config: bool,
     pre_build_hooks: Vec<Box<PreBuildHook>>,
     workspace_setups: Vec<Box<WorkspaceSetup>>,
     home: Option<Arc<TempDir>>,
@@ -271,6 +273,11 @@ impl TestCodexBuilder {
 
     pub fn with_auth(mut self, auth: CodexAuth) -> Self {
         self.auth = auth;
+        self
+    }
+
+    pub fn with_auth_manager_from_config(mut self) -> Self {
+        self.auth_manager_from_config = true;
         self
     }
 
@@ -539,6 +546,11 @@ impl TestCodexBuilder {
         environment_manager: Arc<codex_exec_server::EnvironmentManager>,
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
+        let configured_auth_manager = if self.auth_manager_from_config {
+            Some(AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await)
+        } else {
+            None
+        };
         let state_db = codex_core::init_state_db(&config).await;
         let thread_store = thread_store_from_config(&config, state_db.clone());
         let installation_id = resolve_installation_id(&config.codex_home).await?;
@@ -550,7 +562,9 @@ impl TestCodexBuilder {
             });
         let thread_manager = ThreadManager::new(
             &config,
-            codex_core::test_support::auth_manager_from_auth(auth.clone()),
+            configured_auth_manager
+                .clone()
+                .unwrap_or_else(|| codex_core::test_support::auth_manager_from_auth(auth.clone())),
             SessionSource::Exec,
             Arc::clone(&environment_manager),
             Arc::clone(&self.extensions),
@@ -566,7 +580,9 @@ impl TestCodexBuilder {
 
         let new_conversation = match (resume_from, user_shell_override) {
             (Some(path), Some(user_shell_override)) => {
-                let auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
+                let auth_manager = configured_auth_manager.clone().unwrap_or_else(|| {
+                    codex_core::test_support::auth_manager_from_auth(auth.clone())
+                });
                 Box::pin(
                     codex_core::test_support::resume_thread_from_rollout_with_user_shell_override(
                         thread_manager.as_ref(),
@@ -579,7 +595,8 @@ impl TestCodexBuilder {
                 .await?
             }
             (Some(path), None) => {
-                let auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
+                let auth_manager = configured_auth_manager
+                    .unwrap_or_else(|| codex_core::test_support::auth_manager_from_auth(auth));
                 Box::pin(thread_manager.resume_thread_from_rollout(
                     config.clone(),
                     path,
@@ -1135,6 +1152,7 @@ pub fn test_codex() -> TestCodexBuilder {
                 .expect("test config should allow Apps override");
         })],
         auth: CodexAuth::from_api_key("dummy"),
+        auth_manager_from_config: false,
         pre_build_hooks: vec![],
         workspace_setups: vec![],
         home: None,

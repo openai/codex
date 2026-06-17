@@ -158,11 +158,12 @@ impl AccountRequestProcessor {
         }
     }
 
-    pub(crate) fn clear_external_auth(&self) {
-        self.auth_manager.clear_external_auth();
-        self.thread_manager
-            .plugins_manager()
-            .set_auth_mode(self.auth_manager.get_api_auth_mode());
+    pub(crate) fn clear_external_auth_if(&self, expected: &Arc<dyn ExternalAuth>) {
+        if self.auth_manager.clear_external_auth_if(expected) {
+            self.thread_manager
+                .plugins_manager()
+                .set_auth_mode(self.auth_manager.get_api_auth_mode());
+        }
     }
 
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
@@ -780,11 +781,11 @@ impl AccountRequestProcessor {
                 requires_openai_auth: Some(false),
             }
         } else {
-            let auth = if do_refresh {
-                self.auth_manager.auth_cached()
-            } else {
-                self.auth_manager.auth().await
-            };
+            let auth = self
+                .auth_manager
+                .auth()
+                .await
+                .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
             match auth {
                 Some(auth) => {
                     let permanent_refresh_failure =
@@ -856,7 +857,12 @@ impl AccountRequestProcessor {
     async fn get_account_rate_limits_response(
         &self,
     ) -> Result<GetAccountRateLimitsResponse, JSONRPCErrorError> {
-        let Some(auth) = self.auth_manager.auth().await else {
+        let Some(auth) = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?
+        else {
             return Err(invalid_request(
                 "codex account authentication required to read rate limits",
             ));
@@ -919,7 +925,12 @@ impl AccountRequestProcessor {
     async fn get_account_token_usage_response(
         &self,
     ) -> Result<GetAccountTokenUsageResponse, JSONRPCErrorError> {
-        let Some(auth) = self.auth_manager.auth().await else {
+        let Some(auth) = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?
+        else {
             return Err(invalid_request(
                 "codex account authentication required to read token usage",
             ));
@@ -978,7 +989,12 @@ impl AccountRequestProcessor {
         &self,
         params: SendAddCreditsNudgeEmailParams,
     ) -> Result<AddCreditsNudgeEmailStatus, JSONRPCErrorError> {
-        let Some(auth) = self.auth_manager.auth().await else {
+        let Some(auth) = self
+            .auth_manager
+            .auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?
+        else {
             return Err(invalid_request(
                 "codex account authentication required to notify workspace owner",
             ));

@@ -1,0 +1,20 @@
+[package]
+name = "codex-workload-identity-providers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-workload-identity = { workspace = true }
+codex-workload-identity-aws = { workspace = true }
+codex-workload-identity-azure = { workspace = true }
+codex-workload-identity-github-actions = { workspace = true }
+codex-workload-identity-spiffe = { workspace = true }
+reqwest = { workspace = true }
+
+[lib]
+doctest = false
+test = false

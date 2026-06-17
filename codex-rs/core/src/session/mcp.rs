@@ -302,7 +302,13 @@ impl Session {
         keyring_backend_kind: AuthKeyringBackendKind,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
-        let auth = self.services.auth_manager.auth().await;
+        let auth = match self.services.auth_manager.auth().await {
+            Ok(auth) => auth,
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to resolve auth while refreshing MCP servers");
+                None
+            }
+        };
         let config = self.get_config().await;
         let mcp_config = self.runtime_mcp_config(config.as_ref()).await;
         let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);

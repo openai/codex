@@ -13,7 +13,7 @@ pub(crate) async fn rate_limits_ok(auth_manager: &AuthManager, config: &Config) 
 }
 
 async fn rate_limits_check(auth_manager: &AuthManager, config: &Config) -> Option<bool> {
-    let auth = auth_manager.auth().await?;
+    let auth = auth_manager.auth().await.ok()??;
     if !auth.uses_codex_backend() {
         return None;
     }

@@ -9,7 +9,10 @@ use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
@@ -39,6 +42,31 @@ impl TurnSkillsContext {
 }
 
 pub(crate) type ShellSnapshotTask = Shared<BoxFuture<'static, Option<Arc<ShellSnapshotFile>>>>;
+
+pub(crate) fn model_visible_permission_profile(
+    permission_profile: &PermissionProfile,
+    enforcement_only_paths: &[AbsolutePathBuf],
+) -> PermissionProfile {
+    let enforcement_only_paths = enforcement_only_paths
+        .iter()
+        .cloned()
+        .collect::<HashSet<_>>();
+    let mut permission_profile = permission_profile.clone();
+    if let PermissionProfile::Managed {
+        file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+        ..
+    } = &mut permission_profile
+    {
+        entries.retain(|entry| {
+            entry.access != FileSystemAccessMode::Deny
+                || !matches!(
+                    &entry.path,
+                    FileSystemPath::Path { path } if enforcement_only_paths.contains(path)
+                )
+        });
+    }
+    permission_profile
+}
 
 #[derive(Clone)]
 pub(crate) struct TurnEnvironment {
@@ -152,6 +180,13 @@ enum TurnMultiAgentRuntime {
 impl TurnContext {
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
         self.permission_profile.clone()
+    }
+
+    pub(crate) fn model_visible_permission_profile(&self) -> PermissionProfile {
+        model_visible_permission_profile(
+            &self.permission_profile,
+            &self.config.workload_identity_credential_deny_paths,
+        )
     }
 
     pub(crate) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
@@ -345,7 +380,10 @@ impl TurnContext {
         }
     }
 
-    fn non_legacy_file_system_sandbox_policy(&self) -> Option<FileSystemSandboxPolicy> {
+    fn non_legacy_file_system_sandbox_policy(
+        &self,
+        model_visible_permission_profile: &PermissionProfile,
+    ) -> Option<FileSystemSandboxPolicy> {
         // Omit the derived split filesystem policy when it is equivalent to
         // the legacy sandbox policy. This keeps turn-context payloads stable
         // while both fields exist; once callers consume only the split policy,
@@ -356,13 +394,17 @@ impl TurnContext {
                 #[allow(deprecated)]
                 &self.cwd,
             );
-        let file_system_sandbox_policy = self.file_system_sandbox_policy();
+        let file_system_sandbox_policy =
+            model_visible_permission_profile.file_system_sandbox_policy();
         (file_system_sandbox_policy != legacy_file_system_sandbox_policy)
             .then_some(file_system_sandbox_policy)
     }
 
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         let workspace_roots = self.config.effective_workspace_roots();
+        let model_visible_permission_profile = self.model_visible_permission_profile();
+        let model_visible_file_system_sandbox_policy =
+            self.non_legacy_file_system_sandbox_policy(&model_visible_permission_profile);
         #[allow(deprecated)]
         let cwd = self.cwd.clone();
         TurnContextItem {
@@ -373,9 +415,9 @@ impl TurnContext {
             timezone: self.timezone.clone(),
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy(),
-            permission_profile: Some(self.permission_profile()),
+            permission_profile: Some(model_visible_permission_profile),
             network: self.turn_context_network_item(),
-            file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
+            file_system_sandbox_policy: model_visible_file_system_sandbox_policy,
             model: self.model_info.slug.clone(),
             comp_hash: self.model_info.comp_hash.clone(),
             personality: self.personality,

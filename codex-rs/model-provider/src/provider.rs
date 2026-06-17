@@ -140,7 +140,7 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     fn auth_manager(&self) -> Option<Arc<AuthManager>>;
 
     /// Returns the current provider-scoped auth value, if one is configured.
-    fn auth(&self) -> ModelProviderFuture<'_, Option<CodexAuth>>;
+    fn auth(&self) -> ModelProviderFuture<'_, codex_protocol::error::Result<Option<CodexAuth>>>;
 
     /// Returns the current app-visible account state for this provider.
     fn account_state(&self) -> ProviderAccountResult;
@@ -148,7 +148,7 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns provider configuration adapted for the API client.
     fn api_provider(&self) -> ModelProviderFuture<'_, codex_protocol::error::Result<Provider>> {
         Box::pin(async move {
-            let auth = self.auth().await;
+            let auth = self.auth().await?;
             self.info()
                 .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))
         })
@@ -166,7 +166,7 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         &self,
     ) -> ModelProviderFuture<'_, codex_protocol::error::Result<SharedAuthProvider>> {
         Box::pin(async move {
-            let auth = self.auth().await;
+            let auth = self.auth().await?;
             resolve_provider_auth(auth.as_ref(), self.info())
         })
     }
@@ -223,17 +223,24 @@ impl ModelProvider for ConfiguredModelProvider {
     }
 
     fn supports_attestation(&self) -> bool {
-        self.auth_manager
-            .as_ref()
-            .and_then(|auth_manager| auth_manager.auth_cached())
-            .is_some_and(|auth| auth.is_chatgpt_auth())
+        self.info.requires_openai_auth
+            && self
+                .auth_manager
+                .as_ref()
+                .and_then(|auth_manager| auth_manager.auth_mode())
+                .is_some_and(codex_models_manager::AuthMode::has_chatgpt_account)
     }
 
-    fn auth(&self) -> ModelProviderFuture<'_, Option<CodexAuth>> {
+    fn auth(&self) -> ModelProviderFuture<'_, codex_protocol::error::Result<Option<CodexAuth>>> {
         Box::pin(async move {
             match self.auth_manager.as_ref() {
-                Some(auth_manager) => auth_manager.auth().await,
-                None => None,
+                Some(auth_manager)
+                    if self.info.requires_openai_auth || self.info.has_command_auth() =>
+                {
+                    Ok(auth_manager.auth().await?)
+                }
+                Some(auth_manager) => Ok(auth_manager.auth_cached()),
+                None => Ok(None),
             }
         })
     }
@@ -307,6 +314,10 @@ impl ModelProvider for ConfiguredModelProvider {
 
 #[cfg(test)]
 mod tests {
+    use codex_app_server_protocol::AuthMode;
+    use codex_login::ExternalAuth;
+    use codex_login::ExternalAuthFuture;
+    use codex_login::ExternalAuthRefreshContext;
     use std::num::NonZeroU64;
 
     use codex_login::auth::BedrockApiKeyAuth;
@@ -327,6 +338,29 @@ mod tests {
 
     use super::*;
 
+    struct FailingRequiredExternalAuth;
+
+    impl ExternalAuth for FailingRequiredExternalAuth {
+        fn auth_mode(&self) -> AuthMode {
+            AuthMode::Chatgpt
+        }
+
+        fn requires_successful_resolution(&self) -> bool {
+            true
+        }
+
+        fn resolve(&self) -> ExternalAuthFuture<'_, Option<codex_login::ExternalAuthTokens>> {
+            Box::pin(async { Err(std::io::Error::other("required external auth failed")) })
+        }
+
+        fn refresh(
+            &self,
+            _context: ExternalAuthRefreshContext,
+        ) -> ExternalAuthFuture<'_, codex_login::ExternalAuthTokens> {
+            Box::pin(async { Err(std::io::Error::other("required external auth failed")) })
+        }
+    }
+
     fn provider_info_with_command_auth() -> ModelProviderInfo {
         ModelProviderInfo {
             auth: Some(ModelProviderAuthInfo {
@@ -342,6 +376,16 @@ mod tests {
             requires_openai_auth: false,
             ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
         }
+    }
+
+    fn required_external_auth_manager_without_cached_auth() -> Arc<AuthManager> {
+        let auth_manager = AuthManager::external_bearer_only(
+            provider_info_with_command_auth()
+                .auth
+                .expect("command auth should be configured"),
+        );
+        auth_manager.set_external_auth(Arc::new(FailingRequiredExternalAuth));
+        auth_manager
     }
 
     fn test_codex_home() -> std::path::PathBuf {
@@ -368,6 +412,61 @@ mod tests {
             requires_openai_auth: false,
             supports_websockets: false,
         }
+    }
+
+    #[tokio::test]
+    async fn required_external_auth_failure_does_not_fall_back_to_provider_token() {
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("cached-api-key"));
+        auth_manager.set_external_auth(Arc::new(FailingRequiredExternalAuth));
+        let mut provider_info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+        provider_info.experimental_bearer_token = Some("provider-fallback-token".to_string());
+        let provider = create_model_provider(provider_info, Some(auth_manager));
+
+        assert!(provider.auth().await.is_err());
+        assert!(provider.api_provider().await.is_err());
+        assert!(provider.api_auth().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn unauthenticated_provider_does_not_resolve_required_openai_auth() {
+        let auth_manager = required_external_auth_manager_without_cached_auth();
+        let provider = create_model_provider(
+            provider_for("https://example.test/v1".to_string()),
+            Some(auth_manager),
+        );
+
+        assert_eq!(provider.auth().await.unwrap(), None);
+        assert!(
+            provider
+                .api_auth()
+                .await
+                .unwrap()
+                .to_auth_headers()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn required_external_chatgpt_auth_supports_attestation_before_resolution() {
+        let auth_manager = required_external_auth_manager_without_cached_auth();
+        let provider = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            Some(auth_manager),
+        );
+
+        assert!(provider.supports_attestation());
+    }
+
+    #[test]
+    fn unauthenticated_provider_does_not_enable_attestation_for_external_auth() {
+        let auth_manager = required_external_auth_manager_without_cached_auth();
+        let provider = create_model_provider(
+            provider_for("https://example.test/v1".to_string()),
+            Some(auth_manager),
+        );
+
+        assert!(!provider.supports_attestation());
     }
 
     fn remote_model(slug: &str) -> ModelInfo {
@@ -480,7 +579,7 @@ mod tests {
             Some(AuthManager::from_auth_for_testing(auth.clone())),
         );
 
-        assert_eq!(provider.auth().await, Some(auth));
+        assert_eq!(provider.auth().await.unwrap(), Some(auth));
     }
 
     #[test]
