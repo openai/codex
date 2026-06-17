@@ -2867,11 +2867,10 @@ async fn raw_slash_command_reports_usage_for_invalid_arg() {
 }
 
 #[tokio::test]
-async fn multi_agent_slash_command_updates_and_reports_mode() {
+async fn cascade_slash_command_updates_and_reports_mode() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::MultiAgentV2, /*enabled*/ true);
 
-    chat.dispatch_command_with_args(SlashCommand::MultiAgent, "on".to_string(), Vec::new());
+    chat.dispatch_command_with_args(SlashCommand::Cascade, "on".to_string(), Vec::new());
 
     assert_eq!(
         chat.multi_agent_mode_for_turn(),
@@ -2883,9 +2882,9 @@ async fn multi_agent_slash_command_updates_and_reports_mode() {
         .map(|lines| lines_to_single_string(lines))
         .collect::<Vec<_>>()
         .join("\n");
-    assert_chatwidget_snapshot!("multi_agent_slash_command_proactive", rendered);
+    assert_chatwidget_snapshot!("cascade_slash_command_proactive", rendered);
 
-    chat.dispatch_command_with_args(SlashCommand::MultiAgent, "off".to_string(), Vec::new());
+    chat.dispatch_command_with_args(SlashCommand::Cascade, "off".to_string(), Vec::new());
     assert_eq!(
         chat.multi_agent_mode_for_turn(),
         Some(MultiAgentMode::ExplicitRequestOnly)

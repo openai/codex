@@ -270,7 +270,7 @@ impl ChatWidget {
             SlashCommand::Plan => {
                 self.apply_plan_slash_command();
             }
-            SlashCommand::MultiAgent => {
+            SlashCommand::Cascade => {
                 self.show_multi_agent_mode();
             }
             SlashCommand::Goal => {
@@ -702,12 +702,12 @@ impl ChatWidget {
                 }
                 _ => self.add_error_message(RAW_USAGE.to_string()),
             },
-            SlashCommand::MultiAgent => match trimmed.to_ascii_lowercase().as_str() {
+            SlashCommand::Cascade => match trimmed.to_ascii_lowercase().as_str() {
                 "on" => self.set_multi_agent_mode_from_ui(MultiAgentMode::Proactive),
                 "off" => {
                     self.set_multi_agent_mode_from_ui(MultiAgentMode::ExplicitRequestOnly);
                 }
-                _ => self.add_error_message(multi_agent_mode::MULTI_AGENT_MODE_USAGE.to_string()),
+                _ => self.add_error_message(multi_agent_mode::CASCADE_USAGE.to_string()),
             },
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {
@@ -1016,7 +1016,6 @@ impl ChatWidget {
 
         BuiltinCommandFlags {
             collaboration_modes_enabled: self.collaboration_modes_enabled(),
-            multi_agent_mode_enabled: self.multi_agent_mode_enabled(),
             connectors_enabled: self.connectors_enabled(),
             plugins_command_enabled: self.config.features.enabled(Feature::Plugins),
             token_activity_command_enabled: self.has_codex_backend_auth,
@@ -1055,7 +1054,7 @@ impl ChatWidget {
             | SlashCommand::Rollout
             | SlashCommand::Copy
             | SlashCommand::Raw
-            | SlashCommand::MultiAgent
+            | SlashCommand::Cascade
             | SlashCommand::Vim
             | SlashCommand::Diff
             | SlashCommand::App

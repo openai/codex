@@ -42,7 +42,6 @@ pub(crate) struct CommandPopup {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CommandPopupFlags {
     pub(crate) collaboration_modes_enabled: bool,
-    pub(crate) multi_agent_mode_enabled: bool,
     pub(crate) connectors_enabled: bool,
     pub(crate) plugins_command_enabled: bool,
     pub(crate) token_activity_command_enabled: bool,
@@ -57,7 +56,6 @@ impl From<CommandPopupFlags> for BuiltinCommandFlags {
     fn from(value: CommandPopupFlags) -> Self {
         Self {
             collaboration_modes_enabled: value.collaboration_modes_enabled,
-            multi_agent_mode_enabled: value.multi_agent_mode_enabled,
             connectors_enabled: value.connectors_enabled,
             plugins_command_enabled: value.plugins_command_enabled,
             token_activity_command_enabled: value.token_activity_command_enabled,
@@ -531,7 +529,6 @@ mod tests {
         let mut popup = CommandPopup::new(
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
-                multi_agent_mode_enabled: false,
                 connectors_enabled: false,
                 plugins_command_enabled: false,
                 token_activity_command_enabled: false,
@@ -559,7 +556,6 @@ mod tests {
         let mut popup = CommandPopup::new(
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
-                multi_agent_mode_enabled: false,
                 connectors_enabled: false,
                 plugins_command_enabled: false,
                 token_activity_command_enabled: false,
@@ -592,7 +588,6 @@ mod tests {
         let mut popup = CommandPopup::new(
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
-                multi_agent_mode_enabled: false,
                 connectors_enabled: false,
                 plugins_command_enabled: false,
                 token_activity_command_enabled: false,

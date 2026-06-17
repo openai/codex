@@ -39,7 +39,7 @@ pub enum SlashCommand {
     Init,
     Compact,
     Plan,
-    MultiAgent,
+    Cascade,
     Goal,
     Agent,
     Side,
@@ -120,7 +120,7 @@ impl SlashCommand {
             }
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Plan => "switch to Plan mode",
-            SlashCommand::MultiAgent => "configure proactive multi-agent delegation",
+            SlashCommand::Cascade => "configure proactive multi-agent delegation",
             SlashCommand::Goal => "set or view the goal for a long-running task",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
             SlashCommand::Side | SlashCommand::Btw => {
@@ -158,7 +158,7 @@ impl SlashCommand {
             SlashCommand::Review
                 | SlashCommand::Rename
                 | SlashCommand::Plan
-                | SlashCommand::MultiAgent
+                | SlashCommand::Cascade
                 | SlashCommand::Goal
                 | SlashCommand::Ide
                 | SlashCommand::Keymap
@@ -209,7 +209,7 @@ impl SlashCommand {
             | SlashCommand::Import
             | SlashCommand::Review
             | SlashCommand::Plan
-            | SlashCommand::MultiAgent
+            | SlashCommand::Cascade
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
