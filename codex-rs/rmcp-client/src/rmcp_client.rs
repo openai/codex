@@ -893,10 +893,13 @@ impl RmcpClient {
             PendingTransport::StreamableHttpWithOAuth {
                 transport,
                 oauth_persistor,
-            } => (
-                service::serve_client(client_service, transport).boxed(),
-                Some(oauth_persistor),
-            ),
+            } => {
+                oauth_persistor.refresh_if_needed().await?;
+                (
+                    service::serve_client(client_service, transport).boxed(),
+                    Some(oauth_persistor),
+                )
+            }
         };
 
         let service_result = match timeout {
