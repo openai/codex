@@ -340,6 +340,7 @@ struct TurnState {
     started_at: Option<u64>,
     token_usage: Option<TokenUsage>,
     profile: Option<TurnProfile>,
+    time_to_first_token_ms: Option<u64>,
     completed: Option<CompletedTurnState>,
     codex_error: Option<TurnCodexError>,
     latest_diff: Option<String>,
@@ -654,9 +655,14 @@ impl AnalyticsReducer {
         input: TurnProfileFact,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let TurnProfileFact { turn_id, profile } = input;
+        let TurnProfileFact {
+            turn_id,
+            profile,
+            time_to_first_token_ms,
+        } = input;
         let turn_state = self.turns.entry(turn_id.clone()).or_default();
         turn_state.profile = Some(profile);
+        turn_state.time_to_first_token_ms = time_to_first_token_ms;
         self.maybe_emit_turn_event(&turn_id, out).await;
     }
 
@@ -2563,6 +2569,7 @@ fn codex_turn_event_params(
         after_last_sampling_ms,
         sampling_request_count,
         sampling_retry_count,
+        time_to_first_token_ms: turn_state.time_to_first_token_ms,
         duration_ms: completed.duration_ms,
         started_at,
         completed_at: Some(completed.completed_at),

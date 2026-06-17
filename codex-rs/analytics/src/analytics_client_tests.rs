@@ -595,6 +595,27 @@ async fn ingest_turn_prerequisites(
     include_started: bool,
     include_token_usage: bool,
 ) {
+    ingest_turn_prerequisites_with_ttft(
+        reducer,
+        out,
+        include_initialize,
+        include_resolved_config,
+        include_started,
+        include_token_usage,
+        /*time_to_first_token_ms*/ Some(321),
+    )
+    .await;
+}
+
+async fn ingest_turn_prerequisites_with_ttft(
+    reducer: &mut AnalyticsReducer,
+    out: &mut Vec<TrackEventRequest>,
+    include_initialize: bool,
+    include_resolved_config: bool,
+    include_started: bool,
+    include_token_usage: bool,
+    time_to_first_token_ms: Option<u64>,
+) {
     if include_initialize {
         ingest_initialize(reducer, out).await;
         reducer
@@ -672,6 +693,7 @@ async fn ingest_turn_prerequisites(
                 TurnProfileFact {
                     turn_id: "turn-2".to_string(),
                     profile: sample_turn_profile(),
+                    time_to_first_token_ms,
                 },
             ))),
             out,
@@ -793,6 +815,7 @@ async fn ingest_complete_child_turn(
             TurnProfileFact {
                 turn_id: turn_id.to_string(),
                 profile: sample_turn_profile(),
+                time_to_first_token_ms: Some(321),
             },
         ))),
         AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
@@ -3474,6 +3497,7 @@ fn turn_event_serializes_expected_shape() {
             after_last_sampling_ms: 134,
             sampling_request_count: 2,
             sampling_retry_count: 1,
+            time_to_first_token_ms: Some(321),
             duration_ms: Some(1234),
             started_at: Some(455),
             completed_at: Some(456),
@@ -3546,6 +3570,7 @@ fn turn_event_serializes_expected_shape() {
                 "after_last_sampling_ms": 134,
                 "sampling_request_count": 2,
                 "sampling_retry_count": 1,
+                "time_to_first_token_ms": 321,
                 "duration_ms": 1234,
                 "started_at": 455,
                 "completed_at": 456
@@ -3863,6 +3888,10 @@ async fn turn_lifecycle_emits_turn_event() {
     assert_eq!(payload["event_params"]["started_at"], json!(455));
     assert_eq!(payload["event_params"]["completed_at"], json!(456));
     assert_eq!(payload["event_params"]["duration_ms"], json!(1234));
+    assert_eq!(
+        payload["event_params"]["time_to_first_token_ms"],
+        json!(321)
+    );
     assert_eq!(payload["event_params"]["input_tokens"], json!(123));
     assert_eq!(payload["event_params"]["cached_input_tokens"], json!(45));
     assert_eq!(payload["event_params"]["output_tokens"], json!(140));
@@ -4262,6 +4291,10 @@ async fn turn_lifecycle_emits_failed_turn_event() {
         payload["event_params"]["codex_error_http_status_code"],
         json!(null)
     );
+    assert_eq!(
+        payload["event_params"]["time_to_first_token_ms"],
+        json!(321)
+    );
 }
 
 #[tokio::test]
@@ -4295,6 +4328,48 @@ async fn turn_lifecycle_emits_interrupted_turn_event_without_error() {
     assert_eq!(payload["event_params"]["status"], json!("interrupted"));
     assert_eq!(payload["event_params"]["turn_error"], json!(null));
     assert_eq!(payload["event_params"]["codex_error_kind"], json!(null));
+    assert_eq!(payload["event_params"]["duration_ms"], json!(1234));
+    assert_eq!(
+        payload["event_params"]["time_to_first_token_ms"],
+        json!(321)
+    );
+}
+
+#[tokio::test]
+async fn turn_lifecycle_without_qualifying_output_emits_null_ttft() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    ingest_turn_prerequisites_with_ttft(
+        &mut reducer,
+        &mut out,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ true,
+        /*include_token_usage*/ false,
+        /*time_to_first_token_ms*/ None,
+    )
+    .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Completed,
+                /*codex_error_info*/ None,
+            ))),
+            &mut out,
+        )
+        .await;
+
+    assert_eq!(out.len(), 1);
+    let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
+    assert_eq!(payload["event_params"]["status"], json!("completed"));
+    assert_eq!(payload["event_params"]["duration_ms"], json!(1234));
+    assert_eq!(
+        payload["event_params"]["time_to_first_token_ms"],
+        json!(null)
+    );
 }
 
 #[tokio::test]

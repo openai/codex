@@ -739,6 +739,8 @@ impl Session {
             .track_turn_profile(TurnProfileFact {
                 turn_id: turn_context.sub_id.clone(),
                 profile: turn_context.turn_timing_state.complete_profile(),
+                time_to_first_token_ms: time_to_first_token_ms
+                    .and_then(|duration_ms| u64::try_from(duration_ms).ok()),
             });
         self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
             .await;
@@ -853,11 +855,18 @@ impl Session {
             .turn_timing_state
             .completed_at_and_duration_ms()
             .await;
+        let time_to_first_token_ms = task
+            .turn_context
+            .turn_timing_state
+            .time_to_first_token_ms()
+            .await;
         self.services
             .analytics_events_client
             .track_turn_profile(TurnProfileFact {
                 turn_id: task.turn_context.sub_id.clone(),
                 profile: task.turn_context.turn_timing_state.complete_profile(),
+                time_to_first_token_ms: time_to_first_token_ms
+                    .and_then(|duration_ms| u64::try_from(duration_ms).ok()),
             });
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: Some(task.turn_context.sub_id.clone()),

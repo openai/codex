@@ -116,6 +116,7 @@ pub struct TurnProfile {
 pub struct TurnProfileFact {
     pub turn_id: String,
     pub profile: TurnProfile,
+    pub time_to_first_token_ms: Option<u64>,
 }
 
 #[derive(Clone)]
