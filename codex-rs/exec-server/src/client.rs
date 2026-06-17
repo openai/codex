@@ -387,7 +387,7 @@ async fn connect_with_startup_retries(
         loop {
             match ExecServerClient::connect_for_transport(transport_params.clone()).await {
                 Ok(client) => return Ok(client),
-                Err(error) => {
+                Err(error) if error.is_retryable_during_startup() => {
                     debug!(
                         %error,
                         retry_in = ?retry_delay,
@@ -396,6 +396,7 @@ async fn connect_with_startup_retries(
                     tokio::time::sleep(retry_delay).await;
                     retry_delay = (retry_delay * 2).min(ENVIRONMENT_MAX_RETRY_DELAY);
                 }
+                Err(error) => return Err(Arc::new(error)),
             }
         }
     };
@@ -480,6 +481,36 @@ pub enum ExecServerError {
     ConnectionAttempt(#[source] Arc<ExecServerError>),
     #[error("exec-server did not become ready within {timeout:?}")]
     StartupTimedOut { timeout: Duration },
+}
+
+impl ExecServerError {
+    fn is_retryable_during_startup(&self) -> bool {
+        // This is a positive allowlist so new error variants fail fast by default.
+        match self {
+            Self::WebSocketConnectTimeout { .. }
+            | Self::InitializeTimedOut { .. }
+            | Self::Closed
+            | Self::Disconnected(_) => true,
+            Self::WebSocketConnect { source, .. } => match source {
+                tokio_tungstenite::tungstenite::Error::Io(_) => true,
+                tokio_tungstenite::tungstenite::Error::Http(response) => {
+                    retryable_http_status(response.status())
+                }
+                _ => false,
+            },
+            Self::EnvironmentRegistryHttp { status, .. } => retryable_http_status(*status),
+            Self::EnvironmentRegistryRequest(error) => error.is_connect() || error.is_timeout(),
+            _ => false,
+        }
+    }
+}
+
+fn retryable_http_status(status: reqwest::StatusCode) -> bool {
+    status.is_server_error()
+        || matches!(
+            status,
+            reqwest::StatusCode::REQUEST_TIMEOUT | reqwest::StatusCode::TOO_MANY_REQUESTS
+        )
 }
 
 impl ExecServerClient {
@@ -2044,6 +2075,29 @@ mod tests {
             .expect("initialized notification should signal");
         finish_tx.send(()).expect("test should finish");
         server.await.expect("server task should finish");
+    }
+
+    #[tokio::test]
+    async fn invalid_websocket_url_fails_without_startup_retries() {
+        let client = LazyRemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl {
+            websocket_url: "http://example.com".to_string(),
+            connect_timeout: Duration::from_secs(1),
+            initialize_timeout: Duration::from_secs(1),
+        });
+
+        let result = timeout(Duration::from_secs(1), client.get())
+            .await
+            .expect("permanent startup failure should return immediately");
+        let error = match result {
+            Ok(_) => panic!("invalid URL should fail"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            super::ExecServerError::ConnectionAttempt(source)
+                if matches!(source.as_ref(), super::ExecServerError::WebSocketConnect { .. })
+        ));
     }
 
     #[tokio::test]
