@@ -172,6 +172,14 @@ async fn external_agent_config_import_sends_completion_notification_for_sync_onl
 #[tokio::test]
 async fn external_agent_config_import_returns_error_for_failed_sync_import() -> Result<()> {
     let codex_home = TempDir::new()?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
     let source_home = external_agent_home(codex_home.path());
     std::fs::create_dir_all(&source_home)?;
     std::fs::write(
@@ -180,15 +188,26 @@ async fn external_agent_config_import_returns_error_for_failed_sync_import() -> 
     )?;
     std::fs::write(codex_home.path().join("config.toml"), "invalid = [")?;
     let home_dir = codex_home.path().display().to_string();
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
-            .await?;
+    let analytics_capture_file = codex_home.path().join("analytics-events.jsonl");
+    let analytics_capture_file = analytics_capture_file.display().to_string();
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.path(),
+        &[
+            ("HOME", Some(home_dir.as_str())),
+            (
+                "CODEX_ANALYTICS_EVENTS_CAPTURE_FILE",
+                Some(analytics_capture_file.as_str()),
+            ),
+        ],
+    )
+    .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_raw_request(
             "externalAgentConfig/import",
             Some(serde_json::json!({
+                "source": "test_import",
                 "migrationItems": [{
                     "itemType": "CONFIG",
                     "description": "Import config",
@@ -208,6 +227,45 @@ async fn external_agent_config_import_returns_error_for_failed_sync_import() -> 
         error.error.message.contains("invalid existing config.toml"),
         "unexpected error: {error:?}"
     );
+
+    let event = timeout(DEFAULT_TIMEOUT, async {
+        loop {
+            let contents = match std::fs::read_to_string(&analytics_capture_file) {
+                Ok(contents) => contents,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                    continue;
+                }
+                Err(err) => return Err(err.into()),
+            };
+            for line in contents.lines() {
+                let payload: serde_json::Value = serde_json::from_str(line)?;
+                let Some(events) = payload["events"].as_array() else {
+                    continue;
+                };
+                if let Some(event) = events.iter().find(|event| {
+                    event["event_type"] == "codex_onboarding_external_agent_import_failure"
+                }) {
+                    return Ok::<serde_json::Value, anyhow::Error>(event.clone());
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await??;
+    let event_params = &event["event_params"];
+    assert!(
+        !event_params["import_id"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty()
+    );
+    assert_eq!(event_params["source"], "test_import");
+    assert_eq!(event_params["type"], "CONFIG");
+    assert_eq!(event_params["failure_stage"], "import_request_failed");
+    assert_eq!(event_params["error_type"], "invalid_existing_config");
+    assert!(event_params.get("raw_errors").is_none());
+    assert!(event_params.get("message").is_none());
 
     Ok(())
 }
