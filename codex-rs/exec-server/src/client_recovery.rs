@@ -304,16 +304,12 @@ impl Inner {
                     registry_retry_attempt = 0;
                     SESSION_RECOVERY_RETRY_INTERVAL
                 }
-                Ok(Err(error)) if !is_retryable_recovery_error(&error) => {
-                    break error.to_string();
-                }
                 Ok(Err(error)) => {
-                    if is_retryable_registry_error(&error) {
-                        let delay = registry_recovery_retry_delay(
-                            &error,
-                            &session_id,
-                            registry_retry_attempt,
-                        );
+                    if !is_retryable_recovery_error(&error) {
+                        break error.to_string();
+                    } else if is_retryable_registry_error(&error) {
+                        let delay =
+                            registry_recovery_retry_delay(&session_id, registry_retry_attempt);
                         registry_retry_attempt = registry_retry_attempt.saturating_add(1);
                         delay
                     } else {
@@ -542,11 +538,7 @@ fn is_retryable_registry_error(error: &ExecServerError) -> bool {
     )
 }
 
-fn registry_recovery_retry_delay(
-    error: &ExecServerError,
-    session_id: &str,
-    attempt: u32,
-) -> Duration {
+fn registry_recovery_retry_delay(session_id: &str, attempt: u32) -> Duration {
     let multiplier = 1_u32.checked_shl(attempt.min(4)).unwrap_or(u32::MAX);
     let base_delay = REGISTRY_RECOVERY_INITIAL_RETRY_INTERVAL
         .saturating_mul(multiplier)
@@ -555,12 +547,10 @@ fn registry_recovery_retry_delay(
     let mut hasher = DefaultHasher::new();
     session_id.hash(&mut hasher);
     attempt.hash(&mut hasher);
-    let jittered_delay =
-        Duration::from_millis(base_millis / 2 + hasher.finish() % (base_millis / 2 + 1));
-    let retry_after = if let ExecServerError::EnvironmentRegistryHttp { retry_after, .. } = error {
-        *retry_after
-    } else {
-        None
-    };
-    retry_after.map_or(jittered_delay, |delay| delay.max(jittered_delay))
+
+    Duration::from_millis(base_millis / 2 + hasher.finish() % (base_millis / 2 + 1))
 }
+
+#[cfg(test)]
+#[path = "client_recovery_tests.rs"]
+mod tests;

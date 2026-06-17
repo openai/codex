@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use codex_api::SharedAuthProvider;
 use reqwest::StatusCode;
-use reqwest::header::RETRY_AFTER;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::time::sleep;
@@ -112,18 +111,12 @@ impl EnvironmentRegistryClient {
         }
 
         let status = response.status();
-        let retry_after = response
-            .headers()
-            .get(RETRY_AFTER)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok())
-            .map(Duration::from_secs);
         let body = response.text().await.unwrap_or_default();
         if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
             return Err(environment_registry_auth_error(status, &body));
         }
 
-        Err(environment_registry_http_error(status, retry_after, &body))
+        Err(environment_registry_http_error(status, &body))
     }
 }
 
@@ -198,7 +191,6 @@ impl HarnessKeyValidator for RegistryHarnessKeyValidator {
                 status,
                 code: None,
                 message: "environment registry harness key validation failed".to_string(),
-                retry_after: None,
             });
         }
         let response = response
@@ -369,11 +361,7 @@ fn environment_registry_auth_error(status: StatusCode, body: &str) -> ExecServer
     ))
 }
 
-fn environment_registry_http_error(
-    status: StatusCode,
-    retry_after: Option<Duration>,
-    body: &str,
-) -> ExecServerError {
+fn environment_registry_http_error(status: StatusCode, body: &str) -> ExecServerError {
     let parsed = serde_json::from_str::<RegistryErrorBody>(body).ok();
     let (code, message) = parsed
         .and_then(|body| body.error)
@@ -396,7 +384,6 @@ fn environment_registry_http_error(
         status,
         code,
         message,
-        retry_after,
     }
 }
 
