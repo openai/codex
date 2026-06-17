@@ -9,8 +9,6 @@ pub mod marketplace_add;
 pub mod marketplace_remove;
 pub mod marketplace_upgrade;
 mod plugin_bundle_archive;
-mod plugin_catalog;
-mod plugin_catalog_revision;
 mod provider;
 pub mod remote;
 pub mod remote_bundle;
@@ -20,6 +18,7 @@ pub mod store;
 #[cfg(test)]
 mod test_support;
 pub mod toggles;
+mod tool_suggest_metadata;
 
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 pub const OPENAI_API_CURATED_MARKETPLACE_NAME: &str = "openai-api-curated";
