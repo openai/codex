@@ -394,7 +394,7 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
         None
     }
 
-    fn sandbox_cwd<'a>(&self, _req: &'a Req) -> Option<&'a AbsolutePathBuf> {
+    fn sandbox_cwd<'a>(&self, _req: &'a Req) -> Option<&'a PathUri> {
         None
     }
 

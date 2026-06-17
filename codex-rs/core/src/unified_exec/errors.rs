@@ -1,4 +1,5 @@
 use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_utils_path_uri::PathUri;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -23,6 +24,8 @@ pub(crate) enum UnifiedExecError {
         message: String,
         output: ExecToolCallOutput,
     },
+    #[error("{path} is not valid on {}", std::env::consts::OS)]
+    ForeignPath { path: PathUri },
 }
 
 impl UnifiedExecError {

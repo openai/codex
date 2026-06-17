@@ -74,10 +74,13 @@ fn restricted_file_system_uses_platform_sandbox_without_managed_network() {
 }
 
 #[test]
-fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() {
+fn unsandboxed_transform_preserves_foreign_cwd_and_unrestricted_file_system_policy() {
     let manager = SandboxManager::new();
-    let cwd = AbsolutePathBuf::current_dir().expect("current dir");
-    let cwd_uri = PathUri::from_abs_path(&cwd);
+    let cwd_uri = if cfg!(windows) {
+        PathUri::parse("file:///workspace/remote").expect("POSIX path URI")
+    } else {
+        PathUri::parse("file:///C:/workspace/remote").expect("Windows path URI")
+    };
     let permissions = PermissionProfile::from_runtime_permissions(
         &FileSystemSandboxPolicy::unrestricted(),
         NetworkSandboxPolicy::Restricted,
@@ -103,8 +106,8 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
         })
         .expect("transform");
 
-    assert_eq!(exec_request.cwd, cwd);
-    assert_eq!(exec_request.sandbox_policy_cwd, cwd);
+    assert_eq!(exec_request.cwd, cwd_uri);
+    assert_eq!(exec_request.sandbox_policy_cwd, cwd_uri);
     assert_eq!(
         exec_request.file_system_sandbox_policy,
         FileSystemSandboxPolicy::unrestricted()

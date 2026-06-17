@@ -174,6 +174,7 @@ pub enum CodexErrKind {
     LandlockPathFd,
     TokioJoin,
     EnvVar,
+    ForeignPath,
 }
 
 #[derive(Clone)]
@@ -234,6 +235,7 @@ impl From<&CodexErr> for CodexErrKind {
             CodexErr::LandlockPathFd(_) => CodexErrKind::LandlockPathFd,
             CodexErr::TokioJoin(_) => CodexErrKind::TokioJoin,
             CodexErr::EnvVar(_) => CodexErrKind::EnvVar,
+            CodexErr::ParseForeignPath(_) => CodexErrKind::ForeignPath,
         }
     }
 }

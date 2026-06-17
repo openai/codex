@@ -522,19 +522,55 @@ fn join_normalizes_relative_uri_segments() {
 }
 
 #[test]
-fn join_rejects_absolute_and_null_paths() {
+fn join_replaces_posix_absolute_path() {
     let base = PathUri::parse("file:///workspace").expect("valid base URI");
 
-    assert!(matches!(
+    assert_eq!(
         base.join("/src"),
-        Err(PathUriParseError::JoinPathMustBeRelative(path)) if path == "/src"
-    ));
+        Ok(PathUri::parse("file:///src").expect("valid absolute URI"))
+    );
+}
+
+#[test]
+fn join_replaces_windows_absolute_path() {
+    let base = PathUri::parse("file:///C:/workspace/src").expect("valid base URI");
+
+    assert_eq!(
+        base.join(r"D:\tmp\test.rs"),
+        Ok(PathUri::parse("file:///D:/tmp/test.rs").expect("valid absolute URI"))
+    );
+}
+
+#[test]
+fn join_rejects_null_paths() {
+    let base = PathUri::parse("file:///workspace").expect("valid base URI");
+
     assert_eq!(
         base.join("src\0file"),
         Err(PathUriParseError::InvalidFileUriPath {
             path: "src\0file".to_string(),
         })
     );
+}
+
+#[test]
+fn join_uses_the_base_uri_path_convention() {
+    for (base, path, expected) in [
+        (
+            "file:///workspace/src",
+            "../tests/test.rs",
+            "file:///workspace/tests/test.rs",
+        ),
+        (
+            "file:///C:/workspace/src",
+            r"..\tests\test.rs",
+            "file:///C:/workspace/tests/test.rs",
+        ),
+    ] {
+        let base = PathUri::parse(base).expect("valid base URI");
+        let expected = PathUri::parse(expected).expect("valid expected URI");
+        assert_eq!(base.join(path), Ok(expected), "joining {path}");
+    }
 }
 
 #[test]

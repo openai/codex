@@ -109,8 +109,8 @@ pub struct SandboxCommand {
 #[derive(Debug)]
 pub struct SandboxExecRequest {
     pub command: Vec<String>,
-    pub cwd: AbsolutePathBuf,
-    pub sandbox_policy_cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
+    pub sandbox_policy_cwd: PathUri,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
     pub sandbox: SandboxType,
@@ -148,6 +148,52 @@ pub struct SandboxTransformRequest<'a> {
 pub struct SandboxDirectSpawnTransformRequest<'a> {
     pub transform: SandboxTransformRequest<'a>,
     pub workspace_roots: &'a [AbsolutePathBuf],
+}
+
+// TODO(anp): Revisit this preparation type once this module's PathUri migration is complete.
+struct PendingSandboxedExecRequest {
+    native_command_cwd: AbsolutePathBuf,
+    native_sandbox_policy_cwd: AbsolutePathBuf,
+    effective_permission_profile: PermissionProfile,
+    effective_file_system_policy: FileSystemSandboxPolicy,
+    effective_network_policy: NetworkSandboxPolicy,
+}
+
+impl PendingSandboxedExecRequest {
+    fn new(
+        command_cwd: &PathUri,
+        sandbox_policy_cwd: &PathUri,
+        effective_permission_profile: PermissionProfile,
+        managed_mitm_ca_trust_bundle_path: Option<&AbsolutePathBuf>,
+    ) -> Result<Self, SandboxTransformError> {
+        // TODO(anp): Move PathUri conversion into the platform sandbox implementations.
+        let native_command_cwd = command_cwd.to_abs_path().map_err(|source| {
+            SandboxTransformError::InvalidCommandCwd {
+                cwd: command_cwd.clone(),
+                source,
+            }
+        })?;
+        let native_sandbox_policy_cwd = sandbox_policy_cwd.to_abs_path().map_err(|source| {
+            SandboxTransformError::InvalidSandboxPolicyCwd {
+                cwd: sandbox_policy_cwd.clone(),
+                source,
+            }
+        })?;
+        let effective_permission_profile = with_managed_mitm_ca_readable_root(
+            effective_permission_profile,
+            managed_mitm_ca_trust_bundle_path,
+            native_sandbox_policy_cwd.as_path(),
+        );
+        let (effective_file_system_policy, effective_network_policy) =
+            effective_permission_profile.to_runtime_permissions();
+        Ok(Self {
+            native_command_cwd,
+            native_sandbox_policy_cwd,
+            effective_permission_profile,
+            effective_file_system_policy,
+            effective_network_policy,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -266,47 +312,37 @@ impl SandboxManager {
             windows_sandbox_level,
             windows_sandbox_private_desktop,
         } = request;
-        let native_command_cwd = command.cwd.to_abs_path().map_err(|source| {
-            SandboxTransformError::InvalidCommandCwd {
-                cwd: command.cwd.clone(),
-                source,
-            }
-        })?;
-        let native_sandbox_policy_cwd = sandbox_policy_cwd.to_abs_path().map_err(|source| {
-            SandboxTransformError::InvalidSandboxPolicyCwd {
-                cwd: sandbox_policy_cwd.clone(),
-                source,
-            }
-        })?;
         let additional_permissions = command.additional_permissions.take();
         let managed_mitm_ca_trust_bundle_path =
             network.and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path);
-        let effective_permission_profile =
+        let base_effective_permission_profile =
             effective_permission_profile(permissions, additional_permissions.as_ref());
-        let effective_permission_profile = with_managed_mitm_ca_readable_root(
-            effective_permission_profile,
+        let pending_sandboxed_request = PendingSandboxedExecRequest::new(
+            &command.cwd,
+            sandbox_policy_cwd,
+            base_effective_permission_profile.clone(),
             managed_mitm_ca_trust_bundle_path.as_ref(),
-            native_sandbox_policy_cwd.as_path(),
         );
-        let (effective_file_system_policy, effective_network_policy) =
-            effective_permission_profile.to_runtime_permissions();
+        let (base_file_system_policy, base_network_policy) =
+            base_effective_permission_profile.to_runtime_permissions();
         let mut argv = Vec::with_capacity(1 + command.args.len());
         argv.push(command.program);
         argv.extend(command.args.into_iter().map(OsString::from));
 
-        let (argv, arg0_override) = match sandbox {
-            SandboxType::None => (os_argv_to_strings(argv), None),
+        let (argv, arg0_override, pending_sandboxed_request) = match sandbox {
+            SandboxType::None => (os_argv_to_strings(argv), None, None),
             #[cfg(target_os = "macos")]
             SandboxType::MacosSeatbelt => {
                 use crate::seatbelt::CreateSeatbeltCommandArgsParams;
                 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
                 use crate::seatbelt::create_seatbelt_command_args;
 
+                let pending = pending_sandboxed_request?;
                 let mut args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
                     command: os_argv_to_strings(argv),
-                    file_system_sandbox_policy: &effective_file_system_policy,
-                    network_sandbox_policy: effective_network_policy,
-                    sandbox_policy_cwd: native_sandbox_policy_cwd.as_path(),
+                    file_system_sandbox_policy: &pending.effective_file_system_policy,
+                    network_sandbox_policy: pending.effective_network_policy,
+                    sandbox_policy_cwd: pending.native_sandbox_policy_cwd.as_path(),
                     enforce_managed_network,
                     network,
                     extra_allow_unix_sockets: &[],
@@ -314,52 +350,84 @@ impl SandboxManager {
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());
                 full_command.append(&mut args);
-                (full_command, None)
+                (full_command, None, Some(pending))
             }
             #[cfg(not(target_os = "macos"))]
             SandboxType::MacosSeatbelt => return Err(SandboxTransformError::SeatbeltUnavailable),
             SandboxType::LinuxSeccomp => {
+                let pending = pending_sandboxed_request?;
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
                 let allow_proxy_network = allow_network_for_proxy(enforce_managed_network);
                 #[cfg(target_os = "linux")]
                 ensure_linux_bubblewrap_is_supported(
-                    &effective_file_system_policy,
+                    &pending.effective_file_system_policy,
                     use_legacy_landlock,
                     allow_proxy_network,
                     is_wsl1(),
                 )?;
                 let mut args = create_linux_sandbox_command_args_for_permission_profile(
                     os_argv_to_strings(argv),
-                    native_command_cwd.as_path(),
-                    &effective_permission_profile,
-                    native_sandbox_policy_cwd.as_path(),
+                    pending.native_command_cwd.as_path(),
+                    &pending.effective_permission_profile,
+                    pending.native_sandbox_policy_cwd.as_path(),
                     use_legacy_landlock,
                     allow_proxy_network,
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(os_string_to_command_component(exe.as_os_str().to_owned()));
                 full_command.append(&mut args);
-                (full_command, Some(linux_sandbox_arg0_override(exe)))
+                (
+                    full_command,
+                    Some(linux_sandbox_arg0_override(exe)),
+                    Some(pending),
+                )
             }
             #[cfg(target_os = "windows")]
-            SandboxType::WindowsRestrictedToken => (os_argv_to_strings(argv), None),
+            SandboxType::WindowsRestrictedToken => (
+                os_argv_to_strings(argv),
+                None,
+                Some(pending_sandboxed_request?),
+            ),
             #[cfg(not(target_os = "windows"))]
-            SandboxType::WindowsRestrictedToken => (os_argv_to_strings(argv), None),
+            SandboxType::WindowsRestrictedToken => (
+                os_argv_to_strings(argv),
+                None,
+                Some(pending_sandboxed_request?),
+            ),
         };
+
+        // Unsandboxed exec-server requests may have foreign cwd values that cannot be prepared
+        // locally, but their effective permissions must still be preserved. In that case, carry
+        // forward the base profile and its derived runtime policies.
+        let (permission_profile, file_system_sandbox_policy, network_sandbox_policy) =
+            pending_sandboxed_request.map_or(
+                (
+                    base_effective_permission_profile,
+                    base_file_system_policy,
+                    base_network_policy,
+                ),
+                |pending| {
+                    (
+                        pending.effective_permission_profile,
+                        pending.effective_file_system_policy,
+                        pending.effective_network_policy,
+                    )
+                },
+            );
 
         Ok(SandboxExecRequest {
             command: argv,
-            cwd: native_command_cwd,
-            sandbox_policy_cwd: native_sandbox_policy_cwd,
+            cwd: command.cwd,
+            sandbox_policy_cwd: sandbox_policy_cwd.clone(),
             env: command.env,
             network: network.cloned(),
             sandbox,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
-            permission_profile: effective_permission_profile,
-            file_system_sandbox_policy: effective_file_system_policy,
-            network_sandbox_policy: effective_network_policy,
+            permission_profile,
+            file_system_sandbox_policy,
+            network_sandbox_policy,
             arg0: arg0_override,
         })
     }
