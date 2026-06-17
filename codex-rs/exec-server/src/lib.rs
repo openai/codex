@@ -57,6 +57,8 @@ pub use environment::REMOTE_ENVIRONMENT_ID;
 pub use environment_provider::DefaultEnvironmentProvider;
 pub use environment_provider::EnvironmentProvider;
 pub use environment_provider::EnvironmentProviderFuture;
+pub use environment_registry::EnvironmentRegistryConnectRequest;
+pub use environment_registry::EnvironmentRegistryConnectResponse;
 pub use environment_registry::EnvironmentRegistryHarnessKeyValidationRequest;
 pub use environment_registry::EnvironmentRegistryHarnessKeyValidationResponse;
 pub use environment_registry::EnvironmentRegistryRegistrationRequest;

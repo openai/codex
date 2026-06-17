@@ -25,11 +25,19 @@ use crate::local_process::LocalProcess;
 use crate::process::ExecBackend;
 use crate::protocol::EnvironmentInfo;
 use crate::protocol::ShellInfo;
+use crate::remote::NoiseRendezvousEnvironmentConfig;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
 use codex_shell_command::shell_detect::DetectedShell;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
+pub const CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR: &str =
+    "CODEX_EXEC_SERVER_NOISE_REGISTRY_URL";
+pub const CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID_ENV_VAR: &str =
+    "CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID";
+pub const CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR: &str = "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN";
+pub const CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR: &str =
+    "CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID";
 
 /// Owns the execution/filesystem environments available to the Codex runtime.
 ///
@@ -98,6 +106,9 @@ impl EnvironmentManager {
         codex_home: impl AsRef<std::path::Path>,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Result<Self, ExecServerError> {
+        if let Some(config) = noise_environment_config_from_env()? {
+            return Self::from_noise_environment_config(config, local_runtime_paths);
+        }
         let provider = environment_provider_from_codex_home(codex_home.as_ref())?;
         Self::from_snapshot(provider.snapshot().await?, local_runtime_paths)
     }
@@ -107,6 +118,9 @@ impl EnvironmentManager {
     pub async fn from_env(
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Result<Self, ExecServerError> {
+        if let Some(config) = noise_environment_config_from_env()? {
+            return Self::from_noise_environment_config(config, local_runtime_paths);
+        }
         let provider = DefaultEnvironmentProvider::from_env();
         Self::from_snapshot(provider.snapshot().await?, local_runtime_paths)
     }
@@ -120,6 +134,23 @@ impl EnvironmentManager {
             Ok(manager) => manager,
             Err(err) => panic!("default provider should create valid environments: {err}"),
         }
+    }
+
+    fn from_noise_environment_config(
+        config: NoiseRendezvousEnvironmentConfig,
+        local_runtime_paths: Option<ExecServerRuntimePaths>,
+    ) -> Result<Self, ExecServerError> {
+        let manager = Self {
+            default_environment: Some(REMOTE_ENVIRONMENT_ID.to_string()),
+            environments: RwLock::new(HashMap::new()),
+            local_environment: None,
+            local_runtime_paths,
+        };
+        manager.upsert_noise_environment(
+            REMOTE_ENVIRONMENT_ID.to_string(),
+            config.connect_provider(),
+        )?;
+        Ok(manager)
     }
 
     /// Builds a test-only manager that keeps the provider default while also
@@ -315,6 +346,53 @@ impl EnvironmentManager {
             .insert(environment_id, Arc::new(environment));
         Ok(())
     }
+}
+
+fn noise_environment_config_from_env()
+-> Result<Option<NoiseRendezvousEnvironmentConfig>, ExecServerError> {
+    noise_environment_config_from_values(
+        optional_environment_value(CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR),
+        optional_environment_value(CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID_ENV_VAR),
+        optional_environment_value(CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR),
+        optional_environment_value(CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR),
+    )
+}
+
+fn noise_environment_config_from_values(
+    registry_url: Option<String>,
+    environment_id: Option<String>,
+    auth_token: Option<String>,
+    chatgpt_account_id: Option<String>,
+) -> Result<Option<NoiseRendezvousEnvironmentConfig>, ExecServerError> {
+    let (registry_url, environment_id, auth_token) =
+        match (registry_url, environment_id, auth_token) {
+            (None, None, None) => return Ok(None),
+            (Some(registry_url), Some(environment_id), Some(auth_token)) => {
+                (registry_url, environment_id, auth_token)
+            }
+            _ => {
+                return Err(ExecServerError::EnvironmentRegistryConfig(format!(
+                    "Noise environment requires {CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR}, \
+{CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID_ENV_VAR}, and \
+{CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR}"
+                )));
+            }
+        };
+
+    let config = NoiseRendezvousEnvironmentConfig::new(
+        registry_url,
+        environment_id,
+        auth_token,
+        chatgpt_account_id,
+    )?;
+    Ok(Some(config))
+}
+
+fn optional_environment_value(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 /// Concrete execution/filesystem environment selected for a session.
@@ -528,6 +606,7 @@ mod tests {
     use super::EnvironmentManager;
     use super::LOCAL_ENVIRONMENT_ID;
     use super::REMOTE_ENVIRONMENT_ID;
+    use super::noise_environment_config_from_values;
     use crate::ExecServerRuntimePaths;
     use crate::ProcessId;
     use crate::environment_provider::EnvironmentDefault;
@@ -545,6 +624,35 @@ mod tests {
 
     fn assert_local_environment_unavailable(manager: &EnvironmentManager) {
         assert!(manager.try_local_environment().is_none());
+    }
+
+    #[test]
+    fn noise_environment_config_selects_remote_as_default() {
+        let config = noise_environment_config_from_values(
+            Some("http://registry.example/api".to_string()),
+            Some("environment-requested".to_string()),
+            Some("registry-token".to_string()),
+            Some("workspace-123".to_string()),
+        )
+        .expect("parse noise environment configuration")
+        .expect("noise environment configuration");
+
+        let manager = EnvironmentManager::from_noise_environment_config(
+            config, /*local_runtime_paths*/ None,
+        )
+        .expect("build environment manager");
+
+        assert_eq!(
+            manager.default_environment_id(),
+            Some(REMOTE_ENVIRONMENT_ID)
+        );
+        assert!(
+            manager
+                .default_environment()
+                .expect("remote environment")
+                .is_remote()
+        );
+        assert_local_environment_unavailable(&manager);
     }
 
     #[tokio::test]
