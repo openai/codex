@@ -341,6 +341,8 @@ fn spawn_command(
     #[cfg(not(unix))]
     let _ = arg0;
     command.args(args);
+    // TODO(anp): Keep PathUri through the filesystem helper launch boundary.
+    let cwd = cwd.to_abs_path().map_err(io_error)?;
     command.current_dir(cwd.as_path());
     command.env_clear();
     command.envs(env);

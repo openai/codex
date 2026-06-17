@@ -41,6 +41,7 @@ use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -164,7 +165,7 @@ pub struct BackgroundTerminalInfo {
     pub item_id: String,
     pub process_id: String,
     pub command: String,
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
 }
 
 /// Conduit for the bidirectional stream of messages that compose a thread

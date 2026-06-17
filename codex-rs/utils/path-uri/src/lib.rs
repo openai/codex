@@ -211,18 +211,20 @@ impl PathUri {
         Some(Self(url))
     }
 
-    /// Lexically joins a relative URI path onto this URI.
+    /// Lexically resolves native absolute or relative path text against this URI.
     ///
+    /// Path text is interpreted using the POSIX or Windows convention inferred
+    /// from the base URI. An absolute path replaces the base URI's path, while a
+    /// relative path is appended lexically. Windows root-relative paths retain
+    /// the base drive or UNC share, while drive-relative paths are rejected.
     /// Empty and `.` segments are ignored, while `..` removes one segment
-    /// without escaping the URI root. Literal `%`, `?`, and `#` characters are
-    /// percent-encoded as filename text. Paths containing a null character are
-    /// rejected because they cannot be safely converted to native paths.
+    /// without escaping the POSIX root, Windows drive, or UNC share. Literal
+    /// `%`, `?`, and `#` characters are percent-encoded as filename text. Paths
+    /// containing a null character are rejected because they cannot be safely
+    /// converted to native paths.
     /// Opaque fallback URIs created by [`Self::from_abs_path`] reject non-empty
     /// joins.
     pub fn join(&self, path: &str) -> Result<Self, PathUriParseError> {
-        if path.starts_with('/') {
-            return Err(PathUriParseError::JoinPathMustBeRelative(path.to_string()));
-        }
         if path.contains('\0') {
             return Err(PathUriParseError::InvalidFileUriPath {
                 path: path.to_string(),
@@ -231,6 +233,24 @@ impl PathUri {
         if path.is_empty() {
             return Ok(self.clone());
         }
+        let convention =
+            self.infer_path_convention()
+                .ok_or_else(|| PathUriParseError::InvalidFileUriPath {
+                    path: self.to_string(),
+                })?;
+        // An absolute native path is already fully resolved, so replace the base URI's main path
+        // instead of appending it.
+        if let Ok(absolute) = LegacyAppPathString::from_str(path).to_path_uri(convention) {
+            return Ok(absolute);
+        }
+        let path_bytes = path.as_bytes();
+        if convention == PathConvention::Windows
+            && matches!(path_bytes, [drive, b':', ..] if drive.is_ascii_alphabetic())
+        {
+            return Err(PathUriParseError::InvalidFileUriPath {
+                path: path.to_string(),
+            });
+        }
         if decode_bad_path_uri(&self.0).is_some() {
             return Err(PathUriParseError::InvalidFileUriPath {
                 path: self.to_string(),
@@ -238,19 +258,40 @@ impl PathUri {
         }
 
         let mut url = self.0.clone();
+        let anchor_depth = usize::from(convention == PathConvention::Windows);
+        let mut depth = url
+            .path_segments()
+            .map(|segments| segments.filter(|segment| !segment.is_empty()).count())
+            .unwrap_or_default();
+        let windows_root_relative = convention == PathConvention::Windows
+            && matches!(path_bytes, [b'\\' | b'/', rest @ ..] if !matches!(rest, [b'\\' | b'/', ..]));
         {
             let Ok(mut segments) = url.path_segments_mut() else {
                 unreachable!("validated file URLs support hierarchical path segments");
             };
             segments.pop_if_empty();
+            if windows_root_relative {
+                while depth > anchor_depth {
+                    segments.pop();
+                    depth -= 1;
+                }
+            }
+            let path = match convention {
+                PathConvention::Posix => path.to_string(),
+                PathConvention::Windows => path.replace('\\', "/"),
+            };
             for component in path.split('/') {
                 match component {
                     "" | "." => {}
                     ".." => {
-                        segments.pop();
+                        if depth > anchor_depth {
+                            segments.pop();
+                            depth -= 1;
+                        }
                     }
                     component => {
                         segments.push(component);
+                        depth += 1;
                     }
                 }
             }
@@ -347,6 +388,12 @@ impl TryFrom<String> for PathUri {
 
     fn try_from(uri: String) -> Result<Self, Self::Error> {
         Self::parse(&uri)
+    }
+}
+
+impl From<AbsolutePathBuf> for PathUri {
+    fn from(p: AbsolutePathBuf) -> Self {
+        Self::from_abs_path(&p)
     }
 }
 

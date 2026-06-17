@@ -20,6 +20,7 @@ use codex_exec_server::StartedExecProcess;
 use codex_exec_server::WriteResponse;
 use codex_exec_server::WriteStatus;
 use codex_sandboxing::SandboxType;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
 use core_test_support::get_remote_test_env;
@@ -128,7 +129,7 @@ async fn exec_command_with_tty(
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
             process_id,
-            cwd: cwd.clone(),
+            cwd: cwd.clone().into(),
             initial_exec_command_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             hook_command: cmd.to_string(),
             tty,
@@ -370,7 +371,7 @@ async fn unified_exec_persists_across_requests() -> anyhow::Result<()> {
             item_id: "call".to_string(),
             process_id: process_id.to_string(),
             command: "bash -i".to_string(),
-            cwd,
+            cwd: cwd.into(),
         }]
     );
 
@@ -674,7 +675,7 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
             process,
             call_id: "call".to_string(),
             process_id,
-            cwd,
+            cwd: cwd.into(),
             initial_exec_command_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             hook_command: "sleep 60".to_string(),
             tty: true,
@@ -747,7 +748,7 @@ async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Resu
             process: Arc::clone(&process),
             call_id: "call".to_string(),
             process_id,
-            cwd,
+            cwd: cwd.into(),
             initial_exec_command_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hook_command: "sleep 60".to_string(),
             tty: true,

@@ -33,6 +33,10 @@ use ts_rs::TS;
 pub struct LegacyAppPathString(String);
 
 impl LegacyAppPathString {
+    pub(super) fn from_str(path: &str) -> Self {
+        Self(path.to_string())
+    }
+
     /// Renders an absolute path using the current host's path convention.
     pub fn from_abs_path(path: &AbsolutePathBuf) -> Self {
         Self(path.to_string_lossy().into_owned())

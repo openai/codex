@@ -35,12 +35,24 @@ pub(crate) async fn apply_patch(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
+    // TODO(anp): Migrate patch safety checks to PathUri.
+    let cwd = match action.cwd.to_abs_path() {
+        Ok(cwd) => cwd,
+        Err(err) => {
+            return InternalApplyPatchInvocation::Output(Err(FunctionCallError::RespondToModel(
+                format!(
+                    "patch cwd `{}` is not native to the Codex host: {err}",
+                    action.cwd
+                ),
+            )));
+        }
+    };
     match assess_patch_safety(
         &action,
         turn_context.approval_policy.value(),
         &turn_context.permission_profile(),
         file_system_sandbox_policy,
-        &action.cwd,
+        &cwd,
         turn_context.windows_sandbox_level,
     ) {
         SafetyCheck::AutoApprove {

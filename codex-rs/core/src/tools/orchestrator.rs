@@ -239,8 +239,10 @@ impl ToolOrchestrator {
         // Platform-specific flag gating is handled by SandboxManager::select_initial.
         let use_legacy_landlock = turn_ctx.config.features.use_legacy_landlock();
         #[allow(deprecated)]
-        let sandbox_cwd = tool.sandbox_cwd(req).unwrap_or(&turn_ctx.cwd);
-        let sandbox_policy_cwd = PathUri::from_abs_path(sandbox_cwd);
+        let sandbox_policy_cwd = tool
+            .sandbox_cwd(req)
+            .cloned()
+            .unwrap_or_else(|| PathUri::from_abs_path(&turn_ctx.cwd));
         let workspace_roots = turn_ctx.config.effective_workspace_roots();
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,

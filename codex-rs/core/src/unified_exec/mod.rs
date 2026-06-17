@@ -30,8 +30,8 @@ use std::sync::Weak;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_tools::UnifiedExecShellMode;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_path_uri::PathUri;
 use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
@@ -96,8 +96,8 @@ pub(crate) struct ExecCommandRequest {
     pub process_id: i32,
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
-    pub cwd: AbsolutePathBuf,
-    pub sandbox_cwd: AbsolutePathBuf,
+    pub cwd: PathUri,
+    pub sandbox_cwd: PathUri,
     pub turn_environment: TurnEnvironment,
     pub shell_mode: UnifiedExecShellMode,
     pub network: Option<NetworkProxy>,
@@ -156,7 +156,7 @@ struct ProcessEntry {
     process: Arc<UnifiedExecProcess>,
     call_id: String,
     process_id: i32,
-    cwd: AbsolutePathBuf,
+    cwd: PathUri,
     initial_exec_command_active: Arc<std::sync::atomic::AtomicBool>,
     hook_command: String,
     tty: bool,

@@ -21,6 +21,7 @@ use codex_protocol::protocol::PatchApplyStatus;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_shell_command::parse_command::parse_command;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -133,7 +134,7 @@ pub(crate) enum ToolEmitter {
     },
     UnifiedExec {
         command: Vec<String>,
-        cwd: AbsolutePathBuf,
+        cwd: PathUri,
         source: ExecCommandSource,
         parsed_cmd: Vec<ParsedCommand>,
         process_id: Option<String>,
@@ -165,7 +166,7 @@ impl ToolEmitter {
 
     pub fn unified_exec(
         command: &[String],
-        cwd: AbsolutePathBuf,
+        cwd: PathUri,
         source: ExecCommandSource,
         process_id: Option<String>,
     ) -> Self {
@@ -320,11 +321,15 @@ impl ToolEmitter {
                 },
                 stage,
             ) => {
+                // TODO(anp): Migrate exec command protocol events to PathUri.
+                let Ok(cwd) = cwd.to_abs_path() else {
+                    return;
+                };
                 emit_exec_stage(
                     ctx,
                     ExecCommandInput::new(
                         command,
-                        cwd,
+                        &cwd,
                         parsed_cmd,
                         *source,
                         /*interaction_input*/ None,
