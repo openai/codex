@@ -290,7 +290,7 @@ fn config_error_location(err: &std::io::Error) -> Option<(String, AppTextRange)>
         })
 }
 
-fn is_unrecoverable_config_load_error(err: &std::io::Error) -> bool {
+pub(crate) fn is_unrecoverable_config_error(err: &std::io::Error) -> bool {
     codex_core::config::is_windows_sandbox_network_proxy_incompatible_error(err)
 }
 
@@ -503,7 +503,7 @@ pub async fn run_main_with_transport_options(
     {
         Ok(config) => (config, true),
         Err(err) => {
-            if strict_config || is_unrecoverable_config_load_error(&err) {
+            if strict_config || is_unrecoverable_config_error(&err) {
                 return Err(err);
             }
 

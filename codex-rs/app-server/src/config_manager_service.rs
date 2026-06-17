@@ -328,7 +328,7 @@ impl ConfigManager {
             )
             .await;
         if let Err(err) = materialized_config_validation
-            && codex_core::config::is_windows_sandbox_network_proxy_incompatible_error(&err)
+            && crate::is_unrecoverable_config_error(&err)
         {
             return Err(ConfigManagerError::write(
                 ConfigWriteErrorCode::ConfigValidationError,
