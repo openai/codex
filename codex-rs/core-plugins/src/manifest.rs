@@ -12,6 +12,8 @@ const MAX_DEFAULT_PROMPT_LEN: usize = 128;
 pub type PluginManifest = codex_plugin::manifest::PluginManifest<AbsolutePathBuf>;
 pub type PluginManifestHooks = codex_plugin::manifest::PluginManifestHooks<AbsolutePathBuf>;
 pub type PluginManifestInterface = codex_plugin::manifest::PluginManifestInterface<AbsolutePathBuf>;
+pub type PluginManifestMcpServers =
+    codex_plugin::manifest::PluginManifestMcpServers<AbsolutePathBuf>;
 pub type PluginManifestPaths = codex_plugin::manifest::PluginManifestPaths<AbsolutePathBuf>;
 
 #[derive(Debug, Default, Deserialize)]
@@ -30,7 +32,7 @@ struct RawPluginManifest {
     #[serde(default)]
     skills: Option<RawPluginManifestPath>,
     #[serde(default)]
-    mcp_servers: Option<String>,
+    mcp_servers: Option<RawPluginManifestMcpServers>,
     #[serde(default)]
     apps: Option<String>,
     #[serde(default)]
@@ -94,6 +96,14 @@ enum RawPluginManifestDefaultPromptEntry {
 #[serde(untagged)]
 enum RawPluginManifestPath {
     Path(String),
+    Invalid(JsonValue),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawPluginManifestMcpServers {
+    Path(String),
+    Object(std::collections::BTreeMap<String, JsonValue>),
     Invalid(JsonValue),
 }
 
@@ -221,7 +231,7 @@ pub(crate) fn parse_plugin_manifest(
         keywords,
         paths: PluginManifestPaths {
             skills: resolve_manifest_path_value(plugin_root, "skills", skills.as_ref()),
-            mcp_servers: resolve_manifest_path(plugin_root, "mcpServers", mcp_servers.as_deref()),
+            mcp_servers: resolve_manifest_mcp_servers(plugin_root, mcp_servers),
             apps: resolve_manifest_path(plugin_root, "apps", apps.as_deref()),
             hooks: resolve_manifest_hooks(plugin_root, hooks),
         },
@@ -252,6 +262,32 @@ fn resolve_manifest_hooks(
         RawPluginManifestHooks::Invalid(value) => {
             tracing::warn!(
                 "ignoring hooks: expected a string, string array, object, or object array; found {}",
+                json_value_type(&value)
+            );
+            None
+        }
+    }
+}
+
+fn resolve_manifest_mcp_servers(
+    plugin_root: &Path,
+    mcp_servers: Option<RawPluginManifestMcpServers>,
+) -> Option<PluginManifestMcpServers> {
+    match mcp_servers? {
+        RawPluginManifestMcpServers::Path(path) => {
+            resolve_manifest_path(plugin_root, "mcpServers", Some(&path))
+                .map(PluginManifestMcpServers::Path)
+        }
+        RawPluginManifestMcpServers::Object(servers) => match serde_json::to_string(&servers) {
+            Ok(servers) => Some(PluginManifestMcpServers::Object(servers)),
+            Err(err) => {
+                tracing::warn!("ignoring mcpServers: failed to serialize object: {err}");
+                None
+            }
+        },
+        RawPluginManifestMcpServers::Invalid(value) => {
+            tracing::warn!(
+                "ignoring mcpServers: expected a string or object; found {}",
                 json_value_type(&value)
             );
             None
