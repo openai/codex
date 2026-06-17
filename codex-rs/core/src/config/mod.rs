@@ -2489,14 +2489,14 @@ fn resolve_rollout_budget_config(
     else {
         return Ok(None);
     };
-    let Some(limit_tokens) = config.session_limit_tokens else {
-        if config.session_reminder_interval_tokens.is_some()
+    let Some(limit_tokens) = config.limit_tokens else {
+        if config.reminder_interval_tokens.is_some()
             || config.sampling_token_weight.is_some()
             || config.prefill_token_weight.is_some()
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "features.rollout_budget session settings require session_limit_tokens",
+                "features.rollout_budget settings require limit_tokens",
             ));
         }
         return Ok(None);
@@ -2504,16 +2504,16 @@ fn resolve_rollout_budget_config(
     if limit_tokens <= 0 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "features.rollout_budget.session_limit_tokens must be positive",
+            "features.rollout_budget.limit_tokens must be positive",
         ));
     }
     let reminder_interval_tokens = config
-        .session_reminder_interval_tokens
+        .reminder_interval_tokens
         .unwrap_or_else(|| (limit_tokens / 10).max(1));
     if reminder_interval_tokens <= 0 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "features.rollout_budget.session_reminder_interval_tokens must be positive",
+            "features.rollout_budget.reminder_interval_tokens must be positive",
         ));
     }
     let sampling_token_weight = config.sampling_token_weight.unwrap_or(1.0);

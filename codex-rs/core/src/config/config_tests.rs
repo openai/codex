@@ -463,8 +463,8 @@ async fn load_config_resolves_rollout_budget() -> std::io::Result<()> {
         r#"
 [features.rollout_budget]
 enabled = true
-session_limit_tokens = 100000
-session_reminder_interval_tokens = 10000
+limit_tokens = 100000
+reminder_interval_tokens = 10000
 sampling_token_weight = 1.0
 prefill_token_weight = 0.1
 "#,

@@ -2576,25 +2576,25 @@
         "enabled": {
           "type": "boolean"
         },
+        "limit_tokens": {
+          "format": "int64",
+          "minimum": 1.0,
+          "type": "integer"
+        },
         "prefill_token_weight": {
           "format": "double",
           "minimum": 0.0,
           "type": "number"
         },
+        "reminder_interval_tokens": {
+          "format": "int64",
+          "minimum": 1.0,
+          "type": "integer"
+        },
         "sampling_token_weight": {
           "format": "double",
           "minimum": 0.0,
           "type": "number"
-        },
-        "session_limit_tokens": {
-          "format": "int64",
-          "minimum": 1.0,
-          "type": "integer"
-        },
-        "session_reminder_interval_tokens": {
-          "format": "int64",
-          "minimum": 1.0,
-          "type": "integer"
         }
       },
       "type": "object"

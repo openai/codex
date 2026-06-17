@@ -75,10 +75,10 @@ pub struct RolloutBudgetConfigToml {
     pub enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1))]
-    pub session_limit_tokens: Option<i64>,
+    pub limit_tokens: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1))]
-    pub session_reminder_interval_tokens: Option<i64>,
+    pub reminder_interval_tokens: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0.0))]
     pub sampling_token_weight: Option<f64>,
