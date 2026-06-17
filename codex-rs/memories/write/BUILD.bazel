@@ -6,4 +6,7 @@ codex_rust_crate(
         "templates/**",
     ]),
     crate_name = "codex_memories_write",
+    test_sizes = {
+        "write-unit-tests-windows-cross": "medium",
+    },
 )
