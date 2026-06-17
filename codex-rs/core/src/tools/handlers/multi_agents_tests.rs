@@ -1195,6 +1195,11 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
                         && communication.other_recipients.is_empty()
                         && communication.content.is_empty()
                         && communication.encrypted_content.as_deref() == Some("encrypted-spawn-message")
+                        && communication
+                            .metadata
+                            .as_ref()
+                            .and_then(|metadata| metadata.source_call_id.as_deref())
+                            == Some("call-1")
                         && communication.trigger_turn
             )
     }));
@@ -1222,6 +1227,11 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
                         && communication.other_recipients.is_empty()
                         && communication.content.is_empty()
                         && communication.encrypted_content.as_deref() == Some("encrypted-send-message")
+                        && communication
+                            .metadata
+                            .as_ref()
+                            .and_then(|metadata| metadata.source_call_id.as_deref())
+                            == Some("call-1")
                         && !communication.trigger_turn
             )
     }));
@@ -2026,6 +2036,23 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         ))
         .await
         .expect("followup_task should succeed");
+
+    assert!(manager.captured_ops().iter().any(|(id, op)| {
+        *id == agent_id
+            && matches!(
+                op,
+                Op::InterAgentCommunication { communication }
+                    if communication.author == AgentPath::root()
+                        && communication.recipient == worker_path
+                        && communication.encrypted_content.as_deref() == Some("continue")
+                        && communication
+                            .metadata
+                            .as_ref()
+                            .and_then(|metadata| metadata.source_call_id.as_deref())
+                            == Some("call-1")
+                        && communication.trigger_turn
+            )
+    }));
 
     let second_turn = thread.codex.session.new_default_turn().await;
     thread
