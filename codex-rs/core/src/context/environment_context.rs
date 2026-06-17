@@ -380,12 +380,12 @@ impl EnvironmentContext {
     pub(crate) fn diff_from_turn_context_item(
         before: &TurnContextItem,
         after: &EnvironmentContext,
-    ) -> std::io::Result<Self> {
+    ) -> Self {
         let before_network = Self::network_from_turn_context_item(before);
-        let before_filesystem = Self::filesystem_from_turn_context_item(before)?;
+        let before_filesystem = Self::filesystem_from_turn_context_item(before);
         let environments = match &after.environments {
             EnvironmentContextEnvironments::Single(environment) => {
-                if before.cwd != environment.cwd {
+                if PathUri::from_abs_path(&before.cwd) != environment.cwd {
                     EnvironmentContextEnvironments::Single(EnvironmentContextEnvironment::legacy(
                         environment.cwd.clone(),
                         environment.shell.clone(),
@@ -409,14 +409,14 @@ impl EnvironmentContext {
         } else {
             before_filesystem
         };
-        Ok(EnvironmentContext::new_with_environments(
+        EnvironmentContext::new_with_environments(
             environments,
             after.current_date.clone(),
             after.timezone.clone(),
             network,
             filesystem,
             /*subagents*/ None,
-        ))
+        )
     }
 
     pub(crate) fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
@@ -440,18 +440,18 @@ impl EnvironmentContext {
     pub(crate) fn from_turn_context_item(
         turn_context_item: &TurnContextItem,
         shell: String,
-    ) -> std::io::Result<Self> {
-        Ok(Self::new_with_environments(
+    ) -> Self {
+        Self::new_with_environments(
             EnvironmentContextEnvironments::from_vec(vec![EnvironmentContextEnvironment::legacy(
-                turn_context_item.cwd.clone(),
+                PathUri::from_abs_path(&turn_context_item.cwd),
                 shell,
             )]),
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
             Self::network_from_turn_context_item(turn_context_item),
-            Self::filesystem_from_turn_context_item(turn_context_item)?,
+            Self::filesystem_from_turn_context_item(turn_context_item),
             /*subagents*/ None,
-        ))
+        )
     }
 
     pub(crate) fn with_subagents(mut self, subagents: String) -> Self {
@@ -498,11 +498,11 @@ impl EnvironmentContext {
 
     fn filesystem_from_turn_context_item(
         turn_context_item: &TurnContextItem,
-    ) -> std::io::Result<Option<FileSystemContext>> {
-        Ok(Some(FileSystemContext::from_permission_profile(
-            &turn_context_item.permission_profile()?,
+    ) -> Option<FileSystemContext> {
+        Some(FileSystemContext::from_permission_profile(
+            &turn_context_item.permission_profile(),
             &workspace_roots_from_turn_context_item(turn_context_item),
-        )))
+        ))
     }
 }
 
@@ -513,12 +513,7 @@ fn workspace_roots_from_turn_context_item(
         return workspace_roots.clone();
     }
 
-    // Older rollout items did not persist workspace roots. Fall back to the
-    // legacy cwd binding only when reconstructing that historical context.
-    match turn_context_item.cwd.to_abs_path() {
-        Ok(cwd) => vec![cwd],
-        Err(_) => Vec::new(),
-    }
+    vec![turn_context_item.cwd.clone()]
 }
 
 impl ContextualUserFragment for EnvironmentContext {

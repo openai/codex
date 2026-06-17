@@ -1772,7 +1772,6 @@ async fn resume_candidate_matches_cwd(
             | RolloutItem::Compacted(_)
             | RolloutItem::EventMsg(_) => None,
         })
-        && let Ok(latest_turn_context_cwd) = latest_turn_context_cwd.to_abs_path()
     {
         return cwd_matches(latest_turn_context_cwd.as_path(), cwd);
     }

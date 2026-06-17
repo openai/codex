@@ -111,7 +111,7 @@ pub async fn extract_metadata_from_rollout(
     })?;
     let mut metadata = builder.build(default_provider);
     for item in &items {
-        apply_rollout_item(&mut metadata, item, default_provider)?;
+        apply_rollout_item(&mut metadata, item, default_provider);
     }
     if let Some(updated_at) = file_modified_time_utc(rollout_path).await {
         metadata.updated_at = updated_at;

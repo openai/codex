@@ -125,7 +125,7 @@ impl LiveThread {
                 }
             }
         }
-        let metadata_sync = ThreadMetadataSync::for_resume(&params)?;
+        let metadata_sync = ThreadMetadataSync::for_resume(&params);
         Ok(Self {
             thread_id,
             thread_store,
@@ -151,7 +151,7 @@ impl LiveThread {
             .metadata_sync
             .lock()
             .await
-            .observe_appended_items(canonical_items.as_slice())?;
+            .observe_appended_items(canonical_items.as_slice());
         if let Some(update) = update {
             self.thread_store
                 .update_thread_metadata(UpdateThreadMetadataParams {
