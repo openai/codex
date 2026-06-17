@@ -456,6 +456,41 @@ excluded_tool_namespaces = ["mcp__codex_apps", "multi_agent_v1"]
     Ok(())
 }
 
+#[tokio::test]
+async fn load_config_resolves_rollout_budget() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let config_toml: ConfigToml = toml::from_str(
+        r#"
+[features.rollout_budget]
+enabled = true
+session_limit_tokens = 100000
+session_reminder_interval_tokens = 10000
+sampling_token_weight = 1.0
+prefill_token_weight = 0.1
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(config.features.enabled(Feature::RolloutBudget));
+    assert!(!config.features.enabled(Feature::TokenBudget));
+    assert_eq!(
+        config.rollout_budget,
+        Some(RolloutBudgetConfig {
+            limit_tokens: 100_000,
+            reminder_interval_tokens: 10_000,
+            sampling_token_weight: 1.0,
+            prefill_token_weight: 0.1,
+        })
+    );
+    Ok(())
+}
+
 #[test]
 fn rejects_provider_auth_with_env_key() {
     let err = toml::from_str::<ConfigToml>(
