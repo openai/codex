@@ -296,6 +296,7 @@ impl ChatWidget {
             thread_id: self.thread_id.unwrap_or_default(),
             thread_label: None,
             id: ev.effective_approval_id(),
+            environment_id: ev.environment_id,
             command: ev.command,
             reason: ev.reason,
             available_decisions,

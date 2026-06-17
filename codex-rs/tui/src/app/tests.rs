@@ -4690,6 +4690,7 @@ fn exec_approval_request(
             item_id: item_id.to_string(),
             started_at_ms: 0,
             approval_id: approval_id.map(str::to_string),
+            environment_id: None,
             reason: Some("needs approval".to_string()),
             network_approval_context: None,
             command: Some("echo hello".to_string()),

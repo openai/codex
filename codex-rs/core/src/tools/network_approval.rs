@@ -524,6 +524,7 @@ impl NetworkApprovalService {
                     turn_context.as_ref(),
                     guardian_approval_id,
                     /*approval_id*/ None,
+                    /*environment_id*/ None,
                     prompt_command,
                     #[allow(deprecated)]
                     turn_context.cwd.clone(),

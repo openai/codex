@@ -2067,6 +2067,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         panic!("expected CommandExecutionRequestApproval request");
     };
     assert_eq!(params.item_id, "call1");
+    assert_eq!(params.environment_id.as_deref(), Some("local"));
     let resolved_request_id = request_id.clone();
 
     // Approve and wait for task completion

@@ -555,6 +555,14 @@
       ],
       "description": "The command's working directory."
     },
+    "environmentId": {
+      "default": null,
+      "description": "Environment in which the command will run.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "itemId": {
       "type": "string"
     },
