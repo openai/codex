@@ -1283,6 +1283,10 @@ Recoverable configuration and initialization warnings use the existing `configWa
 
 Generic runtime warnings use the `warning` notification: `{ threadId?, message }`. App-server emits this for non-fatal warnings from the core event stream, including cases where not all enabled skills are included in the model-visible skills list for a session.
 
+### Raw response items (experimental)
+
+Set `experimentalRawEvents: true` on `thread/start` or `thread/resume` to receive `rawResponseItem/completed` notifications. Multi-agent v2 `agent_message` items include `metadata.source_call_id`, which matches the originating `spawn_agent`, `send_message`, or `followup_task` call id. Clients can use that field to join the raw message to the corresponding tool or activity event.
+
 ### Notification opt-out
 
 Clients can suppress specific notifications per connection by sending exact method names in `initialize.params.capabilities.optOutNotificationMethods`.

@@ -2593,6 +2593,7 @@ impl ThreadRequestProcessor {
             personality,
             exclude_turns,
             initial_turns_page,
+            experimental_raw_events,
         } = params;
         let include_turns = !exclude_turns;
 
@@ -2695,7 +2696,7 @@ impl ThreadRequestProcessor {
                     self.ensure_conversation_listener(
                         thread_id,
                         request_id.connection_id,
-                        /*raw_events_enabled*/ false,
+                        experimental_raw_events,
                     )
                     .await,
                     thread_id,
@@ -2969,6 +2970,12 @@ impl ThreadRequestProcessor {
                 .thread_state_manager
                 .thread_state(existing_thread_id)
                 .await;
+            if params.experimental_raw_events {
+                thread_state
+                    .lock()
+                    .await
+                    .set_experimental_raw_events(/*enabled*/ true);
+            }
             self.ensure_listener_task_running(
                 existing_thread_id,
                 existing_thread.clone(),

@@ -3488,6 +3488,61 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn thread_resume_can_enable_raw_events_after_restart() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let RestartedThreadFixture {
+        mut mcp, thread_id, ..
+    } = start_materialized_thread_and_restart(codex_home.path(), "seed history").await?;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread_id.clone(),
+            experimental_raw_events: true,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread_id.clone(),
+            client_user_message_id: None,
+            input: vec![UserInput::Text {
+                text: "emit raw events".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("rawResponseItem/completed"),
+    )
+    .await??;
+    let parsed: ServerNotification = notification.try_into()?;
+    let ServerNotification::RawResponseItemCompleted(notification) = parsed else {
+        anyhow::bail!("expected rawResponseItem/completed notification");
+    };
+    assert_eq!(notification.thread_id, thread_id);
+
+    Ok(())
+}
+
 struct RestartedThreadFixture {
     mcp: TestAppServer,
     thread_id: String,
