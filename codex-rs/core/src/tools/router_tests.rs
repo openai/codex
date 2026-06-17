@@ -186,6 +186,7 @@ fn build_tool_call_normalizes_default_function_and_custom_namespaces() -> anyhow
             namespace: namespace.map(str::to_string),
             arguments: "{}".to_string(),
             call_id: "call-function".to_string(),
+            metadata: None,
         })?
         .expect("function_call should produce a tool call");
         assert_eq!(
@@ -200,6 +201,7 @@ fn build_tool_call_normalizes_default_function_and_custom_namespaces() -> anyhow
         call_id: "call-custom".to_string(),
         name: "apply_patch".to_string(),
         input: "*** Begin Patch\n*** End Patch".to_string(),
+        metadata: None,
     })?
     .expect("custom_tool_call should produce a tool call");
     assert_eq!(
