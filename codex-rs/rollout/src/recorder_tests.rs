@@ -984,7 +984,6 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         model_provider: None,
         cli_version: None,
         created_at: None,
-        recency_at: Some("2025-01-03T15:59:00.000Z".to_string()),
         updated_at: None,
     };
     let state_item = ThreadItem {
@@ -1003,7 +1002,6 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         model_provider: Some("state-provider".to_string()),
         cli_version: Some("state-version".to_string()),
         created_at: Some("2025-01-03T16:00:00Z".to_string()),
-        recency_at: Some("2025-01-03T16:00:30.001Z".to_string()),
         updated_at: Some("2025-01-03T16:01:02.003Z".to_string()),
     };
 
@@ -1029,7 +1027,6 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
     assert_eq!(item.model_provider.as_deref(), Some("state-provider"));
     assert_eq!(item.cli_version.as_deref(), Some("state-version"));
     assert_eq!(item.created_at.as_deref(), Some("2025-01-03T16:00:00Z"));
-    assert_eq!(item.recency_at.as_deref(), Some("2025-01-03T16:00:30.001Z"));
     assert_eq!(item.updated_at.as_deref(), Some("2025-01-03T16:01:02.003Z"));
 }
 

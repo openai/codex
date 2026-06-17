@@ -683,6 +683,70 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
 }
 
 #[tokio::test]
+async fn load_plugins_loads_manifest_mcp_server_objects() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/counter-sample/local");
+
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "counter-sample",
+  "version": "1.1.1",
+  "description": "Plugin that declares MCP servers in the manifest",
+  "mcpServers": {
+    "counter": {
+      "type": "http",
+      "url": "https://sample.example/counter/mcp"
+    }
+  }
+}"#,
+    );
+
+    let config_toml = r#"
+[features]
+plugins = true
+
+[plugins."counter-sample@test"]
+enabled = true
+"#;
+    let outcome =
+        load_plugins_from_config(config_toml, codex_home.path(), /*auth_mode*/ None).await;
+
+    assert_eq!(outcome.plugins()[0].error, None);
+    assert_eq!(
+        outcome.plugins()[0].mcp_servers,
+        HashMap::from([(
+            "counter".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "https://sample.example/counter/mcp".to_string(),
+                    bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                environment_id: "local".to_string(),
+                enabled: true,
+                required: false,
+                supports_parallel_tool_calls: false,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                default_tools_approval_mode: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
+            },
+        )])
+    );
+}
+
+#[tokio::test]
 async fn load_plugins_applies_plugin_mcp_server_policy() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
@@ -1093,6 +1157,47 @@ async fn plugin_telemetry_metadata_uses_default_mcp_config_path() {
             description: None,
             has_skills: false,
             mcp_server_names: vec!["sample".to_string()],
+            app_connector_ids: Vec::new(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn plugin_telemetry_metadata_uses_manifest_mcp_server_objects() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/counter-sample/local");
+
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "counter-sample",
+  "version": "1.1.1",
+  "mcpServers": {
+    "counter": {
+      "type": "http",
+      "url": "https://sample.example/counter/mcp"
+    }
+  }
+}"#,
+    );
+
+    let metadata = plugin_telemetry_metadata_from_root(
+        &PluginId::parse("counter-sample@test").expect("plugin id should parse"),
+        &plugin_root.abs(),
+    )
+    .await;
+
+    assert_eq!(
+        metadata.capability_summary,
+        Some(PluginCapabilitySummary {
+            config_name: "counter-sample@test".to_string(),
+            display_name: "counter-sample".to_string(),
+            description: None,
+            has_skills: false,
+            mcp_server_names: vec!["counter".to_string()],
             app_connector_ids: Vec::new(),
         })
     );
