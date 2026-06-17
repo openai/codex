@@ -1,5 +1,8 @@
 mod domain;
+mod spec;
 
+pub const REQUEST_PLUGIN_INSTALLS_TOOL_NAME: &str = "request_plugin_installs";
+pub(crate) const MAX_REQUEST_PLUGIN_INSTALLS_ENTRIES: usize = 16;
 pub use domain::REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE;
 pub use domain::REQUEST_PLUGIN_INSTALL_PERSIST_KEY;
 pub use domain::RequestPluginInstallEntryResult;
@@ -12,3 +15,6 @@ pub use domain::RequestPluginInstallsResult;
 pub use domain::all_requested_connectors_picked_up;
 pub use domain::build_request_plugin_installs_elicitation_request;
 pub use domain::verified_connector_install_completed;
+pub use spec::ToolSuggestPresentation;
+pub use spec::create_request_plugin_installs_tool;
+pub use spec::create_request_plugin_installs_tool_for_tui;
