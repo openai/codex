@@ -172,16 +172,16 @@ pub trait TurnInputContributor: Send + Sync {
     ) -> ExtensionFuture<'a, Vec<Box<dyn ContextualUserFragment + Send>>>;
 }
 
-/// Extension contribution that can update request-local model input immediately
-/// before each sampling attempt.
+/// Extension contribution that can append model input immediately before a
+/// logical sampling request.
 ///
-/// Implementations should preserve the ordering and provenance of existing items.
-/// Returning an error prevents the sampling request from being sent.
+/// Returned items are appended to canonical conversation history and included in
+/// the outbound request. Returning an error prevents the request from being sent.
 pub trait SamplingInputContributor: Send + Sync {
     fn contribute<'a>(
         &'a self,
         input: SamplingInputContext<'a>,
-    ) -> ExtensionFuture<'a, Result<(), String>>;
+    ) -> ExtensionFuture<'a, Result<Vec<Box<dyn ContextualUserFragment + Send>>, String>>;
 }
 
 /// Contributor for host-owned configuration changes.

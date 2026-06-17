@@ -73,8 +73,8 @@ impl SamplingInputContributor for AllContributors {
     fn contribute<'a>(
         &'a self,
         _input: SamplingInputContext<'a>,
-    ) -> ExtensionFuture<'a, Result<(), String>> {
-        Box::pin(std::future::ready(Ok(())))
+    ) -> ExtensionFuture<'a, Result<Vec<Box<dyn ContextualUserFragment + Send>>, String>> {
+        Box::pin(std::future::ready(Ok(Vec::new())))
     }
 }
 

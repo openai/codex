@@ -117,7 +117,7 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
         self.turn_input_contributors.push(contributor);
     }
 
-    /// Registers one request-local sampling-input contributor.
+    /// Registers one pre-sampling input contributor.
     pub fn sampling_input_contributor(&mut self, contributor: Arc<dyn SamplingInputContributor>) {
         self.sampling_input_contributors.push(contributor);
     }
@@ -235,7 +235,7 @@ impl<C: Sync> ExtensionRegistry<C> {
         &self.turn_input_contributors
     }
 
-    /// Returns the registered request-local sampling-input contributors.
+    /// Returns the registered pre-sampling input contributors.
     pub fn sampling_input_contributors(&self) -> &[Arc<dyn SamplingInputContributor>] {
         &self.sampling_input_contributors
     }

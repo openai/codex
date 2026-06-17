@@ -4,12 +4,11 @@ use std::sync::atomic::Ordering;
 
 use anyhow::Result;
 use codex_core::config::Config;
+use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::SamplingInputContext;
 use codex_extension_api::SamplingInputContributor;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
@@ -23,38 +22,42 @@ struct TimestampLikeContributor {
     calls: AtomicUsize,
 }
 
+struct ReminderFragment(usize);
+
+impl ContextualUserFragment for ReminderFragment {
+    fn role(&self) -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("", "")
+    }
+
+    fn body(&self) -> String {
+        format!("{MARKER_PREFIX}{}]", self.0)
+    }
+}
+
 impl SamplingInputContributor for TimestampLikeContributor {
     fn contribute<'a>(
         &'a self,
-        input: SamplingInputContext<'a>,
-    ) -> ExtensionFuture<'a, Result<(), String>> {
+        _input: SamplingInputContext<'a>,
+    ) -> ExtensionFuture<'a, Result<Vec<Box<dyn ContextualUserFragment + Send>>, String>> {
         Box::pin(async move {
             let attempt = self.calls.fetch_add(1, Ordering::Relaxed) + 1;
-            let Some(content) = input.request_input.iter_mut().rev().find_map(|item| {
-                let ResponseItem::Message { role, content, .. } = item else {
-                    return None;
-                };
-                (role == "user").then_some(content)
-            }) else {
-                return Err("sampling request has no user message".to_string());
-            };
-            let Some(text) = content.iter_mut().find_map(|item| {
-                let ContentItem::InputText { text } = item else {
-                    return None;
-                };
-                Some(text)
-            }) else {
-                return Err("user message has no input text".to_string());
-            };
-            text.push_str(&format!("\n{MARKER_PREFIX}{attempt}]"));
-            Ok(())
+            let reminder: Box<dyn ContextualUserFragment + Send> =
+                Box::new(ReminderFragment(attempt));
+            Ok(vec![reminder])
         })
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sampling_input_contributor_runs_for_each_request_without_rewriting_history() -> Result<()>
-{
+async fn sampling_input_contributor_appends_items_to_history_before_each_request() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -93,21 +96,21 @@ async fn sampling_input_contributor_runs_for_each_request_without_rewriting_hist
 
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 2);
-    let user_prompts = requests
+    let reminder_messages = requests
         .iter()
         .map(|request| {
             request
-                .message_input_texts("user")
+                .message_input_texts("developer")
                 .into_iter()
-                .find(|text| text.starts_with(USER_PROMPT))
-                .expect("request should contain the submitted user prompt")
+                .filter(|text| text.starts_with(MARKER_PREFIX))
+                .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
     assert_eq!(
-        user_prompts,
+        reminder_messages,
         vec![
-            format!("{USER_PROMPT}\n{MARKER_PREFIX}1]"),
-            format!("{USER_PROMPT}\n{MARKER_PREFIX}2]"),
+            vec![format!("{MARKER_PREFIX}1]")],
+            vec![format!("{MARKER_PREFIX}1]"), format!("{MARKER_PREFIX}2]"),],
         ]
     );
     assert_eq!(contributor.calls.load(Ordering::Relaxed), 2);
