@@ -445,12 +445,11 @@ future_field = true
 }
 
 #[tokio::test]
-async fn non_strict_config_rejects_duplicate_shell_environment_policy_filters_before_merging() {
+async fn non_strict_config_rejects_shell_filter_case_variants_across_layers() {
     let tmp = tempdir().expect("tempdir");
     let contents = r#"
 [shell_environment_policy.filters]
 "SECRET_TOKEN" = "exclude"
-"secret_token" = "include"
 "#;
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), contents).expect("write config");
 
@@ -459,13 +458,13 @@ async fn non_strict_config_rejects_duplicate_shell_environment_policy_filters_be
         .fallback_cwd(Some(tmp.path().to_path_buf()))
         .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
         .cli_overrides(vec![(
-            "shell_environment_policy.filters.PATH".to_string(),
+            "shell_environment_policy.filters.secret_token".to_string(),
             TomlValue::String("include".to_string()),
         )])
         .strict_config(/*strict_config*/ false)
         .build()
         .await
-        .expect_err("case-insensitive duplicate filters should be rejected per layer");
+        .expect_err("case variants across layers should be rejected after merging");
 
     assert!(
         err.to_string()

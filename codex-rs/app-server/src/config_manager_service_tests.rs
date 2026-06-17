@@ -842,68 +842,6 @@ async fn write_value_reports_managed_override() {
 }
 
 #[tokio::test]
-async fn write_value_matches_shell_filter_paths_case_insensitively() -> Result<()> {
-    let tmp = tempdir()?;
-    let config_path = tmp.path().join(CONFIG_TOML_FILE);
-    std::fs::write(&config_path, "")?;
-
-    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
-    let result = service
-        .write_value(ConfigValueWriteParams {
-            file_path: Some(config_path.display().to_string()),
-            key_path: "shell_environment_policy.filters.PATH".to_string(),
-            value: serde_json::json!("include"),
-            merge_strategy: MergeStrategy::Replace,
-            expected_version: None,
-        })
-        .await?;
-
-    assert_eq!(result.status, WriteStatus::Ok);
-    assert_eq!(result.overridden_metadata, None);
-    assert!(std::fs::read_to_string(config_path)?.contains("PATH = \"include\""));
-    Ok(())
-}
-
-#[tokio::test]
-async fn write_value_reports_case_insensitive_shell_filter_override() -> Result<()> {
-    let tmp = tempdir()?;
-    let config_path = tmp.path().join(CONFIG_TOML_FILE);
-    std::fs::write(&config_path, "")?;
-
-    let managed_path = tmp.path().join("managed_config.toml");
-    std::fs::write(
-        &managed_path,
-        "[shell_environment_policy.filters]\npath = \"exclude\"\n",
-    )?;
-    let managed_file = AbsolutePathBuf::try_from(managed_path.clone())?;
-    let service = ConfigManager::new_for_tests(
-        tmp.path().to_path_buf(),
-        vec![],
-        LoaderOverrides::with_managed_config_path_for_tests(managed_path),
-        CloudConfigBundleLoader::default(),
-    );
-
-    let result = service
-        .write_value(ConfigValueWriteParams {
-            file_path: Some(config_path.display().to_string()),
-            key_path: "shell_environment_policy.filters.PATH".to_string(),
-            value: serde_json::json!("include"),
-            merge_strategy: MergeStrategy::Replace,
-            expected_version: None,
-        })
-        .await?;
-
-    assert_eq!(result.status, WriteStatus::OkOverridden);
-    let overridden = result.overridden_metadata.expect("overridden metadata");
-    assert_eq!(
-        overridden.overriding_layer.name,
-        ConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file }
-    );
-    assert_eq!(overridden.effective_value, serde_json::json!("exclude"));
-    Ok(())
-}
-
-#[tokio::test]
 async fn upsert_merges_tables_replace_overwrites() -> Result<()> {
     let tmp = tempdir().expect("tempdir");
     let path = tmp.path().join(CONFIG_TOML_FILE);

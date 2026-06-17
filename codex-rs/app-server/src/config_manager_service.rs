@@ -616,26 +616,6 @@ fn value_at_path<'a>(root: &'a TomlValue, segments: &[String]) -> Option<&'a Tom
     Some(current)
 }
 
-/// Looks up a path according to its config semantics.
-///
-/// Shell filter patterns compare case-insensitively and are normalized in the
-/// merged effective config, while raw layers preserve their original spelling.
-/// Match that path segment case-insensitively so equivalent raw and effective
-/// paths compare without changing ordinary TOML path semantics.
-fn value_at_semantic_path<'a>(root: &'a TomlValue, segments: &[String]) -> Option<&'a TomlValue> {
-    let [policy, filters, pattern] = segments else {
-        return value_at_path(root, segments);
-    };
-    if policy != "shell_environment_policy" || filters != "filters" {
-        return value_at_path(root, segments);
-    }
-
-    let filters = value_at_path(root, &segments[..2])?.as_table()?;
-    filters
-        .iter()
-        .find_map(|(candidate, value)| candidate.eq_ignore_ascii_case(pattern).then_some(value))
-}
-
 fn override_message(layer: &ConfigLayerSource) -> String {
     match layer {
         ConfigLayerSource::Mdm { domain, key: _ } => {
@@ -673,10 +653,10 @@ fn compute_override_metadata(
     segments: &[String],
 ) -> Option<OverriddenMetadata> {
     let user_value = match layers.get_active_user_layer() {
-        Some(user_layer) => value_at_semantic_path(&user_layer.config, segments),
+        Some(user_layer) => value_at_path(&user_layer.config, segments),
         None => return None,
     };
-    let effective_value = value_at_semantic_path(effective, segments);
+    let effective_value = value_at_path(effective, segments);
 
     if user_value.is_some() && user_value == effective_value {
         return None;
@@ -716,9 +696,7 @@ fn find_effective_layer(
     segments: &[String],
 ) -> Option<ConfigLayerMetadata> {
     for layer in layers.layers_high_to_low() {
-        if let Some(meta) =
-            value_at_semantic_path(&layer.config, segments).map(|_| layer.metadata())
-        {
+        if let Some(meta) = value_at_path(&layer.config, segments).map(|_| layer.metadata()) {
             return Some(meta);
         }
     }

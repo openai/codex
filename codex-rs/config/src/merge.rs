@@ -17,8 +17,10 @@ fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &m
         normalize_key_aliases(path, base_table);
         let mut overlay_table = overlay_table.clone();
         normalize_key_aliases(path, &mut overlay_table);
-        normalize_merge_table_keys(path, base_table);
-        normalize_merge_table_keys(path, &mut overlay_table);
+        if is_permission_network_domains_path(path) {
+            normalize_network_domain_keys(base_table);
+            normalize_network_domain_keys(&mut overlay_table);
+        }
 
         for (key, value) in overlay_table {
             path.push(key.clone());
@@ -87,7 +89,6 @@ fn convert_legacy_to_filters(table: &mut toml::map::Map<String, TomlValue>) {
         None => toml::map::Map::new(),
     };
     table.remove("filters");
-    normalize_table_keys(&mut filters, str::to_ascii_lowercase);
     for (field, action) in [("exclude", "exclude"), ("include_only", "include")] {
         let Some(TomlValue::Array(patterns)) = table.get(field).cloned() else {
             continue;
@@ -96,7 +97,7 @@ fn convert_legacy_to_filters(table: &mut toml::map::Map<String, TomlValue>) {
         for pattern in patterns {
             if let TomlValue::String(pattern) = pattern {
                 filters
-                    .entry(pattern.to_ascii_lowercase())
+                    .entry(pattern)
                     .or_insert_with(|| TomlValue::String(action.to_string()));
             }
         }
@@ -107,11 +108,10 @@ fn convert_legacy_to_filters(table: &mut toml::map::Map<String, TomlValue>) {
 }
 
 fn convert_filters_to_legacy(table: &mut toml::map::Map<String, TomlValue>) {
-    let Some(TomlValue::Table(mut filters)) = table.get("filters").cloned() else {
+    let Some(TomlValue::Table(filters)) = table.get("filters").cloned() else {
         return;
     };
     table.remove("filters");
-    normalize_table_keys(&mut filters, str::to_ascii_lowercase);
     for (pattern, action) in filters {
         match action.as_str() {
             Some("exclude") => push_legacy_pattern(table, "exclude", "include_only", pattern),
@@ -134,10 +134,10 @@ fn push_legacy_pattern(
     let Some(items) = items.as_array_mut() else {
         return;
     };
-    if !items.iter().any(|item| {
-        item.as_str()
-            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(&pattern))
-    }) {
+    if !items
+        .iter()
+        .any(|item| item.as_str().is_some_and(|candidate| candidate == pattern))
+    {
         items.push(TomlValue::String(pattern));
     }
 }
@@ -154,38 +154,23 @@ fn remove_patterns_from_legacy_array(
         return;
     }
     items.retain(|item| {
-        item.as_str().is_none_or(|candidate| {
-            !patterns
-                .iter()
-                .any(|pattern| candidate.eq_ignore_ascii_case(pattern))
-        })
+        item.as_str()
+            .is_none_or(|candidate| !patterns.iter().any(|pattern| candidate == *pattern))
     });
 }
 
-/// Canonicalizes keys for maps whose keys compare independently of TOML's
-/// case-sensitive key semantics, so equivalent entries collide before merging.
-fn normalize_merge_table_keys(path: &[String], table: &mut toml::map::Map<String, TomlValue>) {
-    match path {
+fn is_permission_network_domains_path(path: &[String]) -> bool {
+    matches!(
+        path,
         [permissions, _, network, domains]
-            if permissions == "permissions" && network == "network" && domains == "domains" =>
-        {
-            normalize_table_keys(table, normalize_host);
-        }
-        [policy, filters] if policy == "shell_environment_policy" && filters == "filters" => {
-            // Environment-variable patterns compare case-insensitively.
-            normalize_table_keys(table, str::to_ascii_lowercase);
-        }
-        _ => {}
-    }
+            if permissions == "permissions" && network == "network" && domains == "domains"
+    )
 }
 
-fn normalize_table_keys(
-    table: &mut toml::map::Map<String, TomlValue>,
-    normalize_key: impl Fn(&str) -> String,
-) {
+fn normalize_network_domain_keys(table: &mut toml::map::Map<String, TomlValue>) {
     let entries = std::mem::take(table);
-    for (key, value) in entries {
-        table.insert(normalize_key(&key), value);
+    for (pattern, value) in entries {
+        table.insert(normalize_host(&pattern), value);
     }
 }
 

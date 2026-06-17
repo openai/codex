@@ -146,7 +146,7 @@ exclude = ["HIGH_*"]
 }
 
 #[test]
-fn shell_environment_policy_filters_overlay_merges_by_key_case_insensitively() {
+fn shell_environment_policy_filters_overlay_merges_by_exact_key() {
     let mut base = parse_toml(
         r#"
 [shell_environment_policy.filters]
@@ -169,9 +169,10 @@ fn shell_environment_policy_filters_overlay_merges_by_key_case_insensitively() {
         parse_toml(
             r#"
 [shell_environment_policy.filters]
-"add_*" = "exclude"
+"ADD_*" = "exclude"
+"FLIP_*" = "exclude"
+"KEEP_*" = "include"
 "flip_*" = "include"
-"keep_*" = "include"
 "#,
         )
     );
@@ -202,11 +203,11 @@ include_only = ["FLIP_TO_EXCLUDE", "KEEP_INCLUDED"]
         parse_toml(
             r#"
 [shell_environment_policy.filters]
-"add_included" = "include"
-"flip_to_exclude" = "exclude"
-"flip_to_include" = "include"
-"keep_excluded" = "exclude"
-"keep_included" = "include"
+"ADD_INCLUDED" = "include"
+"FLIP_TO_EXCLUDE" = "exclude"
+"FLIP_TO_INCLUDE" = "include"
+"KEEP_EXCLUDED" = "exclude"
+"KEEP_INCLUDED" = "include"
 "#,
         )
     );
@@ -237,7 +238,7 @@ exclude = ["FLIP_TO_EXCLUDE", "HIGH_EXCLUDED"]
             r#"
 [shell_environment_policy]
 exclude = ["FLIP_TO_EXCLUDE", "HIGH_EXCLUDED"]
-include_only = ["keep_included"]
+include_only = ["KEEP_INCLUDED"]
 "#,
         )
     );

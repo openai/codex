@@ -949,6 +949,8 @@ pub struct ShellEnvironmentPolicyToml {
     /// Ordinary config keeps accepting the legacy arrays above during the
     /// migration. Requirements will accept only this keyed form, keeping array
     /// compatibility isolated so the legacy fields can be deprecated later.
+    /// Pattern keys merge case-sensitively across config layers even though the
+    /// resulting patterns match environment variable names case-insensitively.
     pub filters: Option<BTreeMap<String, ShellEnvironmentPolicyFilter>>,
 
     pub experimental_use_profile: Option<bool>,
