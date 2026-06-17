@@ -41,6 +41,15 @@ pub use turn_lifecycle::TurnStopInput;
 /// Boxed, sendable future returned by asynchronous extension contributors.
 pub type ExtensionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// Host context available while extensions contribute initial model input.
+#[derive(Clone, Copy)]
+pub struct ContextContributionContext<'a> {
+    pub session_store: &'a ExtensionData,
+    pub thread_store: &'a ExtensionData,
+    pub turn_store: &'a ExtensionData,
+    pub model_context_window: Option<i64>,
+}
+
 /// Extension contribution that resolves runtime MCP servers from host config.
 ///
 /// Contributors run in registration order. Later contributions for the same
@@ -65,8 +74,7 @@ pub trait McpServerContributor<C: Sync>: Send + Sync {
 pub trait ContextContributor: Send + Sync {
     fn contribute<'a>(
         &'a self,
-        session_store: &'a ExtensionData,
-        thread_store: &'a ExtensionData,
+        context: ContextContributionContext<'a>,
     ) -> ExtensionFuture<'a, Vec<PromptFragment>>;
 }
 

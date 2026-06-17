@@ -39,6 +39,7 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
         }],
         /*state_db*/ None,
         user_instructions_provider,
+        codex_extension_api::empty_extension_registry(),
     )
     .await?;
 

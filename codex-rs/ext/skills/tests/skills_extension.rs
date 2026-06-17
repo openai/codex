@@ -9,7 +9,7 @@ use codex_core_skills::SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS;
 use codex_core_skills::SKILLS_INTRO_WITH_ABSOLUTE_PATHS;
 use codex_core_skills::SkillLoadOutcome;
 use codex_core_skills::SkillMetadata;
-use codex_core_skills::injection::InjectedHostSkillPrompts;
+use codex_extension_api::ContextContributionContext;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -49,10 +49,10 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 static NEXT_CODEX_HOME_ID: AtomicUsize = AtomicUsize::new(0);
 const DEMO_SKILL_CONTENTS: &str =
-    "---\nname: demo\ndescription: Demo skill.\n---\n# Demo\n\nUse the demo skill.\n";
+    "---\nname: demo\ndescription: Demo skill.\n---\n# Demo\n\nUse [$calendar](app://calendar).\n";
 
 #[tokio::test]
-async fn installed_extension_uses_host_service_snapshot() -> TestResult {
+async fn installed_extension_catalog_uses_host_service_snapshot() -> TestResult {
     let codex_home = test_codex_home();
     let skill_path = codex_home.join("skills").join("demo").join("SKILL.md");
     std::fs::create_dir_all(
@@ -99,41 +99,112 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
     let turn_store = ExtensionData::new("turn-1");
     turn_store.insert(HostSkillsSnapshot::new(Arc::clone(&loaded_skills)));
 
-    let fragments = registry.turn_input_contributors()[0]
-        .contribute(
-            TurnInputContext {
-                turn_id: "turn-1".to_string(),
-                user_input: vec![UserInput::Text {
-                    text: "$demo".to_string(),
-                    text_elements: Vec::new(),
-                }],
-                environments: Vec::new(),
-            },
-            &session_store,
-            &thread_store,
-            &turn_store,
-        )
+    let prompt_fragments = registry.context_contributors()[0]
+        .contribute(prompt_context(&session_store, &thread_store, &turn_store))
         .await;
 
     let expected_catalog = format!(
         "{SKILLS_INSTRUCTIONS_OPEN_TAG}\n## Skills\n{SKILLS_INTRO_WITH_ABSOLUTE_PATHS}\n### Available skills\n- demo: Demo skill. (file: {skill_prompt_path})\n### How to use skills\n{SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS}\n{SKILLS_INSTRUCTIONS_CLOSE_TAG}"
     );
-    let expected_skill = format!(
-        "<skill>\n<name>demo</name>\n<path>{skill_prompt_path}</path>\n{DEMO_SKILL_CONTENTS}\n</skill>"
-    );
-    assert_eq!(
-        vec![("developer", expected_catalog), ("user", expected_skill),],
-        fragments
-            .iter()
-            .map(|fragment| (fragment.role(), fragment.render()))
-            .collect::<Vec<_>>()
-    );
-    let injected_host_skill_prompts = turn_store
-        .get::<InjectedHostSkillPrompts>()
-        .ok_or("host skill prompt marker should be set")?;
-    assert!(injected_host_skill_prompts.contains_path(&skill_path_string));
+    assert_eq!(1, prompt_fragments.len());
+    assert_eq!(expected_catalog, prompt_fragments[0].text());
 
     std::fs::remove_dir_all(codex_home)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn mixed_catalog_preserves_host_budget_and_external_locator() -> TestResult {
+    let host_path =
+        AbsolutePathBuf::try_from(std::env::temp_dir().join("host-demo").join("SKILL.md"))?;
+    let mut outcome = SkillLoadOutcome::default();
+    outcome.skills.push(SkillMetadata {
+        name: "host-demo".to_string(),
+        description: "x".repeat(5_000),
+        short_description: None,
+        interface: None,
+        dependencies: None,
+        policy: None,
+        path_to_skills_md: host_path,
+        scope: SkillScope::User,
+        plugin_id: None,
+    });
+    let providers = SkillProviders::new()
+        .with_host_provider(Arc::new(StaticSkillProvider {
+            catalog: SkillCatalog {
+                entries: vec![test_entry(
+                    SkillSourceKind::Host,
+                    "host",
+                    "host/host-demo",
+                    "host-demo/SKILL.md",
+                )],
+                warnings: Vec::new(),
+            },
+            read_requests: Arc::new(Mutex::new(Vec::new())),
+            list_calls: None,
+            fail_first_list: false,
+        }))
+        .with_executor_provider(Arc::new(StaticSkillProvider {
+            catalog: SkillCatalog {
+                entries: vec![test_entry(
+                    SkillSourceKind::Executor,
+                    "env-1",
+                    "executor/lint-fix",
+                    "lint-fix/SKILL.md",
+                )],
+                warnings: Vec::new(),
+            },
+            read_requests: Arc::new(Mutex::new(Vec::new())),
+            list_calls: None,
+            fail_first_list: false,
+        }));
+    let (event_tx, event_rx) = std::sync::mpsc::channel();
+    let mut builder =
+        ExtensionRegistryBuilder::with_event_sink(Arc::new(ChannelEventSink(event_tx)));
+    install_with_providers(&mut builder, providers, skills_extension_config);
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    thread_store.insert(vec![SelectedCapabilityRoot {
+        id: "lint-fix".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "env-1".to_string(),
+            path: "/skills/lint-fix".to_string(),
+        },
+    }]);
+    let session_source = SessionSource::Cli;
+    let config = default_config();
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &session_source,
+            persistent_thread_state_available: true,
+            environments: &[],
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+    let turn_store = ExtensionData::new("turn-1");
+    turn_store.insert(HostSkillsSnapshot::new(Arc::new(outcome)));
+
+    let fragments = registry.context_contributors()[0]
+        .contribute(ContextContributionContext {
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &turn_store,
+            model_context_window: Some(10_000),
+        })
+        .await;
+
+    assert_eq!(1, fragments.len());
+    let text = fragments[0].text();
+    assert!(text.contains("host-demo"));
+    assert!(text.contains("environment resource: skill://executor/lint-fix/SKILL.md"));
+    let EventMsg::Warning(warning) = event_rx.try_recv()?.msg else {
+        panic!("expected host budget warning");
+    };
+    assert!(warning.message.contains("2% skills context budget"));
+
     Ok(())
 }
 
@@ -183,7 +254,11 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
         .await;
 
     let prompt_fragments = registry.context_contributors()[0]
-        .contribute(&session_store, &thread_store)
+        .contribute(prompt_context(
+            &session_store,
+            &thread_store,
+            &ExtensionData::new("initial-turn"),
+        ))
         .await;
     assert_eq!(1, prompt_fragments.len());
     assert!(
@@ -228,7 +303,7 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
         read_request_keys(&read_requests)
     );
     let rebuilt_prompt_fragments = registry.context_contributors()[0]
-        .contribute(&session_store, &thread_store)
+        .contribute(prompt_context(&session_store, &thread_store, &turn_store))
         .await;
     assert_eq!(1, rebuilt_prompt_fragments.len());
     assert!(rebuilt_prompt_fragments[0].text().contains("lint-fix"));
@@ -294,7 +369,11 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
         .await;
 
     let initial_fragments = registry.context_contributors()[0]
-        .contribute(&session_store, &thread_store)
+        .contribute(prompt_context(
+            &session_store,
+            &thread_store,
+            &ExtensionData::new("initial-turn"),
+        ))
         .await;
     assert!(initial_fragments.is_empty());
     let EventMsg::Warning(warning) = event_rx.try_recv()?.msg else {
@@ -422,16 +501,16 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
         catalog: SkillCatalog {
             entries: vec![
                 test_entry(
-                    SkillSourceKind::Host,
-                    "host",
-                    "host/visible-skill",
-                    "visible-skill/SKILL.md",
+                    SkillSourceKind::Orchestrator,
+                    "codex_apps",
+                    "orchestrator/visible-skill",
+                    "skill://orchestrator/visible-skill/SKILL.md",
                 ),
                 test_entry(
-                    SkillSourceKind::Host,
-                    "host",
-                    "host/hidden-skill",
-                    "hidden-skill/SKILL.md",
+                    SkillSourceKind::Orchestrator,
+                    "codex_apps",
+                    "orchestrator/hidden-skill",
+                    "skill://orchestrator/hidden-skill/SKILL.md",
                 )
                 .hidden_from_prompt(),
             ],
@@ -441,7 +520,7 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
         list_calls: None,
         fail_first_list: false,
     });
-    let providers = SkillProviders::new().with_host_provider(provider);
+    let providers = SkillProviders::new().with_orchestrator_provider(provider);
     let mut builder = ExtensionRegistryBuilder::new();
     install_with_providers(&mut builder, providers, skills_extension_config);
     let registry = builder.build();
@@ -460,6 +539,17 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
         })
         .await;
 
+    let initial_fragments = registry.context_contributors()[0]
+        .contribute(prompt_context(
+            &session_store,
+            &thread_store,
+            &ExtensionData::new("initial-turn"),
+        ))
+        .await;
+    assert_eq!(1, initial_fragments.len());
+    assert!(initial_fragments[0].text().contains("visible-skill"));
+    assert!(!initial_fragments[0].text().contains("hidden-skill"));
+
     let fragments = registry.turn_input_contributors()[0]
         .contribute(
             TurnInputContext {
@@ -476,15 +566,13 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
         )
         .await;
 
-    assert_eq!(2, fragments.len());
-    assert!(fragments[0].render().contains("visible-skill"));
-    assert!(!fragments[0].render().contains("hidden-skill"));
-    assert!(fragments[1].render().contains("<name>hidden-skill</name>"));
+    assert_eq!(1, fragments.len());
+    assert!(fragments[0].render().contains("<name>hidden-skill</name>"));
     assert_eq!(
         vec![(
-            SkillAuthority::new(SkillSourceKind::Host, "host"),
-            SkillPackageId("host/hidden-skill".to_string()),
-            SkillResourceId::new("hidden-skill/SKILL.md"),
+            SkillAuthority::new(SkillSourceKind::Orchestrator, "codex_apps"),
+            SkillPackageId("orchestrator/hidden-skill".to_string()),
+            SkillResourceId::new("skill://orchestrator/hidden-skill/SKILL.md"),
         )],
         read_request_keys(&read_requests)
     );
@@ -604,4 +692,17 @@ fn read_request_keys(
             )
         })
         .collect()
+}
+
+fn prompt_context<'a>(
+    session_store: &'a ExtensionData,
+    thread_store: &'a ExtensionData,
+    turn_store: &'a ExtensionData,
+) -> ContextContributionContext<'a> {
+    ContextContributionContext {
+        session_store,
+        thread_store,
+        turn_store,
+        model_context_window: None,
+    }
 }

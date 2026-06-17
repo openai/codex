@@ -5,6 +5,7 @@ use std::sync::Mutex;
 
 use codex_extension_api::ApprovalReviewContributor;
 use codex_extension_api::ConfigContributor;
+use codex_extension_api::ContextContributionContext;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionData;
@@ -36,8 +37,7 @@ struct AllContributors;
 impl ContextContributor for AllContributors {
     fn contribute<'a>(
         &'a self,
-        _session_store: &'a ExtensionData,
-        _thread_store: &'a ExtensionData,
+        _context: ContextContributionContext<'a>,
     ) -> ExtensionFuture<'a, Vec<PromptFragment>> {
         Box::pin(std::future::ready(Vec::new()))
     }
@@ -149,8 +149,7 @@ struct NamedContextContributor(&'static str);
 impl ContextContributor for NamedContextContributor {
     fn contribute<'a>(
         &'a self,
-        _session_store: &'a ExtensionData,
-        _thread_store: &'a ExtensionData,
+        _context: ContextContributionContext<'a>,
     ) -> ExtensionFuture<'a, Vec<PromptFragment>> {
         Box::pin(std::future::ready(vec![PromptFragment::developer_policy(
             self.0,
@@ -199,7 +198,16 @@ async fn contributors_preserve_registration_order() {
 
     let mut fragments = Vec::new();
     for contributor in registry.context_contributors() {
-        fragments.extend(contributor.contribute(&session_store, &thread_store).await);
+        fragments.extend(
+            contributor
+                .contribute(ContextContributionContext {
+                    session_store: &session_store,
+                    thread_store: &thread_store,
+                    turn_store: &turn_store,
+                    model_context_window: None,
+                })
+                .await,
+        );
     }
     let mut item = TurnItem::HookPrompt(HookPromptItem {
         id: "item".to_string(),

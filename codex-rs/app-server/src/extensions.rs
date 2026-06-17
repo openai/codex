@@ -5,6 +5,7 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
+use codex_app_server_protocol::WarningNotification;
 use codex_core::NewThread;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
@@ -77,11 +78,14 @@ where
     codex_mcp_extension::install_executor_plugins(&mut builder, environment_manager);
     codex_web_search_extension::install(&mut builder, auth_manager.clone());
     codex_image_generation_extension::install(&mut builder, auth_manager);
+    // Selected executor roots take precedence over ambient host skills when a
+    // plain-text skill mention has the same name in both authorities.
     let skill_providers = codex_skills_extension::SkillProviders::new()
         .with_executor_provider(executor_skill_provider)
         .with_orchestrator_provider(Arc::new(
             codex_skills_extension::OrchestratorSkillProvider::new(),
-        ));
+        ))
+        .with_host_provider(Arc::new(codex_skills_extension::HostSkillProvider::new()));
     codex_skills_extension::install_with_providers(
         &mut builder,
         skill_providers,
@@ -138,6 +142,23 @@ impl ExtensionEventSink for AppServerExtensionEventSink {
                                 thread_id: thread_id.to_string(),
                                 turn_id,
                                 goal,
+                            },
+                        ))
+                        .await;
+                });
+            }
+            EventMsg::Warning(warning_event) => {
+                let Ok(thread_id) = ThreadId::from_string(&event.id) else {
+                    tracing::warn!(event_id = %event.id, "dropping extension warning with invalid thread id");
+                    return;
+                };
+                let outgoing = Arc::clone(&self.outgoing);
+                tokio::spawn(async move {
+                    outgoing
+                        .send_server_notification(ServerNotification::Warning(
+                            WarningNotification {
+                                thread_id: Some(thread_id.to_string()),
+                                message: warning_event.message,
                             },
                         ))
                         .await;

@@ -4,6 +4,7 @@ use codex_core_skills::HostSkillsSnapshot;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_extension_api::ConfigContributor;
+use codex_extension_api::ContextContributionContext;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionData;
@@ -105,10 +106,11 @@ where
 {
     fn contribute<'a>(
         &'a self,
-        session_store: &'a ExtensionData,
-        thread_store: &'a ExtensionData,
+        context: ContextContributionContext<'a>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
+            let session_store = context.session_store;
+            let thread_store = context.thread_store;
             let Some(thread_state) = thread_store.get::<SkillsThreadState>() else {
                 return Vec::new();
             };
@@ -116,13 +118,14 @@ where
             if !config.include_instructions {
                 return Vec::new();
             }
+            let host_snapshot = context.turn_store.get::<HostSkillsSnapshot>();
             let catalog = self
                 .list_skills(
                     SkillListQuery {
-                        turn_id: thread_store.level_id().to_string(),
+                        turn_id: context.turn_store.level_id().to_string(),
                         executor_roots: thread_state.selected_roots().to_vec(),
-                        host_snapshot: None,
-                        include_host_skills: false,
+                        host_snapshot: host_snapshot.clone(),
+                        include_host_skills: true,
                         include_bundled_skills: config.bundled_skills_enabled,
                         include_orchestrator_skills: thread_state.orchestrator_skills_enabled(),
                         mcp_resources: session_store.get::<McpResourceClient>(),
@@ -133,10 +136,17 @@ where
             for warning in &catalog.warnings {
                 self.emit_warning(thread_store.level_id(), warning.clone());
             }
-            available_skills_fragment(&catalog)
-                .map(|fragment| PromptFragment::developer_capability(fragment.render()))
-                .into_iter()
-                .collect()
+            let Some((fragment, warning)) = available_skills_fragment(
+                &catalog,
+                host_snapshot.as_deref(),
+                context.model_context_window,
+            ) else {
+                return Vec::new();
+            };
+            if let Some(warning) = warning {
+                self.emit_warning(thread_store.level_id(), warning);
+            }
+            vec![PromptFragment::developer_capability(fragment.render())]
         })
     }
 }
@@ -189,7 +199,7 @@ where
                 turn_id: input.turn_id.clone(),
                 executor_roots: thread_state.selected_roots().to_vec(),
                 host_snapshot: host_snapshot.clone(),
-                include_host_skills: true,
+                include_host_skills: false,
                 include_bundled_skills: config.bundled_skills_enabled,
                 include_orchestrator_skills: thread_state.orchestrator_skills_enabled(),
                 mcp_resources: session_store.get::<McpResourceClient>(),
@@ -201,17 +211,6 @@ where
 
             let selected_entries = collect_explicit_skill_mentions(&input.user_input, &catalog);
             let mut fragments: Vec<Box<dyn ContextualUserFragment + Send>> = Vec::new();
-            if config.include_instructions {
-                let mut turn_catalog = catalog.clone();
-                turn_catalog.entries.retain(|entry| {
-                    entry.authority.kind != SkillSourceKind::Executor
-                        && entry.authority.kind != SkillSourceKind::Orchestrator
-                });
-                if let Some(fragment) = available_skills_fragment(&turn_catalog) {
-                    fragments.push(Box::new(fragment));
-                }
-            }
-
             let mut warnings = catalog.warnings.clone();
             let mut main_prompts_injected = false;
             let mut injected_host_skill_prompts = InjectedHostSkillPrompts::default();

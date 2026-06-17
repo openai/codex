@@ -4,6 +4,11 @@ use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillSourceKind;
 use crate::fragments::AvailableSkillsInstructions;
+use codex_core_skills::HostSkillsSnapshot;
+use codex_core_skills::build_available_skills;
+use codex_core_skills::default_skill_metadata_budget;
+use codex_core_skills::render::SkillCatalogMode;
+use codex_core_skills::render::SkillRenderSideEffects;
 
 const MAX_AVAILABLE_SKILLS_BYTES: usize = 8_000;
 const MAX_MAIN_PROMPT_BYTES: usize = 8_000;
@@ -12,16 +17,76 @@ pub(crate) const MAX_SKILL_PATH_BYTES: usize = 1_024;
 
 pub(crate) fn available_skills_fragment(
     catalog: &SkillCatalog,
-) -> Option<AvailableSkillsInstructions> {
+    host_snapshot: Option<&HostSkillsSnapshot>,
+    model_context_window: Option<i64>,
+) -> Option<(AvailableSkillsInstructions, Option<String>)> {
+    let visible_entries = catalog
+        .entries
+        .iter()
+        .filter(|entry| entry.enabled && entry.prompt_visible)
+        .collect::<Vec<_>>();
+    if visible_entries
+        .iter()
+        .any(|entry| entry.authority.kind == SkillSourceKind::Host)
+        && let Some(host_snapshot) = host_snapshot
+    {
+        let external_lines = bounded_skill_lines(
+            visible_entries
+                .iter()
+                .copied()
+                .filter(|entry| entry.authority.kind != SkillSourceKind::Host),
+        );
+        if let Some(available) = build_available_skills(
+            host_snapshot.outcome(),
+            default_skill_metadata_budget(model_context_window),
+            SkillRenderSideEffects::None,
+        ) {
+            let warning = available.warning_message.clone();
+            return Some((
+                AvailableSkillsInstructions::from_available_skills_with_additional_lines(
+                    available,
+                    external_lines,
+                ),
+                warning,
+            ));
+        }
+        if !external_lines.is_empty() {
+            return Some((
+                AvailableSkillsInstructions::from_skill_lines(
+                    external_lines,
+                    SkillCatalogMode::Mixed,
+                ),
+                None,
+            ));
+        }
+        return None;
+    }
+
+    let mode = if visible_entries
+        .iter()
+        .any(|entry| entry.authority.kind != SkillSourceKind::Host)
+    {
+        SkillCatalogMode::Mixed
+    } else {
+        SkillCatalogMode::HostOnly
+    };
+    let skill_lines = bounded_skill_lines(visible_entries);
+    (!skill_lines.is_empty()).then(|| {
+        (
+            AvailableSkillsInstructions::from_skill_lines(skill_lines, mode),
+            None,
+        )
+    })
+}
+
+fn bounded_skill_lines<'a>(
+    entries: impl IntoIterator<Item = &'a SkillCatalogEntry>,
+) -> Vec<String> {
     let mut total_bytes = 0usize;
     let mut omitted = 0usize;
     let mut skill_lines = Vec::new();
 
-    for entry in catalog
-        .entries
-        .iter()
-        .filter(|entry| entry.enabled && entry.prompt_visible)
-    {
+    for entry in entries {
         let description = entry
             .short_description
             .as_deref()
@@ -36,17 +101,13 @@ pub(crate) fn available_skills_fragment(
         skill_lines.push(line);
     }
 
-    if skill_lines.is_empty() {
-        return None;
-    }
     if omitted > 0 {
         let skill_word = if omitted == 1 { "skill" } else { "skills" };
         skill_lines.push(format!(
             "- {omitted} additional {skill_word} omitted from this bounded skills list."
         ));
     }
-
-    Some(AvailableSkillsInstructions::from_skill_lines(skill_lines))
+    skill_lines
 }
 
 fn render_skill_line(entry: &SkillCatalogEntry, description: &str) -> String {

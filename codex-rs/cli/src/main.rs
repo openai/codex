@@ -1969,6 +1969,7 @@ async fn run_debug_prompt_input_command(
         input,
         /*state_db*/ None,
         user_instructions_provider,
+        codex_core_api::default_extension_registry(),
     )
     .await?;
     println!("{}", serde_json::to_string_pretty(&prompt_input)?);

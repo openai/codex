@@ -6,12 +6,15 @@ use codex_core::StateDbHandle;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_exec_server::EnvironmentManager;
-use codex_extension_api::empty_extension_registry;
+use codex_extension_api::ExtensionEventSink;
+use codex_extension_api::ExtensionRegistry;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::AuthManager;
 use codex_login::default_client::USER_AGENT_SUFFIX;
 use codex_login::default_client::get_codex_user_agent;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::Event;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use rmcp::model::CallToolRequestParams;
@@ -37,6 +40,7 @@ use crate::codex_tool_config::CodexToolCallReplyParam;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::OutgoingNotificationMeta;
 
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
@@ -66,12 +70,16 @@ impl MessageProcessor {
         let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
             config.codex_home.clone(),
         ));
+        let running_requests_id_to_codex_uuid = Arc::new(Mutex::new(HashMap::new()));
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager,
             SessionSource::Mcp,
             environment_manager,
-            empty_extension_registry(),
+            default_extensions(
+                Arc::clone(&outgoing),
+                Arc::clone(&running_requests_id_to_codex_uuid),
+            ),
             user_instructions_provider,
             /*analytics_events_client*/ None,
             codex_core::thread_store_from_config(config.as_ref(), state_db.clone()),
@@ -84,7 +92,7 @@ impl MessageProcessor {
             initialized: false,
             arg0_paths,
             thread_manager,
-            running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
+            running_requests_id_to_codex_uuid,
         }
     }
 
@@ -571,3 +579,60 @@ impl MessageProcessor {
         tracing::info!("notifications/initialized");
     }
 }
+
+fn default_extensions(
+    outgoing: Arc<OutgoingMessageSender>,
+    running_requests: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
+) -> Arc<ExtensionRegistry<Config>> {
+    let event_sink = Arc::new(McpServerExtensionEventSink {
+        outgoing,
+        running_requests,
+    });
+    let mut builder = ExtensionRegistryBuilder::with_event_sink(event_sink);
+    codex_skills_extension::install(&mut builder, |config: &Config| {
+        codex_skills_extension::SkillsExtensionConfig {
+            include_instructions: config.include_skill_instructions,
+            bundled_skills_enabled: config.bundled_skills_enabled(),
+        }
+    });
+    Arc::new(builder.build())
+}
+
+struct McpServerExtensionEventSink {
+    outgoing: Arc<OutgoingMessageSender>,
+    running_requests: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
+}
+
+impl ExtensionEventSink for McpServerExtensionEventSink {
+    fn emit(&self, event: Event) {
+        let Ok(thread_id) = ThreadId::from_string(&event.id) else {
+            tracing::warn!(event_id = %event.id, "dropping extension event with invalid thread id");
+            return;
+        };
+        let outgoing = Arc::clone(&self.outgoing);
+        let running_requests = Arc::clone(&self.running_requests);
+        tokio::spawn(async move {
+            let request_id =
+                running_requests
+                    .lock()
+                    .await
+                    .iter()
+                    .find_map(|(request_id, running_thread_id)| {
+                        (*running_thread_id == thread_id).then(|| request_id.clone())
+                    });
+            outgoing
+                .send_event_as_notification(
+                    &event,
+                    Some(OutgoingNotificationMeta {
+                        request_id,
+                        thread_id: Some(thread_id),
+                    }),
+                )
+                .await;
+        });
+    }
+}
+
+#[cfg(test)]
+#[path = "message_processor_tests.rs"]
+mod tests;

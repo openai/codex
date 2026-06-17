@@ -109,11 +109,11 @@ impl codex_extension_api::ThreadLifecycleContributor<Config> for GuardianMemoryC
 impl codex_extension_api::ContextContributor for GuardianMemoryContextProbe {
     fn contribute<'a>(
         &'a self,
-        _session_store: &'a codex_extension_api::ExtensionData,
-        thread_store: &'a codex_extension_api::ExtensionData,
+        context: codex_extension_api::ContextContributionContext<'a>,
     ) -> codex_extension_api::ExtensionFuture<'a, Vec<codex_extension_api::PromptFragment>> {
         Box::pin(async move {
-            if thread_store
+            if context
+                .thread_store
                 .get::<GuardianMemoryContextEnabled>()
                 .is_some_and(|enabled| enabled.0)
             {
