@@ -16,11 +16,14 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "sync"] }
 url = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 anyhow = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 wiremock = { workspace = true }
 
 [lib]

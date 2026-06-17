@@ -2998,7 +2998,12 @@ impl Session {
         let recommended_plugin_candidates = if crate::tools::spec_plan::tool_suggest_enabled(
             turn_context,
         ) {
-            match self.services.auth_manager.auth().await {
+            let auth = if turn_context.config.model_provider.requires_openai_auth {
+                self.services.auth_manager.auth().await
+            } else {
+                Ok(self.services.auth_manager.auth_cached())
+            };
+            match auth {
                 Ok(auth) => {
                     let plugins_config = turn_context.config.plugins_config_input();
                     self.services

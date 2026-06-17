@@ -1192,7 +1192,11 @@ pub(crate) async fn built_tools(
     };
     let tool_suggest_is_enabled = tool_suggest_enabled(turn_context);
     let auth = if tool_suggest_is_enabled {
-        sess.services.auth_manager.auth().await?
+        if turn_context.config.model_provider.requires_openai_auth {
+            sess.services.auth_manager.auth().await?
+        } else {
+            sess.services.auth_manager.auth_cached()
+        }
     } else {
         None
     };

@@ -604,7 +604,11 @@ impl Session {
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let mcp_thread_init_for_startup = &mcp_thread_init;
         let auth_and_mcp_fut = async move {
-            let auth = auth_manager_clone.auth_result().await?;
+            let auth = if config_for_mcp.model_provider.requires_openai_auth {
+                auth_manager_clone.auth_result().await?
+            } else {
+                auth_manager_clone.auth_cached()
+            };
             let mcp_config = mcp_manager_for_mcp
                 .runtime_config_for_thread(&config_for_mcp, mcp_thread_init_for_startup)
                 .await;

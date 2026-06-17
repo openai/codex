@@ -152,13 +152,28 @@ impl FileSubjectTokenSource {
 
 impl SubjectTokenProvider for FileSubjectTokenSource {
     async fn subject_token(&self) -> Result<SubjectToken, SubjectTokenError> {
-        let file = tokio::fs::File::open(&self.path).await.map_err(|error| {
-            SubjectTokenError::ReadFile {
+        let metadata =
+            tokio::fs::metadata(&self.path)
+                .await
+                .map_err(|error| SubjectTokenError::ReadFile {
+                    provider: self.source,
+                    path: self.path.clone(),
+                    kind: error.kind(),
+                })?;
+        validate_file_metadata(self.source, &self.path, &metadata)?;
+
+        let mut options = tokio::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        options.custom_flags(libc::O_NONBLOCK);
+        let file = options
+            .open(&self.path)
+            .await
+            .map_err(|error| SubjectTokenError::ReadFile {
                 provider: self.source,
                 path: self.path.clone(),
                 kind: error.kind(),
-            }
-        })?;
+            })?;
         let metadata = file
             .metadata()
             .await
@@ -167,17 +182,7 @@ impl SubjectTokenProvider for FileSubjectTokenSource {
                 path: self.path.clone(),
                 kind: error.kind(),
             })?;
-        if !metadata.is_file() {
-            return Err(SubjectTokenError::NotAFile {
-                provider: self.source,
-                path: self.path.clone(),
-            });
-        }
-        if metadata.len() > MAX_SUBJECT_TOKEN_BYTES as u64 {
-            return Err(SubjectTokenError::TooLarge {
-                provider: self.source,
-            });
-        }
+        validate_file_metadata(self.source, &self.path, &metadata)?;
         let mut bytes = Vec::new();
         file.take(MAX_SUBJECT_TOKEN_BYTES as u64 + 1)
             .read_to_end(&mut bytes)
@@ -199,6 +204,23 @@ impl SubjectTokenProvider for FileSubjectTokenSource {
         })?;
         SubjectToken::jwt(value, self.source)
     }
+}
+
+fn validate_file_metadata(
+    source: &'static str,
+    path: &std::path::Path,
+    metadata: &std::fs::Metadata,
+) -> Result<(), SubjectTokenError> {
+    if !metadata.is_file() {
+        return Err(SubjectTokenError::NotAFile {
+            provider: source,
+            path: path.to_path_buf(),
+        });
+    }
+    if metadata.len() > MAX_SUBJECT_TOKEN_BYTES as u64 {
+        return Err(SubjectTokenError::TooLarge { provider: source });
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]

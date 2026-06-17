@@ -83,7 +83,7 @@ mod tests {
     async fn rejects_tcp_endpoint() {
         let source = SpiffeSubjectTokenProvider::new(
             Some("tcp://127.0.0.1:8081".to_string()),
-            None,
+            /*spiffe_id*/ None,
             "openai-audience".to_string(),
         );
 
