@@ -810,6 +810,11 @@ pub struct Config {
     /// Workload identity federation configuration for external ChatGPT auth.
     pub workload_identity: Option<WorkloadIdentityConfig>,
 
+    /// Runtime-only paths added to the sandbox for workload credential isolation.
+    /// These enforcement details must not be exposed in model-visible context.
+    #[doc(hidden)]
+    pub workload_identity_credential_deny_paths: Vec<AbsolutePathBuf>,
+
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     pub mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
 
@@ -2347,13 +2352,11 @@ fn apply_managed_filesystem_constraints(
 
 fn apply_workload_identity_filesystem_constraints(
     file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
-    workload_identity: &WorkloadIdentityConfig,
+    credential_deny_paths: &[AbsolutePathBuf],
 ) {
-    let entries = workload_identity
-        .credential_source
-        .credential_file_paths()
-        .into_iter()
-        .flat_map(workload_identity_credential_deny_paths)
+    let entries = credential_deny_paths
+        .iter()
+        .cloned()
         .map(|path| codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::Path { path },
             access: codex_protocol::permissions::FileSystemAccessMode::Deny,
@@ -2367,7 +2370,18 @@ fn apply_workload_identity_filesystem_constraints(
         .preserve_deny_read_restrictions_from(&FileSystemSandboxPolicy::restricted(entries));
 }
 
-fn workload_identity_credential_deny_paths(path: PathBuf) -> Vec<AbsolutePathBuf> {
+fn workload_identity_credential_deny_paths(
+    workload_identity: &WorkloadIdentityConfig,
+) -> Vec<AbsolutePathBuf> {
+    workload_identity
+        .credential_source
+        .credential_file_paths()
+        .into_iter()
+        .flat_map(workload_identity_credential_path_deny_paths)
+        .collect()
+}
+
+fn workload_identity_credential_path_deny_paths(path: PathBuf) -> Vec<AbsolutePathBuf> {
     let Ok(path) = AbsolutePathBuf::relative_to_current_dir(path) else {
         return Vec::new();
     };
@@ -3615,7 +3629,9 @@ impl Config {
                 filesystem_requirements,
             );
         }
-        if let Some(workload_identity) = cfg.workload_identity.as_ref() {
+        let workload_identity_credential_deny_paths = if let Some(workload_identity) =
+            cfg.workload_identity.as_ref()
+        {
             if cfg.forced_login_method == Some(ForcedLoginMethod::Api) {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -3625,11 +3641,16 @@ impl Config {
             workload_identity.validate().map_err(|error| {
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
             })?;
+            let credential_deny_paths =
+                workload_identity_credential_deny_paths(workload_identity);
             apply_workload_identity_filesystem_constraints(
                 &mut effective_file_system_sandbox_policy,
-                workload_identity,
+                &credential_deny_paths,
             );
-        }
+            credential_deny_paths
+        } else {
+            Vec::new()
+        };
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
             .with_additional_readable_roots(resolved_cwd.as_path(), &helper_readable_roots);
         let effective_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
@@ -3694,6 +3715,7 @@ impl Config {
                 env!("CARGO_PKG_VERSION"),
             ),
             workload_identity: cfg.workload_identity.clone(),
+            workload_identity_credential_deny_paths,
             mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.

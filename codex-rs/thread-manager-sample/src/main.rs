@@ -270,6 +270,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
         workload_identity: None,
+        workload_identity_credential_deny_paths: Vec::new(),
         web_search_mode: Constrained::allow_any(WebSearchMode::Disabled),
         web_search_config: None,
         experimental_request_user_input_enabled: true,

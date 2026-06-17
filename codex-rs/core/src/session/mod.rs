@@ -2892,9 +2892,10 @@ impl Session {
             developer_sections.push(model_switch_message);
         }
         if turn_context.config.include_permissions_instructions {
+            let model_visible_permission_profile = turn_context.model_visible_permission_profile();
             developer_sections.push(
                 PermissionsInstructions::from_permission_profile(
-                    &turn_context.permission_profile,
+                    &model_visible_permission_profile,
                     turn_context.approval_policy.value(),
                     turn_context.config.approvals_reviewer,
                     self.services.exec_policy.current().as_ref(),

@@ -1879,12 +1879,14 @@ impl AuthManager {
         }
     }
 
-    pub fn set_external_auth_if_absent(&self, external_auth: Arc<dyn ExternalAuth>) {
+    pub fn set_external_auth_if_absent(&self, external_auth: Arc<dyn ExternalAuth>) -> bool {
         if let Ok(mut guard) = self.external_auth.write()
             && guard.is_none()
         {
             *guard = Some(external_auth);
+            return true;
         }
+        false
     }
 
     pub fn clear_external_auth(&self) {
@@ -2258,6 +2260,20 @@ impl AuthManager {
             .external_chatgpt_auth(&refreshed)
             .await
             .map_err(RefreshTokenError::Transient)?;
+        if !external_auth.requires_successful_resolution() {
+            let chatgpt_metadata = refreshed.chatgpt_metadata().ok_or_else(|| {
+                RefreshTokenError::Transient(std::io::Error::other(
+                    "external auth tokens are missing ChatGPT metadata",
+                ))
+            })?;
+            login_with_chatgpt_auth_tokens(
+                &self.codex_home,
+                &refreshed.access_token,
+                &chatgpt_metadata.account_id,
+                chatgpt_metadata.plan_type.as_deref(),
+            )
+            .map_err(RefreshTokenError::Transient)?;
+        }
         self.set_cached_auth(Some(auth));
         Ok(())
     }

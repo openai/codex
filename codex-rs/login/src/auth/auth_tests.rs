@@ -568,7 +568,7 @@ struct TestExternalChatgptAuth {
     refresh_count: AtomicUsize,
 }
 
-struct FailingExternalChatgptAuth;
+struct FailingExternalChatgptAuth(&'static str);
 
 impl ExternalAuth for FailingExternalChatgptAuth {
     fn auth_mode(&self) -> AuthMode {
@@ -580,14 +580,16 @@ impl ExternalAuth for FailingExternalChatgptAuth {
     }
 
     fn resolve(&self) -> ExternalAuthFuture<'_, Option<ExternalAuthTokens>> {
-        Box::pin(async { Err(std::io::Error::other("external token exchange failed")) })
+        let message = self.0;
+        Box::pin(async move { Err(std::io::Error::other(message)) })
     }
 
     fn refresh(
         &self,
         _context: ExternalAuthRefreshContext,
     ) -> ExternalAuthFuture<'_, ExternalAuthTokens> {
-        Box::pin(async { Err(std::io::Error::other("external token exchange failed")) })
+        let message = self.0;
+        Box::pin(async move { Err(std::io::Error::other(message)) })
     }
 }
 
@@ -695,6 +697,11 @@ async fn external_chatgpt_auth_resolves_and_refreshes_without_writing_auth_file(
         manager.auth_cached().unwrap().get_token().unwrap(),
         refreshed_token
     );
+    manager.reload().await;
+    assert_eq!(
+        manager.auth_cached().unwrap().get_token().unwrap(),
+        refreshed_token
+    );
     assert!(!get_auth_file(codex_home.path()).exists());
 }
 
@@ -756,7 +763,9 @@ async fn auth_result_preserves_external_auth_resolution_errors() {
         AuthKeyringBackendKind::default(),
     )
     .await;
-    manager.set_external_auth(Arc::new(FailingExternalChatgptAuth));
+    manager.set_external_auth(Arc::new(FailingExternalChatgptAuth(
+        "external token exchange failed",
+    )));
 
     assert_eq!(manager.auth_mode(), Some(AuthMode::Chatgpt));
     assert_eq!(
@@ -770,6 +779,35 @@ async fn auth_result_preserves_external_auth_resolution_errors() {
 
     assert_eq!(error.to_string(), "external token exchange failed");
     assert!(manager.auth().await.is_err());
+}
+
+#[tokio::test]
+async fn set_external_auth_if_absent_preserves_existing_provider() {
+    let manager = AuthManager::shared(
+        PathBuf::from("non-existent"),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+    )
+    .await;
+
+    assert!(
+        manager.set_external_auth_if_absent(Arc::new(FailingExternalChatgptAuth(
+            "original external auth",
+        )))
+    );
+    assert!(
+        !manager.set_external_auth_if_absent(Arc::new(FailingExternalChatgptAuth(
+            "replacement external auth",
+        )))
+    );
+
+    let error = manager
+        .auth()
+        .await
+        .expect_err("the original external auth should remain installed");
+    assert_eq!(error.to_string(), "original external auth");
 }
 
 #[tokio::test]

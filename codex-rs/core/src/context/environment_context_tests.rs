@@ -184,6 +184,42 @@ fn serialize_environment_context_with_full_filesystem_profile() {
 }
 
 #[test]
+fn enforcement_only_paths_are_omitted_from_environment_context() {
+    let credential_path = test_abs_path("/var/run/secrets/workload-token");
+    let visible_denial = test_abs_path("/repo/private");
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: credential_path.clone(),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: visible_denial.clone(),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let model_visible_permission_profile =
+        crate::session::turn_context::model_visible_permission_profile(
+            &permission_profile,
+            &[credential_path.clone()],
+        );
+    let context = FileSystemContext::from_permission_profile(
+        &model_visible_permission_profile,
+        &[test_abs_path("/repo")],
+    )
+    .render();
+
+    assert!(!context.contains(credential_path.to_string_lossy().as_ref()));
+    assert!(context.contains(visible_denial.to_string_lossy().as_ref()));
+}
+
+#[test]
 fn turn_context_item_filesystem_uses_workspace_roots_instead_of_cwd() {
     let repo = test_abs_path("/repo");
     let other_repo = test_abs_path("/other-repo");

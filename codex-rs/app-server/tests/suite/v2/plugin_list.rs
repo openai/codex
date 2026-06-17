@@ -6,6 +6,8 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
@@ -71,6 +73,52 @@ plugins = true
     )
 }
 
+fn write_plugins_enabled_config_with_workload_identity(
+    codex_home: &std::path::Path,
+    server: &MockServer,
+    token_path: &std::path::Path,
+) -> std::io::Result<()> {
+    let token_path = toml::Value::String(token_path.to_string_lossy().into_owned());
+    let chatgpt_base_url = toml::Value::String(format!("{}/backend-api", server.uri()));
+    let token_url = toml::Value::String(format!("{}/oauth/token", server.uri()));
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"chatgpt_base_url = {chatgpt_base_url}
+
+[features]
+plugins = true
+remote_plugin = false
+
+[workload_identity]
+identity_provider_id = "idp_test"
+identity_provider_mapping_id = "idpm_test"
+audience = "api://codex-test"
+token_url = {token_url}
+
+[workload_identity.credential_source]
+type = "file"
+path = {token_path}
+"#,
+        ),
+    )
+}
+
+fn workload_identity_access_token() -> String {
+    let payload = URL_SAFE_NO_PAD.encode(
+        serde_json::json!({
+            "email": "workload@example.com",
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "workspace_test",
+                "chatgpt_plan_type": "enterprise",
+                "chatgpt_user_id": "user_test",
+            }
+        })
+        .to_string(),
+    );
+    format!("header.{payload}.signature")
+}
+
 #[tokio::test]
 async fn plugin_list_skips_invalid_marketplace_file_and_reports_error() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -126,6 +174,56 @@ async fn plugin_list_skips_invalid_marketplace_file_and_reports_error() -> Resul
         "unexpected error: {:?}",
         response.marketplace_load_errors
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_local_succeeds_when_workload_identity_becomes_unavailable() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    let token_path = codex_home.path().join("projected-workload-token");
+    std::fs::write(&token_path, "external-subject-token\n")?;
+    write_plugins_enabled_config_with_workload_identity(codex_home.path(), &server, &token_path)?;
+
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": workload_identity_access_token(),
+            "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "user_id": "user_test",
+            "chatgpt_account_id": "workspace_test",
+            "chatgpt_plan_type": "enterprise",
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/config/bundle"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    std::fs::remove_file(token_path)?;
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: None,
+            marketplace_kinds: Some(vec![PluginListMarketplaceKind::Local]),
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginListResponse = to_response(response)?;
+
+    assert!(response.marketplace_load_errors.is_empty());
     Ok(())
 }
 

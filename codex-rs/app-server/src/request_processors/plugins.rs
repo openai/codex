@@ -534,6 +534,10 @@ impl PluginRequestProcessor {
             marketplace_kinds.unwrap_or_else(|| vec![PluginListMarketplaceKind::Local]);
         let include_local = marketplace_kinds.contains(&PluginListMarketplaceKind::Local);
         let include_vertical = marketplace_kinds.contains(&PluginListMarketplaceKind::Vertical);
+        let include_shared_with_me =
+            marketplace_kinds.contains(&PluginListMarketplaceKind::SharedWithMe);
+        let include_workspace_directory =
+            marketplace_kinds.contains(&PluginListMarketplaceKind::WorkspaceDirectory);
 
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let empty_response = || PluginListResponse {
@@ -544,11 +548,24 @@ impl PluginRequestProcessor {
         if !config.features.enabled(Feature::Plugins) {
             return Ok(empty_response());
         }
-        let auth = self
-            .auth_manager
-            .auth()
-            .await
-            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
+        let include_created_by_me_remote = marketplace_kinds
+            .contains(&PluginListMarketplaceKind::CreatedByMeRemote)
+            && config.features.enabled(Feature::RemotePlugin);
+        let include_global_remote =
+            !explicit_marketplace_kinds && config.features.enabled(Feature::RemotePlugin);
+        let requires_resolved_auth = include_vertical
+            || include_created_by_me_remote
+            || include_global_remote
+            || include_workspace_directory
+            || (include_shared_with_me && config.features.enabled(Feature::PluginSharing));
+        let auth = if requires_resolved_auth {
+            self.auth_manager
+                .auth()
+                .await
+                .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?
+        } else {
+            self.auth_manager.auth_cached()
+        };
         if !self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
             .await
@@ -558,13 +575,6 @@ impl PluginRequestProcessor {
         let auth_mode = auth.as_ref().map(CodexAuth::api_auth_mode);
         plugins_manager.set_auth_mode(auth_mode);
         let plugins_input = config.plugins_config_input();
-        let include_shared_with_me =
-            marketplace_kinds.contains(&PluginListMarketplaceKind::SharedWithMe);
-        let include_created_by_me_remote = marketplace_kinds
-            .contains(&PluginListMarketplaceKind::CreatedByMeRemote)
-            && config.features.enabled(Feature::RemotePlugin);
-        let include_global_remote =
-            !explicit_marketplace_kinds && config.features.enabled(Feature::RemotePlugin);
         let use_remote_global_catalog =
             include_global_remote && auth_mode.is_some_and(AuthMode::uses_codex_backend);
         let remote_plugin_service_config = RemotePluginServiceConfig {
@@ -681,7 +691,7 @@ impl PluginRequestProcessor {
         if include_created_by_me_remote {
             remote_sources.push(RemoteMarketplaceSource::CreatedByMeRemote);
         }
-        if marketplace_kinds.contains(&PluginListMarketplaceKind::WorkspaceDirectory) {
+        if include_workspace_directory {
             remote_sources.push(RemoteMarketplaceSource::WorkspaceDirectory);
         }
         if include_shared_with_me && config.features.enabled(Feature::PluginSharing) {
