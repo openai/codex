@@ -314,6 +314,7 @@ fn sample_thread_start_response() -> ClientResponsePayload {
         active_permission_profile: None,
         reasoning_effort: None,
         multi_agent_mode_available: false,
+        multi_agent_mode: Default::default(),
     })
 }
 
@@ -332,6 +333,7 @@ fn sample_thread_resume_response() -> ClientResponsePayload {
         active_permission_profile: None,
         reasoning_effort: None,
         multi_agent_mode_available: false,
+        multi_agent_mode: Default::default(),
         initial_turns_page: None,
     })
 }
@@ -351,6 +353,7 @@ fn sample_thread_fork_response() -> ClientResponsePayload {
         active_permission_profile: None,
         reasoning_effort: None,
         multi_agent_mode_available: false,
+        multi_agent_mode: Default::default(),
     })
 }
 

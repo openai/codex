@@ -2373,6 +2373,7 @@ mod tests {
             active_permission_profile: None,
             reasoning_effort: None,
             multi_agent_mode_available: false,
+            multi_agent_mode: Default::default(),
             initial_turns_page: None,
         };
 

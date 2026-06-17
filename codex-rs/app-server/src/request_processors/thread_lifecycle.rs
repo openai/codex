@@ -661,6 +661,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         sandbox,
         active_permission_profile,
         reasoning_effort,
+        multi_agent_mode: config_snapshot.multi_agent_mode,
         multi_agent_mode_available: config_snapshot.multi_agent_mode_available,
         initial_turns_page,
     };

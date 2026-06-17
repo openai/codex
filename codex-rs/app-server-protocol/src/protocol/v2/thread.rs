@@ -178,6 +178,9 @@ pub struct ThreadStartResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[experimental("thread/start.multiAgentMode")]
+    #[serde(default)]
+    pub multi_agent_mode: MultiAgentMode,
     #[experimental("thread/start.multiAgentModeAvailable")]
     #[serde(default)]
     pub multi_agent_mode_available: bool,
@@ -400,6 +403,9 @@ pub struct ThreadResumeResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[experimental("thread/resume.multiAgentMode")]
+    #[serde(default)]
+    pub multi_agent_mode: MultiAgentMode,
     #[experimental("thread/resume.multiAgentModeAvailable")]
     #[serde(default)]
     pub multi_agent_mode_available: bool,
@@ -551,6 +557,9 @@ pub struct ThreadForkResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[experimental("thread/fork.multiAgentMode")]
+    #[serde(default)]
+    pub multi_agent_mode: MultiAgentMode,
     #[experimental("thread/fork.multiAgentModeAvailable")]
     #[serde(default)]
     pub multi_agent_mode_available: bool,
