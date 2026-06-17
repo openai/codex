@@ -140,6 +140,9 @@ async fn send_item_event_notification(
     event_turn_id: &str,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
+    // TODO(anp): Stop dropping item notifications here once
+    // `codex_app_server_protocol::protocol::item_builders` can build command actions from
+    // `PathUri` and `protocol::v2::item::CommandAction` carries `PathUri` paths.
     match item_event_to_server_notification(msg, &conversation_id.to_string(), event_turn_id) {
         Ok(notification) => outgoing.send_server_notification(notification).await,
         Err(error) => error!(%error, "failed to map item event to app-server notification"),
