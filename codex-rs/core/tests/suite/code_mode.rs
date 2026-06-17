@@ -277,7 +277,7 @@ text(result);
                 .expect("standalone web search should be enabled");
             config
                 .web_search_mode
-                .set(WebSearchMode::Live)
+                .set(WebSearchMode::IndexGated)
                 .expect("web search mode should be accepted");
         });
     let test = builder.build(&server).await?;
@@ -309,6 +309,7 @@ text(result);
         serde_json::json!({
             "allowed_callers": ["direct"],
             "external_web_access": true,
+            "index_gated_web_access": true,
         })
     );
     assert_eq!(
