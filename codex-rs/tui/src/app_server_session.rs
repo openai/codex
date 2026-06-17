@@ -1562,6 +1562,8 @@ async fn thread_session_state_from_thread_start_response(
         response.runtime_workspace_roots.clone(),
         response.instruction_sources.clone(),
         response.reasoning_effort.clone(),
+        response.multi_agent_mode,
+        response.multi_agent_mode_available,
         config,
     )
     .await
@@ -1603,6 +1605,8 @@ async fn thread_session_state_from_thread_resume_response(
         response.runtime_workspace_roots.clone(),
         response.instruction_sources.clone(),
         response.reasoning_effort.clone(),
+        response.multi_agent_mode,
+        response.multi_agent_mode_available,
         config,
     )
     .await
@@ -1635,6 +1639,8 @@ async fn thread_session_state_from_thread_fork_response(
         response.runtime_workspace_roots.clone(),
         response.instruction_sources.clone(),
         response.reasoning_effort.clone(),
+        response.multi_agent_mode,
+        response.multi_agent_mode_available,
         config,
     )
     .await
@@ -1674,6 +1680,8 @@ async fn thread_session_state_from_thread_response(
     runtime_workspace_roots: Vec<AbsolutePathBuf>,
     instruction_source_paths: Vec<AbsolutePathBuf>,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+    multi_agent_mode: codex_protocol::config_types::MultiAgentMode,
+    multi_agent_mode_available: bool,
     config: &Config,
 ) -> Result<ThreadSessionState, String> {
     let thread_id = ThreadId::from_string(thread_id)
@@ -1703,6 +1711,8 @@ async fn thread_session_state_from_thread_response(
         instruction_source_paths,
         reasoning_effort,
         collaboration_mode: None,
+        multi_agent_mode,
+        multi_agent_mode_available,
         personality: config.personality,
         message_history: Some(MessageHistoryMetadata {
             log_id,
@@ -2507,6 +2517,8 @@ mod tests {
             Vec::new(),
             Vec::new(),
             /*reasoning_effort*/ None,
+            /*multi_agent_mode*/ Default::default(),
+            /*multi_agent_mode_available*/ false,
             &config,
         )
         .await
@@ -2542,6 +2554,8 @@ mod tests {
             Vec::new(),
             Vec::new(),
             /*reasoning_effort*/ None,
+            /*multi_agent_mode*/ Default::default(),
+            /*multi_agent_mode_available*/ false,
             &config,
         )
         .await

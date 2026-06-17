@@ -541,6 +541,7 @@ pub(crate) struct ChatWidget {
     active_collaboration_mask: Option<CollaborationModeMask>,
     multi_agent_mode: MultiAgentMode,
     pending_multi_agent_mode: Option<MultiAgentMode>,
+    multi_agent_mode_available: bool,
     has_chatgpt_account: bool,
     has_codex_backend_auth: bool,
     model_catalog: Arc<ModelCatalog>,

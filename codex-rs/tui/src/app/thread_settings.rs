@@ -185,6 +185,8 @@ fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: 
     session.active_permission_profile = settings.active_permission_profile.clone().map(Into::into);
     session.set_cwd_retargeting_implicit_runtime_workspace_root(settings.cwd.clone());
     session.personality = settings.personality;
+    session.multi_agent_mode = settings.multi_agent_mode;
+    session.multi_agent_mode_available = settings.multi_agent_mode_available;
     let mut collaboration_mode = settings.collaboration_mode.clone();
     collaboration_mode
         .settings

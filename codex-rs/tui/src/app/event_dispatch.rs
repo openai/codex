@@ -892,6 +892,9 @@ impl App {
                 self.sync_active_thread_personality_setting(app_server, personality)
                     .await;
             }
+            AppEvent::UpdateMultiAgentMode(mode) => {
+                self.chat_widget.set_multi_agent_mode_from_ui(mode);
+            }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
             }

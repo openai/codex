@@ -31,6 +31,7 @@ fn thread_settings_for_test(
                 },
             },
             multi_agent_mode: MultiAgentMode::Proactive,
+            multi_agent_mode_available: true,
             personality: Some(Personality::Pragmatic),
         },
     }
@@ -54,6 +55,8 @@ fn configured_thread_session(thread_id: ThreadId) -> crate::session_state::Threa
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
+        multi_agent_mode: Default::default(),
+        multi_agent_mode_available: false,
         personality: None,
         message_history: None,
         network_proxy: None,

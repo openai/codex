@@ -115,6 +115,7 @@ impl ChatWidget {
             active_collaboration_mask,
             multi_agent_mode: MultiAgentMode::default(),
             pending_multi_agent_mode: None,
+            multi_agent_mode_available: false,
             has_chatgpt_account,
             has_codex_backend_auth,
             model_catalog,

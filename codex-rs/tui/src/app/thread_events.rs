@@ -374,6 +374,8 @@ mod tests {
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             collaboration_mode: None,
+            multi_agent_mode: Default::default(),
+            multi_agent_mode_available: false,
             personality: None,
             message_history: None,
             network_proxy: None,

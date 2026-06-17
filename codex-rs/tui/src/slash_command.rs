@@ -158,7 +158,6 @@ impl SlashCommand {
             SlashCommand::Review
                 | SlashCommand::Rename
                 | SlashCommand::Plan
-                | SlashCommand::Cascade
                 | SlashCommand::Goal
                 | SlashCommand::Ide
                 | SlashCommand::Keymap

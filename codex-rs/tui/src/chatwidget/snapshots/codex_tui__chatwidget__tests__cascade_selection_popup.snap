@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: popup
+---
+  Select Cascade Mode
+  Choose when Codex may delegate work to sub-agents.
+
+› 1. Off (current)  Delegate only when you explicitly request sub-agents.
+  2. On             Delegate proactively when parallel work would improve
+                    speed or quality.
+
+  Press enter to confirm or esc to go back

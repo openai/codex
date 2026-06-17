@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use codex_app_server_protocol::AskForApproval;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
@@ -50,6 +51,8 @@ pub(crate) struct ThreadSessionState {
     pub(crate) instruction_source_paths: Vec<AbsolutePathBuf>,
     pub(crate) reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     pub(crate) collaboration_mode: Option<Box<CollaborationMode>>,
+    pub(crate) multi_agent_mode: MultiAgentMode,
+    pub(crate) multi_agent_mode_available: bool,
     pub(crate) personality: Option<Personality>,
     pub(crate) message_history: Option<MessageHistoryMetadata>,
     pub(crate) network_proxy: Option<SessionNetworkProxyRuntime>,

@@ -417,6 +417,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_cascade_command_enabled(&mut self, enabled: bool) {
+        self.composer.set_cascade_command_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub fn set_service_tier_commands_enabled(&mut self, enabled: bool) {
         self.composer.set_service_tier_commands_enabled(enabled);
         self.request_redraw();

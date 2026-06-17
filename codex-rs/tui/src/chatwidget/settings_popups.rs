@@ -90,6 +90,55 @@ impl ChatWidget {
         });
     }
 
+    pub(crate) fn open_cascade_popup(&mut self) {
+        if !self.multi_agent_mode_available {
+            self.add_error_message(
+                "Cascade is unavailable for the current model and multi-agent configuration."
+                    .to_string(),
+            );
+            return;
+        }
+
+        let modes = [
+            (
+                MultiAgentMode::ExplicitRequestOnly,
+                "Off",
+                "Delegate only when you explicitly request sub-agents.",
+            ),
+            (
+                MultiAgentMode::Proactive,
+                "On",
+                "Delegate proactively when parallel work would improve speed or quality.",
+            ),
+        ];
+        let items = modes
+            .into_iter()
+            .map(|(mode, name, description)| SelectionItem {
+                name: name.to_string(),
+                description: Some(description.to_string()),
+                is_current: self.multi_agent_mode == mode,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::UpdateMultiAgentMode(mode));
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            })
+            .collect();
+
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from("Select Cascade Mode".bold()));
+        header.push(Line::from(
+            "Choose when Codex may delegate work to sub-agents.".dim(),
+        ));
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            header: Box::new(header),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
     pub(crate) fn open_experimental_popup(&mut self) {
         let features: Vec<ExperimentalFeatureItem> = FEATURES
             .iter()

@@ -1,6 +1,0 @@
----
-source: tui/src/chatwidget/tests/slash_commands.rs
-assertion_line: 2885
-expression: rendered
----
-• Cascade: proactive Use /cascade off to require an explicit delegation request.

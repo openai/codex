@@ -271,7 +271,7 @@ impl ChatWidget {
                 self.apply_plan_slash_command();
             }
             SlashCommand::Cascade => {
-                self.show_multi_agent_mode();
+                self.open_cascade_popup();
             }
             SlashCommand::Goal => {
                 if !self.config.features.enabled(Feature::Goals) {
@@ -702,13 +702,6 @@ impl ChatWidget {
                 }
                 _ => self.add_error_message(RAW_USAGE.to_string()),
             },
-            SlashCommand::Cascade => match trimmed.to_ascii_lowercase().as_str() {
-                "on" => self.set_multi_agent_mode_from_ui(MultiAgentMode::Proactive),
-                "off" => {
-                    self.set_multi_agent_mode_from_ui(MultiAgentMode::ExplicitRequestOnly);
-                }
-                _ => self.add_error_message(multi_agent_mode::CASCADE_USAGE.to_string()),
-            },
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {
                     return;
@@ -1022,6 +1015,7 @@ impl ChatWidget {
             goal_command_enabled: self.config.features.enabled(Feature::Goals),
             service_tier_commands_enabled: self.fast_mode_enabled(),
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
+            cascade_command_enabled: self.multi_agent_mode_available,
             allow_elevate_sandbox,
             side_conversation_active: self.active_side_conversation,
         }

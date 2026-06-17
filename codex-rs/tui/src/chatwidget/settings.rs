@@ -482,6 +482,7 @@ impl ChatWidget {
         self.set_approvals_reviewer(settings.approvals_reviewer.to_core());
         self.config.personality = settings.personality;
         self.apply_server_multi_agent_mode(settings.multi_agent_mode);
+        self.set_multi_agent_mode_available(settings.multi_agent_mode_available);
 
         let permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
             &settings.sandbox_policy.to_core(),

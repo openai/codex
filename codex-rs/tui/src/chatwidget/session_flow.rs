@@ -74,6 +74,8 @@ impl ChatWidget {
         }
         self.config.approvals_reviewer = session.approvals_reviewer;
         self.config.personality = session.personality;
+        self.apply_server_multi_agent_mode(session.multi_agent_mode);
+        self.set_multi_agent_mode_available(session.multi_agent_mode_available);
         self.status_line_project_root_name_cache = None;
         let forked_from_id = session.forked_from_id;
         let default_model = session.model.clone();

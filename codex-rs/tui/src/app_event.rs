@@ -48,6 +48,7 @@ use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -693,6 +694,9 @@ pub(crate) enum AppEvent {
 
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),
+
+    /// Update the multi-agent mode used by the next turn.
+    UpdateMultiAgentMode(MultiAgentMode),
 
     /// Persist the selected model and reasoning effort to the appropriate config.
     PersistModelSelection {

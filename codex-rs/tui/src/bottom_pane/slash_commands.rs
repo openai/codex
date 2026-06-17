@@ -62,6 +62,7 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) service_tier_commands_enabled: bool,
     pub(crate) goal_command_enabled: bool,
     pub(crate) personality_command_enabled: bool,
+    pub(crate) cascade_command_enabled: bool,
     pub(crate) allow_elevate_sandbox: bool,
     pub(crate) side_conversation_active: bool,
 }
@@ -77,6 +78,7 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.token_activity_command_enabled || *cmd != SlashCommand::Usage)
         .filter(|(_, cmd)| flags.goal_command_enabled || *cmd != SlashCommand::Goal)
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
+        .filter(|(_, cmd)| flags.cascade_command_enabled || *cmd != SlashCommand::Cascade)
         .filter(|(_, cmd)| !flags.side_conversation_active || cmd.available_in_side_conversation())
         .collect()
 }
@@ -171,6 +173,7 @@ mod tests {
             service_tier_commands_enabled: true,
             goal_command_enabled: true,
             personality_command_enabled: true,
+            cascade_command_enabled: true,
             allow_elevate_sandbox: true,
             side_conversation_active: false,
         }
@@ -191,14 +194,28 @@ mod tests {
     }
 
     #[test]
-    fn cascade_command_is_always_visible() {
+    fn cascade_command_is_hidden_when_disabled() {
         assert_eq!(
             find_builtin_command("cascade", BuiltinCommandFlags::default()),
-            Some(SlashCommand::Cascade)
+            None
         );
         assert_eq!(
             find_builtin_command("multi-agent", BuiltinCommandFlags::default()),
             None
+        );
+    }
+
+    #[test]
+    fn cascade_command_is_visible_when_enabled() {
+        assert_eq!(
+            find_builtin_command(
+                "cascade",
+                BuiltinCommandFlags {
+                    cascade_command_enabled: true,
+                    ..Default::default()
+                }
+            ),
+            Some(SlashCommand::Cascade)
         );
     }
 

@@ -993,6 +993,8 @@ async fn bang_shell_enter_while_task_running_submits_run_user_shell_command() {
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
+        multi_agent_mode: Default::default(),
+        multi_agent_mode_available: false,
         personality: None,
         message_history: None,
         network_proxy: None,

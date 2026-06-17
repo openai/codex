@@ -2601,6 +2601,8 @@ async fn session_configured_clears_goal_status_footer() {
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
+        multi_agent_mode: Default::default(),
+        multi_agent_mode_available: false,
         personality: None,
         message_history: None,
         network_proxy: None,
