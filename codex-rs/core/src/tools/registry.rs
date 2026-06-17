@@ -34,6 +34,7 @@ use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use futures::future::BoxFuture;
 use serde_json::Value;
+use tracing::instrument;
 
 pub(crate) type ToolTelemetryTags = Vec<(&'static str, String)>;
 
@@ -327,6 +328,7 @@ impl ToolRegistry {
         Self { tools }
     }
 
+    #[instrument(level = "trace", skip_all)]
     pub(crate) fn from_tools(tools: impl IntoIterator<Item = Arc<dyn CoreToolRuntime>>) -> Self {
         let mut tools_by_name = HashMap::new();
         for tool in tools {
