@@ -8138,7 +8138,7 @@ async fn turn_context_item_stores_local_cwd() {
     turn_context.environments.turn_environments[0] = TurnEnvironment::new(
         "remote".to_string(),
         environment.environment,
-        cwd.clone(),
+        cwd,
         environment.shell,
     );
 
