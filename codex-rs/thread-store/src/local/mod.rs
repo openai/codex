@@ -512,6 +512,7 @@ mod tests {
                 RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
                     call_id: "call-1".to_string(),
                     output: FunctionCallOutputPayload::from_text("tool output".to_string()),
+                    metadata: None,
                 }),
                 RolloutItem::EventMsg(EventMsg::TokenCount(
                     codex_protocol::protocol::TokenCountEvent {
