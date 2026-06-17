@@ -30,8 +30,7 @@ pub fn persisted_rollout_items(items: &[RolloutItem]) -> Vec<RolloutItem> {
 #[inline]
 pub fn should_persist_response_item(item: &ResponseItem) -> bool {
     match item {
-        ResponseItem::AdditionalTools { .. }
-        | ResponseItem::Message { .. }
+        ResponseItem::Message { .. }
         | ResponseItem::AgentMessage { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::LocalShellCall { .. }
@@ -45,8 +44,9 @@ pub fn should_persist_response_item(item: &ResponseItem) -> bool {
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Compaction { .. }
         | ResponseItem::ContextCompaction { .. } => true,
-        ResponseItem::CompactionTrigger { .. } => false,
-        ResponseItem::Other => false,
+        ResponseItem::AdditionalTools { .. }
+        | ResponseItem::CompactionTrigger { .. }
+        | ResponseItem::Other => false,
     }
 }
 

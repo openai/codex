@@ -9,6 +9,8 @@ use codex_features::Feature;
 use codex_image_generation_extension::install as install_image_generation_extension;
 use codex_login::CodexAuth;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::EventMsg;
@@ -114,6 +116,64 @@ async fn responses_lite_uses_input_items_for_instructions_and_tools() -> Result<
 
     let tools = additional_tools(&body)?;
     assert!(!tools.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_lite_rejects_oversized_additional_tools_item() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let oversized_tool = DynamicToolSpec::Function(DynamicToolFunctionSpec {
+        name: "oversized_tool".to_string(),
+        description: "x".repeat(50_000),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false,
+        }),
+        defer_loading: false,
+    });
+    let mut builder = test_codex().with_model_info_override("gpt-5.4", |model_info| {
+        model_info.use_responses_lite = true;
+    });
+    let mut test = builder.build(&server).await?;
+    let new_thread = test
+        .thread_manager
+        .start_thread_with_tools(test.config.clone(), vec![oversized_tool])
+        .await?;
+    test.codex = new_thread.thread;
+    test.session_configured = new_thread.session_configured;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    let error = wait_for_event(&test.codex, |event| matches!(event, EventMsg::Error(_))).await;
+    let EventMsg::Error(error) = error else {
+        unreachable!();
+    };
+    assert!(
+        error
+            .message
+            .starts_with("Responses Lite additional tools exceed the 10000-token limit")
+    );
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
 
     Ok(())
 }
