@@ -6,6 +6,7 @@ use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::config::Config;
+use crate::config::RolloutBudgetConfig;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::rollout_budget::RolloutBudget;
 use crate::session::emit_subagent_session_started;
@@ -107,11 +108,18 @@ pub(crate) struct AgentControl {
 
 impl AgentControl {
     /// Construct a new `AgentControl` that can spawn/message agents via the given manager state.
-    pub(crate) fn new(manager: Weak<ThreadManagerState>) -> Self {
-        Self {
+    pub(crate) fn new(
+        manager: Weak<ThreadManagerState>,
+        rollout_budget: Option<RolloutBudgetConfig>,
+    ) -> Self {
+        let control = Self {
             manager,
             ..Default::default()
+        };
+        if let Some(rollout_budget) = rollout_budget {
+            control.rollout_budget.configure(rollout_budget);
         }
+        control
     }
 
     pub(crate) fn with_session_id(mut self, session_id: SessionId, max_threads: usize) -> Self {

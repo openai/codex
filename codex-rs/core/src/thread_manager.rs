@@ -621,6 +621,7 @@ impl ThreadManager {
         options: StartThreadOptions,
         forked_from_thread_id: Option<ThreadId>,
     ) -> CodexResult<NewThread> {
+        let agent_control = self.agent_control_for_config(&options.config);
         let (resumed_session_source, resumed_thread_source) = options
             .initial_history
             .get_resumed_session_sources()
@@ -631,7 +632,7 @@ impl ThreadManager {
             options.config,
             options.initial_history,
             Arc::clone(&self.state.auth_manager),
-            self.agent_control(),
+            agent_control,
             session_source,
             /*parent_thread_id*/ None,
             forked_from_thread_id,
@@ -710,6 +711,7 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
+        let agent_control = self.agent_control_for_config(&config);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
@@ -721,7 +723,7 @@ impl ThreadManager {
             config,
             initial_history,
             auth_manager,
-            self.agent_control(),
+            agent_control,
             session_source,
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
@@ -743,6 +745,7 @@ impl ThreadManager {
         config: Config,
         user_shell_override: crate::shell::Shell,
     ) -> CodexResult<NewThread> {
+        let agent_control = self.agent_control_for_config(&config);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
@@ -751,7 +754,7 @@ impl ThreadManager {
             config,
             InitialHistory::New,
             Arc::clone(&self.state.auth_manager),
-            self.agent_control(),
+            agent_control,
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
@@ -772,6 +775,7 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         user_shell_override: crate::shell::Shell,
     ) -> CodexResult<NewThread> {
+        let agent_control = self.agent_control_for_config(&config);
         let initial_history = self.initial_history_from_rollout_path(rollout_path).await?;
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
@@ -784,7 +788,7 @@ impl ThreadManager {
             config,
             initial_history,
             auth_manager,
-            self.agent_control(),
+            agent_control,
             session_source,
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
@@ -952,11 +956,12 @@ impl ThreadManager {
             self.state.environment_manager.as_ref(),
             &config.cwd,
         );
+        let agent_control = self.agent_control_for_config(&config);
         Box::pin(self.state.spawn_thread(
             config,
             history,
             Arc::clone(&self.state.auth_manager),
-            self.agent_control(),
+            agent_control,
             /*parent_thread_id*/ None,
             forked_from_thread_id,
             thread_source,
@@ -971,7 +976,11 @@ impl ThreadManager {
     }
 
     pub(crate) fn agent_control(&self) -> AgentControl {
-        AgentControl::new(Arc::downgrade(&self.state))
+        AgentControl::new(Arc::downgrade(&self.state), None)
+    }
+
+    fn agent_control_for_config(&self, config: &Config) -> AgentControl {
+        AgentControl::new(Arc::downgrade(&self.state), config.rollout_budget)
     }
 
     #[cfg(test)]
