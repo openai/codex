@@ -4,17 +4,18 @@ use codex_app_server_protocol::PluginInstallPolicy;
 use codex_login::CodexAuth;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
+use std::borrow::Cow;
 use std::collections::HashSet;
 use tracing::warn;
 
 use crate::OPENAI_API_CURATED_MARKETPLACE_NAME;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
-use crate::PluginCatalogRevision;
 use crate::PluginsConfigInput;
 use crate::PluginsManager;
 use crate::marketplace::MarketplaceListOutcome;
 use crate::marketplace::MarketplacePluginInstallPolicy;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
+use crate::remote::RemoteDiscoverablePlugin;
 
 const TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST: &[&str] = &[
     "github@openai-curated",
@@ -68,12 +69,18 @@ pub struct ToolSuggestDiscoverablePlugin {
     pub app_connector_ids: Vec<String>,
 }
 
-/// Selects the plugin catalog input used by the legacy tool-suggestion projection.
+/// Selects the stable source fragment used by the legacy tool-suggestion projection.
+///
+/// Only the two owner-revisioned sources have reusable variants. `RebuildAll`
+/// preserves the existing path for mutable or otherwise unproven inputs.
+#[derive(Clone, Copy)]
 pub enum ToolSuggestPluginCatalog<'a> {
     RebuildAll,
-    Revisioned {
-        revision: &'a PluginCatalogRevision,
+    Curated {
         marketplaces: &'a MarketplaceListOutcome,
+    },
+    RemoteCurated {
+        plugins: &'a [RemoteDiscoverablePlugin],
     },
 }
 
@@ -104,18 +111,18 @@ impl PluginsManager {
         let use_remote_global_catalog =
             input.plugins.remote_plugin_enabled && auth.is_some_and(CodexAuth::uses_codex_backend);
         let include_openai_curated = !use_remote_global_catalog;
-        let marketplaces = match catalog {
-            ToolSuggestPluginCatalog::RebuildAll => {
+        let marketplaces = match (catalog, use_remote_global_catalog) {
+            (ToolSuggestPluginCatalog::Curated { marketplaces }, false) => self
+                .list_marketplaces_for_config_with_curated_plugin_catalog(
+                    &input.plugins,
+                    marketplaces,
+                ),
+            (ToolSuggestPluginCatalog::RebuildAll, _)
+            | (ToolSuggestPluginCatalog::Curated { .. }, true)
+            | (ToolSuggestPluginCatalog::RemoteCurated { .. }, false)
+            | (ToolSuggestPluginCatalog::RemoteCurated { .. }, true) => {
                 self.list_marketplaces_for_config(&input.plugins, &[], include_openai_curated)
             }
-            ToolSuggestPluginCatalog::Revisioned {
-                revision,
-                marketplaces,
-            } => self.list_marketplaces_for_config_with_revisioned_plugin_catalog(
-                &input.plugins,
-                include_openai_curated,
-                (revision, marketplaces),
-            ),
         }
         .context("failed to list plugin marketplaces for tool suggestions")?
         .marketplaces;
@@ -190,9 +197,18 @@ impl PluginsManager {
                 .flat_map(|marketplace| marketplace.plugins.iter())
                 .map(|plugin| plugin.remote_plugin_id.clone())
                 .collect::<HashSet<_>>();
-            for plugin in
-                self.cached_global_remote_discoverable_plugins_for_config(&input.plugins, auth)
-            {
+            let remote_plugins = match catalog {
+                ToolSuggestPluginCatalog::RemoteCurated { plugins } => Cow::Borrowed(plugins),
+                ToolSuggestPluginCatalog::RebuildAll | ToolSuggestPluginCatalog::Curated { .. } => {
+                    Cow::Owned(
+                        self.cached_global_remote_discoverable_plugins_for_config(
+                            &input.plugins,
+                            auth,
+                        ),
+                    )
+                }
+            };
+            for plugin in remote_plugins.iter() {
                 let is_configured_plugin = input
                     .configured_plugin_ids
                     .contains(plugin.config_id.as_str())
@@ -220,13 +236,13 @@ impl PluginsManager {
                 }
 
                 discoverable_plugins.push(ToolSuggestDiscoverablePlugin {
-                    id: plugin.config_id,
-                    remote_plugin_id: Some(plugin.remote_plugin_id),
-                    name: plugin.name,
-                    description: plugin.description,
+                    id: plugin.config_id.clone(),
+                    remote_plugin_id: Some(plugin.remote_plugin_id.clone()),
+                    name: plugin.name.clone(),
+                    description: plugin.description.clone(),
                     has_skills: plugin.has_skills,
                     mcp_server_names: Vec::new(),
-                    app_connector_ids: plugin.app_ids,
+                    app_connector_ids: plugin.app_ids.clone(),
                 });
             }
         }

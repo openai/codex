@@ -14,7 +14,6 @@ use tempfile::TempDir;
 use tracing::warn;
 use zip::ZipArchive;
 
-use crate::plugin_catalog_revision::PluginCatalogRevision;
 use codex_login::default_client::build_reqwest_client;
 
 const GITHUB_API_BASE_URL: &str = "https://api.github.com";
@@ -28,7 +27,6 @@ const OPENAI_PLUGINS_GIT_URL: &str = "https://github.com/openai/plugins.git";
 const CURATED_PLUGINS_FETCH_REF: &str = "refs/codex/curated-sync";
 const CURATED_PLUGINS_RELATIVE_DIR: &str = ".tmp/plugins";
 const CURATED_PLUGINS_SHA_FILE: &str = ".tmp/plugins.sha";
-const CURATED_PLUGINS_CATALOG_REVISION_FILE: &str = ".codex-plugin-catalog-revision";
 const CURATED_PLUGINS_SYNC_LOCK_FILE: &str = ".tmp/plugins.sync.lock";
 const CURATED_PLUGINS_BACKUP_ARCHIVE_FALLBACK_VERSION: &str = "export-backup";
 const CURATED_PLUGINS_GIT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -69,18 +67,8 @@ pub fn read_curated_plugins_sha(codex_home: &Path) -> Option<String> {
     read_sha_file(curated_plugins_sha_path(codex_home).as_path())
 }
 
-pub(crate) fn read_curated_plugins_catalog_revision(
-    repo_path: &Path,
-) -> Option<PluginCatalogRevision> {
-    PluginCatalogRevision::read(repo_path, curated_plugins_catalog_revision_path(repo_path))
-}
-
 fn curated_plugins_sha_path(codex_home: &Path) -> PathBuf {
     codex_home.join(CURATED_PLUGINS_SHA_FILE)
-}
-
-fn curated_plugins_catalog_revision_path(repo_path: &Path) -> PathBuf {
-    repo_path.join(CURATED_PLUGINS_CATALOG_REVISION_FILE)
 }
 
 pub fn sync_openai_plugins_repo(codex_home: &Path) -> Result<String, String> {
@@ -180,7 +168,6 @@ fn sync_openai_plugins_repo_via_git(codex_home: &Path, git_binary: &str) -> Resu
     let local_sha = read_local_git_or_sha_file(&repo_path, &sha_path, git_binary);
 
     if local_sha.as_deref() == Some(remote_sha.as_str()) && repo_path.join(".git").is_dir() {
-        ensure_curated_plugins_catalog_revision(&repo_path, &remote_sha)?;
         return Ok(remote_sha);
     }
 
@@ -213,7 +200,6 @@ fn sync_openai_plugins_repo_via_git(codex_home: &Path, git_binary: &str) -> Resu
     }
 
     ensure_marketplace_manifest_exists(staged_repo_dir.path())?;
-    write_curated_plugins_catalog_revision(staged_repo_dir.path(), &remote_sha)?;
     activate_curated_repo(&repo_path, staged_repo_dir)?;
     write_curated_plugins_sha(&sha_path, &remote_sha)?;
     Ok(remote_sha)
@@ -317,7 +303,6 @@ fn sync_openai_plugins_repo_via_http(
     let local_sha = read_sha_file(&sha_path);
 
     if local_sha.as_deref() == Some(remote_sha.as_str()) && repo_path.is_dir() {
-        ensure_curated_plugins_catalog_revision(&repo_path, &remote_sha)?;
         return Ok(remote_sha);
     }
 
@@ -325,7 +310,6 @@ fn sync_openai_plugins_repo_via_http(
     let zipball_bytes = runtime.block_on(fetch_curated_repo_zipball(api_base_url, &remote_sha))?;
     extract_zipball_to_dir(&zipball_bytes, staged_repo_dir.path())?;
     ensure_marketplace_manifest_exists(staged_repo_dir.path())?;
-    write_curated_plugins_catalog_revision(staged_repo_dir.path(), &remote_sha)?;
     activate_curated_repo(&repo_path, staged_repo_dir)?;
     write_curated_plugins_sha(&sha_path, &remote_sha)?;
     Ok(remote_sha)
@@ -349,7 +333,6 @@ fn sync_openai_plugins_repo_via_backup_archive(
     ensure_marketplace_manifest_exists(staged_repo_dir.path())?;
     let export_version = read_extracted_backup_archive_git_sha(staged_repo_dir.path())?
         .unwrap_or_else(|| CURATED_PLUGINS_BACKUP_ARCHIVE_FALLBACK_VERSION.to_string());
-    write_curated_plugins_catalog_revision(staged_repo_dir.path(), &export_version)?;
     activate_curated_repo(&repo_path, staged_repo_dir)?;
     write_curated_plugins_sha(&sha_path, &export_version)?;
     Ok(export_version)
@@ -581,24 +564,6 @@ fn write_curated_plugins_sha(sha_path: &Path, remote_sha: &str) -> Result<(), St
         format!(
             "failed to write curated plugins sha file {}: {err}",
             sha_path.display()
-        )
-    })
-}
-
-fn ensure_curated_plugins_catalog_revision(repo_path: &Path, revision: &str) -> Result<(), String> {
-    let revision_path = curated_plugins_catalog_revision_path(repo_path);
-    if read_sha_file(&revision_path).as_deref() == Some(revision) {
-        return Ok(());
-    }
-    write_curated_plugins_catalog_revision(repo_path, revision)
-}
-
-fn write_curated_plugins_catalog_revision(repo_path: &Path, revision: &str) -> Result<(), String> {
-    let revision_path = curated_plugins_catalog_revision_path(repo_path);
-    std::fs::write(&revision_path, format!("{revision}\n")).map_err(|err| {
-        format!(
-            "failed to write curated plugins catalog revision file {}: {err}",
-            revision_path.display()
         )
     })
 }

@@ -600,12 +600,6 @@ async fn sync_openai_plugins_repo_falls_back_to_http_when_git_is_unavailable() {
     assert_eq!(synced_sha, sha);
     assert_curated_gmail_repo(&repo_path);
     assert_eq!(read_curated_plugins_sha(tmp.path()).as_deref(), Some(sha));
-    let revision = read_curated_plugins_catalog_revision(&repo_path)
-        .expect("synced repository should carry a catalog revision");
-    assert_eq!(revision.marker_contents(), format!("{sha}\n"));
-    assert!(revision.is_current());
-    write_curated_plugins_catalog_revision(&repo_path, "replacement").expect("replace revision");
-    assert!(!revision.is_current());
 }
 
 #[cfg(unix)]
@@ -802,7 +796,6 @@ async fn sync_openai_plugins_repo_skips_archive_download_when_sha_matches() {
 
     assert_eq!(read_curated_plugins_sha(tmp.path()).as_deref(), Some(sha));
     assert!(repo_path.join(".agents/plugins/marketplace.json").is_file());
-    assert!(read_curated_plugins_catalog_revision(&repo_path).is_some());
 }
 
 #[tokio::test]

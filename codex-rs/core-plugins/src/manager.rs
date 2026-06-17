@@ -40,16 +40,19 @@ use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
 use crate::marketplace_upgrade::configured_git_marketplace_names;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
-use crate::plugin_catalog_revision::PluginCatalogRevision;
+use crate::plugin_catalog_revision::CuratedPluginCatalogSnapshot;
+use crate::plugin_catalog_revision::RemoteCuratedPluginCatalogSnapshot;
+use crate::plugin_catalog_revision::RevisionedPluginCatalogSnapshots;
 use crate::remote::RecommendedPluginsMode;
+use crate::remote::RemoteDiscoverablePlugin;
 use crate::remote::RemoteInstalledPlugin;
+use crate::remote::RemotePluginCatalogCacheKey;
 use crate::remote::RemotePluginCatalogError;
 use crate::remote::RemotePluginServiceConfig;
 use crate::remote_legacy::RemotePluginFetchError;
 use crate::remote_legacy::RemotePluginMutationError;
 use crate::startup_sync::curated_plugins_api_marketplace_path;
 use crate::startup_sync::curated_plugins_repo_path;
-use crate::startup_sync::read_curated_plugins_catalog_revision;
 use crate::startup_sync::read_curated_plugins_sha;
 use crate::startup_sync::sync_openai_plugins_repo;
 use crate::store::PluginInstallResult as StorePluginInstallResult;
@@ -360,6 +363,8 @@ pub struct PluginsManager {
     remote_installed_plugins_cache: RwLock<Option<Vec<RemoteInstalledPlugin>>>,
     remote_installed_plugins_cache_refresh_state: RwLock<RemoteInstalledPluginsCacheRefreshState>,
     global_remote_catalog_cache_refresh_state: RwLock<GlobalRemoteCatalogCacheRefreshState>,
+    curated_plugin_catalog: RwLock<Option<CuratedPluginCatalogSnapshot>>,
+    remote_curated_plugin_catalog: RwLock<Option<RemoteCuratedPluginCatalogState>>,
     restriction_product: Option<Product>,
     auth_mode: RwLock<Option<AuthMode>>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
@@ -382,6 +387,11 @@ struct PluginLoadCacheKey {
     configured_plugins: HashMap<String, PluginConfig>,
     skill_config_rules: SkillConfigRules,
     remote_plugin_enabled: bool,
+}
+
+struct RemoteCuratedPluginCatalogState {
+    key: RemotePluginCatalogCacheKey,
+    snapshot: RemoteCuratedPluginCatalogSnapshot,
 }
 
 impl PluginsManager {
@@ -420,6 +430,8 @@ impl PluginsManager {
             global_remote_catalog_cache_refresh_state: RwLock::new(
                 GlobalRemoteCatalogCacheRefreshState::default(),
             ),
+            curated_plugin_catalog: RwLock::new(None),
+            remote_curated_plugin_catalog: RwLock::new(None),
             restriction_product,
             auth_mode: RwLock::new(auth_mode),
             analytics_events_client: RwLock::new(None),
@@ -1245,69 +1257,182 @@ impl PluginsManager {
         Ok(self.configured_marketplaces_from_outcome(config, marketplace_outcome))
     }
 
-    pub fn revisioned_plugin_catalog_revision_for_config(
+    /// Returns the complete source-owned plugin snapshots eligible for reuse.
+    ///
+    /// Local curated and remote curated are revisioned independently. Mutable
+    /// home/configured sources and API-key curated data are intentionally
+    /// omitted so callers continue rebuilding them on every projection.
+    pub fn revisioned_plugin_catalog_snapshots_for_config(
         &self,
         config: &PluginsConfigInput,
-        include_openai_curated: bool,
-    ) -> Option<PluginCatalogRevision> {
-        if !config.plugins_enabled
-            || !include_openai_curated
-            || matches!(
-                self.auth_mode(),
-                Some(AuthMode::ApiKey | AuthMode::BedrockApiKey)
-            )
-        {
-            return None;
+        auth: Option<&CodexAuth>,
+    ) -> Result<RevisionedPluginCatalogSnapshots, MarketplaceError> {
+        if !config.plugins_enabled {
+            return Ok(RevisionedPluginCatalogSnapshots::default());
         }
-        let curated_repo_root = curated_plugins_repo_path(self.codex_home.as_path());
-        read_curated_plugins_catalog_revision(&curated_repo_root)
+
+        if config.remote_plugin_enabled && auth.is_some_and(CodexAuth::uses_codex_backend) {
+            return Ok(RevisionedPluginCatalogSnapshots {
+                curated: None,
+                remote_curated: auth.and_then(|auth| {
+                    self.remote_curated_plugin_catalog_snapshot_for_config(config, auth)
+                }),
+            });
+        }
+
+        if matches!(
+            self.auth_mode(),
+            Some(AuthMode::ApiKey | AuthMode::BedrockApiKey)
+        ) {
+            return Ok(RevisionedPluginCatalogSnapshots::default());
+        }
+
+        Ok(RevisionedPluginCatalogSnapshots {
+            curated: self.curated_plugin_catalog_snapshot()?,
+            remote_curated: None,
+        })
     }
 
-    pub fn build_revisioned_plugin_catalog(
+    fn curated_plugin_catalog_snapshot(
         &self,
-        revision: &PluginCatalogRevision,
-    ) -> Result<MarketplaceListOutcome, MarketplaceError> {
-        let incomplete = || {
-            MarketplaceError::InvalidPlugin(
-                "revisioned plugin catalog did not load completely".to_string(),
-            )
-        };
-        if !revision.is_current() {
-            return Err(incomplete());
+    ) -> Result<Option<CuratedPluginCatalogSnapshot>, MarketplaceError> {
+        let curated_repo_root = curated_plugins_repo_path(self.codex_home.as_path());
+        if !curated_repo_root.is_dir() {
+            let mut current = match self.curated_plugin_catalog.write() {
+                Ok(current) => current,
+                Err(err) => err.into_inner(),
+            };
+            *current = None;
+            return Ok(None);
         }
-        let root = AbsolutePathBuf::try_from(revision.source_root().to_path_buf())
-            .map_err(|_| incomplete())?;
+        let current = match self.curated_plugin_catalog.read() {
+            Ok(current) => current,
+            Err(err) => err.into_inner(),
+        };
+        if let Some(snapshot) = current.as_ref() {
+            return Ok(Some(snapshot.clone()));
+        }
+        drop(current);
+
+        let mut current = match self.curated_plugin_catalog.write() {
+            Ok(current) => current,
+            Err(err) => err.into_inner(),
+        };
+        if let Some(snapshot) = current.as_ref() {
+            return Ok(Some(snapshot.clone()));
+        }
+        let snapshot = self.load_curated_plugin_catalog()?;
+        *current = snapshot.clone();
+        Ok(snapshot)
+    }
+
+    fn load_curated_plugin_catalog(
+        &self,
+    ) -> Result<Option<CuratedPluginCatalogSnapshot>, MarketplaceError> {
+        let curated_repo_root = curated_plugins_repo_path(self.codex_home.as_path());
+        if !curated_repo_root.is_dir() {
+            return Ok(None);
+        }
+        let root = AbsolutePathBuf::try_from(curated_repo_root).map_err(|_| {
+            MarketplaceError::InvalidPlugin(
+                "curated plugin catalog root is not absolute".to_string(),
+            )
+        })?;
         let outcome =
             list_marketplaces_with_home(std::slice::from_ref(&root), /*home_dir*/ None)?;
-        if !revision.is_current() || outcome.marketplaces.is_empty() || !outcome.errors.is_empty() {
-            return Err(incomplete());
+        if outcome.marketplaces.is_empty() || !outcome.errors.is_empty() {
+            return Err(MarketplaceError::InvalidPlugin(
+                "curated plugin catalog did not load completely".to_string(),
+            ));
         }
-        Ok(outcome)
+        Ok(Some(CuratedPluginCatalogSnapshot::new(outcome)))
     }
 
-    pub(crate) fn list_marketplaces_for_config_with_revisioned_plugin_catalog(
+    pub(crate) fn reload_curated_plugin_catalog(
+        &self,
+    ) -> Result<Option<CuratedPluginCatalogSnapshot>, MarketplaceError> {
+        let mut current = match self.curated_plugin_catalog.write() {
+            Ok(current) => current,
+            Err(err) => err.into_inner(),
+        };
+        let snapshot = self.load_curated_plugin_catalog()?;
+        *current = snapshot.clone();
+        Ok(snapshot)
+    }
+
+    fn remote_curated_plugin_catalog_snapshot_for_config(
         &self,
         config: &PluginsConfigInput,
-        include_openai_curated: bool,
-        revisioned_catalog: (&PluginCatalogRevision, &MarketplaceListOutcome),
+        auth: &CodexAuth,
+    ) -> Option<RemoteCuratedPluginCatalogSnapshot> {
+        let service_config = remote_plugin_service_config(config);
+        auth.get_account_id()
+            .filter(|account_id| !account_id.is_empty())?;
+        let key = RemotePluginCatalogCacheKey::global(&service_config, auth);
+        let current = match self.remote_curated_plugin_catalog.read() {
+            Ok(current) => current,
+            Err(err) => err.into_inner(),
+        };
+        if let Some(current) = current.as_ref().filter(|current| current.key == key) {
+            return Some(current.snapshot.clone());
+        }
+        drop(current);
+
+        let mut current = match self.remote_curated_plugin_catalog.write() {
+            Ok(current) => current,
+            Err(err) => err.into_inner(),
+        };
+        if let Some(current) = current.as_ref().filter(|current| current.key == key) {
+            return Some(current.snapshot.clone());
+        }
+        let plugins = crate::remote::load_cached_global_remote_discoverable_plugins(
+            self.codex_home.as_path(),
+            &service_config,
+            auth,
+        )?;
+        let snapshot = RemoteCuratedPluginCatalogSnapshot::new(plugins);
+        *current = Some(RemoteCuratedPluginCatalogState {
+            key,
+            snapshot: snapshot.clone(),
+        });
+        Some(snapshot)
+    }
+
+    fn publish_remote_curated_plugin_catalog(
+        &self,
+        config: &RemotePluginServiceConfig,
+        auth: &CodexAuth,
+        plugins: Vec<RemoteDiscoverablePlugin>,
+    ) -> Option<RemoteCuratedPluginCatalogSnapshot> {
+        auth.get_account_id()
+            .filter(|account_id| !account_id.is_empty())?;
+        let key = RemotePluginCatalogCacheKey::global(config, auth);
+        let snapshot = RemoteCuratedPluginCatalogSnapshot::new(plugins);
+        let mut current = match self.remote_curated_plugin_catalog.write() {
+            Ok(current) => current,
+            Err(err) => err.into_inner(),
+        };
+        *current = Some(RemoteCuratedPluginCatalogState {
+            key,
+            snapshot: snapshot.clone(),
+        });
+        Some(snapshot)
+    }
+
+    pub(crate) fn list_marketplaces_for_config_with_curated_plugin_catalog(
+        &self,
+        config: &PluginsConfigInput,
+        curated_catalog: &MarketplaceListOutcome,
     ) -> Result<ConfiguredMarketplaceListOutcome, MarketplaceError> {
         if !config.plugins_enabled {
             return Ok(ConfiguredMarketplaceListOutcome::default());
         }
 
-        let Some(current_revision) =
-            self.revisioned_plugin_catalog_revision_for_config(config, include_openai_curated)
-        else {
-            return self.list_marketplaces_for_config(config, &[], include_openai_curated);
-        };
-        let (revision, revisioned_catalog) = revisioned_catalog;
-        if current_revision != *revision || !revision.is_current() {
-            return self.list_marketplaces_for_config(config, &[], include_openai_curated);
-        }
-        let roots = self.marketplace_roots(config, &[], include_openai_curated);
+        let curated_repo_root = curated_plugins_repo_path(self.codex_home.as_path());
+        let roots = self.marketplace_roots(config, &[], /*include_openai_curated*/ true);
         let Some(revisioned_index) = roots
             .iter()
-            .position(|root| root.as_path() == current_revision.source_root())
+            .position(|root| root.as_path() == curated_repo_root)
         else {
             return Err(MarketplaceError::InvalidPlugin(
                 "revisioned plugin catalog source is missing".to_string(),
@@ -1315,7 +1440,7 @@ impl PluginsManager {
         };
         let mut marketplace_outcome =
             list_marketplaces_with_home(&roots[..revisioned_index], home_dir().as_deref())?;
-        extend_marketplace_outcome(&mut marketplace_outcome, revisioned_catalog.clone());
+        extend_marketplace_outcome(&mut marketplace_outcome, curated_catalog.clone());
         let remaining =
             list_marketplaces_with_home(&roots[revisioned_index + 1..], /*home_dir*/ None)?;
         extend_marketplace_outcome(&mut marketplace_outcome, remaining);
@@ -1708,14 +1833,23 @@ impl PluginsManager {
                     on_effective_plugins_changed,
                 );
                 if config_for_remote_sync.remote_plugin_enabled {
-                    match crate::remote::fetch_and_cache_global_remote_plugin_catalog(
+                    let service_config = remote_plugin_service_config(&config_for_remote_sync);
+                    match crate::remote::fetch_and_cache_global_remote_plugin_catalog_snapshot(
                         manager.codex_home.as_path(),
-                        &remote_plugin_service_config(&config_for_remote_sync),
+                        &service_config,
                         auth.as_ref(),
                     )
                     .await
                     {
-                        Ok(()) => {}
+                        Ok(plugins) => {
+                            if let Some(auth) = auth.as_ref() {
+                                manager.publish_remote_curated_plugin_catalog(
+                                    &service_config,
+                                    auth,
+                                    plugins,
+                                );
+                            }
+                        }
                         Err(
                             RemotePluginCatalogError::AuthRequired
                             | RemotePluginCatalogError::UnsupportedAuthMode,
@@ -1958,6 +2092,12 @@ impl PluginsManager {
                                 if cache_refreshed {
                                     manager.clear_cache();
                                 }
+                                if let Err(err) = manager.reload_curated_plugin_catalog() {
+                                    CURATED_REPO_SYNC_STARTED.store(false, Ordering::SeqCst);
+                                    warn!(
+                                        "failed to publish curated plugin catalog after sync: {err}"
+                                    );
+                                }
                             }
                             Err(err) => {
                                 manager.clear_cache();
@@ -2054,14 +2194,22 @@ impl PluginsManager {
                 }
             };
 
-            match crate::remote::fetch_and_cache_global_remote_plugin_catalog(
+            match crate::remote::fetch_and_cache_global_remote_plugin_catalog_snapshot(
                 self.codex_home.as_path(),
                 &request.service_config,
                 request.auth.as_ref(),
             )
             .await
             {
-                Ok(()) => {}
+                Ok(plugins) => {
+                    if let Some(auth) = request.auth.as_ref() {
+                        self.publish_remote_curated_plugin_catalog(
+                            &request.service_config,
+                            auth,
+                            plugins,
+                        );
+                    }
+                }
                 Err(
                     RemotePluginCatalogError::AuthRequired
                     | RemotePluginCatalogError::UnsupportedAuthMode,

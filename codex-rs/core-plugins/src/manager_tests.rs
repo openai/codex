@@ -12,6 +12,7 @@ use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::REMOTE_WORKSPACE_MARKETPLACE_NAME;
 use crate::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME;
 use crate::remote::RecommendedPlugin;
+use crate::remote::RemoteDiscoverablePlugin;
 use crate::remote::RemoteInstalledPlugin;
 use crate::startup_sync::curated_plugins_repo_path;
 use crate::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
@@ -23,6 +24,8 @@ use crate::test_support::write_openai_api_curated_marketplace;
 use crate::test_support::write_openai_curated_marketplace;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::PluginAvailability;
+use codex_app_server_protocol::PluginInstallPolicy;
 use codex_config::AppToolApproval;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
@@ -3164,7 +3167,7 @@ plugins = true
 }
 
 #[tokio::test]
-async fn curated_catalog_reuses_only_a_current_proven_revision() {
+async fn curated_catalog_revision_advances_only_when_its_owner_reloads() {
     let tmp = tempfile::tempdir().unwrap();
     let curated_root = curated_plugins_repo_path(tmp.path());
     write_file(
@@ -3176,6 +3179,76 @@ plugins = true
     write_openai_curated_marketplace(&curated_root, &["linear"]);
     let config = load_config(tmp.path(), tmp.path()).await;
     let manager = PluginsManager::new(tmp.path().to_path_buf());
+    let plugin_names = |snapshot: &CuratedPluginCatalogSnapshot| {
+        snapshot
+            .marketplaces()
+            .marketplaces
+            .iter()
+            .flat_map(|marketplace| &marketplace.plugins)
+            .map(|plugin| plugin.name.clone())
+            .collect::<Vec<_>>()
+    };
+
+    let first = manager
+        .revisioned_plugin_catalog_snapshots_for_config(&config, /*auth*/ None)
+        .expect("first curated load")
+        .curated
+        .expect("curated source should be revisioned");
+    write_openai_curated_marketplace(&curated_root, &["github"]);
+    let unchanged = manager
+        .revisioned_plugin_catalog_snapshots_for_config(&config, /*auth*/ None)
+        .expect("unchanged curated load")
+        .curated
+        .expect("curated source should remain revisioned");
+    assert_eq!(unchanged.revision(), first.revision());
+    assert_eq!(plugin_names(&unchanged), vec!["linear"]);
+
+    write_file(
+        &curated_root.join(".agents/plugins/marketplace.json"),
+        "{not valid json",
+    );
+    assert!(manager.reload_curated_plugin_catalog().is_err());
+    let retained = manager
+        .revisioned_plugin_catalog_snapshots_for_config(&config, /*auth*/ None)
+        .expect("failed reload should retain the complete snapshot")
+        .curated
+        .expect("curated source should remain revisioned");
+    assert_eq!(retained.revision(), first.revision());
+    assert_eq!(plugin_names(&retained), vec!["linear"]);
+
+    write_openai_curated_marketplace(&curated_root, &["github"]);
+    let reloaded = manager
+        .reload_curated_plugin_catalog()
+        .expect("successful owner reload")
+        .expect("curated source should still exist");
+    assert_ne!(reloaded.revision(), first.revision());
+    assert_eq!(plugin_names(&reloaded), vec!["github"]);
+
+    let replacement = PluginsManager::new(tmp.path().to_path_buf())
+        .revisioned_plugin_catalog_snapshots_for_config(&config, /*auth*/ None)
+        .expect("replacement manager load")
+        .curated
+        .expect("replacement manager should load curated source");
+    assert_ne!(replacement.revision(), reloaded.revision());
+}
+
+#[tokio::test]
+async fn api_key_curated_catalog_remains_unrevisioned() {
+    let tmp = tempfile::tempdir().unwrap();
+    let curated_root = curated_plugins_repo_path(tmp.path());
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
+    write_openai_api_curated_marketplace(&curated_root, &["linear"]);
+    let config = load_config(tmp.path(), tmp.path()).await;
+    let manager = PluginsManager::new_with_options(
+        tmp.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::ApiKey),
+    );
     let plugin_ids = |outcome: ConfiguredMarketplaceListOutcome| {
         outcome
             .marketplaces
@@ -3185,53 +3258,69 @@ plugins = true
             .collect::<Vec<_>>()
     };
 
+    assert_eq!(
+        manager
+            .revisioned_plugin_catalog_snapshots_for_config(&config, /*auth*/ None)
+            .unwrap(),
+        RevisionedPluginCatalogSnapshots::default()
+    );
     let first = manager
         .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
         .expect("first unrevisioned read");
-    write_openai_curated_marketplace(&curated_root, &["github"]);
+    write_openai_api_curated_marketplace(&curated_root, &["github"]);
     let second = manager
         .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
         .expect("second unrevisioned read");
-    assert_eq!(plugin_ids(first), vec!["linear@openai-curated"]);
-    assert_eq!(plugin_ids(second), vec!["github@openai-curated"]);
 
-    write_file(
-        &curated_root.join(".codex-plugin-catalog-revision"),
-        "revision-one\n",
+    assert_eq!(
+        (plugin_ids(first), plugin_ids(second)),
+        (
+            vec!["linear@openai-api-curated".to_string()],
+            vec!["github@openai-api-curated".to_string()]
+        )
     );
-    let revision = manager
-        .revisioned_plugin_catalog_revision_for_config(
-            &config, /*include_openai_curated*/ true,
-        )
-        .expect("revisioned curated source");
+}
 
-    let outcome = manager
-        .build_revisioned_plugin_catalog(&revision)
-        .expect("complete revisioned catalog");
-    assert_eq!(outcome.marketplaces.len(), 1);
-    write_openai_curated_marketplace(&curated_root, &["linear"]);
-    let reused = manager
-        .list_marketplaces_for_config_with_revisioned_plugin_catalog(
-            &config,
-            /*include_openai_curated*/ true,
-            (&revision, &outcome),
-        )
-        .expect("reuse revisioned catalog");
-    assert_eq!(plugin_ids(reused), vec!["github@openai-curated"]);
-
+#[tokio::test]
+async fn remote_curated_catalog_revision_advances_only_when_its_owner_publishes() {
+    let tmp = tempfile::tempdir().unwrap();
     write_file(
-        &curated_root.join(".codex-plugin-catalog-revision"),
-        "revision-two\n",
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = true
+"#,
     );
-    assert!(manager.build_revisioned_plugin_catalog(&revision).is_err());
-    let rebuilt = manager
-        .list_marketplaces_for_config_with_revisioned_plugin_catalog(
-            &config,
-            /*include_openai_curated*/ true,
-            (&revision, &outcome),
-        )
-        .expect("rebuild stale catalog");
-    assert_eq!(plugin_ids(rebuilt), vec!["linear@openai-curated"]);
+    let config = load_config(tmp.path(), tmp.path()).await;
+    let service_config = remote_plugin_service_config(&config);
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let manager = PluginsManager::new(tmp.path().to_path_buf());
+    let plugin = |name: &str| RemoteDiscoverablePlugin {
+        config_id: format!("{name}@openai-curated-remote"),
+        remote_plugin_id: format!("plugin_{name}"),
+        name: name.to_string(),
+        description: None,
+        has_skills: false,
+        app_ids: Vec::new(),
+        install_policy: PluginInstallPolicy::Available,
+        availability: PluginAvailability::Available,
+    };
+
+    let first = manager
+        .publish_remote_curated_plugin_catalog(&service_config, &auth, vec![plugin("linear")])
+        .expect("remote source context should be valid");
+    let unchanged = manager
+        .revisioned_plugin_catalog_snapshots_for_config(&config, Some(&auth))
+        .unwrap()
+        .remote_curated
+        .expect("remote curated source should be revisioned");
+    assert_eq!(unchanged, first);
+
+    let reloaded = manager
+        .publish_remote_curated_plugin_catalog(&service_config, &auth, vec![plugin("github")])
+        .expect("remote source context should be valid");
+    assert_ne!(reloaded.revision(), first.revision());
+    assert_eq!(reloaded.plugins(), &[plugin("github")]);
 }
 
 #[tokio::test]

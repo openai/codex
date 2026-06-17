@@ -1,4 +1,5 @@
 use super::ToolSuggestDiscoverablePlugin;
+use super::ToolSuggestPluginCatalog;
 use super::ToolSuggestPluginDiscoveryInput;
 use crate::OPENAI_BUNDLED_MARKETPLACE_NAME;
 use crate::PluginInstallRequest;
@@ -6,7 +7,7 @@ use crate::PluginsConfigInput;
 use crate::PluginsManager;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RemotePluginServiceConfig;
-use crate::remote::fetch_and_cache_global_remote_plugin_catalog;
+use crate::remote::fetch_and_cache_global_remote_plugin_catalog_snapshot;
 use crate::startup_sync::curated_plugins_repo_path;
 use crate::test_support::TEST_CURATED_PLUGIN_SHA;
 use crate::test_support::load_plugins_config;
@@ -615,7 +616,7 @@ source = "/tmp/{sales_marketplace_name}"
 }
 
 #[tokio::test]
-async fn expands_cached_remote_plugins_by_loaded_apps() {
+async fn expands_revisioned_remote_curated_plugins_by_loaded_apps() {
     let codex_home = tempdir().expect("tempdir should succeed");
     write_file(
         &codex_home.path().join(CONFIG_TOML_FILE),
@@ -679,7 +680,7 @@ remote_plugin = true
     let mut plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
     plugins.chatgpt_base_url = format!("{}/backend-api", server.uri());
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
-    fetch_and_cache_global_remote_plugin_catalog(
+    let remote_curated = fetch_and_cache_global_remote_plugin_catalog_snapshot(
         codex_home.path(),
         &RemotePluginServiceConfig {
             chatgpt_base_url: plugins.chatgpt_base_url.clone(),
@@ -688,6 +689,8 @@ remote_plugin = true
     )
     .await
     .expect("remote plugin catalog cache should write");
+    std::fs::remove_dir_all(codex_home.path().join("cache/remote_plugin_catalog"))
+        .expect("test should remove the disk cache after taking the source snapshot");
 
     for scope in ["GLOBAL", "USER", "WORKSPACE"] {
         Mock::given(method("GET"))
@@ -713,12 +716,17 @@ remote_plugin = true
         .await
         .expect("remote installed plugin cache should write");
 
-    let discoverable_plugins = list_discoverable_plugins(
-        &plugins_manager,
-        discovery_input(plugins, &[], &[], &["remote-unlisted-app"]),
-        Some(&auth),
-    )
-    .await;
+    let input = discovery_input(plugins, &[], &[], &["remote-unlisted-app"]);
+    let discoverable_plugins = plugins_manager
+        .list_tool_suggest_discoverable_plugins_with_catalog(
+            &input,
+            Some(&auth),
+            ToolSuggestPluginCatalog::RemoteCurated {
+                plugins: &remote_curated,
+            },
+        )
+        .await
+        .expect("revisioned remote curated plugins should load");
 
     assert_eq!(
         discoverable_plugins,

@@ -39,8 +39,10 @@ use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
+use crate::runtime_tool_catalog::CuratedPluginCatalogFragment;
 use crate::runtime_tool_catalog::HostedConnectorRuntimeFragment;
 use crate::runtime_tool_catalog::HostedConnectorsRevision;
+use crate::runtime_tool_catalog::RemoteCuratedPluginCatalogFragment;
 use crate::runtime_tool_catalog::RevisionedPluginCatalogFragment;
 use crate::runtime_tool_catalog::RevisionedPluginsRevision;
 use crate::runtime_tool_catalog::RuntimeToolCatalogSnapshot;
@@ -1240,42 +1242,6 @@ pub(crate) async fn built_tools(
         None
     };
     let plugins_config = turn_context.config.plugins_config_input();
-    let include_openai_curated = !(plugins_config.remote_plugin_enabled
-        && auth
-            .as_ref()
-            .is_some_and(codex_login::CodexAuth::uses_codex_backend));
-    let plugin_catalog_revision = if tool_suggest_is_enabled {
-        sess.services
-            .plugins_manager
-            .revisioned_plugin_catalog_revision_for_config(&plugins_config, include_openai_curated)
-    } else {
-        None
-    };
-    let mut reusable_fragment_build_failed = false;
-    let revisioned_plugins = if let Some(revision) = plugin_catalog_revision.as_ref() {
-        let revision_key = RevisionedPluginsRevision::from(revision);
-        if let Some(fragment) = base_catalog.revisioned_plugins_for(&revision_key) {
-            Some(fragment)
-        } else {
-            match sess
-                .services
-                .plugins_manager
-                .build_revisioned_plugin_catalog(revision)
-            {
-                Ok(marketplaces) => Some(Arc::new(RevisionedPluginCatalogFragment {
-                    revision: revision.into(),
-                    marketplaces,
-                })),
-                Err(err) => {
-                    reusable_fragment_build_failed = true;
-                    warn!("failed to build revisioned plugin catalog fragment: {err:#}");
-                    None
-                }
-            }
-        }
-    } else {
-        None
-    };
     let endpoint_recommended_plugin_candidates = if tool_suggest_is_enabled {
         sess.services
             .plugins_manager
@@ -1290,13 +1256,67 @@ pub(crate) async fn built_tools(
     } else {
         None
     };
-    let plugin_catalog = match (
-        plugin_catalog_revision.as_ref(),
-        revisioned_plugins.as_deref(),
-    ) {
-        (Some(revision), Some(fragment)) => ToolSuggestPluginCatalog::Revisioned {
-            revision,
-            marketplaces: &fragment.marketplaces,
+    let mut reusable_fragment_build_failed = false;
+    let revisioned_plugins =
+        if tool_suggest_is_enabled && endpoint_recommended_plugin_candidates.is_none() {
+            match sess
+                .services
+                .plugins_manager
+                .revisioned_plugin_catalog_snapshots_for_config(&plugins_config, auth.as_ref())
+            {
+                Ok(snapshots) => {
+                    let curated = snapshots.curated.map(|snapshot| {
+                        let revision = RevisionedPluginsRevision::from(snapshot.revision());
+                        base_catalog
+                            .curated_plugins_for(revision)
+                            .unwrap_or_else(|| {
+                                Arc::new(CuratedPluginCatalogFragment {
+                                    revision,
+                                    marketplaces: snapshot.shared_marketplaces(),
+                                })
+                            })
+                    });
+                    let remote_curated = snapshots.remote_curated.map(|snapshot| {
+                        let revision = RevisionedPluginsRevision::from(snapshot.revision());
+                        base_catalog
+                            .remote_curated_plugins_for(revision)
+                            .unwrap_or_else(|| {
+                                Arc::new(RemoteCuratedPluginCatalogFragment {
+                                    revision,
+                                    plugins: snapshot.shared_plugins(),
+                                })
+                            })
+                    });
+                    if curated.is_none() && remote_curated.is_none() {
+                        None
+                    } else {
+                        Some(Arc::new(RevisionedPluginCatalogFragment {
+                            curated,
+                            remote_curated,
+                        }))
+                    }
+                }
+                Err(err) => {
+                    reusable_fragment_build_failed = true;
+                    warn!("failed to build revisioned plugin catalog fragment: {err:#}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+    let plugin_catalog = match revisioned_plugins.as_deref() {
+        Some(RevisionedPluginCatalogFragment {
+            curated: Some(curated),
+            ..
+        }) => ToolSuggestPluginCatalog::Curated {
+            marketplaces: &curated.marketplaces,
+        },
+        Some(RevisionedPluginCatalogFragment {
+            remote_curated: Some(remote_curated),
+            ..
+        }) => ToolSuggestPluginCatalog::RemoteCurated {
+            plugins: remote_curated.plugins.as_slice(),
         },
         _ => ToolSuggestPluginCatalog::RebuildAll,
     };

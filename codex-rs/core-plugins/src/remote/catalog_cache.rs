@@ -11,7 +11,7 @@ const REMOTE_PLUGIN_CATALOG_DISK_CACHE_SCHEMA_VERSION: u8 = 1;
 const REMOTE_PLUGIN_CATALOG_DISK_CACHE_DIR: &str = "cache/remote_plugin_catalog";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-struct RemotePluginCatalogCacheKey {
+pub(crate) struct RemotePluginCatalogCacheKey {
     chatgpt_base_url: String,
     account_id: Option<String>,
     chatgpt_user_id: Option<String>,
@@ -19,7 +19,7 @@ struct RemotePluginCatalogCacheKey {
 }
 
 impl RemotePluginCatalogCacheKey {
-    fn global(config: &RemotePluginServiceConfig, auth: &CodexAuth) -> Self {
+    pub(crate) fn global(config: &RemotePluginServiceConfig, auth: &CodexAuth) -> Self {
         Self {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
             account_id: auth.get_account_id(),

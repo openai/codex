@@ -33,6 +33,8 @@ mod catalog_cache;
 mod remote_installed_plugin_sync;
 mod share;
 
+pub(crate) use catalog_cache::RemotePluginCatalogCacheKey;
+
 #[cfg(test)]
 #[path = "remote_tests.rs"]
 mod tests;
@@ -798,11 +800,21 @@ pub async fn fetch_and_cache_global_remote_plugin_catalog(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
 ) -> Result<(), RemotePluginCatalogError> {
+    fetch_and_cache_global_remote_plugin_catalog_snapshot(codex_home, config, auth)
+        .await
+        .map(drop)
+}
+
+pub(crate) async fn fetch_and_cache_global_remote_plugin_catalog_snapshot(
+    codex_home: &Path,
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+) -> Result<Vec<RemoteDiscoverablePlugin>, RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
     let plugins =
         fetch_directory_plugins_for_scope(config, auth, RemotePluginScope::Global).await?;
     catalog_cache::write_cached_global_directory_plugins(codex_home, config, auth, &plugins);
-    Ok(())
+    Ok(remote_discoverable_plugins_from_directory_items(plugins))
 }
 
 pub async fn fetch_recommended_plugins(
@@ -901,8 +913,22 @@ pub fn cached_global_remote_discoverable_plugins(
     config: &RemotePluginServiceConfig,
     auth: &CodexAuth,
 ) -> Vec<RemoteDiscoverablePlugin> {
+    load_cached_global_remote_discoverable_plugins(codex_home, config, auth).unwrap_or_default()
+}
+
+pub(crate) fn load_cached_global_remote_discoverable_plugins(
+    codex_home: &Path,
+    config: &RemotePluginServiceConfig,
+    auth: &CodexAuth,
+) -> Option<Vec<RemoteDiscoverablePlugin>> {
     catalog_cache::load_cached_global_directory_plugins(codex_home, config, auth)
-        .unwrap_or_default()
+        .map(remote_discoverable_plugins_from_directory_items)
+}
+
+fn remote_discoverable_plugins_from_directory_items(
+    plugins: Vec<RemotePluginDirectoryItem>,
+) -> Vec<RemoteDiscoverablePlugin> {
+    plugins
         .into_iter()
         .filter_map(|plugin| match remote_discoverable_plugin_from_directory_item(&plugin) {
             Ok(plugin) => Some(plugin),

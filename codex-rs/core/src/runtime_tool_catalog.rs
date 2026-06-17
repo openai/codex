@@ -1,15 +1,19 @@
-//! Session-scoped reuse of revision-proven runtime tool fragments.
+//! Session-scoped reuse and atomic composition of stable runtime tool fragments.
 //!
-//! This module sits between the source owners and `built_tools`. Source owners
-//! remain responsible for refreshing data and issuing revisions that cover a
-//! complete fragment. The runtime catalog only retains immutable fragments for
-//! revisions that can be proven unchanged, then publishes them as one
-//! consistent snapshot.
+//! `RuntimeToolCatalogManager` is a small consistency boundary between source
+//! owners and `built_tools`. It has exactly two top-level reusable slots:
+//! host-owned Codex Apps runtime data and owner-revisioned plugin catalog data.
+//! Source owners remain responsible for loading, refreshing, and issuing a
+//! revision that covers their complete fragment. This module compares those
+//! revisions, retains unchanged immutable fragments, and publishes the chosen
+//! fragments together as one session snapshot.
 //!
-//! Request-specific policy, unrevisioned sources, dynamic tools, and the final
-//! `ToolRouter` stay on their existing per-request paths.
+//! This is not the connector or plugin directory, and it is not a general cache
+//! registry. It performs no network fetches, marketplace discovery, plugin
+//! materialization, or policy evaluation. Request-specific policy,
+//! unrevisioned sources, dynamic tools, and the final `ToolRouter` stay on their
+//! existing per-request paths.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::PoisonError;
 use std::sync::RwLock;
@@ -17,6 +21,7 @@ use std::sync::RwLock;
 use codex_app_server_protocol::AppInfo;
 use codex_core_plugins::PluginCatalogRevision;
 use codex_core_plugins::marketplace::MarketplaceListOutcome;
+use codex_core_plugins::remote::RemoteDiscoverablePlugin;
 use codex_mcp::HostedConnectorRuntimeRevision;
 use codex_mcp::ToolInfo;
 
@@ -31,15 +36,12 @@ impl From<HostedConnectorRuntimeRevision> for HostedConnectorsRevision {
 }
 
 /// Cache key for a complete plugin catalog whose source supplied a revision.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RevisionedPluginsRevision(PathBuf, String);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RevisionedPluginsRevision(pub(crate) u64);
 
-impl From<&PluginCatalogRevision> for RevisionedPluginsRevision {
-    fn from(revision: &PluginCatalogRevision) -> Self {
-        Self(
-            revision.source_root().to_path_buf(),
-            revision.marker_contents().to_string(),
-        )
+impl From<PluginCatalogRevision> for RevisionedPluginsRevision {
+    fn from(revision: PluginCatalogRevision) -> Self {
+        Self(revision.generation())
     }
 }
 
@@ -50,10 +52,26 @@ pub(crate) struct HostedConnectorRuntimeFragment {
     pub(crate) connectors: Vec<AppInfo>,
 }
 
-/// Complete marketplace data covered by one proven plugin source revision.
-pub(crate) struct RevisionedPluginCatalogFragment {
+/// Complete local curated marketplace data covered by one owner revision.
+pub(crate) struct CuratedPluginCatalogFragment {
     pub(crate) revision: RevisionedPluginsRevision,
-    pub(crate) marketplaces: MarketplaceListOutcome,
+    pub(crate) marketplaces: Arc<MarketplaceListOutcome>,
+}
+
+/// Complete remote-curated discovery data covered by one owner revision.
+pub(crate) struct RemoteCuratedPluginCatalogFragment {
+    pub(crate) revision: RevisionedPluginsRevision,
+    pub(crate) plugins: Arc<Vec<RemoteDiscoverablePlugin>>,
+}
+
+/// Reusable plugin fragments, separated by their independent source owners.
+///
+/// This is one top-level runtime-catalog slot, but its two fields deliberately
+/// retain distinct revisions. A curated refresh therefore cannot evict or
+/// rebuild an unchanged remote-curated fragment, and vice versa.
+pub(crate) struct RevisionedPluginCatalogFragment {
+    pub(crate) curated: Option<Arc<CuratedPluginCatalogFragment>>,
+    pub(crate) remote_curated: Option<Arc<RemoteCuratedPluginCatalogFragment>>,
 }
 
 /// Immutable aggregate of the reusable runtime tool source fragments.
@@ -66,7 +84,7 @@ pub(crate) struct RevisionedPluginCatalogFragment {
 pub(crate) struct RuntimeToolCatalogSnapshot {
     /// Host-owned Codex Apps tools and connector metadata.
     pub(crate) hosted_connectors: Option<Arc<HostedConnectorRuntimeFragment>>,
-    /// Plugin marketplace metadata backed by a proven source revision.
+    /// Local curated and remote-curated plugin fragments with independent revisions.
     pub(crate) revisioned_plugins: Option<Arc<RevisionedPluginCatalogFragment>>,
 }
 
@@ -82,26 +100,39 @@ impl RuntimeToolCatalogSnapshot {
             .map(Arc::clone)
     }
 
-    /// Returns the plugin fragment only when its proven source revision matches.
-    pub(crate) fn revisioned_plugins_for(
+    /// Returns local curated data only when its owner generation still matches.
+    pub(crate) fn curated_plugins_for(
         &self,
-        revision: &RevisionedPluginsRevision,
-    ) -> Option<Arc<RevisionedPluginCatalogFragment>> {
+        revision: RevisionedPluginsRevision,
+    ) -> Option<Arc<CuratedPluginCatalogFragment>> {
         self.revisioned_plugins
             .as_ref()
-            .filter(|fragment| fragment.revision == *revision)
+            .and_then(|fragment| fragment.curated.as_ref())
+            .filter(|fragment| fragment.revision == revision)
+            .map(Arc::clone)
+    }
+
+    /// Returns remote-curated data only when its owner generation still matches.
+    pub(crate) fn remote_curated_plugins_for(
+        &self,
+        revision: RevisionedPluginsRevision,
+    ) -> Option<Arc<RemoteCuratedPluginCatalogFragment>> {
+        self.revisioned_plugins
+            .as_ref()
+            .and_then(|fragment| fragment.remote_curated.as_ref())
+            .filter(|fragment| fragment.revision == revision)
             .map(Arc::clone)
     }
 }
 
 /// Session-scoped coordinator for reusable runtime tool catalog fragments.
 ///
-/// The manager is deliberately not a source owner or a generic cache
-/// framework. `McpConnectionManager` and `PluginsManager` continue to own
-/// refreshes, materialization, and revision semantics. `built_tools` reads
-/// those source inputs, reuses matching fragments from the current snapshot,
-/// rebuilds changed fragments through their owners, and asks this manager to
-/// publish the resulting complete aggregate.
+/// The manager answers one narrow question: which complete, immutable source
+/// fragments can this session safely reuse on the next `built_tools` call?
+/// `McpConnectionManager` and `PluginsManager` continue to own refresh and
+/// revision semantics. `built_tools` reads their current snapshots, reuses
+/// matching fragments from this manager, composes live overlays, and still
+/// constructs a new final router.
 ///
 /// Publication is compare-and-swap-like: a rebuild may replace only the
 /// snapshot it started from. A concurrent publisher wins over a stale rebuild,
