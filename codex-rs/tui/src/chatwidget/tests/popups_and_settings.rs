@@ -461,11 +461,20 @@ async fn marketplace_add_success_refreshes_to_new_marketplace_tab() {
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
     chat.add_plugins_output();
-    for _ in 0..3 {
-        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
-    }
-
-    let reopened_popup = render_bottom_popup(&chat, /*width*/ 100);
+    let reopened_popup = (0..8)
+        .find_map(|_| {
+            let popup = render_bottom_popup(&chat, /*width*/ 100);
+            if popup.contains("[Debug Marketplace]") {
+                Some(popup)
+            } else {
+                chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+                None
+            }
+        })
+        .unwrap_or_else(|| {
+            let popup = render_bottom_popup(&chat, /*width*/ 100);
+            panic!("expected Debug Marketplace tab after reopening, got:\n{popup}");
+        });
     assert!(
         reopened_popup.contains("Installed 0 of 1 Debug Marketplace plugins.")
             && !reopened_popup.contains("installed successfully"),
