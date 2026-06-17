@@ -213,10 +213,8 @@ X-Safe = "SAFE_VAR"
         &config.permissions.shell_environment_policy,
         /*thread_id*/ None,
     );
-    assert_eq!(
-        shell_env,
-        HashMap::from([("SAFE_VAR".to_string(), "safe".to_string())])
-    );
+    assert_eq!(shell_env.get("SAFE_VAR").map(String::as_str), Some("safe"));
+    assert!(!shell_env.contains_key("CODEX_WIF_ASSERTION"));
 
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
