@@ -6,8 +6,6 @@ mod relay_proto;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -43,6 +41,7 @@ use relay_proto::relay_message_frame;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::accept_async;
@@ -73,7 +72,7 @@ impl AuthProvider for StaticRegistryAuthProvider {
 }
 
 struct FailingNoiseConnectProvider {
-    attempts: Arc<AtomicUsize>,
+    attempt_tx: mpsc::UnboundedSender<()>,
 }
 
 impl NoiseRendezvousConnectProvider for FailingNoiseConnectProvider {
@@ -81,7 +80,7 @@ impl NoiseRendezvousConnectProvider for FailingNoiseConnectProvider {
         &self,
         _: NoiseChannelPublicKey,
     ) -> BoxFuture<'_, Result<NoiseRendezvousConnectBundle, ExecServerError>> {
-        self.attempts.fetch_add(1, Ordering::SeqCst);
+        let _ = self.attempt_tx.send(());
         async {
             Err(ExecServerError::Protocol(
                 "test registry connect failure".to_string(),
@@ -96,41 +95,52 @@ fn static_registry_auth_provider() -> codex_api::SharedAuthProvider {
 }
 
 #[tokio::test]
-async fn noise_environment_refreshes_bundle_for_each_connection_attempt() -> Result<()> {
-    let attempts = Arc::new(AtomicUsize::new(0));
+async fn noise_environment_refreshes_bundle_during_startup_retries() -> Result<()> {
+    let (attempt_tx, mut attempt_rx) = mpsc::unbounded_channel();
     let manager = EnvironmentManager::without_environments();
     manager.upsert_noise_environment(
         ENVIRONMENT_ID.to_string(),
-        Arc::new(FailingNoiseConnectProvider {
-            attempts: Arc::clone(&attempts),
-        }),
+        Arc::new(FailingNoiseConnectProvider { attempt_tx }),
     )?;
     let backend = manager
         .get_environment(ENVIRONMENT_ID)
         .context("Noise environment should be materialized")?
         .get_exec_backend();
+    let cwd = PathUri::from_path(std::env::current_dir()?)?;
 
-    for attempt in 1..=2 {
-        let result = backend
+    let startup = tokio::spawn(async move {
+        backend
             .start(ExecParams {
-                process_id: ProcessId::new(format!("proc-{attempt}")),
+                process_id: ProcessId::from("proc-1"),
                 argv: vec!["true".to_string()],
-                cwd: PathUri::from_path(std::env::current_dir()?)?,
+                cwd,
                 env_policy: None,
                 env: HashMap::new(),
                 tty: false,
                 pipe_stdin: false,
                 arg0: None,
             })
-            .await;
-        assert!(matches!(
-            result,
-            Err(ExecServerError::Protocol(ref message))
-                if message == "test registry connect failure"
-        ));
-    }
+            .await
+    });
 
-    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    timeout(TEST_TIMEOUT, async {
+        for _ in 0..2 {
+            attempt_rx
+                .recv()
+                .await
+                .context("connection provider should remain available")?;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .context("startup should retry the Noise connection")??;
+
+    startup.abort();
+    let cancellation = match startup.await {
+        Err(error) => error,
+        Ok(_) => panic!("startup should be cancelled"),
+    };
+    assert!(cancellation.is_cancelled());
     Ok(())
 }
 
