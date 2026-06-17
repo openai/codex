@@ -24,7 +24,15 @@ impl ChatWidget {
     pub(super) fn on_image_generation_begin(&mut self) {
         self.record_visible_turn_activity();
         self.flush_answer_stream_with_separator();
-        self.set_status_header(String::from("Generating image"));
+        let mcp_startup_owns_status =
+            self.mcp_startup_status.is_some() && self.status_header_is_mcp_startup_owned();
+        if self.unified_exec_wait_streak.is_none()
+            && self.status_state.pending_guardian_review_status.is_empty()
+            && !mcp_startup_owns_status
+        {
+            self.bottom_pane.ensure_status_indicator();
+            self.set_status_header(String::from("Generating image"));
+        }
         self.request_redraw();
     }
 
@@ -42,7 +50,9 @@ impl ChatWidget {
             revised_prompt,
             saved_path,
         ));
-        self.restore_reasoning_status_header();
+        if self.status_state.current_status.header == "Generating image" {
+            self.restore_reasoning_status_header();
+        }
         self.request_redraw();
     }
 

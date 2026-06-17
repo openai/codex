@@ -140,6 +140,27 @@ async fn mcp_startup_complete_does_not_clear_running_task() {
 }
 
 #[tokio::test]
+async fn image_generation_completion_preserves_newer_mcp_startup_status() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    handle_turn_started(&mut chat, "turn-1");
+    handle_image_generation_started(&mut chat, "call-image-generation");
+
+    notify_mcp_status(&mut chat, "schaltwerk", McpServerStartupState::Starting);
+    assert!(chat.status_header_is_mcp_startup_owned());
+    let expected_status = chat.status_state.current_status.clone();
+
+    handle_image_generation_end(
+        &mut chat,
+        "call-image-generation",
+        "completed",
+        /*revised_prompt*/ None,
+        /*saved_path*/ None,
+    );
+
+    assert_eq!(chat.status_state.current_status, expected_status);
+}
+
+#[tokio::test]
 async fn turn_start_preserves_active_mcp_startup_header() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_mcp_startup_expected_servers(["schaltwerk".to_string()]);

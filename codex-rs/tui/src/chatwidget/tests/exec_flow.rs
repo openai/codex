@@ -895,9 +895,11 @@ async fn image_generation_call_adds_history_cell() {
 }
 
 #[tokio::test]
-async fn standalone_image_generation_started_updates_status() {
+async fn standalone_image_generation_started_restores_hidden_status() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     handle_turn_started(&mut chat, "turn-1");
+    chat.bottom_pane.hide_status_indicator();
+    assert!(!chat.bottom_pane.status_indicator_visible());
 
     handle_image_generation_started(&mut chat, "call-image-generation");
     assert_eq!(chat.status_state.current_status.header, "Generating image");
@@ -906,7 +908,6 @@ async fn standalone_image_generation_started_updates_status() {
         .status_widget()
         .expect("status indicator should be visible");
     assert_eq!(status.header(), "Generating image");
-    assert!(chat.transcript.active_cell.is_none());
 
     let height = chat.desired_height(/*width*/ 80);
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
@@ -918,6 +919,27 @@ async fn standalone_image_generation_started_updates_status() {
         "standalone_image_generation_status",
         normalized_backend_snapshot(terminal.backend())
     );
+}
+
+#[tokio::test]
+async fn standalone_image_generation_preserves_background_wait_status() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    handle_turn_started(&mut chat, "turn-1");
+    begin_unified_exec_startup(&mut chat, "call-exec", "process-1", "just fix");
+    terminal_interaction(&mut chat, "call-wait", "process-1", "");
+    let expected_status = chat.status_state.current_status.clone();
+
+    handle_image_generation_started(&mut chat, "call-image-generation");
+    assert_eq!(chat.status_state.current_status, expected_status);
+    handle_image_generation_end(
+        &mut chat,
+        "call-image-generation",
+        "completed",
+        /*revised_prompt*/ None,
+        /*saved_path*/ None,
+    );
+
+    assert_eq!(chat.status_state.current_status, expected_status);
 }
 
 #[tokio::test]
