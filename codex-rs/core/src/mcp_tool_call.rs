@@ -626,7 +626,11 @@ async fn maybe_request_codex_apps_auth_elicitation(
         return result;
     }
 
-    if !turn_context.features.enabled(Feature::AuthElicitation) {
+    if !turn_context
+        .config
+        .features
+        .enabled(Feature::AuthElicitation)
+    {
         return result;
     }
 
@@ -723,10 +727,10 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     let sandbox_state = serde_json::to_value(SandboxState {
         permission_profile: Some(turn_context.permission_profile()),
         sandbox_policy: turn_context.sandbox_policy(),
-        codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
+        codex_linux_sandbox_exe: turn_context.config.codex_linux_sandbox_exe.clone(),
         #[allow(deprecated)]
         sandbox_cwd: turn_context.cwd.to_path_buf(),
-        use_legacy_landlock: turn_context.features.use_legacy_landlock(),
+        use_legacy_landlock: turn_context.config.features.use_legacy_landlock(),
     })?;
 
     match meta.as_mut() {

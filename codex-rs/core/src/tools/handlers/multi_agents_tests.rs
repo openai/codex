@@ -4467,17 +4467,19 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         text: "base".to_string(),
     };
     turn.developer_instructions = Some("dev".to_string());
-    turn.compact_prompt = Some("compact".to_string());
-    turn.shell_environment_policy = ShellEnvironmentPolicy {
+    let mut config = (*turn.config).clone();
+    config.compact_prompt = Some("compact".to_string());
+    config.permissions.shell_environment_policy = ShellEnvironmentPolicy {
         use_profile: true,
         ..ShellEnvironmentPolicy::default()
     };
+    config.codex_linux_sandbox_exe = Some(PathBuf::from("/bin/echo"));
+    turn.config = Arc::new(config);
     let temp_dir = tempfile::tempdir().expect("temp dir");
     #[allow(deprecated)]
     {
         turn.cwd = temp_dir.abs();
     }
-    turn.codex_linux_sandbox_exe = Some(PathBuf::from("/bin/echo"));
     #[allow(deprecated)]
     let turn_cwd = turn.cwd.clone();
     let sandbox_policy = pick_allowed_sandbox_policy(
@@ -4506,9 +4508,6 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     expected.model_reasoning_effort = turn.reasoning_effort.clone();
     expected.model_reasoning_summary = Some(turn.reasoning_summary);
     expected.developer_instructions = turn.developer_instructions.clone();
-    expected.compact_prompt = turn.compact_prompt.clone();
-    expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
-    expected.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
     #[allow(deprecated)]
     {
         expected.cwd = turn.cwd.clone();
@@ -4544,9 +4543,6 @@ async fn build_agent_resume_config_clears_base_instructions() {
     expected.model_reasoning_effort = turn.reasoning_effort.clone();
     expected.model_reasoning_summary = Some(turn.reasoning_summary);
     expected.developer_instructions = turn.developer_instructions.clone();
-    expected.compact_prompt = turn.compact_prompt.clone();
-    expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
-    expected.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
     #[allow(deprecated)]
     {
         expected.cwd = turn.cwd.clone();

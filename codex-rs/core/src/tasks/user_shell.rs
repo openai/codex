@@ -157,7 +157,7 @@ pub(crate) async fn execute_user_shell_command(
     };
     let shell_snapshot_location = turn_environment.shell_snapshot(&cwd);
     let mut exec_env_map = create_env(
-        &turn_context.shell_environment_policy,
+        &turn_context.config.permissions.shell_environment_policy,
         Some(session.thread_id),
     );
     if exec_env_map.contains_key(PROXY_ACTIVE_ENV_KEY) {
@@ -167,7 +167,11 @@ pub(crate) async fn execute_user_shell_command(
         &display_command,
         environment_shell,
         shell_snapshot_location.as_ref(),
-        &turn_context.shell_environment_policy.r#set,
+        &turn_context
+            .config
+            .permissions
+            .shell_environment_policy
+            .r#set,
         &mut exec_env_map,
     );
 
@@ -294,7 +298,7 @@ pub(crate) async fn execute_user_shell_command(
                         duration: output.duration,
                         formatted_output: format_exec_output_str(
                             &output,
-                            turn_context.truncation_policy,
+                            turn_context.model_info.truncation_policy.into(),
                         ),
                         status: if output.exit_code == 0 {
                             ExecCommandStatus::Completed
@@ -339,7 +343,7 @@ pub(crate) async fn execute_user_shell_command(
                         duration: exec_output.duration,
                         formatted_output: format_exec_output_str(
                             &exec_output,
-                            turn_context.truncation_policy,
+                            turn_context.model_info.truncation_policy.into(),
                         ),
                         status: ExecCommandStatus::Failed,
                     }),

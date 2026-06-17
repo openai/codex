@@ -195,7 +195,7 @@ impl ViewImageHandler {
             DEFAULT_IMAGE_DETAIL
         };
 
-        let image_url = if turn.features.enabled(Feature::ResizeAllImages) {
+        let image_url = if turn.config.features.enabled(Feature::ResizeAllImages) {
             // The history insertion path owns image decoding and resizing when this is enabled.
             data_url_from_bytes("application/octet-stream", &file_bytes)
         } else {

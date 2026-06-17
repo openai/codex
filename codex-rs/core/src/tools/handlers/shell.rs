@@ -80,7 +80,12 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     };
     let fs = turn_environment.environment.get_filesystem();
 
-    let explicit_env_overrides = turn.shell_environment_policy.r#set.clone();
+    let explicit_env_overrides = turn
+        .config
+        .permissions
+        .shell_environment_policy
+        .r#set
+        .clone();
     let exec_permission_approvals_enabled =
         session.features().enabled(Feature::ExecPermissionApprovals);
     let requested_additional_permissions = additional_permissions.clone();
@@ -223,7 +228,9 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     let post_tool_use_response = out
         .as_ref()
         .ok()
-        .map(|output| crate::tools::format_exec_output_str(output, turn.truncation_policy))
+        .map(|output| {
+            crate::tools::format_exec_output_str(output, turn.model_info.truncation_policy.into())
+        })
         .map(JsonValue::String);
     let content = emitter
         .finish(event_ctx, out, /*applied_patch_delta*/ None)

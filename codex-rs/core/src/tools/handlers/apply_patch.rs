@@ -82,7 +82,11 @@ impl ToolArgumentDiffConsumer for ApplyPatchArgumentDiffConsumer {
         call_id: String,
         diff: &str,
     ) -> Option<EventMsg> {
-        if !turn.features.enabled(Feature::ApplyPatchStreamingEvents) {
+        if !turn
+            .config
+            .features
+            .enabled(Feature::ApplyPatchStreamingEvents)
+        {
             return None;
         }
 
