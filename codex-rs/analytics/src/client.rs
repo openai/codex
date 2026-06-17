@@ -11,8 +11,11 @@ use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexGoalEvent;
 use crate::facts::CustomAnalyticsFact;
+use crate::facts::ExternalAgentConfigImportCompletedInput;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
+use crate::facts::PluginInstallFailedInput;
+use crate::facts::PluginInstallFailedPluginInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::SkillInvocation;
@@ -340,6 +343,45 @@ impl AnalyticsEventsClient {
                 plugin,
                 state: PluginState::Installed,
             }),
+        ));
+    }
+
+    pub fn track_plugin_install_failed(
+        &self,
+        plugin: PluginTelemetryMetadata,
+        error_message: String,
+    ) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::PluginInstallFailed(PluginInstallFailedInput {
+                plugin: PluginInstallFailedPluginInput::Plugin(plugin),
+                error_message,
+            }),
+        ));
+    }
+
+    pub fn track_remote_plugin_install_failed(
+        &self,
+        remote_plugin_id: String,
+        marketplace_name: String,
+        error_message: String,
+    ) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::PluginInstallFailed(PluginInstallFailedInput {
+                plugin: PluginInstallFailedPluginInput::RemotePlugin {
+                    remote_plugin_id,
+                    marketplace_name,
+                },
+                error_message,
+            }),
+        ));
+    }
+
+    pub fn track_external_agent_config_import_completed(
+        &self,
+        input: ExternalAgentConfigImportCompletedInput,
+    ) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::ExternalAgentConfigImportCompleted(input),
         ));
     }
 

@@ -510,7 +510,7 @@ impl MessageProcessor {
             outgoing.clone(),
             config_manager.clone(),
             thread_manager.clone(),
-            analytics_events_client,
+            analytics_events_client.clone(),
         );
         let external_agent_config_processor =
             ExternalAgentConfigRequestProcessor::new(ExternalAgentConfigRequestProcessorArgs {
@@ -520,6 +520,7 @@ impl MessageProcessor {
                 config_manager: config_manager.clone(),
                 config_processor: config_processor.clone(),
                 state_db,
+                analytics_events_client,
                 arg0_paths,
                 codex_home: config.codex_home.to_path_buf(),
             });

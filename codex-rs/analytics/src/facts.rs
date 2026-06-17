@@ -504,6 +504,8 @@ pub(crate) enum CustomAnalyticsFact {
     HookRun(HookRunInput),
     PluginUsed(PluginUsedInput),
     PluginStateChanged(PluginStateChangedInput),
+    PluginInstallFailed(PluginInstallFailedInput),
+    ExternalAgentConfigImportCompleted(ExternalAgentConfigImportCompletedInput),
 }
 
 pub(crate) struct SkillInvokedInput {
@@ -540,6 +542,28 @@ pub(crate) struct PluginUsedInput {
 pub(crate) struct PluginStateChangedInput {
     pub plugin: PluginTelemetryMetadata,
     pub state: PluginState,
+}
+
+pub(crate) struct PluginInstallFailedInput {
+    pub plugin: PluginInstallFailedPluginInput,
+    pub error_message: String,
+}
+
+pub(crate) enum PluginInstallFailedPluginInput {
+    Plugin(PluginTelemetryMetadata),
+    RemotePlugin {
+        remote_plugin_id: String,
+        marketplace_name: String,
+    },
+}
+
+pub struct ExternalAgentConfigImportCompletedInput {
+    pub import_id: String,
+    pub source: String,
+    pub item_type: String,
+    pub success_count: usize,
+    pub failed_count: usize,
+    pub raw_errors: Vec<String>,
 }
 
 #[derive(Clone, Copy)]

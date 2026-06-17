@@ -69,6 +69,7 @@ use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
+use codex_plugin::PluginTelemetryMetadata;
 use codex_plugin::app_connector_ids_from_declarations;
 use codex_plugin::prompt_safe_plugin_description;
 use codex_protocol::protocol::HookEventName;
@@ -1079,12 +1080,25 @@ impl PluginsManager {
         &self,
         request: PluginInstallRequest,
     ) -> Result<PluginInstallOutcome, PluginInstallError> {
-        let resolved = find_installable_marketplace_plugin(
+        let resolved = match find_installable_marketplace_plugin(
             &request.marketplace_path,
             &request.plugin_name,
             self.restriction_product,
-        )?;
-        self.install_resolved_plugin(resolved).await
+        ) {
+            Ok(resolved) => resolved,
+            Err(err) => {
+                self.track_plugin_install_resolution_failed(&err);
+                return Err(err.into());
+            }
+        };
+        let plugin_id = resolved.plugin_id.clone();
+        match self.install_resolved_plugin(resolved).await {
+            Ok(outcome) => Ok(outcome),
+            Err(err) => {
+                self.track_plugin_install_failed(&plugin_id, err.to_string());
+                Err(err)
+            }
+        }
     }
 
     pub async fn install_plugin_with_remote_sync(
@@ -1093,21 +1107,72 @@ impl PluginsManager {
         auth: Option<&CodexAuth>,
         request: PluginInstallRequest,
     ) -> Result<PluginInstallOutcome, PluginInstallError> {
-        let resolved = find_installable_marketplace_plugin(
+        let resolved = match find_installable_marketplace_plugin(
             &request.marketplace_path,
             &request.plugin_name,
             self.restriction_product,
-        )?;
+        ) {
+            Ok(resolved) => resolved,
+            Err(err) => {
+                self.track_plugin_install_resolution_failed(&err);
+                return Err(err.into());
+            }
+        };
         let plugin_id = resolved.plugin_id.as_key();
         // This only forwards the backend mutation before the local install flow.
-        crate::remote_legacy::enable_remote_plugin(
+        if let Err(err) = crate::remote_legacy::enable_remote_plugin(
             &remote_plugin_service_config(config),
             auth,
             &plugin_id,
         )
         .await
-        .map_err(PluginInstallError::from)?;
-        self.install_resolved_plugin(resolved).await
+        {
+            let err = PluginInstallError::from(err);
+            self.track_plugin_install_failed(&resolved.plugin_id, err.to_string());
+            return Err(err);
+        }
+        let plugin_id = resolved.plugin_id.clone();
+        match self.install_resolved_plugin(resolved).await {
+            Ok(outcome) => Ok(outcome),
+            Err(err) => {
+                self.track_plugin_install_failed(&plugin_id, err.to_string());
+                Err(err)
+            }
+        }
+    }
+
+    fn track_plugin_install_resolution_failed(&self, err: &MarketplaceError) {
+        let plugin_id = match err {
+            MarketplaceError::PluginNotFound {
+                plugin_name,
+                marketplace_name,
+            }
+            | MarketplaceError::PluginNotAvailable {
+                plugin_name,
+                marketplace_name,
+            } => PluginId::new(plugin_name.clone(), marketplace_name.clone()).ok(),
+            MarketplaceError::Io { .. }
+            | MarketplaceError::MarketplaceNotFound { .. }
+            | MarketplaceError::InvalidMarketplaceFile { .. }
+            | MarketplaceError::PluginsDisabled
+            | MarketplaceError::InvalidPlugin(_) => None,
+        };
+        if let Some(plugin_id) = plugin_id {
+            self.track_plugin_install_failed(&plugin_id, err.to_string());
+        }
+    }
+
+    fn track_plugin_install_failed(&self, plugin_id: &PluginId, error_message: String) {
+        let analytics_events_client = match self.analytics_events_client.read() {
+            Ok(client) => client.clone(),
+            Err(err) => err.into_inner().clone(),
+        };
+        if let Some(analytics_events_client) = analytics_events_client {
+            analytics_events_client.track_plugin_install_failed(
+                PluginTelemetryMetadata::from_plugin_id(plugin_id),
+                error_message,
+            );
+        }
     }
 
     async fn install_resolved_plugin(

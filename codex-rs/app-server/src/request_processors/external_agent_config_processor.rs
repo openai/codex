@@ -15,6 +15,8 @@ use crate::config_manager::ConfigManager;
 use crate::error_code::internal_error;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
+use codex_analytics::AnalyticsEventsClient;
+use codex_analytics::ExternalAgentConfigImportCompletedInput;
 use codex_app_server_protocol::CommandMigration;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
@@ -49,6 +51,8 @@ use super::ConfigRequestProcessor;
 use super::external_agent_session_import::ExternalAgentSessionImporter;
 use uuid::Uuid;
 
+const MAX_ANALYTICS_RAW_ERROR_CHARS: usize = 300;
+
 #[derive(Clone)]
 pub(crate) struct ExternalAgentConfigRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
@@ -57,6 +61,7 @@ pub(crate) struct ExternalAgentConfigRequestProcessor {
     thread_manager: Arc<ThreadManager>,
     config_processor: ConfigRequestProcessor,
     state_db: Option<StateDbHandle>,
+    analytics_events_client: AnalyticsEventsClient,
 }
 
 pub(crate) struct ExternalAgentConfigRequestProcessorArgs {
@@ -66,6 +71,7 @@ pub(crate) struct ExternalAgentConfigRequestProcessorArgs {
     pub(crate) config_manager: ConfigManager,
     pub(crate) config_processor: ConfigRequestProcessor,
     pub(crate) state_db: Option<StateDbHandle>,
+    pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) codex_home: PathBuf,
 }
@@ -79,6 +85,7 @@ impl ExternalAgentConfigRequestProcessor {
             config_manager,
             config_processor,
             state_db,
+            analytics_events_client,
             arg0_paths,
             codex_home,
         } = args;
@@ -96,6 +103,7 @@ impl ExternalAgentConfigRequestProcessor {
             thread_manager,
             config_processor,
             state_db,
+            analytics_events_client,
         }
     }
 
@@ -242,6 +250,7 @@ impl ExternalAgentConfigRequestProcessor {
             send_completed_import_notification(
                 &self.outgoing,
                 self.state_db.as_ref(),
+                &self.analytics_events_client,
                 import_id,
                 &completed_item_results,
             )
@@ -253,6 +262,7 @@ impl ExternalAgentConfigRequestProcessor {
         let plugin_processor = self.clone();
         let outgoing = Arc::clone(&self.outgoing);
         let state_db = self.state_db.clone();
+        let analytics_events_client = self.analytics_events_client.clone();
         let thread_manager = Arc::clone(&self.thread_manager);
         let session_import_result = (!pending_session_imports.is_empty()).then(|| {
             CoreImportItemResult::new(
@@ -324,6 +334,7 @@ impl ExternalAgentConfigRequestProcessor {
             send_completed_import_notification(
                 &outgoing,
                 state_db.as_ref(),
+                &analytics_events_client,
                 import_id,
                 &completed_item_results,
             )
@@ -551,10 +562,12 @@ async fn send_import_progress(
 async fn send_completed_import_notification(
     outgoing: &OutgoingMessageSender,
     state_db: Option<&StateDbHandle>,
+    analytics_events_client: &AnalyticsEventsClient,
     import_id: String,
     item_results: &[CoreImportItemResult],
 ) {
     let notification = completed_notification(import_id, item_results);
+    track_completed_import_notification(analytics_events_client, &notification);
     if let Some(state_db) = state_db
         && let Err(err) = record_completed_import_notification(state_db, &notification).await
     {
@@ -569,6 +582,46 @@ async fn send_completed_import_notification(
             notification,
         ))
         .await;
+}
+
+fn track_completed_import_notification(
+    analytics_events_client: &AnalyticsEventsClient,
+    notification: &ExternalAgentConfigImportCompletedNotification,
+) {
+    for type_result in &notification.item_type_results {
+        analytics_events_client.track_external_agent_config_import_completed(
+            ExternalAgentConfigImportCompletedInput {
+                import_id: notification.import_id.clone(),
+                source: "app_server".to_string(),
+                item_type: match type_result.item_type {
+                    ExternalAgentConfigMigrationItemType::AgentsMd => "AGENTS_MD",
+                    ExternalAgentConfigMigrationItemType::Config => "CONFIG",
+                    ExternalAgentConfigMigrationItemType::Skills => "SKILLS",
+                    ExternalAgentConfigMigrationItemType::Plugins => "PLUGINS",
+                    ExternalAgentConfigMigrationItemType::McpServerConfig => "MCP_SERVER_CONFIG",
+                    ExternalAgentConfigMigrationItemType::Subagents => "SUBAGENTS",
+                    ExternalAgentConfigMigrationItemType::Hooks => "HOOKS",
+                    ExternalAgentConfigMigrationItemType::Commands => "COMMANDS",
+                    ExternalAgentConfigMigrationItemType::Sessions => "SESSIONS",
+                }
+                .to_string(),
+                success_count: type_result.successes.len(),
+                failed_count: type_result.failures.len(),
+                raw_errors: type_result
+                    .failures
+                    .iter()
+                    .map(|failure| analytics_raw_error(&failure.message))
+                    .collect(),
+            },
+        );
+    }
+}
+
+fn analytics_raw_error(message: &str) -> String {
+    message
+        .chars()
+        .take(MAX_ANALYTICS_RAW_ERROR_CHARS)
+        .collect()
 }
 
 async fn record_completed_import_notification(

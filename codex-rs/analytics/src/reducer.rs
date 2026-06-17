@@ -21,7 +21,12 @@ use crate::events::CodexImageGenerationEventParams;
 use crate::events::CodexImageGenerationEventRequest;
 use crate::events::CodexMcpToolCallEventParams;
 use crate::events::CodexMcpToolCallEventRequest;
+use crate::events::CodexOnboardingExternalAgentImportCompleteEventRequest;
+use crate::events::CodexOnboardingExternalAgentImportCompleteMetadata;
 use crate::events::CodexPluginEventRequest;
+use crate::events::CodexPluginInstallFailedEventRequest;
+use crate::events::CodexPluginInstallFailedMetadata;
+use crate::events::CodexPluginMetadata;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexReviewEventParams;
 use crate::events::CodexReviewEventRequest;
@@ -66,7 +71,10 @@ use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
 use crate::facts::CodexGoalEvent;
 use crate::facts::CustomAnalyticsFact;
+use crate::facts::ExternalAgentConfigImportCompletedInput;
 use crate::facts::HookRunInput;
+use crate::facts::PluginInstallFailedInput;
+use crate::facts::PluginInstallFailedPluginInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
@@ -511,6 +519,12 @@ impl AnalyticsReducer {
                 CustomAnalyticsFact::PluginStateChanged(input) => {
                     self.ingest_plugin_state_changed(input, out);
                 }
+                CustomAnalyticsFact::PluginInstallFailed(input) => {
+                    self.ingest_plugin_install_failed(input, out);
+                }
+                CustomAnalyticsFact::ExternalAgentConfigImportCompleted(input) => {
+                    self.ingest_external_agent_config_import_completed(input, out);
+                }
             },
         }
     }
@@ -773,6 +787,62 @@ impl AnalyticsReducer {
             PluginState::Enabled => TrackEventRequest::PluginEnabled(event),
             PluginState::Disabled => TrackEventRequest::PluginDisabled(event),
         });
+    }
+
+    fn ingest_plugin_install_failed(
+        &mut self,
+        input: PluginInstallFailedInput,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let PluginInstallFailedInput {
+            plugin,
+            error_message,
+        } = input;
+        let plugin = match plugin {
+            PluginInstallFailedPluginInput::Plugin(plugin) => codex_plugin_metadata(plugin),
+            PluginInstallFailedPluginInput::RemotePlugin {
+                remote_plugin_id,
+                marketplace_name,
+            } => CodexPluginMetadata {
+                plugin_id: Some(remote_plugin_id),
+                plugin_name: None,
+                marketplace_name: Some(marketplace_name),
+                has_skills: None,
+                mcp_server_count: None,
+                connector_ids: None,
+                product_client_id: Some(originator().value),
+            },
+        };
+        out.push(TrackEventRequest::PluginInstallFailed(
+            CodexPluginInstallFailedEventRequest {
+                event_type: "codex_plugin_install_failed",
+                event_params: CodexPluginInstallFailedMetadata {
+                    plugin,
+                    error_message,
+                },
+            },
+        ));
+    }
+
+    fn ingest_external_agent_config_import_completed(
+        &mut self,
+        input: ExternalAgentConfigImportCompletedInput,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        out.push(TrackEventRequest::ExternalAgentConfigImportCompleted(
+            CodexOnboardingExternalAgentImportCompleteEventRequest {
+                event_type: "codex_onboarding_external_agent_import_complete",
+                event_params: CodexOnboardingExternalAgentImportCompleteMetadata {
+                    import_id: input.import_id,
+                    source: input.source,
+                    item_type: input.item_type,
+                    success_count: input.success_count,
+                    failed_count: input.failed_count,
+                    raw_errors: input.raw_errors,
+                    product_client_id: Some(originator().value),
+                },
+            },
+        ));
     }
 
     async fn ingest_response(
