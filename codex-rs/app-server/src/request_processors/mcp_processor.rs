@@ -230,11 +230,7 @@ impl McpRequestProcessor {
                     .await
             }
         };
-        let auth = self
-            .auth_manager
-            .auth()
-            .await
-            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
+        let auth = self.auth_manager.auth_cached();
         let environment_manager = self.thread_manager.environment_manager();
         // This status path has no turn-selected environment. Use config cwd
         // as the local stdio fallback; named environment stdio MCPs must

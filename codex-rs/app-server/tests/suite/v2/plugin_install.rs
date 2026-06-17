@@ -10,6 +10,7 @@ use anyhow::bail;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::TestAppServer;
+use app_test_support::configure_expiring_workload_identity;
 use app_test_support::start_analytics_events_server;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
@@ -663,6 +664,66 @@ async fn plugin_install_returns_invalid_request_for_missing_marketplace_file() -
     assert_eq!(err.error.code, -32600);
     assert!(err.error.message.contains("marketplace file"));
     assert!(err.error.message.contains("does not exist"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_install_local_succeeds_when_workload_identity_is_unavailable() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"chatgpt_base_url = "{}/backend-api"
+
+[features]
+plugins = true
+"#,
+            server.uri()
+        ),
+    )?;
+    let workload_identity =
+        configure_expiring_workload_identity(codex_home.path(), &server).await?;
+
+    let repo_root = TempDir::new()?;
+    write_plugin_marketplace(
+        repo_root.path(),
+        "debug",
+        "sample-plugin",
+        "./sample-plugin",
+        /*install_policy*/ None,
+        /*auth_policy*/ None,
+    )?;
+    write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    workload_identity.remove_and_wait_for_expiry().await?;
+    let request_id = mcp
+        .send_plugin_install_request(PluginInstallParams {
+            marketplace_path: Some(marketplace_path),
+            remote_marketplace_name: None,
+            plugin_name: "sample-plugin".to_string(),
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginInstallResponse = to_response(response)?;
+
+    assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
+    assert!(
+        codex_home
+            .path()
+            .join("plugins/cache/debug/sample-plugin/local/.codex-plugin/plugin.json")
+            .is_file()
+    );
+    server.verify().await;
     Ok(())
 }
 

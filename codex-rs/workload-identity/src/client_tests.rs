@@ -163,6 +163,7 @@ async fn proactive_refresh_failure_uses_token_until_expiry() -> anyhow::Result<(
         cache.token.as_mut().expect("cached token").refresh_at = Instant::now();
     }
 
+    server.verify().await;
     server.reset().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
@@ -173,6 +174,7 @@ async fn proactive_refresh_failure_uses_token_until_expiry() -> anyhow::Result<(
 
     assert_eq!(client.resolve().await?, token);
     assert_eq!(client.resolve().await?, token);
+    server.verify().await;
     Ok(())
 }
 
@@ -194,6 +196,7 @@ async fn proactive_refresh_failure_fails_after_cached_token_expires() -> anyhow:
         cached.expires_at = Instant::now();
     }
 
+    server.verify().await;
     server.reset().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
@@ -204,6 +207,7 @@ async fn proactive_refresh_failure_fails_after_cached_token_expires() -> anyhow:
 
     assert!(client.resolve().await.is_err());
     assert!(client.resolve().await.is_err());
+    server.verify().await;
     Ok(())
 }
 
@@ -219,6 +223,7 @@ async fn forced_refresh_does_not_reuse_a_rejected_token() -> anyhow::Result<()> 
     let client = test_client(&server).await?;
     client.resolve().await?;
 
+    server.verify().await;
     server.reset().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
@@ -230,6 +235,7 @@ async fn forced_refresh_does_not_reuse_a_rejected_token() -> anyhow::Result<()> 
     assert!(client.refresh().await.is_err());
     assert!(client.cache.lock().expect("cache lock").token.is_none());
     assert!(client.resolve().await.is_err());
+    server.verify().await;
     Ok(())
 }
 
@@ -245,6 +251,7 @@ async fn refresh_rejects_a_changed_principal() -> anyhow::Result<()> {
     let client = test_client(&server).await?;
     client.resolve().await?;
 
+    server.verify().await;
     server.reset().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
@@ -265,6 +272,7 @@ async fn refresh_rejects_a_changed_principal() -> anyhow::Result<()> {
         Err(WorkloadIdentityError::PrincipalChanged)
     ));
     assert!(client.cache.lock().expect("cache lock").token.is_none());
+    server.verify().await;
     Ok(())
 }
 

@@ -8,6 +8,7 @@ mod models_cache;
 mod responses;
 mod rollout;
 mod test_app_server;
+mod workload_identity;
 
 pub use analytics_server::start_analytics_events_server;
 pub use auth_fixtures::ChatGptAuthFixture;
@@ -47,6 +48,8 @@ use serde::de::DeserializeOwned;
 pub use test_app_server::DEFAULT_CLIENT_NAME;
 pub use test_app_server::DISABLE_PLUGIN_STARTUP_TASKS_ARG;
 pub use test_app_server::TestAppServer;
+pub use workload_identity::ExpiringWorkloadIdentityFixture;
+pub use workload_identity::configure_expiring_workload_identity;
 
 pub fn to_response<T: DeserializeOwned>(response: JSONRPCResponse) -> anyhow::Result<T> {
     let value = serde_json::to_value(response.result)?;

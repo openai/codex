@@ -191,12 +191,12 @@ impl RequestPluginInstallHandler {
             .as_ref()
             .is_some_and(|response| response.action == ElicitationAction::Accept);
 
-        let auth = session.services.auth_manager.auth().await.map_err(|err| {
-            FunctionCallError::Fatal(format!(
-                "failed to resolve auth after plugin installation: {err}"
-            ))
-        })?;
         let completed = if user_confirmed {
+            let auth = session.services.auth_manager.auth().await.map_err(|err| {
+                FunctionCallError::Fatal(format!(
+                    "failed to resolve auth after plugin installation: {err}"
+                ))
+            })?;
             verify_request_plugin_install_completed(&session, &turn, &tool, auth.as_ref()).await
         } else {
             false

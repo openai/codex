@@ -145,10 +145,35 @@ async fn build_uploaded_argument_value(
         .to_abs_path()
         .map_err(|error| contextualize_error(error.to_string()))?;
     let resolved_path = native_environment_cwd.join(file_path);
-    let path_uri = PathUri::from_abs_path(&resolved_path);
+    let file_system_policy = turn_context.file_system_sandbox_policy();
+    if !file_system_policy
+        .can_read_path_with_cwd(resolved_path.as_path(), native_environment_cwd.as_path())
+    {
+        return Err(contextualize_error(
+            "path is not readable under the current sandbox policy".to_string(),
+        ));
+    }
+
+    let requested_path_uri = PathUri::from_abs_path(&resolved_path);
     let fs = turn_environment.environment.get_filesystem();
+    // Upload preprocessing runs in the Codex process, so enforce the turn's
+    // read policy before opening either the requested path or a symlink target.
+    let canonical_path_uri = fs
+        .canonicalize(&requested_path_uri, /*sandbox*/ None)
+        .await
+        .map_err(|error| contextualize_error(error.to_string()))?;
+    let canonical_path = canonical_path_uri
+        .to_abs_path()
+        .map_err(|error| contextualize_error(error.to_string()))?;
+    if !file_system_policy
+        .can_read_path_with_cwd(canonical_path.as_path(), native_environment_cwd.as_path())
+    {
+        return Err(contextualize_error(
+            "path is not readable under the current sandbox policy".to_string(),
+        ));
+    }
     let metadata = fs
-        .get_metadata(&path_uri, /*sandbox*/ None)
+        .get_metadata(&canonical_path_uri, /*sandbox*/ None)
         .await
         .map_err(|error| contextualize_error(error.to_string()))?;
     if !metadata.is_file {
@@ -166,7 +191,7 @@ async fn build_uploaded_argument_value(
         )));
     }
     let contents = fs
-        .read_file_stream(&path_uri, /*sandbox*/ None)
+        .read_file_stream(&canonical_path_uri, /*sandbox*/ None)
         .await
         .map_err(|error| contextualize_error(error.to_string()))?;
     let file_name = resolved_path
@@ -199,6 +224,11 @@ mod tests {
     use super::*;
     use crate::session::tests::make_session_and_context;
     use crate::session::turn_context::TurnEnvironment;
+    use codex_protocol::models::PermissionProfile;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
@@ -231,6 +261,25 @@ mod tests {
             PathUri::from_abs_path(&cwd),
             primary.shell.clone(),
         );
+    }
+
+    fn deny_file_read(turn_context: &mut TurnContext, path: AbsolutePathBuf) {
+        let mut file_system_policy = turn_context.file_system_sandbox_policy();
+        file_system_policy.preserve_deny_read_restrictions_from(
+            &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: path.clone() },
+                access: FileSystemAccessMode::Deny,
+            }]),
+        );
+        turn_context.permission_profile =
+            PermissionProfile::from_runtime_permissions_with_enforcement(
+                turn_context.permission_profile.enforcement(),
+                &file_system_policy,
+                turn_context.network_sandbox_policy(),
+            );
+        Arc::make_mut(&mut turn_context.config)
+            .workload_identity_credential_deny_paths
+            .push(path);
     }
 
     #[tokio::test]
@@ -356,6 +405,67 @@ mod tests {
 
         assert!(error.contains("is too large"));
         assert!(error.contains(&(OPENAI_FILE_UPLOAD_LIMIT_BYTES + 1).to_string()));
+    }
+
+    #[tokio::test]
+    async fn build_uploaded_argument_value_rejects_wif_credential_path() {
+        let (_, mut turn_context) = make_session_and_context().await;
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        let dir = tempdir().expect("temp dir");
+        let credential_path = dir.path().join("subject-token");
+        tokio::fs::write(&credential_path, b"external.subject.token")
+            .await
+            .expect("write credential");
+        set_primary_environment_cwd(&mut turn_context, dir.path());
+        deny_file_read(
+            &mut turn_context,
+            AbsolutePathBuf::try_from(credential_path).expect("absolute credential path"),
+        );
+
+        let error = build_uploaded_argument_value(
+            &turn_context,
+            Some(&auth),
+            "file",
+            /*index*/ None,
+            "subject-token",
+        )
+        .await
+        .expect_err("WIF credential should not be uploaded");
+
+        assert!(error.contains("not readable under the current sandbox policy"));
+        assert!(!error.contains("external.subject.token"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn build_uploaded_argument_value_rejects_symlink_to_wif_credential() {
+        let (_, mut turn_context) = make_session_and_context().await;
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        let dir = tempdir().expect("temp dir");
+        let credential_path = dir.path().join("subject-token");
+        let upload_path = dir.path().join("report.csv");
+        tokio::fs::write(&credential_path, b"external.subject.token")
+            .await
+            .expect("write credential");
+        std::os::unix::fs::symlink(&credential_path, &upload_path).expect("create symlink");
+        set_primary_environment_cwd(&mut turn_context, dir.path());
+        deny_file_read(
+            &mut turn_context,
+            AbsolutePathBuf::try_from(credential_path.clone()).expect("absolute credential path"),
+        );
+
+        let error = build_uploaded_argument_value(
+            &turn_context,
+            Some(&auth),
+            "file",
+            /*index*/ None,
+            "report.csv",
+        )
+        .await
+        .expect_err("symlinked WIF credential should not be uploaded");
+
+        assert!(error.contains("not readable under the current sandbox policy"));
+        assert!(!error.contains(credential_path.to_string_lossy().as_ref()));
     }
 
     #[tokio::test]
