@@ -646,7 +646,12 @@ pub fn install_with_providers<C>(
 ) where
     C: Send + Sync + 'static,
 {
-    install_inner(registry, providers, None, config_from_host);
+    install_inner(
+        registry,
+        providers,
+        /*host_provider*/ None,
+        config_from_host,
+    );
 }
 
 fn install_inner<C>(
