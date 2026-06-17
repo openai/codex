@@ -76,7 +76,6 @@ pub use tool_discovery::DiscoverableToolAction;
 pub use tool_discovery::DiscoverableToolType;
 pub use tool_discovery::LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME;
 pub use tool_discovery::ListAvailablePluginsToInstallResult;
-pub use tool_discovery::REQUEST_PLUGIN_INSTALLS_TOOL_NAME;
 pub use tool_discovery::RequestPluginInstallEntry;
 pub use tool_discovery::TOOL_SEARCH_DEFAULT_LIMIT;
 pub use tool_discovery::TOOL_SEARCH_TOOL_NAME;

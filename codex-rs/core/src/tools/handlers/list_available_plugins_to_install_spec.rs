@@ -1,6 +1,6 @@
+use codex_plugin_installs_extension::REQUEST_PLUGIN_INSTALLS_TOOL_NAME;
 use codex_tools::JsonSchema;
 use codex_tools::LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME;
-use codex_tools::REQUEST_PLUGIN_INSTALLS_TOOL_NAME;
 use codex_tools::ResponsesApiTool;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolSpec;

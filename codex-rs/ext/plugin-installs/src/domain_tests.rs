@@ -63,7 +63,7 @@ fn build_request_plugin_installs_elicitation_request_uses_flat_entries_shape() {
     }));
     let resolved_entries = [RequestPluginInstallResolvedPickerEntry {
         category_index: None,
-        tool: &connector,
+        tool: connector,
     }];
 
     let request = build_request_plugin_installs_elicitation_request(
@@ -131,7 +131,7 @@ fn build_request_plugin_installs_elicitation_request_injects_plugin_metadata() {
     }));
     let resolved_entries = [RequestPluginInstallResolvedPickerEntry {
         category_index: None,
-        tool: &plugin,
+        tool: plugin,
     }];
 
     let request = build_request_plugin_installs_elicitation_request(
@@ -209,7 +209,7 @@ fn build_request_plugin_installs_elicitation_request_uses_categories_shape() {
     }));
     let resolved_entries = [RequestPluginInstallResolvedPickerEntry {
         category_index: Some(0),
-        tool: &connector,
+        tool: connector,
     }];
 
     let request = build_request_plugin_installs_elicitation_request(

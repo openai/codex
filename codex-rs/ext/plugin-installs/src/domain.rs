@@ -71,10 +71,10 @@ pub struct RequestPluginInstallsMeta<'a> {
     pub categories: Option<Vec<RequestPluginInstallCategoryMeta<'a>>>,
 }
 
-#[derive(Debug)]
-pub struct RequestPluginInstallResolvedPickerEntry<'a> {
+#[derive(Clone, Debug)]
+pub struct RequestPluginInstallResolvedPickerEntry {
     pub category_index: Option<usize>,
-    pub tool: &'a DiscoverableTool,
+    pub tool: DiscoverableTool,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -98,12 +98,12 @@ pub struct RequestPluginInstallCategoryMeta<'a> {
     pub entries: Vec<RequestPluginInstallEntryMeta<'a>>,
 }
 
-pub fn build_request_plugin_installs_elicitation_request<'a>(
+pub fn build_request_plugin_installs_elicitation_request(
     server_name: &str,
     thread_id: String,
     turn_id: String,
-    args: &'a RequestPluginInstallsArgs,
-    resolved_entries: &'a [RequestPluginInstallResolvedPickerEntry<'a>],
+    args: &RequestPluginInstallsArgs,
+    resolved_entries: &[RequestPluginInstallResolvedPickerEntry],
 ) -> McpServerElicitationRequestParams {
     McpServerElicitationRequestParams {
         thread_id,
@@ -150,7 +150,7 @@ pub fn verified_connector_install_completed(
 
 fn build_request_plugin_installs_meta<'a>(
     args: &'a RequestPluginInstallsArgs,
-    resolved_entries: &'a [RequestPluginInstallResolvedPickerEntry<'a>],
+    resolved_entries: &'a [RequestPluginInstallResolvedPickerEntry],
 ) -> RequestPluginInstallsMeta<'a> {
     let entries = args.entries.as_ref().map(|_| {
         resolved_entries
@@ -186,9 +186,9 @@ fn build_request_plugin_installs_meta<'a>(
 }
 
 fn build_request_plugin_install_entry_meta<'a>(
-    entry: &'a RequestPluginInstallResolvedPickerEntry<'a>,
+    entry: &'a RequestPluginInstallResolvedPickerEntry,
 ) -> RequestPluginInstallEntryMeta<'a> {
-    let tool = entry.tool;
+    let tool = &entry.tool;
     let (remote_plugin_id, app_connector_ids) = match tool {
         DiscoverableTool::Connector(_) => (None, None),
         DiscoverableTool::Plugin(plugin) => (

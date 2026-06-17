@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::Weak;
 
 use codex_app_server_protocol::AppInfo;
 use codex_config::types::ToolSuggestDisabledTool;
@@ -8,12 +9,7 @@ use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use codex_tools::DiscoverableTool;
-use codex_tools::DiscoverableToolAction;
 use codex_tools::DiscoverableToolType;
-use codex_tools::REQUEST_PLUGIN_INSTALLS_TOOL_NAME;
-use codex_tools::ToolName;
-use codex_tools::ToolSpec;
-use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
 use rmcp::model::RequestId;
 use serde::Deserialize;
 use serde_json::Value;
@@ -23,139 +19,52 @@ use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::connectors;
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::FunctionToolOutput;
-use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolPayload;
-use crate::tools::context::boxed_tool_output;
-use crate::tools::handlers::parse_arguments;
-use crate::tools::registry::CoreToolRuntime;
-use crate::tools::registry::ToolExecutor;
 use codex_plugin_installs_extension::REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE;
 use codex_plugin_installs_extension::REQUEST_PLUGIN_INSTALL_PERSIST_KEY;
+use codex_plugin_installs_extension::REQUEST_PLUGIN_INSTALLS_TOOL_NAME;
 use codex_plugin_installs_extension::RequestPluginInstallEntryResult;
 use codex_plugin_installs_extension::RequestPluginInstallInstalledEntry;
 use codex_plugin_installs_extension::RequestPluginInstallResolvedPickerEntry;
-use codex_plugin_installs_extension::RequestPluginInstallsArgs;
+use codex_plugin_installs_extension::RequestPluginInstallsBackend;
+use codex_plugin_installs_extension::RequestPluginInstallsBackendFuture;
+use codex_plugin_installs_extension::RequestPluginInstallsRequest;
 use codex_plugin_installs_extension::RequestPluginInstallsResult;
-use codex_plugin_installs_extension::ToolSuggestPresentation;
 use codex_plugin_installs_extension::all_requested_connectors_picked_up;
 use codex_plugin_installs_extension::build_request_plugin_installs_elicitation_request;
-use codex_plugin_installs_extension::create_request_plugin_installs_tool;
-use codex_plugin_installs_extension::create_request_plugin_installs_tool_for_tui;
 use codex_plugin_installs_extension::request_plugin_install_picker_completed;
-use codex_plugin_installs_extension::validate_request_plugin_install_picker_args;
 use codex_plugin_installs_extension::verified_connector_install_completed;
 
-pub struct RequestPluginInstallsHandler {
-    discoverable_tools: Vec<DiscoverableTool>,
-    presentation: ToolSuggestPresentation,
-    mode: RequestPluginInstallsMode,
+pub(crate) struct CoreRequestPluginInstallsBackend {
+    session: Weak<crate::session::session::Session>,
 }
 
-impl RequestPluginInstallsHandler {
-    pub(crate) fn new(
-        discoverable_tools: Vec<DiscoverableTool>,
-        presentation: ToolSuggestPresentation,
-    ) -> Self {
+impl CoreRequestPluginInstallsBackend {
+    pub(crate) fn new(session: &Arc<crate::session::session::Session>) -> Self {
         Self {
-            discoverable_tools,
-            presentation,
-            mode: RequestPluginInstallsMode::MultipleEntries,
+            session: Arc::downgrade(session),
         }
-    }
-
-    pub(crate) fn single_entry(
-        discoverable_tools: Vec<DiscoverableTool>,
-        presentation: ToolSuggestPresentation,
-    ) -> Self {
-        Self {
-            discoverable_tools,
-            presentation,
-            mode: RequestPluginInstallsMode::SingleEntry,
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum RequestPluginInstallsMode {
-    SingleEntry,
-    MultipleEntries,
-}
-
-impl ToolExecutor<ToolInvocation> for RequestPluginInstallsHandler {
-    fn tool_name(&self) -> ToolName {
-        ToolName::plain(REQUEST_PLUGIN_INSTALLS_TOOL_NAME)
-    }
-
-    fn spec(&self) -> ToolSpec {
-        match self.mode {
-            RequestPluginInstallsMode::SingleEntry => {
-                create_request_plugin_installs_tool_for_tui(self.presentation)
-            }
-            RequestPluginInstallsMode::MultipleEntries => {
-                create_request_plugin_installs_tool(self.presentation)
-            }
-        }
-    }
-
-    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
-        Box::pin(self.handle_call(invocation))
-    }
-}
-
-impl RequestPluginInstallsHandler {
-    async fn handle_call(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation {
-            payload,
-            session,
-            turn,
-            call_id,
-            ..
-        } = invocation;
-
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::Fatal(format!(
-                    "{REQUEST_PLUGIN_INSTALLS_TOOL_NAME} handler received unsupported payload"
-                )));
-            }
-        };
-
-        let args: RequestPluginInstallsArgs = parse_arguments(&arguments)?;
-        if args.action_type != DiscoverableToolAction::Install {
-            return Err(FunctionCallError::RespondToModel(
-                "plugin install requests currently support only action_type=\"install\""
-                    .to_string(),
-            ));
-        }
-        let discoverable_tools = filter_request_plugin_install_discoverable_tools_for_client(
-            self.discoverable_tools.clone(),
-            turn.app_server_client_name.as_deref(),
-        );
-
-        self.handle_request(session, turn, call_id, args, discoverable_tools)
-            .await
     }
 
     async fn handle_request(
         &self,
-        session: Arc<crate::session::session::Session>,
-        turn: Arc<crate::session::turn_context::TurnContext>,
-        call_id: String,
-        args: RequestPluginInstallsArgs,
-        discoverable_tools: Vec<DiscoverableTool>,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+        request: RequestPluginInstallsRequest,
+    ) -> Result<RequestPluginInstallsResult, FunctionCallError> {
+        let RequestPluginInstallsRequest {
+            call_id,
+            turn_id,
+            args,
+            resolved_entries,
+        } = request;
+        let session = self.session.upgrade().ok_or_else(|| {
+            FunctionCallError::Fatal("plugin install session is no longer available".to_string())
+        })?;
+        let turn = session
+            .turn_context_for_sub_id(&turn_id)
+            .await
+            .ok_or_else(|| {
+                FunctionCallError::Fatal("plugin install turn is no longer active".to_string())
+            })?;
         let action_type = args.action_type;
-        let resolved_entries = validate_request_plugin_install_picker_args(
-            &args,
-            &discoverable_tools,
-            turn.app_server_client_name.as_deref(),
-            self.presentation,
-        )?;
         let requested_entries = requested_picker_install_entries(&resolved_entries);
 
         let request_id = RequestId::String(format!("request_plugin_installs_{call_id}").into());
@@ -167,7 +76,6 @@ impl RequestPluginInstallsHandler {
             &resolved_entries,
         );
         drop(resolved_entries);
-        drop(discoverable_tools);
 
         let elicitation = session
             .request_mcp_server_elicitation(turn.as_ref(), request_id, params)
@@ -238,26 +146,23 @@ impl RequestPluginInstallsHandler {
         }
 
         let completed = user_confirmed && request_plugin_install_picker_completed(&entries);
-        let content = serde_json::to_string(&RequestPluginInstallsResult {
+        Ok(RequestPluginInstallsResult {
             completed,
             user_confirmed,
             action_type,
             entries,
         })
-        .map_err(|err| {
-            FunctionCallError::Fatal(format!(
-                "failed to serialize {REQUEST_PLUGIN_INSTALLS_TOOL_NAME} response: {err}"
-            ))
-        })?;
-
-        Ok(boxed_tool_output(FunctionToolOutput::from_text(
-            content,
-            Some(true),
-        )))
     }
 }
 
-impl CoreToolRuntime for RequestPluginInstallsHandler {}
+impl RequestPluginInstallsBackend for CoreRequestPluginInstallsBackend {
+    fn execute(
+        &self,
+        request: RequestPluginInstallsRequest,
+    ) -> RequestPluginInstallsBackendFuture<'_> {
+        Box::pin(self.handle_request(request))
+    }
+}
 
 #[derive(Clone)]
 struct RequestedPickerInstallEntry {
@@ -282,7 +187,7 @@ struct RequestPluginInstallPickerResponseContent {
 }
 
 fn requested_picker_install_entries(
-    resolved_entries: &[RequestPluginInstallResolvedPickerEntry<'_>],
+    resolved_entries: &[RequestPluginInstallResolvedPickerEntry],
 ) -> Vec<RequestedPickerInstallEntry> {
     resolved_entries
         .iter()
@@ -532,5 +437,5 @@ pub(super) fn verified_plugin_install_completed(
 }
 
 #[cfg(test)]
-#[path = "request_plugin_install_tests.rs"]
+#[path = "request_plugin_installs_tests.rs"]
 mod tests;
