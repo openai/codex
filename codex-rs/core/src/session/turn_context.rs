@@ -396,14 +396,8 @@ impl TurnContext {
 
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         let workspace_roots = self.config.effective_workspace_roots();
-        let cwd = self
-            .environments
-            .primary()
-            .map(|environment| environment.cwd().clone())
-            .unwrap_or_else(|| {
-                #[allow(deprecated)]
-                PathUri::from_abs_path(&self.cwd)
-            });
+        #[allow(deprecated)]
+        let cwd = self.cwd.clone();
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
             cwd,

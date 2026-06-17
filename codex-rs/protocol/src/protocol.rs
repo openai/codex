@@ -2988,7 +2988,7 @@ pub struct TurnContextNetworkItem {
 pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
-    pub cwd: PathUri,
+    pub cwd: AbsolutePathBuf,
     /// Effective workspace roots used to materialize symbolic
     /// `:workspace_roots` filesystem permissions in `permission_profile`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3026,35 +3026,21 @@ pub struct TurnContextItem {
 }
 
 impl TurnContextItem {
-    pub fn permission_profile(&self) -> std::io::Result<PermissionProfile> {
-        if let Some(permission_profile) = self.permission_profile.clone() {
-            return Ok(permission_profile);
-        }
-        let file_system_sandbox_policy = match self.file_system_sandbox_policy.clone() {
-            Some(file_system_sandbox_policy) => file_system_sandbox_policy,
-            None => {
-                let cwd = self.cwd.to_abs_path().map_err(|err| {
-                    std::io::Error::new(
-                        err.kind(),
-                        format!(
-                            "cannot hydrate legacy permission profile for cwd {}: {err}",
-                            self.cwd
-                        ),
+    pub fn permission_profile(&self) -> PermissionProfile {
+        self.permission_profile.clone().unwrap_or_else(|| {
+            let file_system_sandbox_policy =
+                self.file_system_sandbox_policy.clone().unwrap_or_else(|| {
+                    FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+                        &self.sandbox_policy,
+                        self.cwd.as_path(),
                     )
-                })?;
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                    &self.sandbox_policy,
-                    cwd.as_path(),
-                )
-            }
-        };
-        Ok(
+                });
             PermissionProfile::from_runtime_permissions_with_enforcement(
                 SandboxEnforcement::from_legacy_sandbox_policy(&self.sandbox_policy),
                 &file_system_sandbox_policy,
                 NetworkSandboxPolicy::from(&self.sandbox_policy),
-            ),
-        )
+            )
+        })
     }
 }
 
@@ -5315,47 +5301,18 @@ mod tests {
     }
 
     #[test]
-    fn turn_context_item_accepts_legacy_cwd_and_serializes_path_uri() -> Result<()> {
-        let legacy_cwd = test_path_buf("/tmp");
+    fn turn_context_item_deserializes_without_network() -> Result<()> {
         let item: TurnContextItem = serde_json::from_value(json!({
-            "cwd": legacy_cwd,
+            "cwd": test_path_buf("/tmp"),
             "approval_policy": "never",
             "sandbox_policy": { "type": "danger-full-access" },
             "model": "gpt-5",
             "summary": "auto",
         }))?;
 
-        let expected_cwd = PathUri::from_path(legacy_cwd)?;
-        assert_eq!(item.cwd, expected_cwd);
-        assert_eq!(
-            serde_json::to_value(&item)?["cwd"],
-            json!(expected_cwd.to_string())
-        );
         assert_eq!(item.network, None);
         assert_eq!(item.file_system_sandbox_policy, None);
         assert_eq!(item.comp_hash, None);
-        Ok(())
-    }
-
-    #[test]
-    fn turn_context_item_rejects_legacy_policy_hydration_for_foreign_cwd() -> Result<()> {
-        let foreign_cwd = if cfg!(windows) {
-            "file:///tmp"
-        } else {
-            "file://server/share"
-        };
-        let item: TurnContextItem = serde_json::from_value(json!({
-            "cwd": foreign_cwd,
-            "approval_policy": "never",
-            "sandbox_policy": { "type": "workspace-write" },
-            "model": "gpt-5",
-            "summary": "auto",
-        }))?;
-
-        let err = item
-            .permission_profile()
-            .expect_err("foreign cwd should not hydrate a legacy permission profile");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         Ok(())
     }
 
@@ -5396,7 +5353,7 @@ mod tests {
     fn turn_context_item_serializes_network_when_present() -> Result<()> {
         let item = TurnContextItem {
             turn_id: None,
-            cwd: PathUri::from_abs_path(&test_path_buf("/tmp").abs()),
+            cwd: test_path_buf("/tmp").abs(),
             workspace_roots: None,
             current_date: None,
             timezone: None,
