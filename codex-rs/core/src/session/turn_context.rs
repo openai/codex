@@ -133,6 +133,7 @@ pub struct TurnContext {
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
     pub(crate) collaboration_mode: CollaborationMode,
+    pub(crate) multi_agent_mode: MultiAgentMode,
     pub(crate) multi_agent_version: MultiAgentVersion,
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
@@ -303,6 +304,7 @@ impl TurnContext {
             compact_prompt: self.compact_prompt.clone(),
             user_instructions: self.user_instructions.clone(),
             collaboration_mode,
+            multi_agent_mode: self.multi_agent_mode,
             multi_agent_version: self.multi_agent_version,
             personality: self.personality,
             approval_policy: self.approval_policy.clone(),
@@ -414,6 +416,7 @@ impl TurnContext {
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),
             multi_agent_version: Some(self.multi_agent_version),
+            multi_agent_mode: Some(self.multi_agent_mode),
             realtime_active: Some(self.realtime_active),
             effort: self.reasoning_effort.clone(),
             summary: ReasoningSummaryConfig::Auto,
@@ -608,6 +611,7 @@ impl Session {
                 .as_ref()
                 .map(LoadedAgentsMd::render),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
+            multi_agent_mode: session_configuration.multi_agent_mode,
             multi_agent_version,
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.clone(),
@@ -639,6 +643,31 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> CodexResult<Arc<TurnContext>> {
+        if updates.multi_agent_mode.is_some() {
+            let candidate = {
+                let state = self.state.lock().await;
+                state.session_configuration.clone().apply(&updates)
+            };
+            let validation_result = match candidate {
+                Ok(candidate) => self
+                    .validate_multi_agent_mode(&candidate)
+                    .await
+                    .map_err(|err| CodexErr::InvalidRequest(err.to_string())),
+                Err(err) => Err(CodexErr::InvalidRequest(err.to_string())),
+            };
+            if let Err(err) = validation_result {
+                let message = err.to_string();
+                self.send_event_raw(Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: message.clone(),
+                        codex_error_info: Some(CodexErrorInfo::BadRequest),
+                    }),
+                })
+                .await;
+                return Err(CodexErr::InvalidRequest(message));
+            }
+        }
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let update_result: CodexResult<_> = {
             let mut state = self.state.lock().await;
@@ -701,6 +730,41 @@ impl Session {
                 updates.final_output_json_schema,
             )
             .await)
+    }
+
+    pub(super) async fn validate_multi_agent_mode(
+        &self,
+        session_configuration: &SessionConfiguration,
+    ) -> ConstraintResult<()> {
+        let per_turn_config =
+            Self::build_per_turn_config(session_configuration, session_configuration.cwd().clone());
+        let model_info = self
+            .services
+            .models_manager
+            .get_model_info(
+                session_configuration.collaboration_mode.model(),
+                &per_turn_config.to_models_manager_config(),
+            )
+            .await;
+        let multi_agent_version = self
+            .multi_agent_version()
+            .or(model_info.multi_agent_version)
+            .unwrap_or_else(|| per_turn_config.multi_agent_version_from_features());
+        if multi_agents::usage_hint_text_for(
+            multi_agent_version,
+            &per_turn_config.multi_agent_v2,
+            &session_configuration.session_source,
+        )
+        .is_none()
+        {
+            return Err(crate::config::ConstraintError::InvalidValue {
+                field_name: "multi_agent_mode",
+                candidate: session_configuration.multi_agent_mode.to_string(),
+                allowed: "multi-agent v2 session with usage hints enabled".to_string(),
+                requirement_source: codex_config::RequirementSource::Unknown,
+            });
+        }
+        Ok(())
     }
 
     async fn new_turn_from_configuration(

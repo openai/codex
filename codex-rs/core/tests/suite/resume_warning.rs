@@ -41,6 +41,7 @@ fn resume_history(
         personality: None,
         collaboration_mode: None,
         multi_agent_version: None,
+        multi_agent_mode: None,
         realtime_active: None,
         effort: config.model_reasoning_effort.clone(),
         summary: config

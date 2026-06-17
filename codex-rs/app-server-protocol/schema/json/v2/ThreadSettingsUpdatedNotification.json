@@ -108,6 +108,14 @@
       ],
       "type": "string"
     },
+    "MultiAgentMode": {
+      "description": "Controls whether the model should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help.",
+      "enum": [
+        "explicitRequestOnly",
+        "proactive"
+      ],
+      "type": "string"
+    },
     "NetworkAccess": {
       "enum": [
         "restricted",
@@ -314,6 +322,14 @@
         },
         "modelProvider": {
           "type": "string"
+        },
+        "multiAgentMode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MultiAgentMode"
+            }
+          ],
+          "default": "explicitRequestOnly"
         },
         "personality": {
           "anyOf": [

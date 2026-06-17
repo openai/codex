@@ -27,6 +27,7 @@ use crate::context::AvailablePluginsInstructions;
 use crate::context::AvailableSkillsInstructions;
 use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
+use crate::context::MultiAgentSpawnPolicyInstructions;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
@@ -89,6 +90,7 @@ use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
@@ -209,7 +211,7 @@ mod handlers;
 mod inject;
 mod input_queue;
 mod mcp;
-mod multi_agents;
+pub(crate) mod multi_agents;
 mod review;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
@@ -438,6 +440,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
     pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
+    pub(crate) inherited_multi_agent_mode: Option<MultiAgentMode>,
 }
 
 pub(crate) fn resolve_multi_agent_version(
@@ -520,6 +523,7 @@ impl Codex {
             thread_store,
             attestation_provider,
             inherited_multi_agent_version,
+            inherited_multi_agent_mode,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -574,6 +578,10 @@ impl Codex {
             .await;
         let multi_agent_version =
             resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version);
+        let multi_agent_mode = conversation_history
+            .get_multi_agent_mode()
+            .or(inherited_multi_agent_mode)
+            .unwrap_or_default();
         config
             .validate_multi_agent_v2_config()
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
@@ -607,6 +615,7 @@ impl Codex {
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
+            multi_agent_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier,
             developer_instructions: config.developer_instructions.clone(),
@@ -1440,11 +1449,14 @@ impl Session {
         &self,
         updates: &SessionSettingsUpdate,
     ) -> ConstraintResult<ThreadConfigSnapshot> {
-        let state = self.state.lock().await;
-        state
-            .session_configuration
-            .apply(updates)
-            .map(|configuration| configuration.thread_config_snapshot())
+        let configuration = {
+            let state = self.state.lock().await;
+            state.session_configuration.apply(updates)
+        }?;
+        if updates.multi_agent_mode.is_some() {
+            self.validate_multi_agent_mode(&configuration).await?;
+        }
+        Ok(configuration.thread_config_snapshot())
     }
 
     pub(crate) async fn set_session_startup_prewarm(
@@ -3080,6 +3092,13 @@ impl Session {
                 ])
         {
             items.push(usage_hint_message);
+        }
+        if let Some(multi_agent_mode) =
+            multi_agents::spawn_policy_for_turn(turn_context, &session_source)
+        {
+            items.push(ContextualUserFragment::into(
+                MultiAgentSpawnPolicyInstructions::new(multi_agent_mode),
+            ));
         }
         if let Some(contextual_user_message) =
             crate::context_manager::updates::build_contextual_user_message(contextual_user_sections)

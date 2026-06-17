@@ -14,6 +14,7 @@ use codex_experimental_api_macros::ExperimentalApi;
 pub use codex_protocol::capabilities::CapabilityRootLocation;
 pub use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 pub use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
@@ -255,6 +256,8 @@ pub struct ThreadSettings {
     pub effort: Option<ReasoningEffort>,
     pub summary: Option<ReasoningSummary>,
     pub collaboration_mode: CollaborationMode,
+    #[serde(default)]
+    pub multi_agent_mode: MultiAgentMode,
     pub personality: Option<Personality>,
 }
 

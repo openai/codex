@@ -1096,16 +1096,12 @@ impl ThreadManagerState {
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
     ) -> Option<MultiAgentVersion> {
-        let inherited_thread_id = match session_source {
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id, ..
-            })) => Some(*parent_thread_id),
-            _ => match initial_history {
-                InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
-                InitialHistory::Forked(_) => forked_from_thread_id.or(parent_thread_id),
-                InitialHistory::New | InitialHistory::Cleared => parent_thread_id,
-            },
-        };
+        let inherited_thread_id = Self::inherited_thread_id_for_spawn(
+            initial_history,
+            session_source,
+            parent_thread_id,
+            forked_from_thread_id,
+        );
         let inherited_multi_agent_version = match inherited_thread_id {
             Some(thread_id) => self
                 .get_thread(thread_id)
@@ -1115,6 +1111,24 @@ impl ThreadManagerState {
             None => None,
         };
         resolve_multi_agent_version(initial_history, inherited_multi_agent_version)
+    }
+
+    fn inherited_thread_id_for_spawn(
+        initial_history: &InitialHistory,
+        session_source: Option<&SessionSource>,
+        parent_thread_id: Option<ThreadId>,
+        forked_from_thread_id: Option<ThreadId>,
+    ) -> Option<ThreadId> {
+        match session_source {
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id, ..
+            })) => Some(*parent_thread_id),
+            _ => match initial_history {
+                InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
+                InitialHistory::Forked(_) => forked_from_thread_id.or(parent_thread_id),
+                InitialHistory::New | InitialHistory::Cleared => parent_thread_id,
+            },
+        }
     }
 
     /// Resolves the provider snapshot for a newly spawned runtime.
@@ -1397,6 +1411,21 @@ impl ThreadManagerState {
                 forked_from_thread_id,
             )
             .await;
+        let inherited_multi_agent_mode = match initial_history.get_multi_agent_mode() {
+            Some(mode) => Some(mode),
+            None => match Self::inherited_thread_id_for_spawn(
+                &initial_history,
+                Some(&session_source),
+                parent_thread_id,
+                forked_from_thread_id,
+            ) {
+                Some(thread_id) => match self.get_thread(thread_id).await {
+                    Ok(thread) => Some(thread.config_snapshot().await.multi_agent_mode),
+                    Err(_) => None,
+                },
+                None => None,
+            },
+        };
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Box::pin(Codex::spawn(CodexSpawnArgs {
@@ -1429,6 +1458,7 @@ impl ThreadManagerState {
             thread_store: Arc::clone(&self.thread_store),
             attestation_provider: self.attestation_provider.clone(),
             inherited_multi_agent_version: multi_agent_version,
+            inherited_multi_agent_mode,
         }))
         .await?;
         let new_thread = self

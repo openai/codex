@@ -2,6 +2,7 @@ use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
 use crate::context::EnvironmentContext;
 use crate::context::ModelSwitchInstructions;
+use crate::context::MultiAgentSpawnPolicyInstructions;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::context::RealtimeEndInstructions;
@@ -89,6 +90,16 @@ fn build_collaboration_mode_update_item(
     } else {
         None
     }
+}
+
+fn build_multi_agent_spawn_policy_update_item(
+    previous: Option<&TurnContextItem>,
+    next: &TurnContext,
+) -> Option<ResponseItem> {
+    let policy = crate::session::multi_agents::spawn_policy_for_turn(next, &next.session_source)?;
+    let previous = previous?;
+    (previous.multi_agent_mode != Some(policy))
+        .then(|| ContextualUserFragment::into(MultiAgentSpawnPolicyInstructions::new(policy)))
 }
 
 pub(crate) fn build_realtime_update_item(
@@ -220,6 +231,8 @@ pub(crate) fn build_settings_update_items(
     // inputs or add explicit replay events so fork/resume can diff everything
     // deterministically.
     let contextual_user_message = build_environment_update_item(previous, next, shell);
+    let multi_agent_spawn_policy_message =
+        build_multi_agent_spawn_policy_update_item(previous, next);
     let developer_update_sections = [
         // Keep model-switch instructions first so model-specific guidance is read before
         // any other context diffs on this turn.
@@ -233,9 +246,12 @@ pub(crate) fn build_settings_update_items(
     .flatten()
     .collect();
 
-    let mut items = Vec::with_capacity(2);
+    let mut items = Vec::with_capacity(3);
     if let Some(developer_message) = build_developer_update_item(developer_update_sections) {
         items.push(developer_message);
+    }
+    if let Some(multi_agent_spawn_policy_message) = multi_agent_spawn_policy_message {
+        items.push(multi_agent_spawn_policy_message);
     }
     if let Some(contextual_user_message) = contextual_user_message {
         items.push(contextual_user_message);

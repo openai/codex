@@ -1,5 +1,6 @@
 use super::residency::is_v2_resident_session_source;
 use super::*;
+use std::collections::HashSet;
 
 const AGENT_NAMES: &str = include_str!("../agent_names.txt");
 
@@ -78,6 +79,24 @@ fn is_multi_agent_v2_usage_hint_message(item: &ResponseItem, usage_hint_texts: &
     usage_hint_texts
         .iter()
         .any(|usage_hint_text| usage_hint_text == text)
+}
+
+fn multi_agent_v2_usage_hint_variants(usage_hint_text: String) -> Vec<String> {
+    let stable_usage_hint_text =
+        crate::session::multi_agents::stable_usage_hint_text(&usage_hint_text).to_string();
+    let legacy_usage_hint_text = format!(
+        "{stable_usage_hint_text}\n\n{}",
+        crate::config::DEFAULT_MULTI_AGENT_V2_NO_SPAWN_HINT_TEXT
+    );
+    [
+        usage_hint_text,
+        stable_usage_hint_text,
+        legacy_usage_hint_text,
+    ]
+    .into_iter()
+    .collect::<HashSet<_>>()
+    .into_iter()
+    .collect()
 }
 
 impl AgentControl {
@@ -452,6 +471,7 @@ impl AgentControl {
                     ]
                     .into_iter()
                     .flatten()
+                    .flat_map(multi_agent_v2_usage_hint_variants)
                     .collect()
                 } else {
                     Vec::new()
@@ -463,6 +483,7 @@ impl AgentControl {
                 ]
                 .into_iter()
                 .flatten()
+                .flat_map(multi_agent_v2_usage_hint_variants)
                 .collect()
             } else {
                 Vec::new()

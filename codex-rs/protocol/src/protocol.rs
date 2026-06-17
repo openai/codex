@@ -21,6 +21,7 @@ use crate::approvals::ElicitationRequestEvent;
 use crate::config_types::ApprovalsReviewer;
 use crate::config_types::CollaborationMode;
 use crate::config_types::ModeKind;
+use crate::config_types::MultiAgentMode;
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::WindowsSandboxLevel;
@@ -104,6 +105,8 @@ pub const PLUGINS_INSTRUCTIONS_OPEN_TAG: &str = "<plugins_instructions>";
 pub const PLUGINS_INSTRUCTIONS_CLOSE_TAG: &str = "</plugins_instructions>";
 pub const COLLABORATION_MODE_OPEN_TAG: &str = "<collaboration_mode>";
 pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
+pub const MULTI_AGENT_SPAWN_POLICY_OPEN_TAG: &str = "<multi_agent_spawn_policy>";
+pub const MULTI_AGENT_SPAWN_POLICY_CLOSE_TAG: &str = "</multi_agent_spawn_policy>";
 pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
 pub const REALTIME_CONVERSATION_CLOSE_TAG: &str = "</realtime_conversation>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
@@ -473,6 +476,9 @@ pub struct ThreadSettingsOverrides {
     /// EXPERIMENTAL - set a pre-set collaboration mode.
     /// Takes precedence over model, effort, and developer instructions if set.
     pub collaboration_mode: Option<CollaborationMode>,
+
+    /// Updated multi-agent mode for this turn and subsequent turns.
+    pub multi_agent_mode: Option<MultiAgentMode>,
 
     /// Updated personality preference.
     pub personality: Option<Personality>,
@@ -1989,6 +1995,8 @@ pub struct ThreadSettingsSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
     pub collaboration_mode: CollaborationMode,
+    #[serde(default)]
+    pub multi_agent_mode: MultiAgentMode,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]
@@ -2539,6 +2547,14 @@ impl InitialHistory {
         }
     }
 
+    pub fn get_multi_agent_mode(&self) -> Option<MultiAgentMode> {
+        match self {
+            InitialHistory::New | InitialHistory::Cleared => None,
+            InitialHistory::Resumed(resumed) => multi_agent_mode_from_items(&resumed.history),
+            InitialHistory::Forked(items) => multi_agent_mode_from_items(items),
+        }
+    }
+
     pub fn get_resumed_session_sources(&self) -> Option<(SessionSource, Option<ThreadSource>)> {
         let meta = self.get_resumed_session_meta()?;
         Some((meta.source.clone(), meta.thread_source.clone()))
@@ -2851,6 +2867,17 @@ fn multi_agent_version_from_items(
     })
 }
 
+fn multi_agent_mode_from_items(items: &[RolloutItem]) -> Option<MultiAgentMode> {
+    items.iter().rev().find_map(|item| match item {
+        RolloutItem::TurnContext(turn_context) => turn_context.multi_agent_mode,
+        RolloutItem::SessionMeta(_)
+        | RolloutItem::ResponseItem(_)
+        | RolloutItem::InterAgentCommunication(_)
+        | RolloutItem::Compacted(_)
+        | RolloutItem::EventMsg(_) => None,
+    })
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -3014,6 +3041,8 @@ pub struct TurnContextItem {
     pub collaboration_mode: Option<CollaborationMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_version: Option<MultiAgentVersion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multi_agent_mode: Option<MultiAgentMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub realtime_active: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
