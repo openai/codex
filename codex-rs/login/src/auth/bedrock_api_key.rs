@@ -4,6 +4,8 @@ use codex_config::types::AuthCredentialsStoreMode;
 use serde::Deserialize;
 use serde::Serialize;
 
+use super::manager::AuthManager;
+use super::manager::load_auth_dot_json;
 use super::manager::save_auth;
 use super::storage::AuthDotJson;
 use super::storage::AuthKeyringBackendKind;
@@ -42,6 +44,67 @@ pub fn login_with_bedrock_api_key(
         auth_credentials_store_mode,
         keyring_backend_kind,
     )
+}
+
+pub(super) fn load_stored_bedrock_api_key(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> std::io::Result<Option<BedrockApiKeyAuth>> {
+    load_stored_bedrock_api_key_auth(
+        codex_home,
+        auth_credentials_store_mode,
+        keyring_backend_kind,
+    )
+    .map(|auth| auth.and_then(|auth| auth.bedrock_api_key))
+}
+
+fn load_stored_bedrock_api_key_auth(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> std::io::Result<Option<AuthDotJson>> {
+    load_auth_dot_json(
+        codex_home,
+        auth_credentials_store_mode,
+        keyring_backend_kind,
+    )
+    .map(|auth| auth.filter(AuthDotJson::is_bedrock_api_key))
+}
+
+impl AuthManager {
+    /// Current cached account auth mode, including provider-specific managed auth.
+    pub fn account_auth_mode_cached(&self) -> Option<AuthMode> {
+        self.get_api_auth_mode().or_else(|| {
+            self.bedrock_api_key_auth_cached()
+                .map(|_| AuthMode::BedrockApiKey)
+        })
+    }
+
+    pub fn has_stored_bedrock_api_key_auth(&self) -> std::io::Result<bool> {
+        load_stored_bedrock_api_key_auth(
+            &self.codex_home,
+            self.auth_credentials_store_mode,
+            self.keyring_backend_kind,
+        )
+        .map(|auth| auth.is_some())
+    }
+
+    pub async fn login_with_bedrock_api_key(
+        &self,
+        api_key: &str,
+        region: &str,
+    ) -> std::io::Result<()> {
+        login_with_bedrock_api_key(
+            &self.codex_home,
+            api_key,
+            region,
+            self.auth_credentials_store_mode,
+            self.keyring_backend_kind,
+        )?;
+        self.reload().await;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

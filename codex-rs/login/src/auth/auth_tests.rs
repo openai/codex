@@ -1609,9 +1609,9 @@ async fn load_auth_keeps_codex_api_key_env_precedence() {
         codex_home.path().to_path_buf(),
         /*enable_codex_api_key_env*/ true,
         AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::Direct,
-        /*agent_identity_authapi_base_url*/ None,
         /*auth_route_config*/ None,
     )
     .await;

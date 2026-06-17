@@ -49,6 +49,7 @@ use codex_login::login_with_api_key;
 use codex_login::login_with_bedrock_api_key;
 use codex_protocol::account::AmazonBedrockCredentialSource;
 use codex_protocol::account::PlanType as AccountPlanType;
+use codex_protocol::auth::AuthMode as DomainAuthMode;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -192,15 +193,26 @@ async fn read_account(mcp: &mut TestAppServer) -> Result<GetAccountResponse> {
     to_response(response)
 }
 
-async fn assert_no_account_updated(mcp: &mut TestAppServer) {
-    assert!(
-        timeout(
-            Duration::from_millis(500),
-            mcp.read_stream_until_notification_message("account/updated"),
-        )
-        .await
-        .is_err()
+async fn assert_account_updated(
+    mcp: &mut TestAppServer,
+    auth_mode: Option<AuthMode>,
+) -> Result<()> {
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("account/updated"),
+    )
+    .await??;
+    let ServerNotification::AccountUpdated(payload) = notification.try_into()? else {
+        bail!("unexpected notification")
+    };
+    assert_eq!(
+        payload,
+        AccountUpdatedNotification {
+            auth_mode,
+            plan_type: None,
+        }
     );
+    Ok(())
 }
 
 async fn mock_device_code_usercode(server: &MockServer, interval_seconds: u64) {
@@ -1039,6 +1051,9 @@ async fn login_and_logout_amazon_bedrock_persist_changes_until_restart() -> Resu
         AuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
     )?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let mut expected_config = read_config_toml(codex_home.path())?;
     expected_config
         .as_table_mut()
@@ -1052,10 +1067,6 @@ async fn login_and_logout_amazon_bedrock_persist_changes_until_restart() -> Resu
         .as_table_mut()
         .expect("config should be a table")
         .remove("model_provider");
-
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_login_account_amazon_bedrock_request(" managed-bedrock-api-key ", " us-west-2 ")
@@ -1073,7 +1084,7 @@ async fn login_and_logout_amazon_bedrock_persist_changes_until_restart() -> Resu
     assert_eq!(
         load_file_auth(codex_home.path())?,
         Some(AuthDotJson {
-            auth_mode: Some(AuthMode::BedrockApiKey),
+            auth_mode: Some(DomainAuthMode::BedrockApiKey),
             openai_api_key: None,
             tokens: None,
             last_refresh: None,
@@ -1103,21 +1114,7 @@ async fn login_and_logout_amazon_bedrock_persist_changes_until_restart() -> Resu
             error: None,
         }
     );
-    let notification = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("account/updated"),
-    )
-    .await??;
-    let ServerNotification::AccountUpdated(payload) = notification.try_into()? else {
-        bail!("unexpected notification")
-    };
-    assert_eq!(
-        payload,
-        AccountUpdatedNotification {
-            auth_mode: Some(AuthMode::BedrockApiKey),
-            plan_type: None,
-        }
-    );
+    assert_account_updated(&mut mcp, Some(AuthMode::BedrockApiKey)).await?;
     assert_eq!(
         read_account(&mut mcp).await?,
         GetAccountResponse {
@@ -1141,7 +1138,7 @@ async fn login_and_logout_amazon_bedrock_persist_changes_until_restart() -> Resu
         read_config_toml(codex_home.path())?,
         expected_config_after_logout
     );
-    assert_no_account_updated(&mut mcp).await;
+    assert_account_updated(&mut mcp, None).await?;
     assert_eq!(
         read_account(&mut mcp).await?,
         GetAccountResponse {
@@ -1203,6 +1200,7 @@ async fn managed_bedrock_login_requires_experimental_api_but_logout_is_best_effo
         LogoutAccountResponse {}
     );
     assert_eq!(load_file_auth(codex_home.path())?, None);
+    assert_account_updated(&mut mcp, None).await?;
     Ok(())
 }
 
@@ -1237,11 +1235,7 @@ async fn login_and_logout_managed_bedrock_update_active_provider() -> Result<()>
         mcp.read_stream_until_notification_message("account/login/completed"),
     )
     .await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("account/updated"),
-    )
-    .await??;
+    assert_account_updated(&mut mcp, Some(AuthMode::BedrockApiKey)).await?;
     assert_eq!(
         read_account(&mut mcp).await?,
         GetAccountResponse {
@@ -1266,7 +1260,7 @@ async fn login_and_logout_managed_bedrock_update_active_provider() -> Result<()>
     assert_eq!(load_file_auth(codex_home.path())?, None);
     assert_eq!(read_config_toml(codex_home.path())?, expected_config);
 
-    assert_no_account_updated(&mut mcp).await;
+    assert_account_updated(&mut mcp, None).await?;
     assert_eq!(
         read_account(&mut mcp).await?,
         GetAccountResponse {
@@ -1290,11 +1284,11 @@ async fn logout_account_aws_managed_bedrock_preserves_openai_auth_and_config() -
         AuthKeyringBackendKind::default(),
     )?;
     let expected_auth = load_file_auth(codex_home.path())?;
-    let expected_config = read_config_toml(codex_home.path())?;
 
     let mut mcp =
         TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let expected_config = read_config_toml(codex_home.path())?;
 
     let request_id = mcp.send_logout_account_request().await?;
     let response: JSONRPCResponse = timeout(
@@ -1308,7 +1302,7 @@ async fn logout_account_aws_managed_bedrock_preserves_openai_auth_and_config() -
     );
     assert_eq!(load_file_auth(codex_home.path())?, expected_auth);
     assert_eq!(read_config_toml(codex_home.path())?, expected_config);
-    assert_no_account_updated(&mut mcp).await;
+    assert_account_updated(&mut mcp, None).await?;
     Ok(())
 }
 
@@ -1390,7 +1384,7 @@ async fn login_account_amazon_bedrock_allows_codex_environment_auth() -> Result<
     assert_eq!(
         load_file_auth(codex_home.path())?,
         Some(AuthDotJson {
-            auth_mode: Some(AuthMode::BedrockApiKey),
+            auth_mode: Some(DomainAuthMode::BedrockApiKey),
             openai_api_key: None,
             tokens: None,
             last_refresh: None,
@@ -1436,6 +1430,13 @@ async fn login_account_amazon_bedrock_allows_codex_environment_auth() -> Result<
 async fn login_account_amazon_bedrock_persists_under_provider_override() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+
+    let mut mcp = TestAppServer::new_with_args(
+        codex_home.path(),
+        &["-c", "model_provider=\"mock_provider\""],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let mut expected_config = read_config_toml(codex_home.path())?;
     expected_config
         .as_table_mut()
@@ -1444,13 +1445,6 @@ async fn login_account_amazon_bedrock_persists_under_provider_override() -> Resu
             "model_provider".to_string(),
             toml::Value::String("amazon-bedrock".to_string()),
         );
-
-    let mut mcp = TestAppServer::new_with_args(
-        codex_home.path(),
-        &["-c", "model_provider=\"mock_provider\""],
-    )
-    .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp
         .send_login_account_amazon_bedrock_request("managed-bedrock-api-key", "us-west-2")
         .await?;
@@ -1466,7 +1460,7 @@ async fn login_account_amazon_bedrock_persists_under_provider_override() -> Resu
     assert_eq!(
         load_file_auth(codex_home.path())?,
         Some(AuthDotJson {
-            auth_mode: Some(AuthMode::BedrockApiKey),
+            auth_mode: Some(DomainAuthMode::BedrockApiKey),
             openai_api_key: None,
             tokens: None,
             last_refresh: None,
@@ -1484,7 +1478,7 @@ async fn login_account_amazon_bedrock_persists_under_provider_override() -> Resu
         mcp.read_stream_until_notification_message("account/login/completed"),
     )
     .await??;
-    assert_no_account_updated(&mut mcp).await;
+    assert_account_updated(&mut mcp, Some(AuthMode::BedrockApiKey)).await?;
     assert_eq!(
         read_account(&mut mcp).await?,
         GetAccountResponse {
@@ -1506,11 +1500,11 @@ async fn logout_account_managed_bedrock_preserves_changed_provider() -> Result<(
         AuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
     )?;
-    let expected_config = read_config_toml(codex_home.path())?;
 
     let mut mcp =
         TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let expected_config = read_config_toml(codex_home.path())?;
 
     let request_id = mcp.send_logout_account_request().await?;
     let response: JSONRPCResponse = timeout(
@@ -1524,7 +1518,7 @@ async fn logout_account_managed_bedrock_preserves_changed_provider() -> Result<(
     );
     assert_eq!(load_file_auth(codex_home.path())?, None);
     assert_eq!(read_config_toml(codex_home.path())?, expected_config);
-    assert_no_account_updated(&mut mcp).await;
+    assert_account_updated(&mut mcp, None).await?;
     Ok(())
 }
 

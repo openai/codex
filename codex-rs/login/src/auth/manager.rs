@@ -36,6 +36,7 @@ use super::agent_identity::record_needs_task_registration;
 use super::agent_identity::register_managed_chatgpt_agent_identity;
 use super::agent_identity::require_agent_identity_authapi_base_url;
 use super::agent_identity::verified_record_from_jwt;
+use super::bedrock_api_key::load_stored_bedrock_api_key;
 use super::external_bearer::BearerTokenRefresher;
 use super::revoke::revoke_auth_tokens;
 pub use crate::auth::agent_identity::AgentIdentityAuth;
@@ -644,10 +645,7 @@ impl CodexAuth {
     ) -> std::io::Result<Option<AgentIdentityAuth>> {
         match self {
             Self::AgentIdentity(auth) => Ok(Some(auth.clone())),
-            Self::ApiKey(_)
-            | Self::ChatgptAuthTokens(_)
-            | Self::PersonalAccessToken(_)
-            | Self::BedrockApiKey(_) => Ok(None),
+            Self::ApiKey(_) | Self::ChatgptAuthTokens(_) | Self::PersonalAccessToken(_) => Ok(None),
             Self::Chatgpt(_) => {
                 if policy == AgentIdentityAuthPolicy::JwtOnly {
                     return Ok(None);
@@ -1025,19 +1023,6 @@ pub fn load_auth_dot_json(
         keyring_backend_kind,
     );
     storage.load()
-}
-
-fn load_stored_bedrock_api_key(
-    codex_home: &Path,
-    auth_credentials_store_mode: AuthCredentialsStoreMode,
-    keyring_backend_kind: AuthKeyringBackendKind,
-) -> std::io::Result<Option<BedrockApiKeyAuth>> {
-    load_auth_dot_json(
-        codex_home,
-        auth_credentials_store_mode,
-        keyring_backend_kind,
-    )
-    .map(|auth| auth.and_then(|auth| auth.bedrock_api_key))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1476,7 +1461,7 @@ fn refresh_token_endpoint() -> String {
 impl AuthDotJson {
     /// Returns whether this stored payload resolves to managed Amazon Bedrock API key auth.
     pub fn is_bedrock_api_key(&self) -> bool {
-        self.resolved_mode() == ApiAuthMode::BedrockApiKey
+        self.resolved_mode() == AuthMode::BedrockApiKey
     }
 
     fn from_external_tokens(external: &ExternalAuthTokens) -> std::io::Result<Self> {
@@ -1815,12 +1800,12 @@ impl UnauthorizedRecovery {
 /// `reload()` is called explicitly. This matches the design goal of avoiding
 /// different parts of the program seeing inconsistent auth data mid‑run.
 pub struct AuthManager {
-    codex_home: PathBuf,
+    pub(super) codex_home: PathBuf,
     inner: RwLock<CachedAuth>,
     auth_change_tx: watch::Sender<u64>,
     enable_codex_api_key_env: bool,
-    auth_credentials_store_mode: AuthCredentialsStoreMode,
-    keyring_backend_kind: AuthKeyringBackendKind,
+    pub(super) auth_credentials_store_mode: AuthCredentialsStoreMode,
+    pub(super) keyring_backend_kind: AuthKeyringBackendKind,
     forced_chatgpt_workspace_id: RwLock<Option<Vec<String>>>,
     chatgpt_base_url: Option<String>,
     agent_identity_authapi_base_url: Option<String>,
@@ -2003,6 +1988,7 @@ impl AuthManager {
     ) -> Arc<Self> {
         let cached = CachedAuth {
             auth: Some(auth),
+            bedrock_api_key: None,
             permanent_refresh_failure: None,
         };
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);
