@@ -109,6 +109,7 @@ struct RealtimeHandoffState {
     last_output_text: Arc<Mutex<Option<String>>>,
     codex_responses_as_items: bool,
     codex_response_item_prefix: Option<String>,
+    codex_response_handoff_prefix: Option<String>,
     session_kind: RealtimeSessionKind,
 }
 
@@ -116,6 +117,7 @@ struct RealtimeHandoffState {
 enum RealtimeOutbound {
     StandaloneHandoff { text: String },
     HandoffUpdate { handoff_id: String, text: String },
+    HandoffAppend { handoff_id: String, text: String },
     CompletedHandoff { handoff_id: String, text: String },
     ConversationItem { text: String },
     HandoffCompleteAck { handoff_id: String },
@@ -212,6 +214,7 @@ impl RealtimeHandoffState {
         output_tx: Sender<RealtimeOutbound>,
         codex_responses_as_items: bool,
         codex_response_item_prefix: Option<String>,
+        codex_response_handoff_prefix: Option<String>,
         session_kind: RealtimeSessionKind,
     ) -> Self {
         Self {
@@ -220,6 +223,7 @@ impl RealtimeHandoffState {
             last_output_text: Arc::new(Mutex::new(None)),
             codex_responses_as_items,
             codex_response_item_prefix,
+            codex_response_handoff_prefix,
             session_kind,
         }
     }
@@ -242,6 +246,7 @@ struct RealtimeStart {
     extra_headers: Option<HeaderMap>,
     codex_responses_as_items: bool,
     codex_response_item_prefix: Option<String>,
+    codex_response_handoff_prefix: Option<String>,
     realtime_call_api_provider: Option<ApiProvider>,
     session_config: RealtimeSessionConfig,
     model_client: ModelClient,
@@ -298,6 +303,7 @@ impl RealtimeConversationManager {
             extra_headers,
             codex_responses_as_items,
             codex_response_item_prefix,
+            codex_response_handoff_prefix,
             realtime_call_api_provider,
             session_config,
             model_client,
@@ -323,6 +329,7 @@ impl RealtimeConversationManager {
             handoff_output_tx,
             codex_responses_as_items,
             codex_response_item_prefix,
+            codex_response_handoff_prefix,
             session_kind,
         );
         let input_channels = RealtimeInputChannels {
@@ -502,6 +509,16 @@ impl RealtimeConversationManager {
                             handoff.codex_response_item_prefix.as_deref(),
                         ),
                     }
+                } else if handoff.session_kind == RealtimeSessionKind::V1
+                    && handoff.codex_response_handoff_prefix.is_some()
+                {
+                    RealtimeOutbound::HandoffAppend {
+                        handoff_id,
+                        text: realtime_backend_item(
+                            output_text,
+                            handoff.codex_response_handoff_prefix.as_deref(),
+                        ),
+                    }
                 } else {
                     RealtimeOutbound::HandoffUpdate {
                         handoff_id,
@@ -520,7 +537,16 @@ impl RealtimeConversationManager {
                         ),
                     }
                 } else {
-                    RealtimeOutbound::StandaloneHandoff { text: output_text }
+                    RealtimeOutbound::StandaloneHandoff {
+                        text: if handoff.session_kind == RealtimeSessionKind::V1 {
+                            realtime_backend_item(
+                                output_text,
+                                handoff.codex_response_handoff_prefix.as_deref(),
+                            )
+                        } else {
+                            output_text
+                        },
+                    }
                 }
             }
         };
@@ -677,6 +703,7 @@ struct PreparedRealtimeConversationStart {
     extra_headers: Option<HeaderMap>,
     codex_responses_as_items: bool,
     codex_response_item_prefix: Option<String>,
+    codex_response_handoff_prefix: Option<String>,
     realtime_call_api_provider: Option<ApiProvider>,
     requested_realtime_session_id: Option<String>,
     version: RealtimeWsVersion,
@@ -746,6 +773,7 @@ async fn prepare_realtime_start(
         extra_headers,
         codex_responses_as_items: params.codex_responses_as_items,
         codex_response_item_prefix: params.codex_response_item_prefix,
+        codex_response_handoff_prefix: params.codex_response_handoff_prefix,
         realtime_call_api_provider,
         requested_realtime_session_id,
         version,
@@ -916,6 +944,7 @@ async fn handle_start_inner(
         extra_headers,
         codex_responses_as_items,
         codex_response_item_prefix,
+        codex_response_handoff_prefix,
         realtime_call_api_provider,
         requested_realtime_session_id,
         version,
@@ -933,6 +962,7 @@ async fn handle_start_inner(
         extra_headers,
         codex_responses_as_items,
         codex_response_item_prefix,
+        codex_response_handoff_prefix,
         realtime_call_api_provider,
         session_config,
         model_client: sess.services.model_client.clone(),
@@ -1368,6 +1398,11 @@ async fn handle_handoff_output(
                     .send_conversation_function_call_output(handoff_id, text)
                     .await
             }
+            RealtimeOutbound::HandoffAppend { handoff_id, text } => {
+                writer
+                    .send_conversation_handoff_append(handoff_id, text)
+                    .await
+            }
             RealtimeOutbound::ConversationItem { text } => {
                 writer
                     .send_conversation_item_create(text, ConversationTextRole::Developer)
@@ -1388,7 +1423,8 @@ async fn handle_handoff_output(
                         .await;
                 }
             }
-            RealtimeOutbound::HandoffUpdate { handoff_id, text } => {
+            RealtimeOutbound::HandoffUpdate { handoff_id, text }
+            | RealtimeOutbound::HandoffAppend { handoff_id, text } => {
                 let active_handoff = handoff_state.active_handoff.lock().await.clone();
                 match active_handoff {
                     Some(active_handoff) if active_handoff == handoff_id => {}

@@ -76,6 +76,10 @@ pub struct ThreadRealtimeStartParams {
     /// Optional prefix added to automatic Codex response items when `codexResponsesAsItems` is true.
     #[ts(optional = nullable)]
     pub codex_response_item_prefix: Option<String>,
+    /// Optional prefix added to automatic V1 Codex responses sent with
+    /// `conversation.handoff.append` when `codexResponsesAsItems` is not true.
+    #[ts(optional = nullable)]
+    pub codex_response_handoff_prefix: Option<String>,
     /// Overrides the configured realtime model for this session only.
     #[ts(optional = nullable)]
     pub model: Option<String>,
