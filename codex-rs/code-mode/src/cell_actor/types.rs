@@ -125,13 +125,18 @@ pub(crate) trait CellHost: Send + Sync + 'static {
 #[derive(Clone)]
 pub(crate) struct CellHandle {
     command_tx: mpsc::UnboundedSender<CellCommand>,
+    cancellation_token: CancellationToken,
     termination_requested: Arc<AtomicBool>,
 }
 
 impl CellHandle {
-    pub(super) fn new(command_tx: mpsc::UnboundedSender<CellCommand>) -> Self {
+    pub(super) fn new(
+        command_tx: mpsc::UnboundedSender<CellCommand>,
+        cancellation_token: CancellationToken,
+    ) -> Self {
         Self {
             command_tx,
+            cancellation_token,
             termination_requested: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -172,6 +177,7 @@ impl CellHandle {
 
     pub(crate) fn shutdown(&self) {
         self.termination_requested.store(true, Ordering::Relaxed);
+        self.cancellation_token.cancel();
         let _ = self
             .command_tx
             .send(CellCommand::Terminate { response_tx: None });

@@ -351,6 +351,36 @@ async fn termination_cancels_pending_callbacks_before_responding() {
 }
 
 #[tokio::test]
+async fn shutdown_cancels_notifications_while_natural_completion_is_draining() {
+    let (delegate, mut events_rx) = HeldNotificationDelegate::new();
+    let service = Arc::new(CodeModeService::with_delegate(delegate.clone()));
+    service
+        .execute(execute_request(r#"notify("pending");"#))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        next_event(&mut events_rx).await,
+        DelegateEvent::NotificationStarted
+    );
+
+    let shutdown_service = Arc::clone(&service);
+    let shutdown = tokio::spawn(async move { shutdown_service.shutdown().await });
+
+    assert_eq!(
+        next_event(&mut events_rx).await,
+        DelegateEvent::NotificationCancelled
+    );
+    delegate.release_notification();
+
+    assert_eq!(shutdown.await.unwrap(), Ok(()));
+    assert_eq!(
+        next_event(&mut events_rx).await,
+        DelegateEvent::CellClosed(cell_id("1"))
+    );
+}
+
+#[tokio::test]
 async fn repeated_termination_is_rejected_while_callback_cleanup_is_pending() {
     let (delegate, mut events_rx) = HeldNotificationDelegate::new();
     let service = Arc::new(CodeModeService::with_delegate(delegate.clone()));

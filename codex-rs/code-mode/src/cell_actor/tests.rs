@@ -63,7 +63,7 @@ fn spawn_cell_actor_harness(initial_observe_mode: ObserveMode) -> CellActorHarne
         PendingRuntimeMode::PauseUntilResumed,
     )
     .unwrap();
-    let handle = CellHandle::new(command_tx);
+    let handle = CellHandle::new(command_tx, CancellationToken::new());
     let task = tokio::spawn(run_cell(
         Arc::new(TestHost),
         CellContext {
