@@ -283,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn allows_read_only_pipelines_and_git_branch_usage() {
+    fn allows_read_only_pipelines() {
         let Some(pwsh) = try_find_pwsh_executable_blocking() else {
             return;
         };
@@ -309,12 +309,6 @@ mod tests {
         assert!(is_safe_command_windows(&[
             pwsh.clone(),
             "-Command".to_string(),
-            "git branch --show-current".to_string()
-        ]));
-
-        assert!(is_safe_command_windows(&[
-            pwsh.clone(),
-            "-Command".to_string(),
             "(Get-Content foo.rs -Raw)".to_string()
         ]));
 
@@ -327,20 +321,27 @@ mod tests {
 
     #[test]
     fn rejects_git_config_sensitive_subcommands() {
-        let results: Vec<(&str, bool)> = ["git status", "git log -1", "git diff", "git show HEAD"]
-            .into_iter()
-            .map(|script| {
-                (
-                    script,
-                    is_safe_command_windows(&[
-                        "powershell.exe".to_string(),
-                        "-NoProfile".to_string(),
-                        "-Command".to_string(),
-                        script.to_string(),
-                    ]),
-                )
-            })
-            .collect();
+        let results: Vec<(&str, bool)> = [
+            "git status",
+            "git log -1",
+            "git diff",
+            "git show HEAD",
+            "git branch",
+            "git branch --show-current",
+        ]
+        .into_iter()
+        .map(|script| {
+            (
+                script,
+                is_safe_command_windows(&[
+                    "powershell.exe".to_string(),
+                    "-NoProfile".to_string(),
+                    "-Command".to_string(),
+                    script.to_string(),
+                ]),
+            )
+        })
+        .collect();
 
         assert_eq!(
             vec![
@@ -348,6 +349,8 @@ mod tests {
                 ("git log -1", false),
                 ("git diff", false),
                 ("git show HEAD", false),
+                ("git branch", false),
+                ("git branch --show-current", false),
             ],
             results
         );
