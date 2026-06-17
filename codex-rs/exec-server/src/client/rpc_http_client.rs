@@ -42,6 +42,7 @@ impl ExecServerClient {
         &self,
         mut params: HttpRequestParams,
     ) -> Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError> {
+        let rpc_client = self.inner.rpc_client().await?;
         params.stream_response = true;
         let request_id = self.inner.next_http_body_stream_request_id();
         params.request_id = request_id.clone();
@@ -51,7 +52,10 @@ impl ExecServerClient {
             .await?;
         let mut registration =
             HttpBodyStreamRegistration::new(Arc::clone(&self.inner), request_id.clone());
-        let response = match self.call(HTTP_REQUEST_METHOD, &params).await {
+        let response = match self
+            .call_rpc(&rpc_client, HTTP_REQUEST_METHOD, &params)
+            .await
+        {
             Ok(response) => response,
             Err(error) => {
                 self.inner.remove_http_body_stream(&request_id).await;
