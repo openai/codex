@@ -440,15 +440,8 @@ impl HooksBrowserView {
                 } else {
                     ' '
                 };
-                let row = match hook.trust_status {
-                    HookTrustStatus::Modified => {
-                        format!("[{marker}] {} · modified", hook_title(idx))
-                    }
-                    HookTrustStatus::Untrusted => format!("[{marker}] {} · new", hook_title(idx)),
-                    HookTrustStatus::Managed | HookTrustStatus::Trusted => {
-                        format!("[{marker}] {}", hook_title(idx))
-                    }
-                };
+                let label = hook_label(hook, idx);
+                let row = format!("[{marker}] {label}");
                 let mut line = Line::from(row);
                 line = truncate_line_with_ellipsis_if_overflow(line, width);
                 let needs_review = hook_needs_review(hook);
@@ -761,6 +754,25 @@ fn hook_title(idx: usize) -> String {
     format!("Hook {}", idx + 1)
 }
 
+fn hook_label(hook: &HookMetadata, idx: usize) -> String {
+    let mut label = hook_title(idx);
+    match hook.trust_status {
+        HookTrustStatus::Modified => label.push_str(" · modified"),
+        HookTrustStatus::Untrusted => label.push_str(" · new"),
+        HookTrustStatus::Managed | HookTrustStatus::Trusted => {}
+    }
+    if let Some(status_message) = hook
+        .status_message
+        .as_deref()
+        .map(str::trim)
+        .filter(|status_message| !status_message.is_empty())
+    {
+        label.push_str(" · ");
+        label.push_str(status_message);
+    }
+    label
+}
+
 fn hook_source_summary(hook: &HookMetadata) -> String {
     match hook.source {
         HookSource::Plugin => hook
@@ -950,7 +962,7 @@ mod tests {
 
     fn view() -> HooksBrowserView {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        HooksBrowserView::new(
+        let mut view = HooksBrowserView::new(
             vec![
                 hook(
                     "plugin:superpowers",
@@ -986,7 +998,10 @@ mod tests {
             Vec::new(),
             Vec::new(),
             AppEventSender::new(tx_raw),
-        )
+        );
+        view.entry.hooks[0].status_message =
+            Some("Rejects commands that violate project policy".to_string());
+        view
     }
 
     #[test]
@@ -1386,6 +1401,8 @@ mod tests {
             /*display_order*/ 0,
         );
         untrusted_hook.trust_status = HookTrustStatus::Untrusted;
+        untrusted_hook.status_message =
+            Some("Validates shell commands against the project policy".to_string());
         let mut view = HooksBrowserView::new(
             vec![untrusted_hook],
             Vec::new(),
@@ -1398,6 +1415,43 @@ mod tests {
             "hooks_browser_review_needed_handler",
             render_lines(&view, /*width*/ 112)
         );
+        assert_snapshot!(
+            "hooks_browser_review_needed_handler_narrow",
+            render_lines(&view, /*width*/ 44)
+        );
+    }
+
+    #[test]
+    fn handler_row_omits_blank_status_and_preserves_review_status() {
+        let mut hooks = view().entry.hooks;
+        let mut hook = hooks.remove(0);
+        hook.status_message = Some(" \t ".to_string());
+        assert_eq!(hook_label(&hook, 0), "Hook 1");
+
+        hook.status_message = Some(
+            "Validates every shell command against the project policy before execution".to_string(),
+        );
+        for (trust_status, trust_label) in [
+            (HookTrustStatus::Untrusted, "new"),
+            (HookTrustStatus::Modified, "modified"),
+        ] {
+            hook.trust_status = trust_status;
+            let row = truncate_line_with_ellipsis_if_overflow(
+                Line::from(format!("[!] {}", hook_label(&hook, 0))),
+                /*max_width*/ 32,
+            );
+            let row_text = row
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
+
+            assert!(
+                row_text.starts_with(&format!("[!] Hook 1 · {trust_label} · ")),
+                "unexpected row: {row_text}"
+            );
+            assert!(row_text.ends_with('…'), "unexpected row: {row_text}");
+        }
     }
 
     fn assert_unmanaged_toggle_key(key_code: KeyCode) {

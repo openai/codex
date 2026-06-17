@@ -1,12 +1,13 @@
 ---
 source: tui/src/bottom_pane/hooks_browser_view.rs
+assertion_line: 1086
 expression: "render_lines(&view, 112)"
 ---
                                                                                                                 
   PreToolUse hooks                                                                                              
   Turn hooks on or off. Your changes are saved automatically.                                                   
                                                                                                                 
-  [x] Hook 1                                                                                                    
+  [x] Hook 1 · Rejects commands that violate project policy                                                     
   [ ] Hook 2                                                                                                    
                                                                                                                 
   Event     PreToolUse                                                                                          
