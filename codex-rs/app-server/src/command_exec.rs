@@ -181,11 +181,6 @@ impl CommandExecManager {
                     "streaming command/exec is not supported with windows sandbox",
                 ));
             }
-            if output_bytes_cap != Some(DEFAULT_OUTPUT_BYTES_CAP) {
-                return Err(invalid_request(
-                    "custom outputBytesCap is not supported with windows sandbox",
-                ));
-            }
             if let InternalProcessId::Client(_) = &process_id {
                 let mut sessions = self.sessions.lock().await;
                 if sessions.contains_key(&process_key) {
@@ -211,8 +206,14 @@ impl CommandExecManager {
                                 request_id,
                                 CommandExecResponse {
                                     exit_code: output.exit_code,
-                                    stdout: output.stdout.text,
-                                    stderr: output.stderr.text,
+                                    stdout: cap_buffered_output(
+                                        output.stdout.text.as_bytes(),
+                                        output_bytes_cap,
+                                    ),
+                                    stderr: cap_buffered_output(
+                                        output.stderr.text.as_bytes(),
+                                        output_bytes_cap,
+                                    ),
                                 },
                             )
                             .await;
@@ -617,6 +618,15 @@ fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHa
     })
 }
 
+fn cap_buffered_output(output: &[u8], output_bytes_cap: Option<usize>) -> String {
+    match output_bytes_cap {
+        Some(output_bytes_cap) => {
+            bytes_to_string_smart(&output[..output.len().min(output_bytes_cap)])
+        }
+        None => bytes_to_string_smart(output),
+    }
+}
+
 async fn handle_process_write(
     session: &ProcessHandle,
     stream_stdin: bool,
@@ -711,6 +721,25 @@ mod tests {
         )
     }
 
+    #[cfg(not(target_os = "windows"))]
+    fn windows_sandbox_exec_request_for_shell(command: &str) -> ExecRequest {
+        let cwd = AbsolutePathBuf::current_dir().expect("current dir");
+        ExecRequest::new(
+            vec!["sh".to_string(), "-lc".to_string(), command.to_string()],
+            cwd.clone(),
+            HashMap::new(),
+            /*network*/ None,
+            ExecExpiration::DefaultTimeout,
+            codex_core::exec::ExecCapturePolicy::ShellTool,
+            SandboxType::WindowsRestrictedToken,
+            vec![cwd],
+            WindowsSandboxLevel::Disabled,
+            /*windows_sandbox_private_desktop*/ false,
+            PermissionProfile::read_only(),
+            /*arg0*/ None,
+        )
+    }
+
     #[tokio::test]
     async fn windows_sandbox_streaming_exec_is_rejected() {
         let (tx, _rx) = mpsc::channel(1);
@@ -791,6 +820,126 @@ mod tests {
         };
         assert_eq!(error.id, request_id.request_id);
         assert!(error.error.message.starts_with("exec failed:"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn windows_sandbox_non_streaming_exec_honors_custom_output_cap() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let manager = CommandExecManager::default();
+        let request_id = ConnectionRequestId {
+            connection_id: ConnectionId(70),
+            request_id: codex_app_server_protocol::RequestId::Integer(199),
+        };
+
+        manager
+            .start(StartCommandExecParams {
+                outgoing: Arc::new(OutgoingMessageSender::new(
+                    tx,
+                    codex_analytics::AnalyticsEventsClient::disabled(),
+                )),
+                request_id: request_id.clone(),
+                process_id: Some("proc-199".to_string()),
+                exec_request: windows_sandbox_exec_request_for_shell(
+                    "printf 'abcdef'; printf 'uvwxyz' >&2",
+                ),
+                started_network_proxy: None,
+                tty: false,
+                stream_stdin: false,
+                stream_stdout_stderr: false,
+                output_bytes_cap: Some(5),
+                size: None,
+            })
+            .await
+            .expect("capped windows sandbox exec should start");
+
+        let envelope = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timed out waiting for outgoing message")
+            .expect("channel closed before outgoing message");
+        let OutgoingEnvelope::ToConnection {
+            connection_id,
+            message,
+            ..
+        } = envelope
+        else {
+            panic!("expected connection-scoped outgoing message");
+        };
+        assert_eq!(connection_id, request_id.connection_id);
+        let OutgoingMessage::Response(response) = message else {
+            panic!("expected successful execution response");
+        };
+        assert_eq!(response.id, request_id.request_id);
+        let response: CommandExecResponse =
+            serde_json::from_value(response.result).expect("deserialize command/exec response");
+        assert_eq!(
+            response,
+            CommandExecResponse {
+                exit_code: 0,
+                stdout: "abcde".to_string(),
+                stderr: "uvwxy".to_string(),
+            }
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn windows_sandbox_non_streaming_exec_allows_uncapped_output() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let manager = CommandExecManager::default();
+        let request_id = ConnectionRequestId {
+            connection_id: ConnectionId(71),
+            request_id: codex_app_server_protocol::RequestId::Integer(200),
+        };
+
+        manager
+            .start(StartCommandExecParams {
+                outgoing: Arc::new(OutgoingMessageSender::new(
+                    tx,
+                    codex_analytics::AnalyticsEventsClient::disabled(),
+                )),
+                request_id: request_id.clone(),
+                process_id: Some("proc-200".to_string()),
+                exec_request: windows_sandbox_exec_request_for_shell(
+                    "printf 'abcdef'; printf 'uvwxyz' >&2",
+                ),
+                started_network_proxy: None,
+                tty: false,
+                stream_stdin: false,
+                stream_stdout_stderr: false,
+                output_bytes_cap: None,
+                size: None,
+            })
+            .await
+            .expect("uncapped windows sandbox exec should start");
+
+        let envelope = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timed out waiting for outgoing message")
+            .expect("channel closed before outgoing message");
+        let OutgoingEnvelope::ToConnection {
+            connection_id,
+            message,
+            ..
+        } = envelope
+        else {
+            panic!("expected connection-scoped outgoing message");
+        };
+        assert_eq!(connection_id, request_id.connection_id);
+        let OutgoingMessage::Response(response) = message else {
+            panic!("expected successful execution response");
+        };
+        assert_eq!(response.id, request_id.request_id);
+        let response: CommandExecResponse =
+            serde_json::from_value(response.result).expect("deserialize command/exec response");
+        assert_eq!(
+            response,
+            CommandExecResponse {
+                exit_code: 0,
+                stdout: "abcdef".to_string(),
+                stderr: "uvwxyz".to_string(),
+            }
+        );
     }
 
     #[cfg(not(target_os = "windows"))]
