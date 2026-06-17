@@ -72,6 +72,7 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
     apply_rollout_item(&mut expected, &rollout_line.item, "openai")
         .expect("rollout item should apply");
     expected.updated_at = file_modified_time_utc(&path).await.expect("mtime");
+    expected.recency_at = expected.updated_at;
 
     assert_eq!(outcome.metadata, expected);
     assert_eq!(outcome.memory_mode, None);
