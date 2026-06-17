@@ -7,6 +7,7 @@ use crate::agent::status::is_final;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::config::Config;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::rollout_budget::RolloutBudget;
 use crate::session::emit_subagent_session_started;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::session_prefix::format_subagent_context_line;
@@ -100,6 +101,8 @@ pub(crate) struct AgentControl {
     state: Arc<AgentRegistry>,
     v2_residency: Arc<V2Residency>,
     agent_execution_limiter: Arc<AgentExecutionLimiter>,
+    /// Session-scoped state shared by the root thread and every cloned sub-agent control handle.
+    rollout_budget: Arc<RolloutBudget>,
 }
 
 impl AgentControl {
@@ -119,6 +122,10 @@ impl AgentControl {
 
     pub(crate) fn session_id(&self) -> SessionId {
         self.session_id
+    }
+
+    pub(crate) fn rollout_budget(&self) -> &RolloutBudget {
+        self.rollout_budget.as_ref()
     }
 
     /// Send rich user input items to an existing agent thread.

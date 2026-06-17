@@ -948,6 +948,11 @@ impl Session {
                     .effective_agent_max_threads(MultiAgentVersion::V2)
                     .unwrap_or(usize::MAX),
             );
+            if !session_configuration.session_source.is_non_root_agent()
+                && let Some(rollout_budget) = config.rollout_budget
+            {
+                agent_control.rollout_budget().configure(rollout_budget);
+            }
             // Keep one stable manager handle for the session so extension resource clients
             // automatically observe the manager installed at startup and on later refreshes.
             let mcp_connection_manager = Arc::new(arc_swap::ArcSwap::from_pointee(

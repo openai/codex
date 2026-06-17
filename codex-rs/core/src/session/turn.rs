@@ -218,6 +218,14 @@ pub(crate) async fn run_turn(
             break;
         }
 
+        let window_id = sess.current_window_id().await;
+        super::rollout_budget::maybe_record_reminder(
+            sess.as_ref(),
+            turn_context.as_ref(),
+            &window_id,
+        )
+        .await;
+
         // Construct the input that we will send to the model.
         let sampling_request_input: Vec<ResponseItem> = async {
             sess.clone_history()
@@ -227,7 +235,6 @@ pub(crate) async fn run_turn(
         .instrument(trace_span!("run_turn.prepare_sampling_request_input"))
         .await;
 
-        let window_id = sess.current_window_id().await;
         let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
             sess.installation_id.clone(),
             window_id,

@@ -100,6 +100,7 @@ mod resume;
 mod resume_warning;
 mod review;
 mod rmcp_client;
+mod rollout_budget;
 mod rollout_list_find;
 mod safety_check_downgrade;
 mod search_tool;
