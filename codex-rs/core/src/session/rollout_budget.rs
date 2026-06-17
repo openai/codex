@@ -30,7 +30,7 @@ impl Session {
         {
             self.services
                 .agent_control
-                .interrupt_session(self.thread_id())
+                .interrupt_all_threads(self.thread_id())
                 .await;
         }
     }

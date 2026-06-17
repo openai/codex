@@ -136,8 +136,8 @@ impl AgentControl {
         self.rollout_budget.as_ref()
     }
 
-    /// Interrupt all threads in this session, interrupting the triggering thread last.
-    pub(crate) async fn interrupt_session(&self, triggering_thread_id: ThreadId) {
+    /// Interrupt all threads in this agent tree, interrupting the triggering thread last.
+    pub(crate) async fn interrupt_all_threads(&self, triggering_thread_id: ThreadId) {
         let mut thread_ids = self
             .state
             .live_agents()
