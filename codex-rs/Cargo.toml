@@ -53,6 +53,7 @@ members = [
     "ext/image-generation",
     "ext/memories",
     "ext/mcp",
+    "ext/plugin-installs",
     "ext/skills",
     "ext/web-search",
     "external-agent-migration",
@@ -200,6 +201,7 @@ codex-mcp = { path = "codex-mcp" }
 codex-mcp-extension = { path = "ext/mcp" }
 codex-mcp-server = { path = "mcp-server" }
 codex-model-provider-info = { path = "model-provider-info" }
+codex-plugin-installs-extension = { path = "ext/plugin-installs" }
 codex-models-manager = { path = "models-manager" }
 codex-network-proxy = { path = "network-proxy" }
 codex-ollama = { path = "ollama" }

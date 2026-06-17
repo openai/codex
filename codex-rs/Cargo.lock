@@ -3602,6 +3602,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-plugin-installs-extension"
+version = "0.0.0"
+dependencies = [
+ "codex-app-server-protocol",
+ "codex-extension-api",
+ "codex-tools",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "codex-process-hardening"
 version = "0.0.0"
 dependencies = [
