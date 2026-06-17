@@ -7,6 +7,12 @@ use crate::landlock::allow_network_for_proxy;
 use crate::landlock::create_linux_sandbox_command_args_for_permission_profile;
 use crate::policy_transforms::effective_permission_profile;
 use crate::policy_transforms::should_require_platform_sandbox;
+#[cfg(target_os = "windows")]
+use crate::resolve_windows_elevated_filesystem_overrides;
+#[cfg(target_os = "windows")]
+use crate::resolve_windows_restricted_token_filesystem_overrides;
+#[cfg(target_os = "windows")]
+use crate::windows_sandbox_uses_elevated_backend;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -20,6 +26,9 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io;
 use std::path::Path;
+
+#[cfg(target_os = "windows")]
+const WINDOWS_SANDBOX_WRAPPER_SETUP_ENV_ALLOWLIST: &[&str] = &["USERNAME", "USERPROFILE"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SandboxType {
@@ -131,6 +140,16 @@ pub struct SandboxTransformRequest<'a> {
     pub windows_sandbox_private_desktop: bool,
 }
 
+/// Bundled arguments for a sandbox transformation whose result will be spawned
+/// directly from argv.
+///
+/// Direct-spawn callers will not run a later platform-specific launcher, so the
+/// returned command must encode any sandbox wrapper it needs.
+pub struct SandboxDirectSpawnTransformRequest<'a> {
+    pub transform: SandboxTransformRequest<'a>,
+    pub workspace_roots: &'a [AbsolutePathBuf],
+}
+
 #[derive(Debug)]
 pub enum SandboxTransformError {
     InvalidCommandCwd {
@@ -146,6 +165,8 @@ pub enum SandboxTransformError {
     Wsl1UnsupportedForBubblewrap,
     #[cfg(not(target_os = "macos"))]
     SeatbeltUnavailable,
+    #[cfg(target_os = "windows")]
+    WindowsSandboxPreparation(String),
 }
 
 impl std::fmt::Display for SandboxTransformError {
@@ -168,6 +189,10 @@ impl std::fmt::Display for SandboxTransformError {
             Self::Wsl1UnsupportedForBubblewrap => write!(f, "{WSL1_BWRAP_WARNING}"),
             #[cfg(not(target_os = "macos"))]
             Self::SeatbeltUnavailable => write!(f, "seatbelt sandbox is only available on macOS"),
+            #[cfg(target_os = "windows")]
+            Self::WindowsSandboxPreparation(err) => {
+                write!(f, "failed to prepare windows sandbox wrapper: {err}")
+            }
         }
     }
 }
@@ -182,6 +207,8 @@ impl std::error::Error for SandboxTransformError {
             Self::Wsl1UnsupportedForBubblewrap => None,
             #[cfg(not(target_os = "macos"))]
             Self::SeatbeltUnavailable => None,
+            #[cfg(target_os = "windows")]
+            Self::WindowsSandboxPreparation(_) => None,
         }
     }
 }
@@ -335,6 +362,142 @@ impl SandboxManager {
             network_sandbox_policy: effective_network_policy,
             arg0: arg0_override,
         })
+    }
+
+    pub fn transform_for_direct_spawn(
+        &self,
+        request: SandboxDirectSpawnTransformRequest<'_>,
+    ) -> Result<SandboxExecRequest, SandboxTransformError> {
+        #[cfg(target_os = "windows")]
+        {
+            let codex_home = codex_utils_home_dir::find_codex_home()
+                .map_err(|err| SandboxTransformError::WindowsSandboxPreparation(err.to_string()))?;
+            self.transform_for_direct_spawn_with_codex_home(request, codex_home.as_path())
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            self.transform(request.transform)
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn transform_for_direct_spawn_with_codex_home(
+        &self,
+        request: SandboxDirectSpawnTransformRequest<'_>,
+        codex_home: &Path,
+    ) -> Result<SandboxExecRequest, SandboxTransformError> {
+        let workspace_roots = request.workspace_roots;
+        let mut request = self.transform(request.transform)?;
+        if request.sandbox == SandboxType::WindowsRestrictedToken {
+            wrap_windows_sandbox_exec_request_for_direct_spawn(
+                &mut request,
+                workspace_roots,
+                codex_home,
+            )?;
+        }
+        Ok(request)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn wrap_windows_sandbox_exec_request_for_direct_spawn(
+    request: &mut SandboxExecRequest,
+    workspace_roots: &[AbsolutePathBuf],
+    codex_home: &Path,
+) -> Result<(), SandboxTransformError> {
+    let Some(program) = request.command.first_mut() else {
+        return Err(SandboxTransformError::WindowsSandboxPreparation(
+            "sandbox command was empty".to_string(),
+        ));
+    };
+    let source = std::path::PathBuf::from(&program);
+    let helper = codex_windows_sandbox::resolve_exe_for_launch(source.as_path(), codex_home);
+    *program = helper.to_string_lossy().into_owned();
+
+    let inner_command = std::mem::take(&mut request.command);
+    let proxy_enforced = request.network.is_some();
+    let use_elevated =
+        windows_sandbox_uses_elevated_backend(request.windows_sandbox_level, proxy_enforced);
+    let overrides = if use_elevated {
+        resolve_windows_elevated_filesystem_overrides(
+            request.sandbox,
+            &request.permission_profile,
+            &request.sandbox_policy_cwd,
+            use_elevated,
+        )
+    } else {
+        resolve_windows_restricted_token_filesystem_overrides(
+            request.sandbox,
+            &request.permission_profile,
+            &request.sandbox_policy_cwd,
+            request.windows_sandbox_level,
+        )
+    }
+    .map_err(SandboxTransformError::WindowsSandboxPreparation)?;
+    let empty_paths: &[AbsolutePathBuf] = &[];
+    let read_roots_override = overrides
+        .as_ref()
+        .and_then(|overrides| overrides.read_roots_override.as_deref());
+    let read_roots_include_platform_defaults = overrides
+        .as_ref()
+        .is_some_and(|overrides| overrides.read_roots_include_platform_defaults);
+    let write_roots_override = overrides
+        .as_ref()
+        .and_then(|overrides| overrides.write_roots_override.as_deref());
+    let deny_read_paths_override = overrides.as_ref().map_or(empty_paths, |overrides| {
+        overrides.additional_deny_read_paths.as_slice()
+    });
+    let deny_write_paths_override = overrides.as_ref().map_or(empty_paths, |overrides| {
+        overrides.additional_deny_write_paths.as_slice()
+    });
+    let mut wrapper_args =
+        codex_windows_sandbox::create_windows_sandbox_command_args_for_permission_profile(
+            inner_command,
+            &request.cwd,
+            workspace_roots,
+            &request.env,
+            &request.permission_profile,
+            request.windows_sandbox_level,
+            request.windows_sandbox_private_desktop,
+            proxy_enforced,
+            read_roots_override,
+            read_roots_include_platform_defaults,
+            write_roots_override,
+            deny_read_paths_override,
+            deny_write_paths_override,
+            codex_home,
+        );
+
+    request.command = Vec::with_capacity(1 + wrapper_args.len());
+    request.command.push(source.to_string_lossy().into_owned());
+    request.command.append(&mut wrapper_args);
+    request.sandbox = SandboxType::None;
+    request.arg0 = None;
+    add_windows_sandbox_wrapper_setup_env(&mut request.env);
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn add_windows_sandbox_wrapper_setup_env(env: &mut HashMap<String, String>) {
+    add_windows_sandbox_wrapper_setup_env_from_vars(env, std::env::vars_os());
+}
+
+#[cfg(target_os = "windows")]
+fn add_windows_sandbox_wrapper_setup_env_from_vars(
+    env: &mut HashMap<String, String>,
+    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) {
+    for (key, value) in vars {
+        let key = key.to_string_lossy().into_owned();
+        if !WINDOWS_SANDBOX_WRAPPER_SETUP_ENV_ALLOWLIST
+            .iter()
+            .any(|allowed| key.eq_ignore_ascii_case(allowed))
+        {
+            continue;
+        }
+        env.retain(|existing, _| !existing.eq_ignore_ascii_case(&key));
+        env.insert(key, value.to_string_lossy().into_owned());
     }
 }
 

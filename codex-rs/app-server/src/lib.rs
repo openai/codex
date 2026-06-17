@@ -101,6 +101,7 @@ pub mod in_process;
 mod mcp_refresh;
 mod message_processor;
 mod models;
+mod models_refresh_worker;
 mod outgoing_message;
 mod request_processors;
 mod request_serialization;

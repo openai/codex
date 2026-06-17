@@ -694,7 +694,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         config.model_provider.clone(),
     );
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
-    let skills_manager = Arc::new(SkillsManager::new(
+    let skills_service = Arc::new(SkillsService::new(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
@@ -711,7 +711,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         auth_manager,
         models_manager,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
-        skills_manager,
+        skills_service,
         plugins_manager,
         mcp_manager,
         extensions: codex_extension_api::empty_extension_registry(),

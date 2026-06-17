@@ -862,6 +862,7 @@ fn sample_command_approval_request(request_id: i64, approval_id: Option<&str>) -
             item_id: "item-1".to_string(),
             started_at_ms: 1_000,
             approval_id: approval_id.map(str::to_string),
+            environment_id: None,
             reason: None,
             network_approval_context: None,
             command: Some("echo hi".to_string()),

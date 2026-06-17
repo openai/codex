@@ -292,10 +292,8 @@ pub(crate) struct PreviousTurnSettings {
 }
 
 #[cfg(test)]
-use crate::SkillLoadOutcome;
-#[cfg(test)]
 use crate::SkillMetadata;
-use crate::SkillsManager;
+use crate::SkillsService;
 use crate::agents_md::load_project_instructions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
@@ -304,6 +302,8 @@ use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::rollout::map_session_init_error;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
+#[cfg(test)]
+use crate::skills::SkillLoadOutcome;
 use crate::state::AutoCompactWindowSnapshot;
 use crate::state::PendingRequestPermissions;
 use crate::state::SessionServices;
@@ -409,7 +409,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: SharedModelsManager,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
-    pub(crate) skills_manager: Arc<SkillsManager>,
+    pub(crate) skills_service: Arc<SkillsService>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
@@ -495,7 +495,7 @@ impl Codex {
             auth_manager,
             models_manager,
             environment_manager,
-            skills_manager,
+            skills_service,
             plugins_manager,
             mcp_manager,
             extensions,
@@ -651,7 +651,7 @@ impl Codex {
             agent_status_tx.clone(),
             conversation_history,
             session_source_clone,
-            skills_manager,
+            skills_service,
             plugins_manager,
             mcp_manager.clone(),
             extensions,
@@ -1507,7 +1507,7 @@ impl Session {
             (previous_config, new_config, config)
         };
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
-        self.services.skills_manager.clear_cache();
+        self.services.skills_service.clear_cache();
         self.services.plugins_manager.clear_cache();
         let environments = self.services.turn_environments.snapshot().await;
         let hooks = build_hooks_for_config(
@@ -2039,6 +2039,7 @@ impl Session {
         turn_context: &TurnContext,
         call_id: String,
         approval_id: Option<String>,
+        environment_id: Option<String>,
         command: Vec<String>,
         cwd: AbsolutePathBuf,
         reason: Option<String>,
@@ -2091,6 +2092,7 @@ impl Session {
             call_id,
             approval_id,
             turn_id: turn_context.sub_id.clone(),
+            environment_id,
             started_at_ms: now_unix_timestamp_ms(),
             command,
             cwd,
@@ -2969,7 +2971,7 @@ impl Session {
         }
         if turn_context.config.include_skill_instructions {
             let available_skills = build_available_skills(
-                &turn_context.turn_skills.outcome,
+                turn_context.turn_skills.snapshot.outcome(),
                 default_skill_metadata_budget(turn_context.model_info.context_window),
                 SkillRenderSideEffects::ThreadStart {
                     session_telemetry: &self.services.session_telemetry,

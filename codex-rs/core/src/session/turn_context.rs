@@ -1,9 +1,8 @@
 use super::*;
-use crate::SkillLoadOutcome;
 use crate::agents_md::LoadedAgentsMd;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::shell_snapshot::ShellSnapshotFile;
-use codex_core_skills::HostLoadedSkills;
+use codex_core_skills::HostSkillsSnapshot;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
@@ -26,14 +25,14 @@ use tracing::instrument;
 
 #[derive(Clone, Debug)]
 pub(crate) struct TurnSkillsContext {
-    pub(crate) outcome: Arc<SkillLoadOutcome>,
+    pub(crate) snapshot: HostSkillsSnapshot,
     pub(crate) implicit_invocation_seen_skills: Arc<Mutex<HashSet<String>>>,
 }
 
 impl TurnSkillsContext {
-    pub(crate) fn new(outcome: Arc<SkillLoadOutcome>) -> Self {
+    pub(crate) fn new(snapshot: HostSkillsSnapshot) -> Self {
         Self {
-            outcome,
+            snapshot,
             implicit_invocation_seen_skills: Arc::new(Mutex::new(HashSet::new())),
         }
     }
@@ -331,6 +330,12 @@ impl TurnContext {
         FileSystemSandboxContext {
             permissions: permissions.into(),
             cwd: Some(cwd.clone()),
+            workspace_roots: self
+                .config
+                .effective_workspace_roots()
+                .iter()
+                .map(PathUri::from_abs_path)
+                .collect(),
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: self
                 .config
@@ -488,7 +493,7 @@ impl Session {
         environments: TurnEnvironmentSnapshot,
         cwd: AbsolutePathBuf,
         sub_id: String,
-        skills_outcome: Arc<SkillLoadOutcome>,
+        skills_snapshot: HostSkillsSnapshot,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration
@@ -531,7 +536,7 @@ impl Session {
         ));
         let (current_date, timezone) = local_time_context();
         let extension_data = Arc::new(codex_extension_api::ExtensionData::new(sub_id.clone()));
-        extension_data.insert(HostLoadedSkills::new(Arc::clone(&skills_outcome)));
+        extension_data.insert(skills_snapshot.clone());
         TurnContext {
             sub_id,
             trace_id: current_span_trace_id(),
@@ -569,7 +574,7 @@ impl Session {
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,
             extension_data,
-            turn_skills: TurnSkillsContext::new(skills_outcome),
+            turn_skills: TurnSkillsContext::new(skills_snapshot),
             turn_timing_state: Arc::new(TurnTimingState::default()),
             terminal_error: Arc::new(Mutex::new(None)),
             server_model_warning_emitted: AtomicBool::new(false),
@@ -726,12 +731,11 @@ impl Session {
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
         let fs = primary_turn_environment
             .map(|turn_environment| turn_environment.environment.get_filesystem());
-        let skills_outcome = Arc::new(
-            self.services
-                .skills_manager
-                .skills_for_config(&skills_input, fs)
-                .await,
-        );
+        let skills_snapshot = self
+            .services
+            .skills_service
+            .snapshot_for_config(&skills_input, fs)
+            .await;
         let mut turn_context: TurnContext = Self::make_turn_context(
             self.thread_id(),
             self.session_id(),
@@ -759,7 +763,7 @@ impl Session {
             turn_environments,
             cwd,
             sub_id,
-            skills_outcome,
+            skills_snapshot,
         );
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 

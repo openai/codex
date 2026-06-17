@@ -1,5 +1,4 @@
 use super::*;
-use codex_core_skills::HostLoadedSkills;
 use std::sync::atomic::AtomicBool;
 
 /// Spawn a review thread using the given prompt.
@@ -100,9 +99,7 @@ pub(super) async fn spawn_review_thread(
     let extension_data = Arc::new(codex_extension_api::ExtensionData::new(
         review_turn_id.clone(),
     ));
-    extension_data.insert(HostLoadedSkills::new(
-        parent_turn_context.turn_skills.outcome.clone(),
-    ));
+    extension_data.insert(parent_turn_context.turn_skills.snapshot.clone());
 
     let review_turn_context = TurnContext {
         sub_id: review_turn_id.clone(),
@@ -138,7 +135,7 @@ pub(super) async fn spawn_review_thread(
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         turn_metadata_state,
         extension_data,
-        turn_skills: TurnSkillsContext::new(parent_turn_context.turn_skills.outcome.clone()),
+        turn_skills: TurnSkillsContext::new(parent_turn_context.turn_skills.snapshot.clone()),
         turn_timing_state: Arc::new(TurnTimingState::default()),
         terminal_error: Arc::new(Mutex::new(None)),
         server_model_warning_emitted: AtomicBool::new(false),

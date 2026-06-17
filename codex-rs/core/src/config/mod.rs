@@ -3874,7 +3874,7 @@ impl Config {
     }
 
     pub fn bundled_skills_enabled(&self) -> bool {
-        crate::manager::bundled_skills_enabled_from_stack(&self.config_layer_stack)
+        crate::skills::service::bundled_skills_enabled_from_stack(&self.config_layer_stack)
     }
 }
 
