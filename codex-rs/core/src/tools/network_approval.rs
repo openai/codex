@@ -51,7 +51,6 @@ pub(crate) struct NetworkApprovalSpec {
     pub mode: NetworkApprovalMode,
     pub trigger: GuardianNetworkAccessTrigger,
     pub command: String,
-    pub environment_id: String,
 }
 
 #[derive(Clone, Debug)]
@@ -225,7 +224,6 @@ struct ActiveNetworkApprovalCall {
     turn_id: String,
     trigger: GuardianNetworkAccessTrigger,
     command: String,
-    environment_id: String,
     cancellation_token: CancellationToken,
 }
 
@@ -269,7 +267,6 @@ impl NetworkApprovalService {
         turn_id: String,
         trigger: GuardianNetworkAccessTrigger,
         command: String,
-        environment_id: String,
         cancellation_token: CancellationToken,
     ) {
         let mut calls = self.calls.lock().await;
@@ -281,7 +278,6 @@ impl NetworkApprovalService {
                 turn_id,
                 trigger,
                 command,
-                environment_id,
                 cancellation_token,
             }),
         );
@@ -512,7 +508,6 @@ impl NetworkApprovalService {
                     turn_id: owner_call
                         .as_ref()
                         .map_or_else(|| turn_context.sub_id.clone(), |call| call.turn_id.clone()),
-                    environment_id: owner_call.as_ref().map(|call| call.environment_id.clone()),
                     target,
                     host: request.host,
                     protocol,
@@ -529,7 +524,7 @@ impl NetworkApprovalService {
                     turn_context.as_ref(),
                     guardian_approval_id,
                     /*approval_id*/ None,
-                    owner_call.as_ref().map(|call| call.environment_id.clone()),
+                    /*environment_id*/ None,
                     prompt_command,
                     #[allow(deprecated)]
                     turn_context.cwd.clone(),
@@ -717,7 +712,6 @@ pub(crate) async fn begin_network_approval(
         mode,
         trigger,
         command,
-        environment_id,
     } = spec?;
     if !managed_network_active || network.is_none() {
         return None;
@@ -733,7 +727,6 @@ pub(crate) async fn begin_network_approval(
             turn_id.to_string(),
             trigger,
             command,
-            environment_id,
             cancellation_token.clone(),
         )
         .await;

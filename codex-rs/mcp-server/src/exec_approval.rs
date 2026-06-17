@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -34,8 +33,6 @@ pub struct ExecApprovalElicitRequestParams {
     pub codex_mcp_tool_call_id: String,
     pub codex_event_id: String,
     pub codex_call_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub codex_environment_id: Option<String>,
     pub codex_command: Vec<String>,
     pub codex_cwd: PathBuf,
     pub codex_parsed_cmd: Vec<ParsedCommand>,
@@ -54,7 +51,6 @@ pub struct ExecApprovalResponse {
 pub(crate) async fn handle_exec_approval_request(
     command: Vec<String>,
     cwd: PathBuf,
-    environment_id: Option<String>,
     outgoing: Arc<crate::outgoing_message::OutgoingMessageSender>,
     codex: Arc<CodexThread>,
     request_id: RequestId,
@@ -65,7 +61,12 @@ pub(crate) async fn handle_exec_approval_request(
     codex_parsed_cmd: Vec<ParsedCommand>,
     thread_id: ThreadId,
 ) {
-    let message = exec_approval_message(&command, &cwd, environment_id.as_deref());
+    let escaped_command =
+        shlex::try_join(command.iter().map(String::as_str)).unwrap_or_else(|_| command.join(" "));
+    let message = format!(
+        "Allow Codex to run `{escaped_command}` in `{cwd}`?",
+        cwd = cwd.to_string_lossy()
+    );
 
     let params = ExecApprovalElicitRequestParams {
         message,
@@ -75,7 +76,6 @@ pub(crate) async fn handle_exec_approval_request(
         codex_mcp_tool_call_id: tool_call_id.clone(),
         codex_event_id: event_id.clone(),
         codex_call_id: call_id,
-        codex_environment_id: environment_id,
         codex_command: command,
         codex_cwd: cwd,
         codex_parsed_cmd,
@@ -106,21 +106,6 @@ pub(crate) async fn handle_exec_approval_request(
         tokio::spawn(async move {
             on_exec_approval_response(approval_id, event_id, on_response, codex).await;
         });
-    }
-}
-
-fn exec_approval_message(command: &[String], cwd: &Path, environment_id: Option<&str>) -> String {
-    let escaped_command =
-        shlex::try_join(command.iter().map(String::as_str)).unwrap_or_else(|_| command.join(" "));
-    match environment_id {
-        Some(environment_id) => format!(
-            "Allow Codex to run `{escaped_command}` in environment `{environment_id}` with working directory `{}`?",
-            cwd.to_string_lossy()
-        ),
-        None => format!(
-            "Allow Codex to run `{escaped_command}` in `{}`?",
-            cwd.to_string_lossy()
-        ),
     }
 }
 
@@ -160,7 +145,3 @@ async fn on_exec_approval_response(
         error!("failed to submit ExecApproval: {err}");
     }
 }
-
-#[cfg(test)]
-#[path = "exec_approval_tests.rs"]
-mod tests;

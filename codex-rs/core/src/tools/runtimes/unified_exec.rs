@@ -168,7 +168,6 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                     review_id,
                     GuardianApprovalRequest::ExecCommand {
                         id: call_id,
-                        environment_id: Some(req.turn_environment.environment_id.clone()),
                         command,
                         cwd: cwd.clone(),
                         sandbox_permissions: req.sandbox_permissions,
@@ -257,7 +256,6 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 tty: Some(req.tty),
             },
             command: req.hook_command.clone(),
-            environment_id: req.turn_environment.environment_id.clone(),
         })
     }
 

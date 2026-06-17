@@ -471,7 +471,6 @@ impl CoreShellActionProvider {
                         review_id.clone(),
                         GuardianApprovalRequest::Execve {
                             id: call_id.clone(),
-                            environment_id: environment_id.clone(),
                             source,
                             program: program.to_string_lossy().into_owned(),
                             argv: argv.to_vec(),

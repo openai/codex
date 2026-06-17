@@ -1913,14 +1913,12 @@ impl App {
                         self.keymap.pager.clone(),
                     ));
                 }
-                ApprovalRequest::Exec {
-                    environment_id,
-                    command,
-                    ..
-                } => {
+                ApprovalRequest::Exec { command, .. } => {
                     let _ = tui.enter_alt_screen();
+                    let full_cmd = strip_bash_lc_and_escape(&command);
+                    let full_cmd_lines = highlight_bash_to_lines(&full_cmd);
                     self.overlay = Some(Overlay::new_static_with_lines(
-                        fullscreen_exec_approval_lines(environment_id.as_deref(), &command),
+                        full_cmd_lines,
                         "E X E C".to_string(),
                         self.keymap.pager.clone(),
                     ));
@@ -2323,21 +2321,4 @@ impl App {
             }
         }
     }
-}
-
-pub(super) fn fullscreen_exec_approval_lines(
-    environment_id: Option<&str>,
-    command: &[String],
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    if let Some(environment_id) = environment_id {
-        lines.push(Line::from(vec![
-            "Environment: ".into(),
-            environment_id.to_string().bold(),
-        ]));
-        lines.push(Line::from(""));
-    }
-    let full_cmd = strip_bash_lc_and_escape(command);
-    lines.extend(highlight_bash_to_lines(&full_cmd));
-    lines
 }

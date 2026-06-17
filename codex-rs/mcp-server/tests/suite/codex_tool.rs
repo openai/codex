@@ -192,9 +192,8 @@ fn create_expected_elicitation_request_params(
     codex_event_id: String,
     thread_id: codex_protocol::ThreadId,
 ) -> anyhow::Result<serde_json::Value> {
-    let environment_id = "local";
     let expected_message = format!(
-        "Allow Codex to run `{}` in environment `{environment_id}` with working directory `{}`?",
+        "Allow Codex to run `{}` in `{}`?",
         shlex::try_join(command.iter().map(std::convert::AsRef::as_ref))?,
         workdir.to_string_lossy()
     );
@@ -206,7 +205,6 @@ fn create_expected_elicitation_request_params(
         codex_elicitation: "exec-approval".to_string(),
         codex_mcp_tool_call_id,
         codex_event_id,
-        codex_environment_id: Some(environment_id.to_string()),
         codex_command: command,
         codex_cwd: workdir.to_path_buf(),
         codex_call_id: "call1234".to_string(),

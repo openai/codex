@@ -478,7 +478,6 @@ async fn handle_exec_approval(
             new_guardian_review_id(),
             GuardianApprovalRequest::Shell {
                 id: call_id.clone(),
-                environment_id,
                 command,
                 cwd,
                 sandbox_permissions: if additional_permissions.is_some() {

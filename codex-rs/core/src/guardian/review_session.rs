@@ -1177,7 +1177,6 @@ mod tests {
             spawn_config,
             request: GuardianApprovalRequest::Shell {
                 id: "shell-1".to_string(),
-                environment_id: None,
                 command: vec!["git".to_string(), "status".to_string()],
                 cwd,
                 sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
