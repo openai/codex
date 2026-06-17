@@ -169,7 +169,9 @@ impl McpRequestProcessor {
             server.oauth_resource.as_deref(),
             timeout_secs,
             config.mcp_oauth_callback_port,
-            config.mcp_oauth_callback_url.as_deref(),
+            server
+                .oauth_callback_url()
+                .or(config.mcp_oauth_callback_url.as_deref()),
         )
         .await
         .map_err(|err| internal_error(format!("failed to login to MCP server '{name}': {err}")))?;

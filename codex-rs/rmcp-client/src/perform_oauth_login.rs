@@ -107,6 +107,7 @@ pub async fn perform_oauth_login(
         CallbackUrlOutput::Suppress,
     )
     .await
+    .map(|_| ())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -139,6 +140,7 @@ pub async fn perform_oauth_login_silent(
         CallbackUrlOutput::Suppress,
     )
     .await
+    .map(|_| ())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -154,7 +156,7 @@ pub async fn perform_oauth_login_print_callback_url(
     oauth_resource: Option<&str>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
-) -> Result<()> {
+) -> Result<OAuthLoginOutput> {
     perform_oauth_login_with_browser_output(
         server_name,
         server_url,
@@ -173,6 +175,11 @@ pub async fn perform_oauth_login_print_callback_url(
     .await
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OAuthLoginOutput {
+    pub callback_url: String,
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn perform_oauth_login_with_browser_output(
     server_name: &str,
@@ -188,7 +195,7 @@ async fn perform_oauth_login_with_browser_output(
     callback_url: Option<&str>,
     emit_browser_url: bool,
     callback_url_output: CallbackUrlOutput,
-) -> Result<()> {
+) -> Result<OAuthLoginOutput> {
     let headers = OauthHeaders {
         http_headers,
         env_http_headers,
@@ -394,6 +401,7 @@ impl OauthLoginHandle {
 
 struct OauthLoginFlow {
     auth_url: String,
+    redirect_uri_base: String,
     redirect_uri: String,
     oauth_state: OAuthState,
     rx: oneshot::Receiver<CallbackResult>,
@@ -473,12 +481,13 @@ fn resolve_redirect_uri(
     server: &Server,
     server_url: &str,
     callback_url: Option<&str>,
-) -> Result<String> {
-    let redirect_uri = match callback_url {
+) -> Result<(String, String)> {
+    let redirect_uri_base = match callback_url {
         Some(callback_url) => configured_redirect_uri(callback_url)?,
         None => local_redirect_uri(server)?,
     };
-    append_callback_id_to_redirect_uri(server_url, &redirect_uri)
+    let redirect_uri = append_callback_id_to_redirect_uri(server_url, &redirect_uri_base)?;
+    Ok((redirect_uri_base, redirect_uri))
 }
 
 fn callback_id_from_server_url(server_url: &str) -> Result<String> {
@@ -558,7 +567,8 @@ impl OauthLoginFlow {
             server: Arc::clone(&server),
         };
 
-        let redirect_uri = resolve_redirect_uri(&server, server_url, callback_url)?;
+        let (redirect_uri_base, redirect_uri) =
+            resolve_redirect_uri(&server, server_url, callback_url)?;
         let callback_path = callback_path_from_redirect_uri(&redirect_uri)?;
 
         let (tx, rx) = oneshot::channel();
@@ -590,6 +600,7 @@ impl OauthLoginFlow {
 
         Ok(Self {
             auth_url,
+            redirect_uri_base,
             redirect_uri,
             oauth_state,
             rx,
@@ -611,7 +622,7 @@ impl OauthLoginFlow {
         mut self,
         emit_browser_url: bool,
         callback_url_output: CallbackUrlOutput,
-    ) -> Result<()> {
+    ) -> Result<OAuthLoginOutput> {
         if self.launch_browser {
             let server_name = &self.server_name;
             let auth_url = &self.auth_url;
@@ -676,7 +687,9 @@ impl OauthLoginFlow {
                 self.keyring_backend_kind,
             )?;
 
-            Ok(())
+            Ok(OAuthLoginOutput {
+                callback_url: self.redirect_uri_base.clone(),
+            })
         }
         .await;
 
@@ -691,7 +704,8 @@ impl OauthLoginFlow {
         tokio::spawn(async move {
             let result = self
                 .finish(/*emit_browser_url*/ false, CallbackUrlOutput::Suppress)
-                .await;
+                .await
+                .map(|_| ());
 
             if let Err(err) = &result {
                 eprintln!(

@@ -124,6 +124,12 @@ pub struct McpServerOAuthConfig {
     /// Explicit OAuth client identifier to present during authorization and token exchange.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
+
+    /// OAuth callback URL base to use for this server.
+    ///
+    /// Codex appends the deterministic callback ID suffix derived from the MCP server URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callback_url: Option<String>,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -200,6 +206,12 @@ impl McpServerConfig {
         self.oauth
             .as_ref()
             .and_then(|oauth| oauth.client_id.as_deref())
+    }
+
+    pub fn oauth_callback_url(&self) -> Option<&str> {
+        self.oauth
+            .as_ref()
+            .and_then(|oauth| oauth.callback_url.as_deref())
     }
 }
 

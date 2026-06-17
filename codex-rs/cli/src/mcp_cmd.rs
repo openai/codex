@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -239,7 +240,7 @@ async fn perform_oauth_login_retry_without_scopes(
     callback_port: Option<u16>,
     callback_url: Option<&str>,
     callback_url_output: OAuthCallbackUrlOutput,
-) -> Result<()> {
+) -> Result<Option<String>> {
     match run_oauth_login(
         name,
         url,
@@ -256,7 +257,7 @@ async fn perform_oauth_login_retry_without_scopes(
     )
     .await
     {
-        Ok(()) => Ok(()),
+        Ok(callback_url) => Ok(callback_url),
         Err(err) if should_retry_without_scopes(resolved_scopes, &err) => {
             println!("OAuth provider rejected discovered scopes. Retrying without scopes…");
             run_oauth_login(
@@ -293,10 +294,10 @@ async fn run_oauth_login(
     callback_port: Option<u16>,
     callback_url: Option<&str>,
     callback_url_output: OAuthCallbackUrlOutput,
-) -> Result<()> {
+) -> Result<Option<String>> {
     match callback_url_output {
         OAuthCallbackUrlOutput::Print => {
-            perform_oauth_login_print_callback_url(
+            let output = perform_oauth_login_print_callback_url(
                 name,
                 url,
                 store_mode,
@@ -309,7 +310,8 @@ async fn run_oauth_login(
                 callback_port,
                 callback_url,
             )
-            .await
+            .await?;
+            Ok(Some(output.callback_url))
         }
         OAuthCallbackUrlOutput::Suppress => {
             perform_oauth_login(
@@ -325,7 +327,8 @@ async fn run_oauth_login(
                 callback_port,
                 callback_url,
             )
-            .await
+            .await?;
+            Ok(None)
         }
     }
 }
@@ -433,6 +436,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
             .clone()
             .map(|client_id| McpServerOAuthConfig {
                 client_id: Some(client_id),
+                callback_url: None,
             }),
         oauth_resource: oauth_resource.clone(),
         tools: HashMap::new(),
@@ -443,7 +447,9 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
             match resolve_mcp_oauth_callback_url(
                 url,
                 config.mcp_oauth_callback_port,
-                config.mcp_oauth_callback_url.as_deref(),
+                new_entry
+                    .oauth_callback_url()
+                    .or(config.mcp_oauth_callback_url.as_deref()),
             ) {
                 Ok(callback_url) => Some(Ok(callback_url)),
                 Err(err)
@@ -477,7 +483,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                 /*configured_scopes*/ None,
                 oauth_config.discovered_scopes.clone(),
             );
-            perform_oauth_login_retry_without_scopes(
+            let persisted_callback_url = perform_oauth_login_retry_without_scopes(
                 &name,
                 &oauth_config.url,
                 config.mcp_oauth_credentials_store_mode,
@@ -488,10 +494,17 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                 oauth_client_id.as_deref(),
                 oauth_resource.as_deref(),
                 config.mcp_oauth_callback_port,
-                config.mcp_oauth_callback_url.as_deref(),
+                servers
+                    .get(&name)
+                    .and_then(McpServerConfig::oauth_callback_url)
+                    .or(config.mcp_oauth_callback_url.as_deref()),
                 OAuthCallbackUrlOutput::Print,
             )
             .await?;
+            if let Some(callback_url) = persisted_callback_url {
+                persist_server_oauth_callback_url(&codex_home, &mut servers, &name, callback_url)
+                    .await?;
+            }
             println!("Successfully logged in.");
         }
         McpOAuthLoginSupport::Unsupported => print_precomputed_oauth_callback_url(&callback_url),
@@ -510,6 +523,34 @@ fn print_precomputed_oauth_callback_url(callback_url: &Option<Result<String>>) {
     if let Some(Ok(callback_url)) = callback_url {
         println!("OAuth callback URL: {callback_url}");
     }
+}
+
+async fn persist_server_oauth_callback_url(
+    codex_home: &std::path::Path,
+    servers: &mut BTreeMap<String, McpServerConfig>,
+    name: &str,
+    callback_url: String,
+) -> Result<()> {
+    let server = servers
+        .get_mut(name)
+        .ok_or_else(|| anyhow!("No MCP server named '{name}' found."))?;
+    let oauth = server.oauth.get_or_insert_with(|| McpServerOAuthConfig {
+        client_id: None,
+        callback_url: None,
+    });
+
+    if oauth.callback_url.as_deref() == Some(callback_url.as_str()) {
+        return Ok(());
+    }
+
+    oauth.callback_url = Some(callback_url);
+    ConfigEditsBuilder::new(codex_home)
+        .replace_mcp_servers(servers)
+        .apply()
+        .await
+        .with_context(|| format!("failed to write MCP servers to {}", codex_home.display()))?;
+
+    Ok(())
 }
 
 async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveArgs) -> Result<()> {
@@ -593,7 +634,9 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         server.oauth_client_id(),
         server.oauth_resource.as_deref(),
         config.mcp_oauth_callback_port,
-        config.mcp_oauth_callback_url.as_deref(),
+        server
+            .oauth_callback_url()
+            .or(config.mcp_oauth_callback_url.as_deref()),
         OAuthCallbackUrlOutput::Suppress,
     )
     .await?;
@@ -630,7 +673,9 @@ async fn run_callback_url(
     let callback_url = resolve_mcp_oauth_callback_url(
         url,
         config.mcp_oauth_callback_port,
-        config.mcp_oauth_callback_url.as_deref(),
+        server
+            .oauth_callback_url()
+            .or(config.mcp_oauth_callback_url.as_deref()),
     )?;
     println!("{callback_url}");
     Ok(())

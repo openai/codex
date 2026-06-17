@@ -930,6 +930,7 @@ fn blocking_replace_mcp_servers_round_trips() {
             scopes: None,
             oauth: Some(McpServerOAuthConfig {
                 client_id: Some("eci-prd-pub-codex-123".to_string()),
+                callback_url: None,
             }),
             oauth_resource: Some("https://resource.example.com".to_string()),
             tools: HashMap::new(),

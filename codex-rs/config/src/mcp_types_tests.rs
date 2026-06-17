@@ -355,6 +355,28 @@ fn deserialize_streamable_http_server_config_with_oauth_client_id() {
         cfg.oauth,
         Some(McpServerOAuthConfig {
             client_id: Some("eci-prd-pub-codex-123".to_string()),
+            callback_url: None,
+        })
+    );
+}
+
+#[test]
+fn deserialize_streamable_http_server_config_with_oauth_callback_url() {
+    let cfg: McpServerConfig = toml::from_str(
+        r#"
+            url = "https://example.com/mcp"
+
+            [oauth]
+            callback_url = "http://127.0.0.1:4321/callback"
+        "#,
+    )
+    .expect("should deserialize http config with oauth callback url");
+
+    assert_eq!(
+        cfg.oauth,
+        Some(McpServerOAuthConfig {
+            client_id: None,
+            callback_url: Some("http://127.0.0.1:4321/callback".to_string()),
         })
     );
 }

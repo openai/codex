@@ -647,6 +647,7 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
                     scopes: None,
                     oauth: Some(McpServerOAuthConfig {
                         client_id: Some("client-id".to_string()),
+                        callback_url: None,
                     }),
                     oauth_resource: None,
                     tools: HashMap::new(),

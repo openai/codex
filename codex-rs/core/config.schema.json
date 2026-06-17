@@ -1323,6 +1323,10 @@
       "additionalProperties": false,
       "description": "OAuth client settings used when Codex launches an MCP OAuth flow.",
       "properties": {
+        "callback_url": {
+          "description": "OAuth callback URL base to use for this server.\n\nCodex appends the deterministic callback ID suffix derived from the MCP server URL.",
+          "type": "string"
+        },
         "client_id": {
           "description": "Explicit OAuth client identifier to present during authorization and token exchange.",
           "type": "string"
