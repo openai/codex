@@ -53,6 +53,7 @@ pub(super) async fn spawn_review_thread(
         .clone();
     per_turn_config.codex_linux_sandbox_exe =
         parent_turn_context.config.codex_linux_sandbox_exe.clone();
+    per_turn_config.compact_prompt = parent_turn_context.config.compact_prompt.clone();
     if let Err(err) = per_turn_config.web_search_mode.set(review_web_search_mode) {
         let fallback_value = per_turn_config.web_search_mode.value();
         tracing::warn!(
@@ -124,7 +125,6 @@ pub(super) async fn spawn_review_thread(
         app_server_client_name: parent_turn_context.app_server_client_name.clone(),
         developer_instructions: None,
         user_instructions: None,
-        compact_prompt: parent_turn_context.compact_prompt.clone(),
         collaboration_mode: parent_turn_context.collaboration_mode.clone(),
         multi_agent_version: MultiAgentVersion::Disabled,
         personality: parent_turn_context.personality,

@@ -46,7 +46,6 @@ Relevant ownership points:
 | `timezone` | Genuine creation-time turn snapshot | Durable; used in model environment context and copied to review |
 | `app_server_client_name` | Thread/session setting snapshot | Used later for hook payloads and plugin-install/tool exposure behavior; copied to review |
 | `developer_instructions` | Thread configuration snapshot | Materialized into model history; copied into child config and `with_model`; deliberately cleared for review |
-| `compact_prompt` | Thread configuration snapshot | Used only when compacting; copied into child and review contexts |
 | `user_instructions` | Rendered snapshot of thread-loaded `AGENTS.md` instructions | Materialized into model history; preserved by `with_model`, cleared for review. Delegated children reload from the parent session rather than this field |
 | `collaboration_mode` | Mutable thread setting frozen for this turn | Durable; used throughout the task and copied to review and alternate-model contexts |
 | `multi_agent_version` | Session-latched value selected once and then copied into turns | Durable; used for tools and lifecycle. Review forces it to `Disabled` |
@@ -81,7 +80,7 @@ Relevant ownership points:
 - The genuinely turn-owned core is small: IDs and tracing, metadata, timing, extension state, skill dedupe, stream dedupe, final schema, and turn-resolved model/environment state.
 - Most of the struct is a flattened thread-settings snapshot.
 - `auth_manager` and probably `provider` are session services masquerading as turn state.
-- Feature flags, shell policy, Linux sandbox executable, compatibility hash, truncation policy, and tool mode now come directly from `config` or `model_info` instead of duplicate `TurnContext` fields.
+- Feature flags, shell policy, Linux sandbox executable, compact prompt, compatibility hash, truncation policy, and tool mode now come directly from `config` or `model_info` instead of duplicate `TurnContext` fields.
 - `cwd` is duplicated legacy state and should disappear once consumers consistently use the selected turn environment.
 - Mutable turn state such as metadata, timing, extension data, and stream dedupe would be clearer in a separate runtime-state object rather than mixed into an otherwise immutable snapshot.
 - Background consumers should capture explicit narrow payloads rather than `Arc<TurnContext>`.
