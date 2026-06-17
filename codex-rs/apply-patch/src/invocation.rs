@@ -230,7 +230,7 @@ pub async fn verify_apply_patch_args(
     MaybeApplyPatchVerified::Body(ApplyPatchAction {
         changes,
         patch,
-        cwd: effective_cwd,
+        cwd: effective_cwd.into(),
     })
 }
 
@@ -811,7 +811,9 @@ PATCH"#,
                     },
                 )]),
                 patch: argv[1].clone(),
-                cwd: AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
+                cwd: AbsolutePathBuf::from_absolute_path(session_dir.path())
+                    .unwrap()
+                    .into(),
             })
         );
     }
@@ -851,7 +853,10 @@ PATCH"#,
             other => panic!("expected verified body, got {other:?}"),
         };
 
-        assert_eq!(action.cwd.as_path(), worktree_dir.as_path());
+        assert_eq!(
+            action.cwd.to_abs_path().unwrap().as_path(),
+            worktree_dir.as_path()
+        );
 
         let source_path = worktree_dir.join(source_name);
         let change = action

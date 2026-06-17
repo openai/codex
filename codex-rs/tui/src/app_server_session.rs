@@ -391,7 +391,10 @@ impl AppServerSession {
             .client
             .request_typed(ClientRequest::ExternalAgentConfigImport {
                 request_id,
-                params: ExternalAgentConfigImportParams { migration_items },
+                params: ExternalAgentConfigImportParams {
+                    migration_items,
+                    source: None,
+                },
             })
             .await
             .wrap_err("externalAgentConfig/import failed during Claude Code import");

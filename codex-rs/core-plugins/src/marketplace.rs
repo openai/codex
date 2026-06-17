@@ -544,20 +544,26 @@ fn resolve_local_plugin_source_path(
     marketplace_path: &AbsolutePathBuf,
     path: &str,
 ) -> Result<AbsolutePathBuf, MarketplaceError> {
-    let Some(path) = path.strip_prefix("./") else {
+    match path {
+        "" => {
+            return Err(MarketplaceError::InvalidMarketplaceFile {
+                path: marketplace_path.to_path_buf(),
+                message: "local plugin source path must not be empty".to_string(),
+            });
+        }
+        "." | "./" => return marketplace_root_dir(marketplace_path),
+        _ => {}
+    }
+
+    // Non-root local sources must keep the explicit `./` prefix and remain normalized.
+    let Some(relative_path) = path.strip_prefix("./") else {
         return Err(MarketplaceError::InvalidMarketplaceFile {
             path: marketplace_path.to_path_buf(),
             message: "local plugin source path must start with `./`".to_string(),
         });
     };
-    if path.is_empty() {
-        return Err(MarketplaceError::InvalidMarketplaceFile {
-            path: marketplace_path.to_path_buf(),
-            message: "local plugin source path must not be empty".to_string(),
-        });
-    }
 
-    let relative_source_path = Path::new(path);
+    let relative_source_path = Path::new(relative_path);
     if relative_source_path
         .components()
         .any(|component| !matches!(component, Component::Normal(_)))

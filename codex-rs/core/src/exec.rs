@@ -381,7 +381,7 @@ pub fn build_exec_request(
         })
         .map(|request| {
             let windows_sandbox_workspace_roots = if windows_sandbox_workspace_roots.is_empty() {
-                vec![request.sandbox_policy_cwd.clone()]
+                vec![sandbox_cwd.clone()]
             } else {
                 windows_sandbox_workspace_roots.to_vec()
             };
@@ -439,6 +439,15 @@ pub(crate) async fn execute_exec_request(
         windows_sandbox_filesystem_overrides,
         arg0,
     } = exec_request;
+
+    // TODO(anp): Keep PathUri through the local process launch boundary.
+    let cwd = cwd
+        .to_abs_path()
+        .map_err(|err| CodexErr::InvalidRequest(format!("invalid exec cwd: {err}")))?;
+    // TODO(anp): Keep PathUri through the Windows sandbox launch boundary.
+    let windows_sandbox_policy_cwd = windows_sandbox_policy_cwd
+        .to_abs_path()
+        .map_err(|err| CodexErr::InvalidRequest(format!("invalid sandbox cwd: {err}")))?;
 
     let params = ExecParams {
         command,
