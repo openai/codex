@@ -29,6 +29,7 @@ use crate::NoiseChannelIdentity;
 use crate::NoiseChannelPublicKey;
 use crate::NoiseRendezvousConnectBundle;
 use crate::NoiseRendezvousConnectProvider;
+use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
 use crate::noise_relay::noise_relay_websocket_config;
 use crate::relay::HarnessKeyValidator;
 use crate::relay::run_multiplexed_environment;
@@ -42,6 +43,7 @@ struct EnvironmentRegistryClient {
     base_url: String,
     auth_provider: SharedAuthProvider,
     http: reqwest::Client,
+    connect_timeout: Duration,
 }
 
 impl std::fmt::Debug for EnvironmentRegistryClient {
@@ -62,6 +64,7 @@ impl EnvironmentRegistryClient {
             http: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()?,
+            connect_timeout: DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
         })
     }
 
@@ -126,6 +129,7 @@ impl EnvironmentRegistryClient {
             ))
             .headers(self.auth_provider.to_auth_headers())
             .json(&EnvironmentRegistryConnectRequest { harness_public_key })
+            .timeout(self.connect_timeout)
             .send()
             .await?;
         let response: EnvironmentRegistryConnectResponse =
@@ -687,6 +691,36 @@ mod tests {
         assert_eq!(bundle.executor_registration_id, "registration-1");
         assert_eq!(bundle.executor_public_key, executor_public_key);
         assert_eq!(bundle.harness_key_authorization, "authorization-1");
+    }
+
+    #[tokio::test]
+    async fn connect_environment_times_out_when_registry_stalls() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/cloud/environment/environment-requested/connect"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(1)))
+            .mount(&server)
+            .await;
+        let mut client =
+            EnvironmentRegistryClient::new(server.uri(), static_registry_auth_provider())
+                .expect("client");
+        client.connect_timeout = Duration::from_millis(50);
+        let harness_public_key = NoiseChannelIdentity::generate()
+            .expect("identity")
+            .public_key();
+
+        let error = match client
+            .connect_environment("environment-requested", harness_public_key)
+            .await
+        {
+            Ok(_) => panic!("stalled connect response should time out"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            ExecServerError::EnvironmentRegistryRequest(error) if error.is_timeout()
+        ));
     }
 
     #[tokio::test]
