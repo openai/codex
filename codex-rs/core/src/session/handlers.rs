@@ -178,6 +178,7 @@ async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
             reasoning_summary: snapshot.reasoning_summary,
             personality: snapshot.personality,
             collaboration_mode: snapshot.collaboration_mode,
+            multi_agent_mode: snapshot.multi_agent_mode,
         },
     })
 }
