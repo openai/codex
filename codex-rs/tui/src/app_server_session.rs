@@ -29,6 +29,7 @@ use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
+use codex_app_server_protocol::ExternalAgentConfigImportSource;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
@@ -391,7 +392,10 @@ impl AppServerSession {
             .client
             .request_typed(ClientRequest::ExternalAgentConfigImport {
                 request_id,
-                params: ExternalAgentConfigImportParams { migration_items },
+                params: ExternalAgentConfigImportParams {
+                    migration_items,
+                    source: Some(ExternalAgentConfigImportSource::ClaudeCode),
+                },
             })
             .await
             .wrap_err("externalAgentConfig/import failed during Claude Code import");

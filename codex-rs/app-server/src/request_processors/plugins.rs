@@ -1528,7 +1528,6 @@ impl PluginRequestProcessor {
                 self.track_plugin_install_failed_for_remote_plugin(
                     &remote_plugin_id,
                     REMOTE_GLOBAL_MARKETPLACE_NAME,
-                    None,
                     error_type,
                     err.to_string(),
                 );
@@ -1544,7 +1543,6 @@ impl PluginRequestProcessor {
             self.track_plugin_install_failed_for_remote_plugin(
                 &remote_plugin_id,
                 &actual_remote_marketplace_name,
-                Some(&remote_plugin_name),
                 "remote_plugin_disabled_by_admin",
                 message.clone(),
             );
@@ -1555,7 +1553,6 @@ impl PluginRequestProcessor {
             self.track_plugin_install_failed_for_remote_plugin(
                 &remote_plugin_id,
                 &actual_remote_marketplace_name,
-                Some(&remote_plugin_name),
                 "remote_plugin_not_available",
                 message.clone(),
             );
@@ -1582,7 +1579,6 @@ impl PluginRequestProcessor {
             self.track_plugin_install_failed_for_remote_plugin(
                 &remote_plugin_id,
                 &actual_remote_marketplace_name,
-                Some(&remote_plugin_name),
                 error_type,
                 err.to_string(),
             );
@@ -1599,7 +1595,6 @@ impl PluginRequestProcessor {
             self.track_plugin_install_failed_for_remote_plugin(
                 &remote_plugin_id,
                 &actual_remote_marketplace_name,
-                Some(&remote_plugin_name),
                 error_type,
                 err.to_string(),
             );
@@ -1621,7 +1616,6 @@ impl PluginRequestProcessor {
             self.track_plugin_install_failed_for_remote_plugin(
                 &remote_plugin_id,
                 &actual_remote_marketplace_name,
-                Some(&remote_plugin_name),
                 error_type,
                 err.to_string(),
             );
@@ -1713,29 +1707,25 @@ impl PluginRequestProcessor {
         &self,
         remote_plugin_id: &str,
         marketplace_name: &str,
-        plugin_name: Option<&str>,
         error_type: &'static str,
         error_message: String,
     ) {
         tracing::warn!(
             remote_plugin_id = %remote_plugin_id,
             marketplace_name = %marketplace_name,
-            plugin_name = ?plugin_name,
             error_type = %error_type,
             error = %error_message,
             "remote plugin install failed"
         );
         // The remote id is reported separately; this local name only satisfies
         // PluginId validation before remote details are available.
-        let local_plugin_name = plugin_name.unwrap_or("unknown");
-        let Ok(plugin_id) =
-            PluginId::new(local_plugin_name.to_string(), marketplace_name.to_string())
+        let Ok(plugin_id) = PluginId::new("unknown".to_string(), marketplace_name.to_string())
         else {
             return;
         };
         let mut plugin = PluginTelemetryMetadata::from_plugin_id(&plugin_id);
         plugin.remote_plugin_id = Some(remote_plugin_id.to_string());
-        plugin.event_plugin_name = plugin_name.map(str::to_owned);
+        plugin.event_plugin_name = None;
         self.analytics_events_client
             .track_plugin_install_failed(plugin, error_type.to_string());
     }

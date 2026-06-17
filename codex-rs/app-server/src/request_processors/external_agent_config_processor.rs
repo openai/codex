@@ -28,6 +28,7 @@ use codex_app_server_protocol::ExternalAgentConfigImportItemTypeSuccess as Proto
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
 use codex_app_server_protocol::ExternalAgentConfigImportProgressNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
+use codex_app_server_protocol::ExternalAgentConfigImportSource;
 use codex_app_server_protocol::ExternalAgentConfigImportTypeResult as ProtocolImportTypeResult;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
@@ -205,6 +206,9 @@ impl ExternalAgentConfigRequestProcessor {
         params: ExternalAgentConfigImportParams,
     ) -> Result<(), JSONRPCErrorError> {
         let import_id = Uuid::new_v4().to_string();
+        let import_source = params
+            .source
+            .unwrap_or(ExternalAgentConfigImportSource::ClaudeCode);
         let needs_runtime_refresh = migration_items_need_runtime_refresh(&params.migration_items);
         let has_migration_items = !params.migration_items.is_empty();
         let has_plugin_imports = params.migration_items.iter().any(|item| {
@@ -250,6 +254,7 @@ impl ExternalAgentConfigRequestProcessor {
                 self.state_db.as_ref(),
                 &self.analytics_events_client,
                 import_id,
+                import_source,
                 &completed_item_results,
             )
             .await;
@@ -334,6 +339,7 @@ impl ExternalAgentConfigRequestProcessor {
                 state_db.as_ref(),
                 &analytics_events_client,
                 import_id,
+                import_source,
                 &completed_item_results,
             )
             .await;
@@ -562,11 +568,12 @@ async fn send_completed_import_notification(
     state_db: Option<&StateDbHandle>,
     analytics_events_client: &AnalyticsEventsClient,
     import_id: String,
+    import_source: ExternalAgentConfigImportSource,
     item_results: &[CoreImportItemResult],
 ) {
     let notification = completed_notification(import_id, item_results);
     log_completed_import_failures(&notification);
-    track_completed_import_notification(analytics_events_client, &notification);
+    track_completed_import_notification(analytics_events_client, import_source, &notification);
     if let Some(state_db) = state_db
         && let Err(err) = record_completed_import_notification(state_db, &notification).await
     {
@@ -602,13 +609,15 @@ fn log_completed_import_failures(notification: &ExternalAgentConfigImportComplet
 
 fn track_completed_import_notification(
     analytics_events_client: &AnalyticsEventsClient,
+    import_source: ExternalAgentConfigImportSource,
     notification: &ExternalAgentConfigImportCompletedNotification,
 ) {
+    let source = analytics_import_source(import_source).to_string();
     for type_result in &notification.item_type_results {
         analytics_events_client.track_external_agent_config_import_completed(
             ExternalAgentConfigImportCompletedInput {
                 import_id: notification.import_id.clone(),
-                source: "app_server".to_string(),
+                source: source.clone(),
                 item_type: match type_result.item_type {
                     ExternalAgentConfigMigrationItemType::AgentsMd => "AGENTS_MD",
                     ExternalAgentConfigMigrationItemType::Config => "CONFIG",
@@ -625,6 +634,13 @@ fn track_completed_import_notification(
                 failed_count: type_result.failures.len(),
             },
         );
+    }
+}
+
+fn analytics_import_source(source: ExternalAgentConfigImportSource) -> &'static str {
+    match source {
+        ExternalAgentConfigImportSource::ClaudeCode => "claude_code",
+        ExternalAgentConfigImportSource::ClaudeCowork => "claude_cowork",
     }
 }
 

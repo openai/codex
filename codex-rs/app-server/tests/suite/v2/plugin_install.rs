@@ -607,7 +607,7 @@ async fn plugin_install_rejects_remote_plugin_disabled_by_admin_before_download(
         "codex_plugin_install_failed"
     );
     assert_eq!(event_params["plugin_id"], REMOTE_PLUGIN_ID);
-    assert_eq!(event_params["plugin_name"], "linear");
+    assert_eq!(event_params["plugin_name"], json!(null));
     assert_eq!(event_params["marketplace_name"], "openai-curated-remote");
     assert_eq!(
         event_params["error_type"],
@@ -663,7 +663,6 @@ async fn plugin_install_tracks_analytics_when_remote_plugin_not_available() -> R
         "codex_plugin_install_failed"
     );
     assert_eq!(event_params["plugin_id"], REMOTE_PLUGIN_ID);
-    assert_eq!(event_params["plugin_name"], "linear");
     assert_eq!(event_params["marketplace_name"], "openai-curated-remote");
     assert_eq!(event_params["error_type"], "remote_plugin_not_available");
     Ok(())
@@ -1084,7 +1083,6 @@ async fn plugin_install_errors_when_remote_bundle_download_fails() -> Result<()>
         "codex_plugin_install_failed"
     );
     assert_eq!(event_params["plugin_id"], REMOTE_PLUGIN_ID);
-    assert_eq!(event_params["plugin_name"], "linear");
     assert_eq!(event_params["marketplace_name"], "openai-curated-remote");
     assert_eq!(event_params["error_type"], "remote_bundle_download_status");
     assert!(

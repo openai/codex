@@ -813,12 +813,30 @@
             "$ref": "#/definitions/ExternalAgentConfigMigrationItem"
           },
           "type": "array"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExternalAgentConfigImportSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Source product that produced the migration items. Missing means Claude Code for compatibility with older clients."
         }
       },
       "required": [
         "migrationItems"
       ],
       "type": "object"
+    },
+    "ExternalAgentConfigImportSource": {
+      "enum": [
+        "claudeCode",
+        "claudeCowork"
+      ],
+      "type": "string"
     },
     "ExternalAgentConfigMigrationItem": {
       "properties": {

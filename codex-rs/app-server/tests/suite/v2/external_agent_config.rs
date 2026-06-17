@@ -233,6 +233,7 @@ async fn external_agent_config_import_completed_tracks_analytics_event() -> Resu
         .send_raw_request(
             "externalAgentConfig/import",
             Some(serde_json::json!({
+                "source": "claudeCowork",
                 "migrationItems": [{
                     "itemType": "SESSIONS",
                     "description": "Migrate recent sessions",
@@ -276,7 +277,7 @@ async fn external_agent_config_import_completed_tracks_analytics_event() -> Resu
     .await?;
     let event_params = &event["event_params"];
     assert_eq!(event_params["import_id"], serde_json::json!(import_id));
-    assert_eq!(event_params["source"], "app_server");
+    assert_eq!(event_params["source"], "claude_cowork");
     assert_eq!(event_params["type"], "SESSIONS");
     assert_eq!(event_params["success_count"], 0);
     assert_eq!(event_params["failed_count"], 1);
