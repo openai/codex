@@ -155,7 +155,7 @@ fn remove_patterns_from_legacy_array(
     }
     items.retain(|item| {
         item.as_str()
-            .is_none_or(|candidate| !patterns.iter().any(|pattern| candidate == *pattern))
+            .is_none_or(|candidate| !patterns.contains(&candidate))
     });
 }
 
