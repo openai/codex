@@ -418,7 +418,7 @@ impl ThreadRequestProcessor {
         params: ThreadStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-        openai_form_elicitation_capability: codex_mcp::OpenAiFormElicitationCapability,
+        supports_openai_form_elicitation: bool,
         request_context: RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_start_inner(
@@ -426,7 +426,7 @@ impl ThreadRequestProcessor {
             params,
             app_server_client_name,
             app_server_client_version,
-            openai_form_elicitation_capability,
+            supports_openai_form_elicitation,
             request_context,
         )
         .await
@@ -449,14 +449,14 @@ impl ThreadRequestProcessor {
         params: ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-        openai_form_elicitation_capability: codex_mcp::OpenAiFormElicitationCapability,
+        supports_openai_form_elicitation: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_resume_inner(
             request_id,
             params,
             app_server_client_name,
             app_server_client_version,
-            openai_form_elicitation_capability,
+            supports_openai_form_elicitation,
         )
         .await
         .map(|()| None)
@@ -468,14 +468,14 @@ impl ThreadRequestProcessor {
         params: ThreadForkParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-        openai_form_elicitation_capability: codex_mcp::OpenAiFormElicitationCapability,
+        supports_openai_form_elicitation: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_fork_inner(
             request_id,
             params,
             app_server_client_name,
             app_server_client_version,
-            openai_form_elicitation_capability,
+            supports_openai_form_elicitation,
         )
         .await
         .map(|()| None)
@@ -881,7 +881,7 @@ impl ThreadRequestProcessor {
         params: ThreadStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-        openai_form_elicitation_capability: codex_mcp::OpenAiFormElicitationCapability,
+        supports_openai_form_elicitation: bool,
         request_context: RequestContext,
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadStartParams {
@@ -952,7 +952,7 @@ impl ThreadRequestProcessor {
                 request_id,
                 app_server_client_name,
                 app_server_client_version,
-                openai_form_elicitation_capability,
+                supports_openai_form_elicitation,
                 config,
                 typesafe_overrides,
                 dynamic_tools,
@@ -1026,7 +1026,7 @@ impl ThreadRequestProcessor {
         request_id: ConnectionRequestId,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-        openai_form_elicitation_capability: codex_mcp::OpenAiFormElicitationCapability,
+        supports_openai_form_elicitation: bool,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<DynamicToolSpec>>,
@@ -1132,10 +1132,6 @@ impl ThreadRequestProcessor {
             thread_extension_init.insert(selected_capability_roots);
             codex_mcp_extension::initialize_executor_plugin_thread_data(&mut thread_extension_init);
         }
-        insert_openai_form_elicitation_capability(
-            &mut thread_extension_init,
-            openai_form_elicitation_capability,
-        );
         let create_thread_started_at = std::time::Instant::now();
         let NewThread {
             thread_id,
@@ -1159,6 +1155,7 @@ impl ThreadRequestProcessor {
                 parent_trace: request_trace,
                 environments,
                 thread_extension_init,
+                supports_openai_form_elicitation,
             })
             .instrument(tracing::info_span!(
                 "app_server.thread_start.create_thread",
@@ -2532,7 +2529,7 @@ impl ThreadRequestProcessor {
         params: ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-        openai_form_elicitation_capability: codex_mcp::OpenAiFormElicitationCapability,
+        supports_openai_form_elicitation: bool,
     ) -> Result<(), JSONRPCErrorError> {
         if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
             && self
@@ -2577,6 +2574,7 @@ impl ThreadRequestProcessor {
                 &params,
                 app_server_client_name.clone(),
                 app_server_client_version.clone(),
+                supports_openai_form_elicitation,
             )
             .await
         {
@@ -2672,12 +2670,12 @@ impl ThreadRequestProcessor {
 
         match self
             .thread_manager
-            .resume_thread_with_history_and_extension_data(
+            .resume_thread_with_history(
                 config,
                 thread_history,
                 self.auth_manager.clone(),
                 self.request_trace_context(&request_id).await,
-                openai_form_elicitation_extension_data(openai_form_elicitation_capability),
+                supports_openai_form_elicitation,
             )
             .await
         {
@@ -2866,6 +2864,7 @@ impl ThreadRequestProcessor {
         params: &ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        supports_openai_form_elicitation: bool,
     ) -> Result<RunningThreadResumeResult, JSONRPCErrorError> {
         let running_thread = if params.history.is_some() {
             if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
@@ -2996,6 +2995,14 @@ impl ThreadRequestProcessor {
                 app_server_client_version,
             )
             .await?;
+            existing_thread
+                .set_openai_form_elicitation_support(supports_openai_form_elicitation)
+                .await
+                .map_err(|err| {
+                    internal_error(format!(
+                        "failed to update OpenAI form elicitation support: {err}"
+                    ))
+                })?;
 
             let mut summary_source_thread = source_thread;
             summary_source_thread.history = None;
@@ -3295,7 +3302,7 @@ impl ThreadRequestProcessor {
         params: ThreadForkParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-        openai_form_elicitation_capability: codex_mcp::OpenAiFormElicitationCapability,
+        supports_openai_form_elicitation: bool,
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadForkParams {
             thread_id,
@@ -3395,7 +3402,7 @@ impl ThreadRequestProcessor {
             ..
         } = self
             .thread_manager
-            .fork_thread_from_history_with_extension_data(
+            .fork_thread_from_history(
                 ForkSnapshot::Interrupted,
                 config,
                 InitialHistory::Resumed(ResumedHistory {
@@ -3405,7 +3412,7 @@ impl ThreadRequestProcessor {
                 }),
                 thread_source.map(Into::into),
                 self.request_trace_context(&request_id).await,
-                openai_form_elicitation_extension_data(openai_form_elicitation_capability),
+                supports_openai_form_elicitation,
             )
             .await
             .map_err(|err| match err {
@@ -3708,23 +3715,6 @@ impl ThreadRequestProcessor {
         }
 
         Ok((items, next_cursor))
-    }
-}
-
-fn openai_form_elicitation_extension_data(
-    capability: codex_mcp::OpenAiFormElicitationCapability,
-) -> ExtensionDataInit {
-    let mut extension_data = ExtensionDataInit::new();
-    insert_openai_form_elicitation_capability(&mut extension_data, capability);
-    extension_data
-}
-
-fn insert_openai_form_elicitation_capability(
-    extension_data: &mut ExtensionDataInit,
-    capability: codex_mcp::OpenAiFormElicitationCapability,
-) {
-    if capability == codex_mcp::OpenAiFormElicitationCapability::Supported {
-        extension_data.insert(capability);
     }
 }
 

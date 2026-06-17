@@ -333,6 +333,13 @@ impl CodexThread {
             .await
     }
 
+    pub async fn set_openai_form_elicitation_support(&self, supported: bool) -> anyhow::Result<()> {
+        self.codex
+            .session
+            .set_openai_form_elicitation_support(supported)
+            .await
+    }
+
     /// Preview persistent thread settings overrides without committing them.
     pub async fn preview_thread_settings_overrides(
         &self,

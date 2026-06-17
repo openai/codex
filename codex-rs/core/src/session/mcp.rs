@@ -345,12 +345,6 @@ impl Session {
             *guard = cancellation_token.clone();
             cancellation_token
         };
-        let openai_form_elicitation_capability = self
-            .services
-            .thread_extension_data
-            .get::<codex_mcp::OpenAiFormElicitationCapability>()
-            .map(|capability| *capability.as_ref())
-            .unwrap_or_default();
         let refreshed_manager = McpConnectionManager::new(
             &mcp_servers,
             store_mode,
@@ -367,7 +361,9 @@ impl Session {
             host_owned_codex_apps_enabled,
             mcp_config.prefix_mcp_tool_names,
             mcp_config.client_elicitation_capability,
-            openai_form_elicitation_capability,
+            self.services
+                .supports_openai_form_elicitation
+                .load(std::sync::atomic::Ordering::Relaxed),
             tool_plugin_provenance,
             auth.as_ref(),
             elicitation_reviewer,
@@ -432,6 +428,34 @@ impl Session {
             elicitation_reviewer,
         )
         .await;
+    }
+
+    pub(crate) async fn set_openai_form_elicitation_support(
+        &self,
+        supported: bool,
+    ) -> anyhow::Result<()> {
+        if self
+            .services
+            .supports_openai_form_elicitation
+            .load(std::sync::atomic::Ordering::Relaxed)
+            == supported
+        {
+            return Ok(());
+        }
+
+        let config = self.get_config().await;
+        let refresh_config = McpServerRefreshConfig {
+            mcp_servers: serde_json::to_value(config.mcp_servers.get())?,
+            mcp_oauth_credentials_store_mode: serde_json::to_value(
+                config.mcp_oauth_credentials_store_mode,
+            )?,
+            auth_keyring_backend_kind: serde_json::to_value(config.auth_keyring_backend_kind())?,
+        };
+        self.services
+            .supports_openai_form_elicitation
+            .store(supported, std::sync::atomic::Ordering::Relaxed);
+        *self.pending_mcp_server_refresh_config.lock().await = Some(refresh_config);
+        Ok(())
     }
 
     pub(crate) async fn refresh_mcp_servers_now(
@@ -605,18 +629,9 @@ fn guardian_elicitation_review_request(
 }
 
 fn elicitation_connector_id(elicitation: &Elicitation) -> Option<&str> {
-    match elicitation {
-        Elicitation::Mcp(
-            rmcp::model::CreateElicitationRequestParams::FormElicitationParams { meta, .. }
-            | rmcp::model::CreateElicitationRequestParams::UrlElicitationParams { meta, .. },
-        ) => meta
-            .as_ref()
-            .and_then(|meta| metadata_str(&meta.0, MCP_ELICITATION_CONNECTOR_ID_KEY)),
-        Elicitation::OpenAiForm { meta, .. } => meta
-            .as_ref()
-            .and_then(Value::as_object)
-            .and_then(|meta| metadata_str(meta, MCP_ELICITATION_CONNECTOR_ID_KEY)),
-    }
+    elicitation
+        .meta()
+        .and_then(|meta| metadata_str(meta, MCP_ELICITATION_CONNECTOR_ID_KEY))
 }
 
 fn meta_requests_approval_request(meta: &Option<Meta>) -> bool {

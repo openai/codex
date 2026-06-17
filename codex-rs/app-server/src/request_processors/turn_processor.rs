@@ -1183,6 +1183,7 @@ impl TurnRequestProcessor {
                 }),
                 /*thread_source*/ None,
                 self.request_trace_context(request_id).await,
+                /*supports_openai_form_elicitation*/ false,
             )
             .await
             .map_err(|err| {

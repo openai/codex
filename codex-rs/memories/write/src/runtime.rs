@@ -313,6 +313,7 @@ impl MemoryStartupContext {
                 parent_trace: None,
                 environments,
                 thread_extension_init: Default::default(),
+                supports_openai_form_elicitation: false,
             })
             .await?;
 

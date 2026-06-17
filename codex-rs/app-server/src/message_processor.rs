@@ -220,7 +220,7 @@ pub(crate) struct InitializedConnectionSessionState {
     pub(crate) app_server_client_name: String,
     pub(crate) client_version: String,
     pub(crate) request_attestation: bool,
-    pub(crate) openai_form_elicitation_capability: codex_mcp::OpenAiFormElicitationCapability,
+    pub(crate) supports_openai_form_elicitation: bool,
 }
 
 impl Default for ConnectionSessionState {
@@ -272,13 +272,10 @@ impl ConnectionSessionState {
             .is_some_and(|session| session.request_attestation)
     }
 
-    pub(crate) fn openai_form_elicitation_capability(
-        &self,
-    ) -> codex_mcp::OpenAiFormElicitationCapability {
+    pub(crate) fn supports_openai_form_elicitation(&self) -> bool {
         self.initialized
             .get()
-            .map(|session| session.openai_form_elicitation_capability)
-            .unwrap_or_default()
+            .is_some_and(|session| session.supports_openai_form_elicitation)
     }
 
     pub(crate) fn initialize(&self, session: InitializedConnectionSessionState) -> Result<(), ()> {
@@ -885,7 +882,7 @@ impl MessageProcessor {
         let serialization_scope = codex_request.serialization_scope();
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
-        let openai_form_elicitation_capability = session.openai_form_elicitation_capability();
+        let supports_openai_form_elicitation = session.supports_openai_form_elicitation();
         let error_request_id = connection_request_id.clone();
         let rpc_gate = Arc::clone(&session.rpc_gate);
         let processor = Arc::clone(self);
@@ -901,7 +898,7 @@ impl MessageProcessor {
                         request_context,
                         app_server_client_name,
                         client_version,
-                        openai_form_elicitation_capability,
+                        supports_openai_form_elicitation,
                     )
                     .await;
                 if let Err(error) = result {
@@ -931,7 +928,7 @@ impl MessageProcessor {
         request_context: RequestContext,
         app_server_client_name: Option<String>,
         client_version: Option<String>,
-        openai_form_elicitation_capability: codex_mcp::OpenAiFormElicitationCapability,
+        supports_openai_form_elicitation: bool,
     ) -> Result<(), JSONRPCErrorError> {
         let connection_id = connection_request_id.connection_id;
         let request_id = ConnectionRequestId {
@@ -1084,7 +1081,7 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
-                        openai_form_elicitation_capability,
+                        supports_openai_form_elicitation,
                         request_context,
                     )
                     .await
@@ -1101,7 +1098,7 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
-                        openai_form_elicitation_capability,
+                        supports_openai_form_elicitation,
                     )
                     .await
             }
@@ -1112,7 +1109,7 @@ impl MessageProcessor {
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
-                        openai_form_elicitation_capability,
+                        supports_openai_form_elicitation,
                     )
                     .await
             }

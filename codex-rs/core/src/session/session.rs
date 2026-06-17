@@ -482,6 +482,7 @@ impl Session {
         mcp_manager: Arc<McpManager>,
         extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
         thread_extension_init: ExtensionDataInit,
+        supports_openai_form_elicitation: bool,
         agent_control: AgentControl,
         environment_manager: Arc<EnvironmentManager>,
         inherited_environments: Option<TurnEnvironmentSnapshot>,
@@ -1007,6 +1008,9 @@ impl Session {
                 session_extension_data,
                 thread_extension_data,
                 mcp_thread_init,
+                supports_openai_form_elicitation: std::sync::atomic::AtomicBool::new(
+                    supports_openai_form_elicitation,
+                ),
                 agent_control,
                 network_proxy: arc_swap::ArcSwapOption::from(network_proxy.map(Arc::new)),
                 network_proxy_audit_metadata,
@@ -1110,12 +1114,6 @@ impl Session {
             } else {
                 ElicitationCapability::default()
             };
-            let openai_form_elicitation_capability = sess
-                .services
-                .thread_extension_data
-                .get::<codex_mcp::OpenAiFormElicitationCapability>()
-                .map(|capability| *capability.as_ref())
-                .unwrap_or_default();
             let mcp_startup_cancellation_token = {
                 let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
                 cancel_guard.cancel();
@@ -1150,7 +1148,9 @@ impl Session {
                 host_owned_codex_apps_enabled,
                 config.prefix_mcp_tool_names(),
                 client_elicitation_capability,
-                openai_form_elicitation_capability,
+                sess.services
+                    .supports_openai_form_elicitation
+                    .load(std::sync::atomic::Ordering::Relaxed),
                 tool_plugin_provenance,
                 auth,
                 Some(sess.mcp_elicitation_reviewer()),

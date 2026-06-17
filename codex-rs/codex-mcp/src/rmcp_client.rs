@@ -29,7 +29,6 @@ use crate::codex_apps::normalize_codex_apps_tool_title;
 use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
 use crate::elicitation::ElicitationRequestManager;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
-use crate::mcp::OpenAiFormElicitationCapability;
 use crate::mcp::ToolPluginProvenance;
 use crate::runtime::McpRuntimeContext;
 use crate::runtime::emit_duration;
@@ -155,7 +154,7 @@ impl AsyncManagedClient {
         runtime_context: McpRuntimeContext,
         runtime_auth_provider: Option<SharedAuthProvider>,
         client_elicitation_capability: ElicitationCapability,
-        openai_form_elicitation_capability: OpenAiFormElicitationCapability,
+        supports_openai_form_elicitation: bool,
     ) -> Self {
         let tool_filter = server
             .configured_config()
@@ -209,7 +208,7 @@ impl AsyncManagedClient {
                         elicitation_requests,
                         codex_apps_tools_cache_context,
                         client_elicitation_capability,
-                        openai_form_elicitation_capability,
+                        supports_openai_form_elicitation,
                     },
                 )
                 .await
@@ -489,11 +488,11 @@ async fn start_server_task(
         elicitation_requests,
         codex_apps_tools_cache_context,
         client_elicitation_capability,
-        openai_form_elicitation_capability,
+        supports_openai_form_elicitation,
     } = params;
     let params = mcp_initialize_request_params(
         client_elicitation_capability,
-        openai_form_elicitation_capability,
+        supports_openai_form_elicitation,
     );
 
     let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
@@ -556,18 +555,15 @@ async fn start_server_task(
 
 fn mcp_initialize_request_params(
     client_elicitation_capability: ElicitationCapability,
-    openai_form_elicitation_capability: OpenAiFormElicitationCapability,
+    supports_openai_form_elicitation: bool,
 ) -> InitializeRequestParams {
     let mut capabilities = ClientCapabilities::default();
     capabilities.elicitation = Some(client_elicitation_capability);
-    match openai_form_elicitation_capability {
-        OpenAiFormElicitationCapability::Unsupported => {}
-        OpenAiFormElicitationCapability::Supported => {
-            capabilities.extensions = Some(BTreeMap::from([(
-                OPENAI_FORM_CAPABILITY.to_string(),
-                JsonObject::new(),
-            )]));
-        }
+    if supports_openai_form_elicitation {
+        capabilities.extensions = Some(BTreeMap::from([(
+            OPENAI_FORM_CAPABILITY.to_string(),
+            JsonObject::new(),
+        )]));
     }
     InitializeRequestParams::new(
         capabilities,
@@ -600,7 +596,7 @@ struct StartServerTaskParams {
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
     client_elicitation_capability: ElicitationCapability,
-    openai_form_elicitation_capability: OpenAiFormElicitationCapability,
+    supports_openai_form_elicitation: bool,
 }
 
 async fn make_rmcp_client(
@@ -697,16 +693,10 @@ mod tests {
 
     #[test]
     fn mcp_initialize_advertises_openai_form_only_when_supported() {
-        let unsupported = mcp_initialize_request_params(
-            ElicitationCapability::default(),
-            OpenAiFormElicitationCapability::Unsupported,
-        );
+        let unsupported = mcp_initialize_request_params(ElicitationCapability::default(), false);
         assert_eq!(unsupported.capabilities.extensions, None);
 
-        let supported = mcp_initialize_request_params(
-            ElicitationCapability::default(),
-            OpenAiFormElicitationCapability::Supported,
-        );
+        let supported = mcp_initialize_request_params(ElicitationCapability::default(), true);
         assert_eq!(
             supported.capabilities.extensions,
             Some(BTreeMap::from([(
