@@ -1881,6 +1881,8 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 - **ChatGPT managed (`chatgpt`)** (recommended): Codex owns the ChatGPT OAuth flow and refresh tokens. Start via `account/login/start` with `type: "chatgpt"` for the browser flow or `type: "chatgptDeviceCode"` for device code; Codex persists tokens to disk and refreshes them automatically.
 - **Personal access token (`personalAccessToken`)**: Codex uses a ChatGPT-backed personal access token loaded outside the app-server login RPCs, such as with `codex login --with-access-token` or `CODEX_ACCESS_TOKEN`.
 
+Single-client stdio clients may include `sourceSurfaceStableId` on `account/login/start` and `account/read`. Codex forwards the current value on authorize, code-exchange, and refresh requests. Remote-control connections to that process inherit the value but cannot replace it; standalone shared and in-process transports use Codex's installation ID instead. The value is optional experiment-analysis context and does not affect authentication decisions.
+
 ### API Overview
 
 - `account/read` — fetch current account info; optionally refresh tokens.
@@ -1919,6 +1921,7 @@ Response examples:
 Field notes:
 
 - `refreshToken` (bool): set `true` to force a token refresh.
+- `sourceSurfaceStableId` (string, optional): updates the value Codex forwards on later managed-auth requests. Send the same value on `account/login/start` so the authorize and code-exchange requests match.
 - `requiresOpenaiAuth` reflects the active provider; when `false`, Codex can run without OpenAI credentials.
 - Amazon Bedrock reports `credentialSource: "codexManaged"` when it uses a Bedrock API key managed by Codex. Otherwise it reports `credentialSource: "awsManaged"` for the external AWS credential path. This identifies the selected credential source; it does not validate that the AWS credential chain can resolve credentials.
 

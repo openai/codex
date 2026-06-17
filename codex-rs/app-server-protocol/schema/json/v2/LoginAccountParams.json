@@ -26,6 +26,13 @@
         "codexStreamlinedLogin": {
           "type": "boolean"
         },
+        "sourceSurfaceStableId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "type": {
           "enum": [
             "chatgpt"
@@ -42,6 +49,13 @@
     },
     {
       "properties": {
+        "sourceSurfaceStableId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "type": {
           "enum": [
             "chatgptDeviceCode"

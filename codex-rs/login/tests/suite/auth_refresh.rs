@@ -62,6 +62,8 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
         bedrock_api_key: None,
     };
     ctx.write_auth(&initial_auth).await?;
+    ctx.auth_manager
+        .set_source_surface_stable_id(Some("codex-source-stable-id".to_string()));
 
     ctx.auth_manager
         .refresh_token_from_authority()
@@ -75,6 +77,7 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
             "client_id": "staging-client",
             "grant_type": "refresh_token",
             "refresh_token": INITIAL_REFRESH_TOKEN,
+            "source_surface_stable_id": "codex-source-stable-id",
         })
     );
 

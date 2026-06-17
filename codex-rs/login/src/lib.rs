@@ -6,6 +6,14 @@ mod device_code_auth;
 mod pkce;
 mod server;
 
+const SOURCE_SURFACE_STABLE_ID_MAX_LENGTH: usize = 128;
+
+fn valid_source_surface_stable_id(value: Option<&str>) -> Option<&str> {
+    value.filter(|value| {
+        !value.trim().is_empty() && value.len() <= SOURCE_SURFACE_STABLE_ID_MAX_LENGTH
+    })
+}
+
 pub use codex_client::BuildCustomCaTransportError as BuildLoginHttpClientError;
 pub use codex_config::types::AuthCredentialsStoreMode;
 pub use device_code_auth::DeviceCode;

@@ -241,6 +241,7 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
     let get_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: false,
+            source_surface_stable_id: None,
         })
         .await?;
     let get_resp: JSONRPCResponse = timeout(
@@ -308,6 +309,7 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
     let get_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: false,
+            source_surface_stable_id: None,
         })
         .await?;
     let get_resp: JSONRPCResponse = timeout(
@@ -376,6 +378,7 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
     let get_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: true,
+            source_surface_stable_id: None,
         })
         .await?;
     let get_resp: JSONRPCResponse = timeout(
@@ -1521,7 +1524,11 @@ async fn login_account_chatgpt_includes_forced_workspace_query_param() -> Result
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let request_id = mcp.send_login_account_chatgpt_request().await?;
+    let request_id = mcp
+        .send_login_account_chatgpt_request_with_source_surface_stable_id(Some(
+            "codex-source-stable-id",
+        ))
+        .await?;
     let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
@@ -1535,6 +1542,16 @@ async fn login_account_chatgpt_includes_forced_workspace_query_param() -> Result
     assert!(
         auth_url.contains(&format!("allowed_workspace_id={WORKSPACE_ID_ALLOWED}")),
         "auth URL should include forced workspace"
+    );
+    let auth_url = Url::parse(&auth_url)?;
+    let query = auth_url
+        .query_pairs()
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(
+        query
+            .get("source_surface_stable_id")
+            .map(std::convert::AsRef::as_ref),
+        Some("codex-source-stable-id")
     );
     Ok(())
 }
@@ -1600,6 +1617,7 @@ async fn get_account_no_auth() -> Result<()> {
 
     let params = GetAccountParams {
         refresh_token: false,
+        source_surface_stable_id: None,
     };
     let request_id = mcp.send_get_account_request(params).await?;
 
@@ -1641,6 +1659,7 @@ async fn get_account_with_api_key() -> Result<()> {
 
     let params = GetAccountParams {
         refresh_token: false,
+        source_surface_stable_id: None,
     };
     let request_id = mcp.send_get_account_request(params).await?;
 
@@ -1675,6 +1694,7 @@ async fn get_account_when_auth_not_required() -> Result<()> {
 
     let params = GetAccountParams {
         refresh_token: false,
+        source_surface_stable_id: None,
     };
     let request_id = mcp.send_get_account_request(params).await?;
 
@@ -1716,6 +1736,7 @@ region = "us-west-2"
 
     let params = GetAccountParams {
         refresh_token: false,
+        source_surface_stable_id: None,
     };
     let request_id = mcp.send_get_account_request(params).await?;
 
@@ -1760,6 +1781,7 @@ async fn get_account_with_managed_bedrock_provider() -> Result<()> {
     let request_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: false,
+            source_surface_stable_id: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -1805,6 +1827,7 @@ async fn get_account_with_chatgpt() -> Result<()> {
 
     let params = GetAccountParams {
         refresh_token: false,
+        source_surface_stable_id: None,
     };
     let request_id = mcp.send_get_account_request(params).await?;
 
@@ -1889,6 +1912,7 @@ async fn get_account_omits_chatgpt_after_permanent_refresh_failure() -> Result<(
     let request_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: false,
+            source_surface_stable_id: None,
         })
         .await?;
 
@@ -1932,6 +1956,7 @@ async fn get_account_with_chatgpt_missing_plan_claim_returns_unknown() -> Result
 
     let params = GetAccountParams {
         refresh_token: false,
+        source_surface_stable_id: None,
     };
     let request_id = mcp.send_get_account_request(params).await?;
 

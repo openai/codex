@@ -130,6 +130,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
         forced_chatgpt_workspace_id: Some(vec![chatgpt_account_id.to_string()]),
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        source_surface_stable_id: None,
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -193,6 +194,7 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        source_surface_stable_id: None,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -237,6 +239,7 @@ async fn login_server_includes_forced_workspaces_as_one_query_param() -> Result<
         ]),
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        source_surface_stable_id: None,
     };
     let server = run_login_server(opts)?;
     let auth_url = Url::parse(&server.auth_url)?;
@@ -276,6 +279,7 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
         forced_chatgpt_workspace_id: Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        source_surface_stable_id: None,
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -337,6 +341,7 @@ async fn oauth_access_denied_missing_entitlement_blocks_login_with_clear_error()
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        source_surface_stable_id: None,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -406,6 +411,7 @@ async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        source_surface_stable_id: None,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -553,6 +559,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        source_surface_stable_id: None,
     };
 
     let first_server = run_login_server(first_opts)?;
@@ -575,6 +582,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        source_surface_stable_id: None,
     };
 
     let second_server = run_login_server(second_opts)?;

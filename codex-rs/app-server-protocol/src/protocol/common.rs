@@ -1924,6 +1924,7 @@ mod tests {
             request_id: request_id(),
             params: v2::GetAccountParams {
                 refresh_token: false,
+                source_surface_stable_id: None,
             },
         };
         assert_eq!(
@@ -2624,6 +2625,7 @@ mod tests {
             request_id: RequestId::Integer(3),
             params: v2::LoginAccountParams::Chatgpt {
                 codex_streamlined_login: false,
+                source_surface_stable_id: None,
             },
         };
         assert_eq!(
@@ -2631,7 +2633,8 @@ mod tests {
                 "method": "account/login/start",
                 "id": 3,
                 "params": {
-                    "type": "chatgpt"
+                    "type": "chatgpt",
+                    "sourceSurfaceStableId": null
                 }
             }),
             serde_json::to_value(&request)?,
@@ -2645,6 +2648,7 @@ mod tests {
             request_id: RequestId::Integer(3),
             params: v2::LoginAccountParams::Chatgpt {
                 codex_streamlined_login: true,
+                source_surface_stable_id: None,
             },
         };
         assert_eq!(
@@ -2653,7 +2657,8 @@ mod tests {
                 "id": 3,
                 "params": {
                     "type": "chatgpt",
-                    "codexStreamlinedLogin": true
+                    "codexStreamlinedLogin": true,
+                    "sourceSurfaceStableId": null
                 }
             }),
             serde_json::to_value(&request)?,
@@ -2665,14 +2670,17 @@ mod tests {
     fn serialize_account_login_chatgpt_device_code() -> Result<()> {
         let request = ClientRequest::LoginAccount {
             request_id: RequestId::Integer(4),
-            params: v2::LoginAccountParams::ChatgptDeviceCode,
+            params: v2::LoginAccountParams::ChatgptDeviceCode {
+                source_surface_stable_id: None,
+            },
         };
         assert_eq!(
             json!({
                 "method": "account/login/start",
                 "id": 4,
                 "params": {
-                    "type": "chatgptDeviceCode"
+                    "type": "chatgptDeviceCode",
+                    "sourceSurfaceStableId": null
                 }
             }),
             serde_json::to_value(&request)?,
@@ -2728,13 +2736,16 @@ mod tests {
             request_id: RequestId::Integer(6),
             params: v2::GetAccountParams {
                 refresh_token: false,
+                source_surface_stable_id: None,
             },
         };
         assert_eq!(
             json!({
                 "method": "account/read",
                 "id": 6,
-                "params": {}
+                "params": {
+                    "sourceSurfaceStableId": null
+                }
             }),
             serde_json::to_value(&request)?,
         );
@@ -2742,6 +2753,7 @@ mod tests {
             request_id: RequestId::Integer(7),
             params: v2::GetAccountParams {
                 refresh_token: true,
+                source_surface_stable_id: None,
             },
         };
         assert_eq!(
@@ -2749,7 +2761,8 @@ mod tests {
                 "method": "account/read",
                 "id": 7,
                 "params": {
-                    "refreshToken": true
+                    "refreshToken": true,
+                    "sourceSurfaceStableId": null
                 }
             }),
             serde_json::to_value(&request)?,

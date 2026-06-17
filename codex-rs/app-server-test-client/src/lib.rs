@@ -1720,6 +1720,7 @@ impl CodexClient {
             request_id: request_id.clone(),
             params: codex_app_server_protocol::LoginAccountParams::Chatgpt {
                 codex_streamlined_login: false,
+                source_surface_stable_id: None,
             },
         };
 
@@ -1730,7 +1731,9 @@ impl CodexClient {
         let request_id = self.request_id();
         let request = ClientRequest::LoginAccount {
             request_id: request_id.clone(),
-            params: codex_app_server_protocol::LoginAccountParams::ChatgptDeviceCode,
+            params: codex_app_server_protocol::LoginAccountParams::ChatgptDeviceCode {
+                source_surface_stable_id: None,
+            },
         };
 
         self.send_request(request, request_id, "account/login/start")

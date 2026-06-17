@@ -5,6 +5,7 @@ use codex_config::CloudConfigBundleLoadError;
 use codex_config::CloudConfigBundleLoadErrorCode;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_core::resolve_installation_id;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use std::path::PathBuf;
@@ -67,5 +68,10 @@ pub async fn cloud_config_bundle_loader_for_storage(
         keyring_backend_kind,
     )
     .await;
+    if let Ok(codex_home) = codex_home.clone().try_into()
+        && let Ok(installation_id) = resolve_installation_id(&codex_home).await
+    {
+        auth_manager.set_source_surface_stable_id(Some(installation_id));
+    }
     cloud_config_bundle_loader(auth_manager, chatgpt_base_url, codex_home)
 }

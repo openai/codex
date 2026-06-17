@@ -1057,11 +1057,13 @@ fn persist_tokens(
 async fn request_chatgpt_token_refresh(
     refresh_token: String,
     client: &CodexHttpClient,
+    source_surface_stable_id: Option<String>,
 ) -> Result<RefreshResponse, RefreshTokenError> {
     let refresh_request = RefreshRequest {
         client_id: oauth_client_id(),
         grant_type: "refresh_token",
         refresh_token,
+        source_surface_stable_id,
     };
 
     let endpoint = refresh_token_endpoint();
@@ -1157,6 +1159,8 @@ struct RefreshRequest {
     client_id: String,
     grant_type: &'static str,
     refresh_token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_surface_stable_id: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -1526,6 +1530,7 @@ pub struct AuthManager {
     chatgpt_base_url: Option<String>,
     refresh_lock: Semaphore,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
+    source_surface_stable_id: RwLock<Option<String>>,
 }
 
 /// Configuration view required to construct a shared [`AuthManager`].
@@ -1630,6 +1635,7 @@ impl AuthManager {
             chatgpt_base_url,
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
+            source_surface_stable_id: RwLock::new(None),
         }
     }
 
@@ -1652,6 +1658,7 @@ impl AuthManager {
             chatgpt_base_url: None,
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
+            source_surface_stable_id: RwLock::new(None),
         })
     }
 
@@ -1673,6 +1680,7 @@ impl AuthManager {
             chatgpt_base_url: None,
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
+            source_surface_stable_id: RwLock::new(None),
         })
     }
 
@@ -1694,6 +1702,7 @@ impl AuthManager {
             external_auth: RwLock::new(Some(
                 Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
             )),
+            source_surface_stable_id: RwLock::new(None),
         })
     }
 
@@ -1904,6 +1913,20 @@ impl AuthManager {
 
     pub fn codex_api_key_env_enabled(&self) -> bool {
         self.enable_codex_api_key_env
+    }
+
+    pub fn source_surface_stable_id(&self) -> Option<String> {
+        self.source_surface_stable_id
+            .read()
+            .map(|value| value.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn set_source_surface_stable_id(&self, value: Option<String>) {
+        let value = crate::valid_source_surface_stable_id(value.as_deref()).map(str::to_owned);
+        if let Ok(mut current) = self.source_surface_stable_id.write() {
+            *current = value;
+        }
     }
 
     /// Convenience constructor returning an `Arc` wrapper.
@@ -2210,7 +2233,12 @@ impl AuthManager {
         auth: &ChatgptAuth,
         refresh_token: String,
     ) -> Result<(), RefreshTokenError> {
-        let refresh_response = request_chatgpt_token_refresh(refresh_token, auth.client()).await?;
+        let refresh_response = request_chatgpt_token_refresh(
+            refresh_token,
+            auth.client(),
+            self.source_surface_stable_id(),
+        )
+        .await?;
 
         persist_tokens(
             auth.storage(),

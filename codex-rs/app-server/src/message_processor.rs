@@ -46,6 +46,7 @@ use crate::skills_watcher::SkillsWatcher;
 use crate::thread_state::ConnectionCapabilities;
 use crate::thread_state::ThreadStateManager;
 use crate::transport::AppServerTransport;
+use crate::transport::ConnectionOrigin;
 use crate::transport::RemoteControlHandle;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppServerRpcTransport;
@@ -213,6 +214,7 @@ pub(crate) struct MessageProcessor {
 #[derive(Debug)]
 pub(crate) struct ConnectionSessionState {
     pub(crate) rpc_gate: Arc<ConnectionRpcGate>,
+    origin: ConnectionOrigin,
     initialized: OnceLock<InitializedConnectionSessionState>,
 }
 
@@ -225,16 +227,11 @@ pub(crate) struct InitializedConnectionSessionState {
     pub(crate) request_attestation: bool,
 }
 
-impl Default for ConnectionSessionState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ConnectionSessionState {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(origin: ConnectionOrigin) -> Self {
         Self {
             rpc_gate: Arc::new(ConnectionRpcGate::new()),
+            origin,
             initialized: OnceLock::new(),
         }
     }
@@ -884,6 +881,7 @@ impl MessageProcessor {
         let serialization_scope = codex_request.serialization_scope();
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
+        let accepts_client_source_surface_stable_id = session.origin == ConnectionOrigin::Stdio;
         let error_request_id = connection_request_id.clone();
         let rpc_gate = Arc::clone(&session.rpc_gate);
         let processor = Arc::clone(self);
@@ -899,6 +897,7 @@ impl MessageProcessor {
                         request_context,
                         app_server_client_name,
                         client_version,
+                        accepts_client_source_surface_stable_id,
                     )
                     .await;
                 if let Err(error) = result {
@@ -928,6 +927,7 @@ impl MessageProcessor {
         request_context: RequestContext,
         app_server_client_name: Option<String>,
         client_version: Option<String>,
+        accepts_client_source_surface_stable_id: bool,
     ) -> Result<(), JSONRPCErrorError> {
         let connection_id = connection_request_id.connection_id;
         let request_id = ConnectionRequestId {
@@ -1378,7 +1378,11 @@ impl MessageProcessor {
             }
             ClientRequest::LoginAccount { params, .. } => {
                 self.account_processor
-                    .login_account(request_id.clone(), params)
+                    .login_account(
+                        request_id.clone(),
+                        params,
+                        accepts_client_source_surface_stable_id,
+                    )
                     .await
             }
             ClientRequest::LogoutAccount { .. } => {
@@ -1390,7 +1394,9 @@ impl MessageProcessor {
                 self.account_processor.cancel_login_account(params).await
             }
             ClientRequest::GetAccount { params, .. } => {
-                self.account_processor.get_account(params).await
+                self.account_processor
+                    .get_account(params, accepts_client_source_surface_stable_id)
+                    .await
             }
             ClientRequest::GetAuthStatus { params, .. } => {
                 self.account_processor.get_auth_status(params).await

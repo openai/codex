@@ -1260,8 +1260,19 @@ impl TestAppServer {
 
     /// Send an `account/login/start` JSON-RPC request for ChatGPT login.
     pub async fn send_login_account_chatgpt_request(&mut self) -> anyhow::Result<i64> {
+        self.send_login_account_chatgpt_request_with_source_surface_stable_id(
+            /*source_surface_stable_id*/ None,
+        )
+        .await
+    }
+
+    pub async fn send_login_account_chatgpt_request_with_source_surface_stable_id(
+        &mut self,
+        source_surface_stable_id: Option<&str>,
+    ) -> anyhow::Result<i64> {
         let params = serde_json::json!({
-            "type": "chatgpt"
+            "type": "chatgpt",
+            "sourceSurfaceStableId": source_surface_stable_id,
         });
         self.send_request("account/login/start", Some(params)).await
     }
