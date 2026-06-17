@@ -64,33 +64,20 @@ const LOADING_ANIMATION_DELAY: Duration = Duration::from_secs(1);
 const LOADING_ANIMATION_INTERVAL: Duration = Duration::from_millis(100);
 const APPS_HELP_ARTICLE_URL: &str = "https://help.openai.com/en/articles/11487775-apps-in-chatgpt";
 const PERSONAL_MARKETPLACE_RELATIVE_PATH: &str = ".agents/plugins/marketplace.json";
+const REMOTE_LOADING_TAB_ID_PREFIX: &str = "remote-loading:";
+const REMOTE_EMPTY_TAB_ID_PREFIX: &str = "remote-empty:";
+const REMOTE_ERROR_TAB_ID_PREFIX: &str = "remote-error:";
 const WORKSPACE_SECTION_MARKETPLACE_NAMES: &[&str] = &[REMOTE_WORKSPACE_MARKETPLACE_NAME];
 const SHARED_WITH_ME_SECTION_MARKETPLACE_NAMES: &[&str] = &[
     REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
     REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
     REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
 ];
-const WORKSPACE_SECTION_TAB_IDS: &[&str] = &[
-    "marketplace:workspace-directory",
-    "remote-loading:workspace-loading",
-    "remote-empty:workspace",
-    "remote-error:workspace",
-];
-const SHARED_WITH_ME_SECTION_TAB_IDS: &[&str] = &[
-    "marketplace:workspace-shared-with-me",
-    "marketplace:workspace-shared-with-me-private",
-    "marketplace:workspace-shared-with-me-unlisted",
-    "remote-loading:shared-with-me-loading",
-    "remote-empty:shared-with-me",
-    "remote-error:shared-with-me",
-];
 const WORKSPACE_SECTION_TAB_ORDER: u8 = 0;
 const SHARED_WITH_ME_SECTION_TAB_ORDER: u8 = 1;
 const SHARED_WITH_ME_LINK_SECTION_TAB_ORDER: u8 = 2;
 const LOCAL_MARKETPLACE_TAB_ORDER: u8 = 3;
 const OTHER_MARKETPLACE_TAB_ORDER: u8 = 4;
-const WORKSPACE_SECTION_FALLBACK_TAB_ORDER: u8 = 5;
-const SHARED_WITH_ME_SECTION_FALLBACK_TAB_ORDER: u8 = 6;
 
 #[derive(Debug, Clone)]
 struct PreferredLocalPluginSource {
@@ -112,15 +99,18 @@ enum MarketplaceProduct {
 
 impl MarketplaceProduct {
     fn from_marketplace(marketplace: &PluginMarketplaceEntry) -> Self {
-        if marketplace
-            .path
-            .as_ref()
-            .is_some_and(is_personal_marketplace_path)
-        {
+        Self::from_marketplace_parts(&marketplace.name, marketplace.path.as_ref())
+    }
+
+    fn from_marketplace_parts(
+        marketplace_name: &str,
+        marketplace_path: Option<&AbsolutePathBuf>,
+    ) -> Self {
+        if marketplace_path.is_some_and(is_personal_marketplace_path) {
             return Self::Local;
         }
 
-        Self::from_marketplace_name(&marketplace.name)
+        Self::from_marketplace_name(marketplace_name)
     }
 
     fn from_marketplace_name(marketplace_name: &str) -> Self {
@@ -172,6 +162,8 @@ enum RemoteMarketplaceSection {
 }
 
 impl RemoteMarketplaceSection {
+    const ALL: [Self; 2] = [Self::Workspace, Self::SharedWithMe];
+
     fn fallback_tab(
         self,
         marketplaces: &[&PluginMarketplaceEntry],
@@ -204,7 +196,7 @@ impl RemoteMarketplaceSection {
             return None;
         };
 
-        Some((self.fallback_tab_order(), tab))
+        Some((self.tab_order(), tab))
     }
 
     fn id(self) -> &'static str {
@@ -249,11 +241,26 @@ impl RemoteMarketplaceSection {
         }
     }
 
-    fn fallback_tab_order(self) -> u8 {
+    fn tab_order(self) -> u8 {
         match self {
-            Self::Workspace => WORKSPACE_SECTION_FALLBACK_TAB_ORDER,
-            Self::SharedWithMe => SHARED_WITH_ME_SECTION_FALLBACK_TAB_ORDER,
+            Self::Workspace => WORKSPACE_SECTION_TAB_ORDER,
+            Self::SharedWithMe => SHARED_WITH_ME_SECTION_TAB_ORDER,
         }
+    }
+
+    fn is_fallback_tab_id(self, tab_id: &str) -> bool {
+        tab_id.strip_prefix(REMOTE_LOADING_TAB_ID_PREFIX) == Some(self.loading_tab_id())
+            || tab_id.strip_prefix(REMOTE_EMPTY_TAB_ID_PREFIX) == Some(self.id())
+            || tab_id.strip_prefix(REMOTE_ERROR_TAB_ID_PREFIX) == Some(self.id())
+    }
+
+    fn contains_tab_id(self, tab_id: &str) -> bool {
+        self.is_fallback_tab_id(tab_id)
+            || tab_id
+                .strip_prefix(MARKETPLACE_TAB_ID_PREFIX)
+                .is_some_and(|marketplace_name| {
+                    self.marketplace_names().contains(&marketplace_name)
+                })
     }
 }
 
@@ -1003,9 +1010,13 @@ impl ChatWidget {
         plugins_response: &PluginListResponse,
         plugin: &PluginDetail,
     ) -> SelectionViewParams {
-        let marketplace_label = marketplace_product_label_from_name(&plugin.marketplace_name)
-            .map(str::to_string)
-            .unwrap_or_else(|| plugin.marketplace_name.clone());
+        let marketplace_label = MarketplaceProduct::from_marketplace_parts(
+            &plugin.marketplace_name,
+            plugin.marketplace_path.as_ref(),
+        )
+        .label()
+        .map(str::to_string)
+        .unwrap_or_else(|| plugin.marketplace_name.clone());
         let display_name = plugin_display_name(&plugin.summary);
         let detail_status_label = plugin_detail_status_label(&plugin.summary);
         let mut header = ColumnRenderable::new();
@@ -1603,17 +1614,12 @@ fn remote_section_marketplace_tab_id(
     saved_tab_id: &str,
     marketplaces: &[PluginMarketplaceEntry],
 ) -> Option<String> {
-    let marketplace_name_matches = match saved_tab_id {
-        "remote-loading:workspace-loading"
-        | "remote-empty:workspace"
-        | "remote-error:workspace" => WORKSPACE_SECTION_MARKETPLACE_NAMES,
-        "remote-loading:shared-with-me-loading"
-        | "remote-empty:shared-with-me"
-        | "remote-error:shared-with-me" => SHARED_WITH_ME_SECTION_MARKETPLACE_NAMES,
-        _ => return None,
-    };
+    let section = RemoteMarketplaceSection::ALL
+        .into_iter()
+        .find(|section| section.is_fallback_tab_id(saved_tab_id))?;
 
-    marketplace_name_matches
+    section
+        .marketplace_names()
         .iter()
         .find_map(|marketplace_name| {
             marketplaces
@@ -1632,22 +1638,12 @@ fn plugin_tab_id_matching_saved_id(saved_tab_id: &str, tabs: &[SelectionTab]) ->
         return Some(tab_id);
     }
 
-    let candidate_tab_ids = match saved_tab_id {
-        "remote-loading:workspace-loading"
-        | "remote-empty:workspace"
-        | "remote-error:workspace"
-        | "marketplace:workspace-directory" => WORKSPACE_SECTION_TAB_IDS,
-        "remote-loading:shared-with-me-loading"
-        | "remote-empty:shared-with-me"
-        | "remote-error:shared-with-me"
-        | "marketplace:workspace-shared-with-me"
-        | "marketplace:workspace-shared-with-me-private"
-        | "marketplace:workspace-shared-with-me-unlisted" => SHARED_WITH_ME_SECTION_TAB_IDS,
-        _ => return None,
-    };
+    let section = RemoteMarketplaceSection::ALL
+        .into_iter()
+        .find(|section| section.contains_tab_id(saved_tab_id))?;
 
     tabs.iter()
-        .find(|tab| candidate_tab_ids.contains(&tab.id.as_str()))
+        .find(|tab| section.contains_tab_id(&tab.id))
         .map(|tab| tab.id.clone())
 }
 
@@ -1732,7 +1728,7 @@ fn plugin_remote_section_error<'a>(
 
 fn remote_section_loading_tab(id: &str, label: &str) -> SelectionTab {
     SelectionTab {
-        id: format!("remote-loading:{id}"),
+        id: format!("{REMOTE_LOADING_TAB_ID_PREFIX}{id}"),
         label: label.to_string(),
         header: plugins_header(
             format!("Loading {label} plugins."),
@@ -1749,7 +1745,7 @@ fn remote_section_empty_tab(
     item_description: &str,
 ) -> SelectionTab {
     SelectionTab {
-        id: format!("remote-empty:{id}"),
+        id: format!("{REMOTE_EMPTY_TAB_ID_PREFIX}{id}"),
         label: label.to_string(),
         header: plugins_header(
             format!("{label}."),
@@ -1766,7 +1762,7 @@ fn remote_section_empty_tab(
 
 fn remote_section_error_tab(section_error: &PluginRemoteSectionError) -> SelectionTab {
     SelectionTab {
-        id: format!("remote-error:{}", section_error.section_id),
+        id: format!("{REMOTE_ERROR_TAB_ID_PREFIX}{}", section_error.section_id),
         label: section_error.label.clone(),
         header: plugins_header(
             format!("{} unavailable.", section_error.label),

@@ -586,10 +586,17 @@ async fn plugins_popup_removes_user_configured_marketplace_flow() {
 }
 
 #[tokio::test]
-async fn plugin_detail_popup_snapshot_shows_install_actions_and_capability_summaries() {
+async fn plugin_detail_popup_snapshot_labels_personal_marketplace_as_local() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
+    let marketplace_name = "personal-marketplace";
+    let personal_marketplace_path = AbsolutePathBuf::try_from(
+        dirs::home_dir()
+            .expect("home directory")
+            .join(".agents/plugins/marketplace.json"),
+    )
+    .expect("absolute personal marketplace path");
     let summary = plugins_test_summary(
         "plugin-figma",
         "figma",
@@ -599,28 +606,29 @@ async fn plugin_detail_popup_snapshot_shows_install_actions_and_capability_summa
         /*enabled*/ true,
         PluginInstallPolicy::Available,
     );
-    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
-        summary.clone(),
-    ])]);
+    let response = plugins_test_response(vec![PluginMarketplaceEntry {
+        name: marketplace_name.to_string(),
+        path: Some(personal_marketplace_path.clone()),
+        interface: None,
+        plugins: vec![summary.clone()],
+    }]);
     let cwd = chat.config.cwd.clone();
     chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
     chat.add_plugins_output();
-    chat.on_plugin_detail_loaded(
-        cwd.to_path_buf(),
-        Ok(PluginReadResponse {
-            plugin: plugins_test_detail(
-                summary,
-                Some("Turn Figma files into implementation context."),
-                &["design-review", "extract-copy"],
-                &[
-                    (codex_app_server_protocol::HookEventName::PreToolUse, 1),
-                    (codex_app_server_protocol::HookEventName::Stop, 2),
-                ],
-                &["Figma", "Slack"],
-                &["figma-mcp", "docs-mcp"],
-            ),
-        }),
+    let mut plugin = plugins_test_detail(
+        summary,
+        Some("Turn Figma files into implementation context."),
+        &["design-review", "extract-copy"],
+        &[
+            (codex_app_server_protocol::HookEventName::PreToolUse, 1),
+            (codex_app_server_protocol::HookEventName::Stop, 2),
+        ],
+        &["Figma", "Slack"],
+        &["figma-mcp", "docs-mcp"],
     );
+    plugin.marketplace_name = marketplace_name.to_string();
+    plugin.marketplace_path = Some(personal_marketplace_path);
+    chat.on_plugin_detail_loaded(cwd.to_path_buf(), Ok(PluginReadResponse { plugin }));
 
     let popup = render_bottom_popup(&chat, /*width*/ 100);
     assert_chatwidget_snapshot!(
@@ -685,7 +693,7 @@ async fn plugins_popup_remote_row_opens_remote_detail() {
     let popup = render_loaded_plugins_popup(
         &mut chat,
         plugins_test_response(vec![PluginMarketplaceEntry {
-            name: "workspace-directory".to_string(),
+            name: REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string(),
             path: None,
             interface: Some(MarketplaceInterface {
                 display_name: Some("Workspace".to_string()),
@@ -725,7 +733,7 @@ async fn plugins_popup_remote_row_opens_remote_detail() {
             assert_eq!(params.marketplace_path, None);
             assert_eq!(
                 params.remote_marketplace_name,
-                Some("workspace-directory".to_string())
+                Some(REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string())
             );
             assert_eq!(params.plugin_name, "plugins~Plugin_calendar");
         }
@@ -749,7 +757,7 @@ async fn plugin_detail_remote_install_uses_remote_location() {
     chat.on_plugins_loaded(
         cwd.to_path_buf(),
         Ok(plugins_test_response(vec![PluginMarketplaceEntry {
-            name: "workspace-shared-with-me-private".to_string(),
+            name: REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME.to_string(),
             path: None,
             interface: Some(MarketplaceInterface {
                 display_name: Some("Shared with me".to_string()),
@@ -762,7 +770,8 @@ async fn plugin_detail_remote_install_uses_remote_location() {
         cwd.to_path_buf(),
         Ok(PluginReadResponse {
             plugin: PluginDetail {
-                marketplace_name: "workspace-shared-with-me-private".to_string(),
+                marketplace_name: REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME
+                    .to_string(),
                 marketplace_path: None,
                 summary,
                 share_url: None,
@@ -800,7 +809,10 @@ async fn plugin_detail_remote_install_uses_remote_location() {
             plugin_name,
             plugin_display_name,
         }) => {
-            assert_eq!(marketplace_name, "workspace-shared-with-me-private");
+            assert_eq!(
+                marketplace_name,
+                REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME
+            );
             assert_eq!(plugin_name, "plugins~Plugin_linear");
             assert_eq!(plugin_display_name, "Linear");
         }
@@ -824,7 +836,7 @@ async fn plugin_detail_remote_uninstall_uses_remote_plugin_id() {
     chat.on_plugins_loaded(
         cwd.to_path_buf(),
         Ok(plugins_test_response(vec![PluginMarketplaceEntry {
-            name: "workspace-shared-with-me-private".to_string(),
+            name: REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME.to_string(),
             path: None,
             interface: Some(MarketplaceInterface {
                 display_name: Some("Shared with me".to_string()),
@@ -837,7 +849,8 @@ async fn plugin_detail_remote_uninstall_uses_remote_plugin_id() {
         cwd.to_path_buf(),
         Ok(PluginReadResponse {
             plugin: PluginDetail {
-                marketplace_name: "workspace-shared-with-me-private".to_string(),
+                marketplace_name: REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME
+                    .to_string(),
                 marketplace_path: None,
                 summary,
                 share_url: None,
@@ -884,7 +897,7 @@ async fn plugin_detail_remote_without_remote_id_disables_uninstall_action() {
     let summary = PluginSummary {
         source: PluginSource::Remote,
         ..plugins_test_summary(
-            "linear@workspace-shared-with-me-private",
+            &format!("linear@{REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME}"),
             "linear",
             Some("Linear"),
             Some("Issue tracking."),
@@ -897,7 +910,7 @@ async fn plugin_detail_remote_without_remote_id_disables_uninstall_action() {
     chat.on_plugins_loaded(
         cwd.to_path_buf(),
         Ok(plugins_test_response(vec![PluginMarketplaceEntry {
-            name: "workspace-shared-with-me-private".to_string(),
+            name: REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME.to_string(),
             path: None,
             interface: Some(MarketplaceInterface {
                 display_name: Some("Shared with me".to_string()),
@@ -910,7 +923,8 @@ async fn plugin_detail_remote_without_remote_id_disables_uninstall_action() {
         cwd.to_path_buf(),
         Ok(PluginReadResponse {
             plugin: PluginDetail {
-                marketplace_name: "workspace-shared-with-me-private".to_string(),
+                marketplace_name: REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME
+                    .to_string(),
                 marketplace_path: None,
                 summary,
                 share_url: None,
@@ -1261,7 +1275,7 @@ async fn plugins_popup_installed_remote_row_keeps_remote_detail_when_local_share
         plugins_test_response(vec![
             plugins_test_curated_marketplace(vec![local_summary]),
             PluginMarketplaceEntry {
-                name: "workspace-shared-with-me-private".to_string(),
+                name: REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME.to_string(),
                 path: None,
                 interface: Some(MarketplaceInterface {
                     display_name: Some("Shared with me".to_string()),
@@ -1303,7 +1317,7 @@ async fn plugins_popup_installed_remote_row_keeps_remote_detail_when_local_share
             assert_eq!(params.marketplace_path, None);
             assert_eq!(
                 params.remote_marketplace_name,
-                Some("workspace-shared-with-me-private".to_string())
+                Some(REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME.to_string())
             );
             assert_eq!(params.plugin_name, remote_plugin_id);
         }
