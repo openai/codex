@@ -1,4 +1,6 @@
+use crate::PathConvention;
 use crate::PathUri;
+use crate::is_windows_separator_byte;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -33,10 +35,6 @@ use ts_rs::TS;
 pub struct LegacyAppPathString(String);
 
 impl LegacyAppPathString {
-    pub(super) fn from_str(path: &str) -> Self {
-        Self(path.to_string())
-    }
-
     /// Renders an absolute path using the current host's path convention.
     pub fn from_abs_path(path: &AbsolutePathBuf) -> Self {
         Self(path.to_string_lossy().into_owned())
@@ -69,13 +67,11 @@ impl LegacyAppPathString {
         &self,
         convention: PathConvention,
     ) -> Result<PathUri, LegacyAppPathStringError> {
-        let path = match convention {
-            PathConvention::Posix => parse_posix_path(&self.0),
-            PathConvention::Windows => parse_windows_path(&self.0),
-        };
-        path.ok_or_else(|| LegacyAppPathStringError::InvalidNativePath {
-            path: self.0.clone(),
-            convention,
+        PathUri::from_absolute_native_path(&self.0, convention).ok_or_else(|| {
+            LegacyAppPathStringError::InvalidNativePath {
+                path: self.0.clone(),
+                convention,
+            }
         })
     }
 
@@ -113,88 +109,6 @@ impl From<AbsolutePathBuf> for LegacyAppPathString {
     fn from(path: AbsolutePathBuf) -> Self {
         Self::from_abs_path(&path)
     }
-}
-
-fn parse_posix_path(path: &str) -> Option<PathUri> {
-    let path = path.strip_prefix('/')?;
-    if path.contains('\0') {
-        return Some(PathUri::from_opaque_path_bytes(
-            format!("/{path}").as_bytes(),
-        ));
-    }
-    path_uri_from_segments(/*host*/ None, path.split('/'))
-}
-
-fn parse_windows_path(path: &str) -> Option<PathUri> {
-    let bytes = path.as_bytes();
-    let uses_namespace = matches!(
-        bytes,
-        [first, second, namespace @ (b'.' | b'?'), separator, ..]
-            if is_windows_separator_byte(*first)
-                && is_windows_separator_byte(*second)
-                && is_windows_separator_byte(*separator)
-                && matches!(*namespace, b'.' | b'?')
-    );
-    if uses_namespace || path.contains('\0') {
-        return Some(windows_opaque_path_uri(path));
-    }
-
-    if matches!(
-        bytes,
-        [drive, b':', separator, ..]
-            if drive.is_ascii_alphabetic() && is_windows_separator_byte(*separator)
-    ) {
-        return path_uri_from_segments(
-            /*host*/ None,
-            std::iter::once(&path[..2]).chain(path[3..].split(is_windows_separator_char)),
-        );
-    }
-
-    if matches!(bytes, [first, second, ..]
-        if is_windows_separator_byte(*first) && is_windows_separator_byte(*second))
-    {
-        let mut components = path[2..].split(is_windows_separator_char);
-        let host = components.next().filter(|host| !host.is_empty())?;
-        let share = components.next().filter(|share| !share.is_empty())?;
-        return path_uri_from_segments(Some(host), std::iter::once(share).chain(components))
-            .or_else(|| Some(windows_opaque_path_uri(path)));
-    }
-
-    None
-}
-
-fn path_uri_from_segments<'a>(
-    host: Option<&str>,
-    segments: impl Iterator<Item = &'a str>,
-) -> Option<PathUri> {
-    let mut url = url::Url::parse("file:///").ok()?;
-    if let Some(host) = host {
-        url.set_host(Some(host)).ok()?;
-    }
-    {
-        let mut url_segments = url.path_segments_mut().ok()?;
-        url_segments.clear();
-        for segment in segments {
-            url_segments.push(segment);
-        }
-    }
-    PathUri::try_from(url).ok()
-}
-
-fn windows_opaque_path_uri(path: &str) -> PathUri {
-    let path_bytes = path
-        .encode_utf16()
-        .flat_map(u16::to_le_bytes)
-        .collect::<Vec<_>>();
-    PathUri::from_opaque_path_bytes(&path_bytes)
-}
-
-fn is_windows_separator_char(character: char) -> bool {
-    matches!(character, '\\' | '/')
-}
-
-fn is_windows_separator_byte(character: u8) -> bool {
-    matches!(character, b'\\' | b'/')
 }
 
 fn render_opaque_fallback(
@@ -370,41 +284,6 @@ pub enum LegacyAppPathStringError {
         path: String,
         convention: PathConvention,
     },
-}
-
-/// Path syntax used to render a [`PathUri`] as an operating-system path.
-///
-/// This describes path grammar rather than a specific operating system because
-/// Linux and macOS share the POSIX representation relevant here.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
-pub enum PathConvention {
-    Posix,
-    Windows,
-}
-
-impl PathConvention {
-    /// Returns the path convention used by the current process.
-    #[cfg(windows)]
-    pub const fn native() -> Self {
-        Self::Windows
-    }
-
-    /// Returns the path convention used by the current process.
-    #[cfg(unix)]
-    pub const fn native() -> Self {
-        Self::Posix
-    }
-}
-
-impl fmt::Display for PathConvention {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Posix => f.write_str("POSIX"),
-            Self::Windows => f.write_str("Windows"),
-        }
-    }
 }
 
 #[cfg(test)]
