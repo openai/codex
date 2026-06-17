@@ -491,6 +491,32 @@ prefill_token_weight = 0.1
     Ok(())
 }
 
+#[tokio::test]
+async fn load_config_rejects_enabled_rollout_budget_without_limit() -> std::io::Result<()> {
+    for config_toml in [
+        "[features]\nrollout_budget = true\n",
+        "[features.rollout_budget]\nenabled = true\n",
+    ] {
+        let codex_home = tempdir()?;
+        let config_toml: ConfigToml =
+            toml::from_str(config_toml).expect("TOML deserialization should succeed");
+        let err = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await
+        .expect_err("enabled rollout budget without limit_tokens should be rejected");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            err.to_string(),
+            "features.rollout_budget.limit_tokens is required when rollout_budget is enabled"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn rejects_provider_auth_with_env_key() {
     let err = toml::from_str::<ConfigToml>(

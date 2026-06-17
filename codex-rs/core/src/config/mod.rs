@@ -2482,24 +2482,21 @@ fn resolve_rollout_budget_config(
     if !features.enabled(Feature::RolloutBudget) {
         return Ok(None);
     }
+    let missing_limit_error = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.rollout_budget.limit_tokens is required when rollout_budget is enabled",
+        )
+    };
     let Some(FeatureToml::Config(config)) = config_toml
         .features
         .as_ref()
         .and_then(|features| features.rollout_budget.as_ref())
     else {
-        return Ok(None);
+        return Err(missing_limit_error());
     };
     let Some(limit_tokens) = config.limit_tokens else {
-        if config.reminder_interval_tokens.is_some()
-            || config.sampling_token_weight.is_some()
-            || config.prefill_token_weight.is_some()
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "features.rollout_budget settings require limit_tokens",
-            ));
-        }
-        return Ok(None);
+        return Err(missing_limit_error());
     };
     if limit_tokens <= 0 {
         return Err(std::io::Error::new(
