@@ -11,6 +11,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystemFuture;
 use codex_exec_server::FileMetadata;
+use codex_exec_server::FileSystemReadStream;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_FS;
 use codex_exec_server::ReadDirectoryEntry;
@@ -140,6 +141,19 @@ impl ExecutorFileSystem for FailingFileSystem {
         Box::pin(FailingFileSystem::read_file(self, path, sandbox))
     }
 
+    fn read_file_stream<'a>(
+        &'a self,
+        _path: &'a PathUri,
+        _sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
+        Box::pin(async {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "failing filesystem does not support streaming reads",
+            ))
+        })
+    }
+
     fn write_file<'a>(
         &'a self,
         path: &'a PathUri,
@@ -253,7 +267,7 @@ fn resolved_local_environments<const N: usize>(
                         Environment::create_for_tests(/*exec_server_url*/ None)
                             .expect("local environment"),
                     ),
-                    cwd,
+                    PathUri::from_abs_path(&cwd),
                     /*shell*/ None,
                 )
             })

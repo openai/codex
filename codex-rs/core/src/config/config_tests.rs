@@ -1362,6 +1362,92 @@ sandbox = "elevated"
 }
 
 #[tokio::test]
+async fn respect_system_proxy_feature_resolves_enabled() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            features: Some(
+                toml::from_str(
+                    r#"
+respect_system_proxy = true
+"#,
+                )
+                .expect("valid features"),
+            ),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(config.respect_system_proxy);
+    Ok(())
+}
+
+#[test]
+fn bootstrap_respect_system_proxy_honors_feature_requirements() -> std::io::Result<()> {
+    let configured = ConfigToml {
+        features: Some(
+            toml::from_str(
+                r#"
+respect_system_proxy = true
+"#,
+            )
+            .expect("valid features"),
+        ),
+        ..Default::default()
+    };
+    let disabled = Sourced::new(
+        FeatureRequirementsToml {
+            entries: BTreeMap::from([("respect_system_proxy".to_string(), false)]),
+        },
+        RequirementSource::Unknown,
+    );
+    assert!(!resolve_bootstrap_respect_system_proxy(
+        &configured,
+        Some(&disabled)
+    )?);
+
+    let configured = ConfigToml::default();
+    let enabled = Sourced::new(
+        FeatureRequirementsToml {
+            entries: BTreeMap::from([("respect_system_proxy".to_string(), true)]),
+        },
+        RequirementSource::Unknown,
+    );
+    assert!(resolve_bootstrap_respect_system_proxy(
+        &configured,
+        Some(&enabled)
+    )?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn respect_system_proxy_cli_override_enables_feature() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[features]
+respect_system_proxy = false
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(vec![(
+            "features.respect_system_proxy".to_string(),
+            toml::Value::Boolean(true),
+        )])
+        .build()
+        .await?;
+
+    assert!(config.respect_system_proxy);
+    Ok(())
+}
+
+#[tokio::test]
 async fn experimental_network_requirements_enable_proxy_without_feature() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config = ConfigBuilder::without_managed_config_for_tests()

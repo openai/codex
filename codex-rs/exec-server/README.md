@@ -345,6 +345,8 @@ invalid or unavailable paths. For compatibility, requests also accept native
 absolute path strings and normalize them to `file:` URIs:
 
 - `fs/readFile`
+- `fs/open`, `fs/readBlock`, and `fs/close` (internal transport for
+  `ExecutorFileSystem::read_file_stream`)
 - `fs/writeFile`
 - `fs/createDirectory`
 - `fs/getMetadata`

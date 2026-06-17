@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
-use codex_core_skills::HostLoadedSkills;
+use codex_core_skills::HostSkillsSnapshot;
 use codex_core_skills::SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS;
 use codex_core_skills::SKILLS_INTRO_WITH_ABSOLUTE_PATHS;
 use codex_core_skills::SkillLoadOutcome;
@@ -52,7 +52,7 @@ const DEMO_SKILL_CONTENTS: &str =
     "---\nname: demo\ndescription: Demo skill.\n---\n# Demo\n\nUse the demo skill.\n";
 
 #[tokio::test]
-async fn installed_extension_uses_host_loaded_skills() -> TestResult {
+async fn installed_extension_uses_host_service_snapshot() -> TestResult {
     let codex_home = test_codex_home();
     let skill_path = codex_home.join("skills").join("demo").join("SKILL.md");
     std::fs::create_dir_all(
@@ -97,7 +97,7 @@ async fn installed_extension_uses_host_loaded_skills() -> TestResult {
     let loaded_skills = Arc::new(outcome);
     let skill_prompt_path = skill_path_string.replace('\\', "/");
     let turn_store = ExtensionData::new("turn-1");
-    turn_store.insert(HostLoadedSkills::new(Arc::clone(&loaded_skills)));
+    turn_store.insert(HostSkillsSnapshot::new(Arc::clone(&loaded_skills)));
 
     let fragments = registry.turn_input_contributors()[0]
         .contribute(

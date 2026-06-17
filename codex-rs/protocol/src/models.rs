@@ -863,6 +863,20 @@ pub enum AgentMessageInputContent {
     EncryptedContent { encrypted_content: String },
 }
 
+/// Returns the locally readable text when an agent message is entirely plaintext.
+pub fn plaintext_agent_message_content(content: &[AgentMessageInputContent]) -> Option<String> {
+    let mut text_parts = Vec::with_capacity(content.len());
+    for part in content {
+        match part {
+            AgentMessageInputContent::InputText { text } => text_parts.push(text.as_str()),
+            AgentMessageInputContent::EncryptedContent { .. } => return None,
+        }
+    }
+
+    let text = text_parts.join("\n");
+    (!text.trim().is_empty()).then_some(text)
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageDetail {
@@ -895,6 +909,9 @@ pub struct ResponseItemMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub source_call_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
@@ -1971,6 +1988,20 @@ mod tests {
     ];
 
     #[test]
+    fn plaintext_agent_message_content_rejects_mixed_encrypted_content() {
+        let content = vec![
+            AgentMessageInputContent::InputText {
+                text: "Message Type: MESSAGE\nPayload:\n".to_string(),
+            },
+            AgentMessageInputContent::EncryptedContent {
+                encrypted_content: "encrypted-payload".to_string(),
+            },
+        ];
+
+        assert_eq!(plaintext_agent_message_content(&content), None);
+    }
+
+    #[test]
     fn response_input_message_conversion_preserves_phase() {
         let item = ResponseItem::from(ResponseInputItem::Message {
             role: "assistant".to_string(),
@@ -2044,6 +2075,7 @@ mod tests {
     fn response_item_metadata(turn_id: &str) -> ResponseItemMetadata {
         ResponseItemMetadata {
             turn_id: Some(turn_id.to_string()),
+            ..Default::default()
         }
     }
 

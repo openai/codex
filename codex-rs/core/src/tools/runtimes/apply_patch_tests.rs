@@ -19,7 +19,7 @@ fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::
     crate::session::turn_context::TurnEnvironment::new(
         environment_id.to_string(),
         std::sync::Arc::new(codex_exec_server::Environment::default_for_tests()),
-        std::env::temp_dir().abs(),
+        PathUri::from_abs_path(&std::env::temp_dir().abs()),
         /*shell*/ None,
     )
 }
@@ -54,7 +54,7 @@ async fn guardian_review_request_includes_patch_context() {
         .join("guardian-apply-patch-test.txt")
         .abs();
     let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
-    let expected_cwd = action.cwd.clone();
+    let expected_cwd = action.cwd.to_abs_path().expect("native patch cwd");
     let expected_patch = action.patch.clone();
     let request = ApplyPatchRequest {
         turn_environment: test_turn_environment(codex_exec_server::LOCAL_ENVIRONMENT_ID),
@@ -74,7 +74,8 @@ async fn guardian_review_request_includes_patch_context() {
         permissions_preapproved: false,
     };
 
-    let guardian_request = ApplyPatchRuntime::build_guardian_review_request(&request, "call-1");
+    let guardian_request = ApplyPatchRuntime::build_guardian_review_request(&request, "call-1")
+        .expect("native guardian request cwd");
 
     assert_eq!(
         guardian_request,

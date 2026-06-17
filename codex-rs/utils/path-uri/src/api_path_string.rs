@@ -1,4 +1,6 @@
+use crate::PathConvention;
 use crate::PathUri;
+use crate::is_windows_separator_byte;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -30,9 +32,9 @@ use ts_rs::TS;
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, TS)]
 #[serde(transparent)]
 #[ts(type = "string")]
-pub struct ApiPathString(String);
+pub struct LegacyAppPathString(String);
 
-impl ApiPathString {
+impl LegacyAppPathString {
     /// Renders an absolute path using the current host's path convention.
     pub fn from_abs_path(path: &AbsolutePathBuf) -> Self {
         Self(path.to_string_lossy().into_owned())
@@ -48,7 +50,7 @@ impl ApiPathString {
     pub fn from_path_uri(
         path: &PathUri,
         convention: PathConvention,
-    ) -> Result<Self, ApiPathStringError> {
+    ) -> Result<Self, LegacyAppPathStringError> {
         if let Some(path_bytes) = path.opaque_fallback_bytes() {
             return render_opaque_fallback(path, &path_bytes, convention).map(Self);
         }
@@ -61,14 +63,15 @@ impl ApiPathString {
 
     /// Parses this API string as an absolute path using the requested native
     /// path convention and returns its canonical path URI.
-    pub fn to_path_uri(&self, convention: PathConvention) -> Result<PathUri, ApiPathStringError> {
-        let path = match convention {
-            PathConvention::Posix => parse_posix_path(&self.0),
-            PathConvention::Windows => parse_windows_path(&self.0),
-        };
-        path.ok_or_else(|| ApiPathStringError::InvalidNativePath {
-            path: self.0.clone(),
-            convention,
+    pub fn to_path_uri(
+        &self,
+        convention: PathConvention,
+    ) -> Result<PathUri, LegacyAppPathStringError> {
+        PathUri::from_absolute_native_path(&self.0, convention).ok_or_else(|| {
+            LegacyAppPathStringError::InvalidNativePath {
+                path: self.0.clone(),
+                convention,
+            }
         })
     }
 
@@ -102,99 +105,17 @@ impl ApiPathString {
     }
 }
 
-impl From<AbsolutePathBuf> for ApiPathString {
+impl From<AbsolutePathBuf> for LegacyAppPathString {
     fn from(path: AbsolutePathBuf) -> Self {
         Self::from_abs_path(&path)
     }
-}
-
-fn parse_posix_path(path: &str) -> Option<PathUri> {
-    let path = path.strip_prefix('/')?;
-    if path.contains('\0') {
-        return Some(PathUri::from_opaque_path_bytes(
-            format!("/{path}").as_bytes(),
-        ));
-    }
-    path_uri_from_segments(/*host*/ None, path.split('/'))
-}
-
-fn parse_windows_path(path: &str) -> Option<PathUri> {
-    let bytes = path.as_bytes();
-    let uses_namespace = matches!(
-        bytes,
-        [first, second, namespace @ (b'.' | b'?'), separator, ..]
-            if is_windows_separator_byte(*first)
-                && is_windows_separator_byte(*second)
-                && is_windows_separator_byte(*separator)
-                && matches!(*namespace, b'.' | b'?')
-    );
-    if uses_namespace || path.contains('\0') {
-        return Some(windows_opaque_path_uri(path));
-    }
-
-    if matches!(
-        bytes,
-        [drive, b':', separator, ..]
-            if drive.is_ascii_alphabetic() && is_windows_separator_byte(*separator)
-    ) {
-        return path_uri_from_segments(
-            /*host*/ None,
-            std::iter::once(&path[..2]).chain(path[3..].split(is_windows_separator_char)),
-        );
-    }
-
-    if matches!(bytes, [first, second, ..]
-        if is_windows_separator_byte(*first) && is_windows_separator_byte(*second))
-    {
-        let mut components = path[2..].split(is_windows_separator_char);
-        let host = components.next().filter(|host| !host.is_empty())?;
-        let share = components.next().filter(|share| !share.is_empty())?;
-        return path_uri_from_segments(Some(host), std::iter::once(share).chain(components))
-            .or_else(|| Some(windows_opaque_path_uri(path)));
-    }
-
-    None
-}
-
-fn path_uri_from_segments<'a>(
-    host: Option<&str>,
-    segments: impl Iterator<Item = &'a str>,
-) -> Option<PathUri> {
-    let mut url = url::Url::parse("file:///").ok()?;
-    if let Some(host) = host {
-        url.set_host(Some(host)).ok()?;
-    }
-    {
-        let mut url_segments = url.path_segments_mut().ok()?;
-        url_segments.clear();
-        for segment in segments {
-            url_segments.push(segment);
-        }
-    }
-    PathUri::try_from(url).ok()
-}
-
-fn windows_opaque_path_uri(path: &str) -> PathUri {
-    let path_bytes = path
-        .encode_utf16()
-        .flat_map(u16::to_le_bytes)
-        .collect::<Vec<_>>();
-    PathUri::from_opaque_path_bytes(&path_bytes)
-}
-
-fn is_windows_separator_char(character: char) -> bool {
-    matches!(character, '\\' | '/')
-}
-
-fn is_windows_separator_byte(character: u8) -> bool {
-    matches!(character, b'\\' | b'/')
 }
 
 fn render_opaque_fallback(
     path: &PathUri,
     path_bytes: &[u8],
     convention: PathConvention,
-) -> Result<String, ApiPathStringError> {
+) -> Result<String, LegacyAppPathStringError> {
     let rendered = match convention {
         PathConvention::Posix if path_bytes.starts_with(b"/") => {
             Some(String::from_utf8_lossy(path_bytes).into_owned())
@@ -202,7 +123,7 @@ fn render_opaque_fallback(
         PathConvention::Windows => render_windows_opaque_fallback(path_bytes),
         PathConvention::Posix => None,
     };
-    rendered.ok_or_else(|| ApiPathStringError::OpaqueFallback {
+    rendered.ok_or_else(|| LegacyAppPathStringError::OpaqueFallback {
         path: path.to_string(),
     })
 }
@@ -238,13 +159,13 @@ fn is_windows_separator(character: u16) -> bool {
     character == u16::from(b'\\') || character == u16::from(b'/')
 }
 
-impl fmt::Display for ApiPathString {
+impl fmt::Display for LegacyAppPathString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
 }
 
-impl Serialize for ApiPathString {
+impl Serialize for LegacyAppPathString {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -253,9 +174,9 @@ impl Serialize for ApiPathString {
     }
 }
 
-impl JsonSchema for ApiPathString {
+impl JsonSchema for LegacyAppPathString {
     fn schema_name() -> String {
-        "ApiPathString".to_string()
+        "LegacyAppPathString".to_string()
     }
 
     fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
@@ -263,7 +184,7 @@ impl JsonSchema for ApiPathString {
     }
 }
 
-fn render_posix_path(path: &PathUri) -> Result<String, ApiPathStringError> {
+fn render_posix_path(path: &PathUri) -> Result<String, LegacyAppPathStringError> {
     let url = path.to_url();
     // POSIX file paths do not have a UNC authority, so `file://server/share`
     // cannot be represented as `/share` without losing the server identity.
@@ -281,7 +202,7 @@ fn render_posix_path(path: &PathUri) -> Result<String, ApiPathStringError> {
     Ok(rendered)
 }
 
-fn render_windows_path(path: &PathUri) -> Result<String, ApiPathStringError> {
+fn render_windows_path(path: &PathUri) -> Result<String, LegacyAppPathStringError> {
     let url = path.to_url();
     let mut segments = path_segments(&url);
     let mut rendered = String::new();
@@ -342,15 +263,15 @@ fn decode_native_segment(segment: &str) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-fn incompatible_convention(path: &PathUri, convention: PathConvention) -> ApiPathStringError {
-    ApiPathStringError::IncompatibleConvention {
+fn incompatible_convention(path: &PathUri, convention: PathConvention) -> LegacyAppPathStringError {
+    LegacyAppPathStringError::IncompatibleConvention {
         path: path.to_string(),
         convention,
     }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
-pub enum ApiPathStringError {
+pub enum LegacyAppPathStringError {
     #[error("opaque fallback path URI `{path}` cannot be recovered as a native path")]
     OpaqueFallback { path: String },
     #[error("path URI `{path}` cannot be rendered using {convention} path syntax")]
@@ -363,41 +284,6 @@ pub enum ApiPathStringError {
         path: String,
         convention: PathConvention,
     },
-}
-
-/// Path syntax used to render a [`PathUri`] as an operating-system path.
-///
-/// This describes path grammar rather than a specific operating system because
-/// Linux and macOS share the POSIX representation relevant here.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
-pub enum PathConvention {
-    Posix,
-    Windows,
-}
-
-impl PathConvention {
-    /// Returns the path convention used by the current process.
-    #[cfg(windows)]
-    pub const fn native() -> Self {
-        Self::Windows
-    }
-
-    /// Returns the path convention used by the current process.
-    #[cfg(unix)]
-    pub const fn native() -> Self {
-        Self::Posix
-    }
-}
-
-impl fmt::Display for PathConvention {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Posix => f.write_str("POSIX"),
-            Self::Windows => f.write_str("Windows"),
-        }
-    }
 }
 
 #[cfg(test)]

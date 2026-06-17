@@ -238,6 +238,7 @@ fn build_compacted_history_preserves_user_message_metadata() {
             message: "first user message".to_string(),
             metadata: Some(ResponseItemMetadata {
                 turn_id: Some("turn-1".to_string()),
+                ..Default::default()
             }),
         }],
         "summary text",

@@ -3,7 +3,6 @@ use std::time::Duration;
 use codex_api::SharedAuthProvider;
 use reqwest::StatusCode;
 use serde::Deserialize;
-use serde::Serialize;
 use tokio::time::sleep;
 use tokio_tungstenite::connect_async_with_config;
 use tracing::debug;
@@ -12,6 +11,10 @@ use tracing::warn;
 
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 
+use crate::EnvironmentRegistryHarnessKeyValidationRequest;
+use crate::EnvironmentRegistryHarnessKeyValidationResponse;
+use crate::EnvironmentRegistryRegistrationRequest;
+use crate::EnvironmentRegistryRegistrationResponse;
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::NoiseChannelIdentity;
@@ -67,8 +70,8 @@ impl EnvironmentRegistryClient {
             ))
             .headers(self.auth_provider.to_auth_headers())
             .json(&EnvironmentRegistryRegistrationRequest {
-                security_profile: NOISE_RELAY_SECURITY_PROFILE,
-                executor_public_key,
+                security_profile: NOISE_RELAY_SECURITY_PROFILE.to_string(),
+                executor_public_key: executor_public_key.clone(),
             })
             .send()
             .await?;
@@ -120,32 +123,6 @@ impl EnvironmentRegistryClient {
     }
 }
 
-#[derive(Serialize)]
-struct EnvironmentRegistryRegistrationRequest<'a> {
-    security_profile: &'static str,
-    executor_public_key: &'a NoiseChannelPublicKey,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize)]
-struct EnvironmentRegistryRegistrationResponse {
-    environment_id: String,
-    url: String,
-    security_profile: String,
-    executor_registration_id: String,
-}
-
-#[derive(Serialize)]
-struct EnvironmentRegistryHarnessKeyValidationRequest<'a> {
-    executor_registration_id: &'a str,
-    harness_public_key: &'a NoiseChannelPublicKey,
-    harness_key_authorization: &'a str,
-}
-
-#[derive(Deserialize)]
-struct EnvironmentRegistryHarnessKeyValidationResponse {
-    valid: bool,
-}
-
 #[derive(Clone)]
 struct RegistryHarnessKeyValidator {
     client: EnvironmentRegistryClient,
@@ -172,9 +149,9 @@ impl HarnessKeyValidator for RegistryHarnessKeyValidator {
             ))
             .headers(self.client.auth_provider.to_auth_headers())
             .json(&EnvironmentRegistryHarnessKeyValidationRequest {
-                executor_registration_id: &self.executor_registration_id,
-                harness_public_key,
-                harness_key_authorization: authorization,
+                executor_registration_id: self.executor_registration_id.clone(),
+                harness_public_key: harness_public_key.clone(),
+                harness_key_authorization: authorization.to_string(),
             })
             .send()
             .await?;

@@ -1,0 +1,71 @@
+---
+source: tui/src/chatwidget/tests/usage.rs
+expression: "states.join(\"\\n---\\n\")"
+---
+  Rate-limit resets
+  Checking your available resets...
+
+›    Loading...
+
+  Press enter to confirm or esc to go back
+---
+  Rate-limit resets
+  You have 2 rate-limit resets available.
+
+  1. Use a reset  Reset your current Codex usage windows.
+› 2. Cancel
+
+  Press enter to confirm or esc to go back
+---
+  Rate-limit resets
+  You don't have any rate-limit resets available.
+
+› 1. Close
+
+  Press enter to confirm or esc to go back
+---
+  Rate-limit resets
+  Couldn't load rate-limit resets. Please try again.
+
+› 1. Close
+
+  Press enter to confirm or esc to go back
+---
+  Rate-limit resets
+  Resetting your usage...
+
+›    Using a reset...
+---
+  Rate-limit resets
+  Couldn't reset usage. Please try again.
+
+› 1. Try again
+  2. Close
+
+  Press enter to confirm or esc to go back
+---
+  Rate-limit resets
+  Your usage does not need a reset right now.
+
+› 1. Close
+
+  Press enter to confirm or esc to go back
+---
+  Rate-limit resets
+  No rate-limit resets are available.
+
+› 1. Close
+
+  Press enter to confirm or esc to go back
+---
+  Rate-limit resets
+  Usage reset. Checking your remaining resets...
+
+›    Refreshing...
+---
+  Rate-limit resets
+  Usage reset. You have 1 rate-limit reset left.
+
+› 1. Close
+
+  Press enter to confirm or esc to go back

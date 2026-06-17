@@ -28,6 +28,7 @@ use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::LoadUserInstructionsFuture;
 use codex_extension_api::UserInstructionsProvider;
 use codex_extension_api::empty_extension_registry;
+use codex_features::Feature;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -1127,7 +1128,12 @@ fn function_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
 
 pub fn test_codex() -> TestCodexBuilder {
     TestCodexBuilder {
-        config_mutators: vec![],
+        config_mutators: vec![Box::new(|config| {
+            config
+                .features
+                .disable(Feature::Apps)
+                .expect("test config should allow Apps override");
+        })],
         auth: CodexAuth::from_api_key("dummy"),
         pre_build_hooks: vec![],
         workspace_setups: vec![],

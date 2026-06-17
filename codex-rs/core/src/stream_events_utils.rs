@@ -579,7 +579,7 @@ pub(crate) async fn finalize_turn_item(
         }
     }
     if let TurnItem::ImageGeneration(image_item) = &mut *turn_item
-        && image_item.status == "completed"
+        && !image_item.result.is_empty()
     {
         persist_image_generation_item(sess, turn_context, image_item).await;
     }

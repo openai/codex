@@ -87,6 +87,11 @@ use tungstenite::stream::MaybeTlsStream;
 use url::Url;
 use uuid::Uuid;
 
+mod loopback_responses_server;
+mod plugin_analytics_capture;
+mod plugin_analytics_mutation_smoke;
+mod plugin_analytics_smoke;
+
 const NOTIFICATIONS_TO_OPT_OUT: &[&str] = &[
     // v2 item deltas.
     "command/exec/outputDelta",
@@ -272,6 +277,39 @@ enum CliCommand {
         #[arg(long, default_value_t = 15)]
         hold_seconds: u64,
     },
+    /// Exercise remote plugin analytics through production app-server RPC paths.
+    #[command(name = "plugin-analytics-smoke")]
+    PluginAnalyticsSmoke {
+        /// Installed local plugin id, such as `linear@openai-curated-remote`.
+        #[arg(long)]
+        plugin_id: String,
+        /// JSONL output path. Defaults to a PID-specific file under the system temp directory.
+        #[arg(long)]
+        capture_file: Option<PathBuf>,
+    },
+    /// Install and uninstall one remote plugin while validating analytics capture.
+    #[command(name = "plugin-analytics-mutation-smoke")]
+    PluginAnalyticsMutationSmoke {
+        /// Backend remote plugin id. The plugin must be initially uninstalled.
+        #[arg(long)]
+        remote_plugin_id: String,
+        /// Acknowledge that this command mutates the active account's plugin state.
+        #[arg(long)]
+        confirm_account_mutation: bool,
+        /// JSONL output path. Defaults to a PID-specific file under the system temp directory.
+        #[arg(long)]
+        capture_file: Option<PathBuf>,
+    },
+    /// Best-effort recovery command that uninstalls one remote plugin.
+    #[command(name = "plugin-remote-uninstall")]
+    PluginRemoteUninstall {
+        /// Backend remote plugin id to uninstall.
+        #[arg(long)]
+        remote_plugin_id: String,
+        /// Acknowledge that this command mutates the active account's plugin state.
+        #[arg(long)]
+        confirm_account_mutation: bool,
+    },
 }
 
 pub async fn run() -> Result<()> {
@@ -421,6 +459,58 @@ pub async fn run() -> Result<()> {
                 workspace,
                 script,
                 hold_seconds,
+            )
+        }
+        CliCommand::PluginAnalyticsSmoke {
+            plugin_id,
+            capture_file,
+        } => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "plugin-analytics-smoke")?;
+            if url.is_some() {
+                bail!("plugin-analytics-smoke requires --codex-bin and does not support --url");
+            }
+            let codex_bin = codex_bin.context("plugin-analytics-smoke requires --codex-bin")?;
+            plugin_analytics_smoke::run(&codex_bin, &config_overrides, &plugin_id, capture_file)
+        }
+        CliCommand::PluginAnalyticsMutationSmoke {
+            remote_plugin_id,
+            confirm_account_mutation,
+            capture_file,
+        } => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "plugin-analytics-mutation-smoke")?;
+            if url.is_some() {
+                bail!(
+                    "plugin-analytics-mutation-smoke requires --codex-bin and does not support --url"
+                );
+            }
+            let codex_bin =
+                codex_bin.context("plugin-analytics-mutation-smoke requires --codex-bin")?;
+            plugin_analytics_mutation_smoke::run(
+                &codex_bin,
+                &config_overrides,
+                &remote_plugin_id,
+                plugin_analytics_mutation_smoke::AccountMutationConfirmation::from_flag(
+                    confirm_account_mutation,
+                ),
+                capture_file,
+            )
+        }
+        CliCommand::PluginRemoteUninstall {
+            remote_plugin_id,
+            confirm_account_mutation,
+        } => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "plugin-remote-uninstall")?;
+            if url.is_some() {
+                bail!("plugin-remote-uninstall requires --codex-bin and does not support --url");
+            }
+            let codex_bin = codex_bin.context("plugin-remote-uninstall requires --codex-bin")?;
+            plugin_analytics_mutation_smoke::run_cleanup(
+                &codex_bin,
+                &config_overrides,
+                &remote_plugin_id,
+                plugin_analytics_mutation_smoke::AccountMutationConfirmation::from_flag(
+                    confirm_account_mutation,
+                ),
             )
         }
     }
@@ -1440,6 +1530,14 @@ impl CodexClient {
     }
 
     fn spawn_stdio(codex_bin: &Path, config_overrides: &[String]) -> Result<Self> {
+        Self::spawn_stdio_with_env(codex_bin, config_overrides, &[])
+    }
+
+    fn spawn_stdio_with_env(
+        codex_bin: &Path,
+        config_overrides: &[String],
+        environment: &[(OsString, OsString)],
+    ) -> Result<Self> {
         let codex_bin_display = codex_bin.display();
         let mut cmd = Command::new(codex_bin);
         if let Some(codex_bin_parent) = codex_bin.parent() {
@@ -1452,6 +1550,9 @@ impl CodexClient {
         }
         for override_kv in config_overrides {
             cmd.arg("--config").arg(override_kv);
+        }
+        for (name, value) in environment {
+            cmd.env(name, value);
         }
         let mut codex_app_server = cmd
             .arg("app-server")
@@ -1957,6 +2058,7 @@ impl CodexClient {
             item_id,
             started_at_ms: _,
             approval_id,
+            environment_id,
             reason,
             network_approval_context,
             command,
@@ -1974,6 +2076,9 @@ impl CodexClient {
         );
         self.command_approval_count += 1;
         self.command_approval_item_ids.push(item_id.clone());
+        if let Some(environment_id) = environment_id.as_deref() {
+            println!("< environment: {environment_id}");
+        }
         if let Some(reason) = reason.as_deref() {
             println!("< reason: {reason}");
         }

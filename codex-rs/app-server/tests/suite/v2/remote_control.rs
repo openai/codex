@@ -271,7 +271,15 @@ async fn listen_off_honors_persisted_remote_control_enable() -> Result<()> {
         .await?;
 
     let _app_server = TestAppServer::new_with_args(codex_home.path(), &["--listen", "off"]).await?;
-    timeout(STARTUP_TIMEOUT, listener.accept()).await??;
+    let request = timeout(STARTUP_TIMEOUT, read_http_request(&listener)).await??;
+    assert!(
+        request
+            .request_line
+            .starts_with("GET /backend-api/wham/remote/control/server ")
+            || request
+                .request_line
+                .starts_with("POST /backend-api/wham/remote/control/server/refresh ")
+    );
     Ok(())
 }
 
@@ -852,9 +860,15 @@ impl BlockingRemoteControlBackend {
                     {
                         return;
                     }
-                    let Ok(_websocket) = listener.accept().await else {
+                    let Ok(request) = read_http_request(&listener).await else {
                         return;
                     };
+                    if !request
+                        .request_line
+                        .starts_with("GET /backend-api/wham/remote/control/server ")
+                    {
+                        return;
+                    }
                     std::future::pending::<()>().await;
                 }
                 Err(err) => {
@@ -1030,36 +1044,44 @@ async fn read_enroll_request(listener: &TcpListener) -> Result<(String, BufReade
 }
 
 async fn read_http_request(listener: &TcpListener) -> Result<HttpRequest> {
-    let (stream, _) = listener.accept().await?;
-    let mut reader = BufReader::new(stream);
-
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line).await?;
-    let mut content_length = 0;
     loop {
-        let mut line = String::new();
-        reader.read_line(&mut line).await?;
-        if line == "\r\n" {
-            break;
-        }
-        if let Some(value) = line
-            .trim_end()
-            .strip_prefix("content-length:")
-            .or_else(|| line.trim_end().strip_prefix("Content-Length:"))
-        {
-            content_length = value.trim().parse::<usize>()?;
-        }
-    }
-    let mut body = vec![0; content_length];
-    if content_length > 0 {
-        reader.read_exact(&mut body).await?;
-    }
+        let (stream, _) = listener.accept().await?;
+        let mut reader = BufReader::new(stream);
 
-    Ok(HttpRequest {
-        request_line: request_line.trim_end().to_string(),
-        body: String::from_utf8(body)?,
-        reader,
-    })
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).await?;
+        let mut content_length = 0;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).await?;
+            if line == "\r\n" {
+                break;
+            }
+            if let Some(value) = line
+                .trim_end()
+                .strip_prefix("content-length:")
+                .or_else(|| line.trim_end().strip_prefix("Content-Length:"))
+            {
+                content_length = value.trim().parse::<usize>()?;
+            }
+        }
+        let mut body = vec![0; content_length];
+        if content_length > 0 {
+            reader.read_exact(&mut body).await?;
+        }
+
+        let request_line = request_line.trim_end().to_string();
+        if request_line.starts_with("GET ") && request_line.contains("/v1/models?") {
+            respond_with_json(reader.into_inner(), serde_json::json!({ "models": [] })).await?;
+            continue;
+        }
+
+        return Ok(HttpRequest {
+            request_line,
+            body: String::from_utf8(body)?,
+            reader,
+        });
+    }
 }
 
 async fn respond_with_json(stream: TcpStream, body: serde_json::Value) -> Result<()> {

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use codex_core_skills::HostLoadedSkills;
+use codex_core_skills::HostSkillsSnapshot;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_extension_api::ConfigContributor;
@@ -121,7 +121,7 @@ where
                     SkillListQuery {
                         turn_id: thread_store.level_id().to_string(),
                         executor_roots: thread_state.selected_roots().to_vec(),
-                        host: None,
+                        host_snapshot: None,
                         include_host_skills: false,
                         include_bundled_skills: config.bundled_skills_enabled,
                         include_orchestrator_skills: thread_state.orchestrator_skills_enabled(),
@@ -184,11 +184,11 @@ where
             };
 
             let config = thread_state.config();
-            let host_loaded_skills = turn_store.get::<HostLoadedSkills>();
+            let host_snapshot = turn_store.get::<HostSkillsSnapshot>();
             let query = SkillListQuery {
                 turn_id: input.turn_id.clone(),
                 executor_roots: thread_state.selected_roots().to_vec(),
-                host: host_loaded_skills.clone(),
+                host_snapshot: host_snapshot.clone(),
                 include_host_skills: true,
                 include_bundled_skills: config.bundled_skills_enabled,
                 include_orchestrator_skills: thread_state.orchestrator_skills_enabled(),
@@ -217,12 +217,7 @@ where
             let mut injected_host_skill_prompts = InjectedHostSkillPrompts::default();
             for entry in &selected_entries {
                 match self
-                    .read_main_prompt(
-                        entry,
-                        host_loaded_skills.clone(),
-                        session_store,
-                        &thread_state,
-                    )
+                    .read_main_prompt(entry, host_snapshot.clone(), session_store, &thread_state)
                     .await
                 {
                     Ok(read_result) => {
@@ -259,12 +254,12 @@ where
                 }
             }
 
-            if let Some(host_loaded_skills) = &host_loaded_skills {
+            if let Some(host_snapshot) = &host_snapshot {
                 for entry in selected_entries
                     .iter()
                     .filter(|entry| entry.authority.kind != SkillSourceKind::Host)
                 {
-                    for host_skill in host_loaded_skills
+                    for host_skill in host_snapshot
                         .outcome()
                         .skills
                         .iter()
@@ -319,7 +314,7 @@ impl<C> SkillsExtension<C> {
     async fn read_main_prompt(
         &self,
         entry: &SkillCatalogEntry,
-        host_loaded_skills: Option<Arc<HostLoadedSkills>>,
+        host_snapshot: Option<Arc<HostSkillsSnapshot>>,
         session_store: &ExtensionData,
         thread_state: &SkillsThreadState,
     ) -> Result<SkillReadResult, String> {
@@ -330,7 +325,7 @@ impl<C> SkillsExtension<C> {
                     authority: entry.authority.clone(),
                     package: entry.id.clone(),
                     resource: entry.main_prompt.clone(),
-                    host: host_loaded_skills,
+                    host_snapshot,
                     mcp_resources: session_store.get::<McpResourceClient>(),
                 },
             )

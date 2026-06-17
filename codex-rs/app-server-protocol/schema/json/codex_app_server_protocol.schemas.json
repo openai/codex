@@ -2131,6 +2131,29 @@
             },
             "method": {
               "enum": [
+                "externalAgentConfig/import/readHistories"
+              ],
+              "title": "ExternalAgentConfig/import/readHistoriesRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "ExternalAgentConfig/import/readHistoriesRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "config/value/write"
               ],
               "title": "Config/value/writeRequestMethod",
@@ -2362,6 +2385,14 @@
             }
           ],
           "description": "The command's working directory."
+        },
+        "environmentId": {
+          "default": null,
+          "description": "Environment in which the command will run.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "itemId": {
           "type": "string"
@@ -4838,6 +4869,26 @@
           "properties": {
             "method": {
               "enum": [
+                "externalAgentConfig/import/progress"
+              ],
+              "title": "ExternalAgentConfig/import/progressNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportProgressNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "ExternalAgentConfig/import/progressNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "externalAgentConfig/import/completed"
               ],
               "title": "ExternalAgentConfig/import/completedNotificationMethod",
@@ -5804,6 +5855,14 @@
           },
           {
             "properties": {
+              "credentialSource": {
+                "allOf": [
+                  {
+                    "$ref": "#/definitions/v2/AmazonBedrockCredentialSource"
+                  }
+                ],
+                "default": "awsManaged"
+              },
               "type": {
                 "enum": [
                   "amazonBedrock"
@@ -6020,7 +6079,7 @@
           "read": {
             "description": "This will be removed in favor of `entries`.",
             "items": {
-              "$ref": "#/definitions/v2/ApiPathString"
+              "$ref": "#/definitions/v2/LegacyAppPathString"
             },
             "type": [
               "array",
@@ -6030,7 +6089,7 @@
           "write": {
             "description": "This will be removed in favor of `entries`.",
             "items": {
-              "$ref": "#/definitions/v2/ApiPathString"
+              "$ref": "#/definitions/v2/LegacyAppPathString"
             },
             "type": [
               "array",
@@ -6123,6 +6182,13 @@
       "AgentPath": {
         "type": "string"
       },
+      "AmazonBedrockCredentialSource": {
+        "enum": [
+          "codexManaged",
+          "awsManaged"
+        ],
+        "type": "string"
+      },
       "AnalyticsConfig": {
         "additionalProperties": true,
         "properties": {
@@ -6134,9 +6200,6 @@
           }
         },
         "type": "object"
-      },
-      "ApiPathString": {
-        "type": "string"
       },
       "AppBranding": {
         "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
@@ -6635,6 +6698,16 @@
             "anyOf": [
               {
                 "$ref": "#/definitions/v2/ApprovalsReviewer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "default_tools_approval_mode": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppToolApproval"
               },
               {
                 "type": "null"
@@ -9046,7 +9119,7 @@
             ]
           },
           "includeHome": {
-            "description": "If true, include detection under the user's home (~/.claude, ~/.codex, etc.).",
+            "description": "If true, include detection under the user's home directory.",
             "type": "boolean"
           }
         },
@@ -9089,9 +9162,61 @@
         "title": "ExternalAgentConfigImportCompletedNotification",
         "type": "object"
       },
+      "ExternalAgentConfigImportHistoriesReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportHistory"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "ExternalAgentConfigImportHistoriesReadResponse",
+        "type": "object"
+      },
+      "ExternalAgentConfigImportHistory": {
+        "properties": {
+          "completedAtMs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "failures": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportItemTypeFailure"
+            },
+            "type": "array"
+          },
+          "importId": {
+            "type": "string"
+          },
+          "successes": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportItemTypeSuccess"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "completedAtMs",
+          "failures",
+          "importId",
+          "successes"
+        ],
+        "type": "object"
+      },
       "ExternalAgentConfigImportItemTypeFailure": {
         "properties": {
           "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "errorType": {
             "type": [
               "string",
               "null"
@@ -9157,12 +9282,39 @@
               "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItem"
             },
             "type": "array"
+          },
+          "source": {
+            "description": "Source product that produced the migration items. Missing means unspecified.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "migrationItems"
         ],
         "title": "ExternalAgentConfigImportParams",
+        "type": "object"
+      },
+      "ExternalAgentConfigImportProgressNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "importId": {
+            "type": "string"
+          },
+          "itemTypeResults": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportTypeResult"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "importId",
+          "itemTypeResults"
+        ],
+        "title": "ExternalAgentConfigImportProgressNotification",
         "type": "object"
       },
       "ExternalAgentConfigImportResponse": {
@@ -9375,7 +9527,7 @@
           {
             "properties": {
               "path": {
-                "$ref": "#/definitions/v2/ApiPathString"
+                "$ref": "#/definitions/v2/LegacyAppPathString"
               },
               "type": {
                 "enum": [
@@ -11053,6 +11205,9 @@
         ],
         "title": "ItemStartedNotification",
         "type": "object"
+      },
+      "LegacyAppPathString": {
+        "type": "string"
       },
       "ListMcpServerStatusParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -15294,6 +15449,12 @@
       },
       "ResponseItemMetadata": {
         "properties": {
+          "source_call_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "turn_id": {
             "type": [
               "string",
@@ -16490,6 +16651,14 @@
           "preview": {
             "description": "Usually the first user message in the thread, if available.",
             "type": "string"
+          },
+          "recencyAt": {
+            "description": "Unix timestamp (in seconds) used for thread recency ordering.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "sessionId": {
             "description": "Session id shared by threads that belong to the same session tree.",
@@ -18750,7 +18919,8 @@
       "ThreadSortKey": {
         "enum": [
           "created_at",
-          "updated_at"
+          "updated_at",
+          "recency_at"
         ],
         "type": "string"
       },
@@ -19387,7 +19557,7 @@
       "TurnEnvironmentParams": {
         "properties": {
           "cwd": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
+            "$ref": "#/definitions/v2/LegacyAppPathString"
           },
           "environmentId": {
             "type": "string"

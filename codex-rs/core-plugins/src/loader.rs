@@ -2,6 +2,7 @@ use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::app_mcp_routing::apps_route_available;
 use crate::is_openai_curated_marketplace_name;
 use crate::manifest::PluginManifestHooks;
+use crate::manifest::PluginManifestMcpServers;
 use crate::manifest::PluginManifestPaths;
 use crate::manifest::load_plugin_manifest;
 use crate::marketplace::MarketplacePluginSource;
@@ -33,7 +34,6 @@ use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
-use codex_plugin::PluginLoadOutcome;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_plugin::app_connector_ids_from_declarations;
 use codex_protocol::protocol::Product;
@@ -81,12 +81,8 @@ enum NonCuratedCacheRefreshMode {
     ForceReinstall,
 }
 
-pub fn log_plugin_load_errors(outcome: &PluginLoadOutcome<McpServerConfig>) {
-    for plugin in outcome
-        .plugins()
-        .iter()
-        .filter(|plugin| plugin.error.is_some())
-    {
+pub(crate) fn log_plugin_load_errors(plugins: &[LoadedPlugin<McpServerConfig>]) {
+    for plugin in plugins.iter().filter(|plugin| plugin.error.is_some()) {
         if let Some(error) = plugin.error.as_deref() {
             warn!(
                 plugin = plugin.config_name,
@@ -110,14 +106,15 @@ struct PluginAppConfig {
     category: Option<String>,
 }
 
+/// Load configured plugins without applying auth-dependent runtime policies.
 #[instrument(level = "trace", skip_all)]
-pub async fn load_plugins_from_layer_stack(
+pub(crate) async fn load_plugins_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
     extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
     restriction_product: Option<Product>,
     prefer_remote_curated_conflicts: bool,
-) -> PluginLoadOutcome<McpServerConfig> {
+) -> Vec<LoadedPlugin<McpServerConfig>> {
     let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
     load_plugins_from_layer_stack_with_scope(
         config_layer_stack,
@@ -138,7 +135,7 @@ async fn load_plugins_from_layer_stack_with_scope(
     store: &PluginStore,
     prefer_remote_curated_conflicts: bool,
     scope: PluginLoadScope<'_>,
-) -> PluginLoadOutcome<McpServerConfig> {
+) -> Vec<LoadedPlugin<McpServerConfig>> {
     let configured_plugins = merge_configured_plugins_with_remote_installed(
         configured_plugins_from_stack(config_layer_stack),
         extra_plugins,
@@ -167,7 +164,7 @@ async fn load_plugins_from_layer_stack_with_scope(
         plugins.push(loaded_plugin);
     }
 
-    PluginLoadOutcome::from_plugins(plugins)
+    plugins
 }
 
 /// Load hooks from enabled plugins without loading their skills, MCP servers, or apps.
@@ -177,7 +174,7 @@ pub async fn load_plugin_hooks_from_layer_stack(
     store: &PluginStore,
     prefer_remote_curated_conflicts: bool,
 ) -> PluginHookLoadOutcome {
-    let outcome = load_plugins_from_layer_stack_with_scope(
+    let plugins = load_plugins_from_layer_stack_with_scope(
         config_layer_stack,
         extra_plugins,
         store,
@@ -186,8 +183,16 @@ pub async fn load_plugin_hooks_from_layer_stack(
     )
     .await;
     PluginHookLoadOutcome {
-        hook_sources: outcome.effective_plugin_hook_sources(),
-        hook_load_warnings: outcome.effective_plugin_hook_warnings(),
+        hook_sources: plugins
+            .iter()
+            .filter(|plugin| plugin.is_active())
+            .flat_map(|plugin| plugin.hook_sources.iter().cloned())
+            .collect(),
+        hook_load_warnings: plugins
+            .iter()
+            .filter(|plugin| plugin.is_active())
+            .flat_map(|plugin| plugin.hook_load_warnings.iter().cloned())
+            .collect(),
     }
 }
 
@@ -720,25 +725,12 @@ async fn load_plugin(
             let has_enabled_skills = resolved_skills.has_enabled_skills();
             loaded_plugin.disabled_skill_paths = resolved_skills.disabled_skill_paths;
             loaded_plugin.has_enabled_skills = has_enabled_skills;
-            let mut mcp_servers = HashMap::new();
-            for mcp_config_path in plugin_mcp_config_paths(plugin_root.as_path(), manifest_paths) {
-                let plugin_mcp =
-                    load_mcp_servers_from_file(plugin_root.as_path(), &mcp_config_path).await;
-                for (name, mut config) in plugin_mcp.mcp_servers {
-                    if let Some(policy) = plugin.mcp_servers.get(&name) {
-                        apply_plugin_mcp_server_policy(&mut config, policy);
-                    }
-                    if mcp_servers.insert(name.clone(), config).is_some() {
-                        warn!(
-                            plugin = %plugin_root.display(),
-                            path = %mcp_config_path.display(),
-                            server = name,
-                            "plugin MCP file overwrote an earlier server definition"
-                        );
-                    }
-                }
-            }
-            loaded_plugin.mcp_servers = mcp_servers;
+            loaded_plugin.mcp_servers = load_plugin_mcp_servers_from_manifest(
+                plugin_root.as_path(),
+                manifest_paths,
+                Some(&plugin.mcp_servers),
+            )
+            .await;
             loaded_plugin.apps = load_plugin_apps(plugin_root.as_path()).await;
         }
         PluginLoadScope::HooksOnly => {}
@@ -849,7 +841,7 @@ fn plugin_mcp_config_paths(
     plugin_root: &Path,
     manifest_paths: &PluginManifestPaths,
 ) -> Vec<AbsolutePathBuf> {
-    if let Some(path) = &manifest_paths.mcp_servers {
+    if let Some(PluginManifestMcpServers::Path(path)) = &manifest_paths.mcp_servers {
         return vec![path.clone()];
     }
     default_mcp_config_paths(plugin_root)
@@ -1090,15 +1082,14 @@ pub async fn plugin_telemetry_metadata_from_root(
 
     let manifest_paths = &manifest.paths;
     let has_skills = !plugin_skill_roots(plugin_root, manifest_paths).is_empty();
-    let mut mcp_server_names = Vec::new();
-    for path in plugin_mcp_config_paths(plugin_root.as_path(), manifest_paths) {
-        mcp_server_names.extend(
-            load_mcp_servers_from_file(plugin_root.as_path(), &path)
-                .await
-                .mcp_servers
-                .into_keys(),
-        );
-    }
+    let mut mcp_server_names = load_plugin_mcp_servers_from_manifest(
+        plugin_root.as_path(),
+        manifest_paths,
+        /*plugin_policy*/ None,
+    )
+    .await
+    .into_keys()
+    .collect::<Vec<_>>();
     mcp_server_names.sort_unstable();
     mcp_server_names.dedup();
 
@@ -1147,11 +1138,49 @@ async fn load_declared_plugin_mcp_servers(plugin_root: &Path) -> HashMap<String,
         return HashMap::new();
     };
 
+    load_plugin_mcp_servers_from_manifest(plugin_root, &manifest.paths, /*plugin_policy*/ None)
+        .await
+}
+
+async fn load_plugin_mcp_servers_from_manifest(
+    plugin_root: &Path,
+    manifest_paths: &PluginManifestPaths,
+    plugin_policy: Option<&HashMap<String, PluginMcpServerConfig>>,
+) -> HashMap<String, McpServerConfig> {
     let mut mcp_servers = HashMap::new();
-    for mcp_config_path in plugin_mcp_config_paths(plugin_root, &manifest.paths) {
-        let plugin_mcp = load_mcp_servers_from_file(plugin_root, &mcp_config_path).await;
-        for (name, config) in plugin_mcp.mcp_servers {
-            mcp_servers.entry(name).or_insert(config);
+    match &manifest_paths.mcp_servers {
+        Some(PluginManifestMcpServers::Object(object_servers)) => {
+            let plugin_mcp = load_mcp_servers_from_manifest_object(plugin_root, object_servers);
+            for (name, mut config) in plugin_mcp.mcp_servers {
+                if let Some(policy) = plugin_policy.and_then(|policy| policy.get(&name)) {
+                    apply_plugin_mcp_server_policy(&mut config, policy);
+                }
+                if mcp_servers.insert(name.clone(), config).is_some() {
+                    warn!(
+                        plugin = %plugin_root.display(),
+                        server = name,
+                        "plugin manifest MCP object overwrote an earlier server definition"
+                    );
+                }
+            }
+        }
+        Some(PluginManifestMcpServers::Path(_)) | None => {
+            for mcp_config_path in plugin_mcp_config_paths(plugin_root, manifest_paths) {
+                let plugin_mcp = load_mcp_servers_from_file(plugin_root, &mcp_config_path).await;
+                for (name, mut config) in plugin_mcp.mcp_servers {
+                    if let Some(policy) = plugin_policy.and_then(|policy| policy.get(&name)) {
+                        apply_plugin_mcp_server_policy(&mut config, policy);
+                    }
+                    if mcp_servers.insert(name.clone(), config).is_some() {
+                        warn!(
+                            plugin = %plugin_root.display(),
+                            path = %mcp_config_path.display(),
+                            server = name,
+                            "plugin MCP file overwrote an earlier server definition"
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -1201,6 +1230,37 @@ async fn load_mcp_servers_from_file(
             path = %mcp_config_path.display(),
             error = error.message,
             "failed to parse plugin MCP server"
+        );
+    }
+    PluginMcpDiscovery {
+        mcp_servers: parsed.servers.into_iter().collect(),
+    }
+}
+
+fn load_mcp_servers_from_manifest_object(
+    plugin_root: &Path,
+    object_config: &str,
+) -> PluginMcpDiscovery {
+    let parsed = match parse_plugin_mcp_config(
+        plugin_root,
+        object_config,
+        PluginMcpServerPlacement::Declared,
+    ) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            warn!(
+                plugin = %plugin_root.display(),
+                "failed to parse plugin manifest MCP object: {err}"
+            );
+            return PluginMcpDiscovery::default();
+        }
+    };
+    for error in parsed.errors {
+        warn!(
+            plugin = %plugin_root.display(),
+            server = error.name,
+            error = error.message,
+            "failed to parse plugin manifest MCP object server"
         );
     }
     PluginMcpDiscovery {

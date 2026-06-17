@@ -1946,7 +1946,6 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-test",
@@ -2761,6 +2760,7 @@ dependencies = [
  "codex-otel",
  "codex-plugin",
  "codex-protocol",
+ "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-path-uri",
  "codex-utils-plugins",
@@ -2891,6 +2891,7 @@ dependencies = [
  "ctor 0.6.3",
  "futures",
  "http 1.4.0",
+ "libc",
  "pretty_assertions",
  "prost 0.14.3",
  "reqwest 0.12.28",
@@ -2906,6 +2907,7 @@ dependencies = [
  "toml 0.9.11+spec-1.1.0",
  "tracing",
  "uuid",
+ "windows-sys 0.52.0",
  "wiremock",
 ]
 
@@ -3040,9 +3042,11 @@ dependencies = [
 name = "codex-file-system"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-path-uri",
+ "futures",
  "serde",
 ]
 
@@ -3788,7 +3792,9 @@ dependencies = [
  "codex-network-proxy",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-home-dir",
  "codex-utils-path-uri",
+ "codex-windows-sandbox",
  "dunce",
  "libc",
  "pretty_assertions",
