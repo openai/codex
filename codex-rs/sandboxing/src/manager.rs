@@ -474,6 +474,21 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
     workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
 ) -> Result<(), SandboxTransformError> {
+    // TODO(anp): Keep PathUri through the Windows sandbox wrapper boundary.
+    let native_cwd =
+        request
+            .cwd
+            .to_abs_path()
+            .map_err(|source| SandboxTransformError::InvalidCommandCwd {
+                cwd: request.cwd.clone(),
+                source,
+            })?;
+    let native_sandbox_policy_cwd = request.sandbox_policy_cwd.to_abs_path().map_err(|source| {
+        SandboxTransformError::InvalidSandboxPolicyCwd {
+            cwd: request.sandbox_policy_cwd.clone(),
+            source,
+        }
+    })?;
     let Some(program) = request.command.first_mut() else {
         return Err(SandboxTransformError::WindowsSandboxPreparation(
             "sandbox command was empty".to_string(),
@@ -491,14 +506,14 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
         resolve_windows_elevated_filesystem_overrides(
             request.sandbox,
             &request.permission_profile,
-            &request.sandbox_policy_cwd,
+            &native_sandbox_policy_cwd,
             use_elevated,
         )
     } else {
         resolve_windows_restricted_token_filesystem_overrides(
             request.sandbox,
             &request.permission_profile,
-            &request.sandbox_policy_cwd,
+            &native_sandbox_policy_cwd,
             request.windows_sandbox_level,
         )
     }
@@ -522,7 +537,7 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
     let mut wrapper_args =
         codex_windows_sandbox::create_windows_sandbox_command_args_for_permission_profile(
             inner_command,
-            &request.cwd,
+            &native_cwd,
             workspace_roots,
             &request.env,
             &request.permission_profile,
