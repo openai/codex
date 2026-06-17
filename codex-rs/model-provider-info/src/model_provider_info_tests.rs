@@ -368,6 +368,64 @@ fn test_merge_configured_model_providers_applies_amazon_bedrock_profile_override
 }
 
 #[test]
+fn test_merge_configured_model_providers_applies_amazon_bedrock_namespace_tools_override() {
+    let configured_model_providers = std::collections::HashMap::from([(
+        AMAZON_BEDROCK_PROVIDER_ID.to_string(),
+        ModelProviderInfo {
+            namespace_tools: Some(false),
+            ..ModelProviderInfo::default()
+        },
+    )]);
+
+    let mut expected = built_in_model_providers(/*openai_base_url*/ None);
+    expected
+        .get_mut(AMAZON_BEDROCK_PROVIDER_ID)
+        .expect("Amazon Bedrock provider should be built in")
+        .namespace_tools = Some(false);
+
+    assert_eq!(
+        merge_configured_model_providers(
+            built_in_model_providers(/*openai_base_url*/ None),
+            configured_model_providers,
+        ),
+        Ok(expected)
+    );
+}
+
+#[test]
+fn test_merge_configured_model_providers_applies_amazon_bedrock_allowed_overrides_together() {
+    let configured_model_providers = std::collections::HashMap::from([(
+        AMAZON_BEDROCK_PROVIDER_ID.to_string(),
+        ModelProviderInfo {
+            aws: Some(ModelProviderAwsAuthInfo {
+                profile: Some("codex-bedrock".to_string()),
+                region: Some("us-west-2".to_string()),
+            }),
+            namespace_tools: Some(false),
+            ..ModelProviderInfo::default()
+        },
+    )]);
+
+    let mut expected = built_in_model_providers(/*openai_base_url*/ None);
+    let expected_bedrock = expected
+        .get_mut(AMAZON_BEDROCK_PROVIDER_ID)
+        .expect("Amazon Bedrock provider should be built in");
+    expected_bedrock.aws = Some(ModelProviderAwsAuthInfo {
+        profile: Some("codex-bedrock".to_string()),
+        region: Some("us-west-2".to_string()),
+    });
+    expected_bedrock.namespace_tools = Some(false);
+
+    assert_eq!(
+        merge_configured_model_providers(
+            built_in_model_providers(/*openai_base_url*/ None),
+            configured_model_providers,
+        ),
+        Ok(expected)
+    );
+}
+
+#[test]
 fn test_merge_configured_model_providers_rejects_amazon_bedrock_non_default_fields() {
     let configured_model_providers = std::collections::HashMap::from([(
         AMAZON_BEDROCK_PROVIDER_ID.to_string(),
@@ -387,7 +445,7 @@ fn test_merge_configured_model_providers_rejects_amazon_bedrock_non_default_fiel
             configured_model_providers,
         ),
         Err(
-            "model_providers.amazon-bedrock only supports changing `aws.profile` and `aws.region`; other non-default provider fields are not supported"
+            "model_providers.amazon-bedrock only supports changing `aws.profile`, `aws.region`, and `namespace_tools`; other non-default provider fields are not supported"
                 .to_string()
         )
     );

@@ -523,6 +523,24 @@ region = "us-west-2"
     );
 }
 
+#[test]
+fn accepts_amazon_bedrock_namespace_tools_override() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+[model_providers.amazon-bedrock]
+namespace_tools = false
+"#,
+    )
+    .expect("Amazon Bedrock namespace tool override should deserialize");
+
+    assert_eq!(
+        cfg.model_providers
+            .get("amazon-bedrock")
+            .and_then(|provider| provider.namespace_tools),
+        Some(false)
+    );
+}
+
 #[tokio::test]
 async fn load_config_applies_amazon_bedrock_aws_profile_override() {
     let cfg = toml::from_str::<ConfigToml>(
@@ -545,6 +563,73 @@ region = "us-west-2"
     .expect("load config");
 
     assert_eq!(config.model_provider_id, "amazon-bedrock");
+    assert_eq!(
+        config
+            .model_provider
+            .aws
+            .as_ref()
+            .and_then(|aws| aws.profile.as_deref()),
+        Some("codex-bedrock")
+    );
+    assert_eq!(
+        config
+            .model_provider
+            .aws
+            .as_ref()
+            .and_then(|aws| aws.region.as_deref()),
+        Some("us-west-2")
+    );
+}
+
+#[tokio::test]
+async fn load_config_applies_amazon_bedrock_namespace_tools_override() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+model_provider = "amazon-bedrock"
+
+[model_providers.amazon-bedrock]
+namespace_tools = false
+"#,
+    )
+    .expect("Amazon Bedrock namespace tool override should deserialize");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert_eq!(config.model_provider_id, "amazon-bedrock");
+    assert_eq!(config.model_provider.namespace_tools, Some(false));
+}
+
+#[tokio::test]
+async fn load_config_applies_amazon_bedrock_allowed_overrides_together() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+model_provider = "amazon-bedrock"
+
+[model_providers.amazon-bedrock]
+namespace_tools = false
+
+[model_providers.amazon-bedrock.aws]
+profile = "codex-bedrock"
+region = "us-west-2"
+"#,
+    )
+    .expect("Amazon Bedrock allowed overrides should deserialize");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert_eq!(config.model_provider.namespace_tools, Some(false));
     assert_eq!(
         config
             .model_provider
@@ -592,7 +677,7 @@ region = "us-west-2"
 
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(err.to_string().contains(
-        "model_providers.amazon-bedrock only supports changing `aws.profile` and `aws.region`; other non-default provider fields are not supported"
+        "model_providers.amazon-bedrock only supports changing `aws.profile`, `aws.region`, and `namespace_tools`; other non-default provider fields are not supported"
     ));
 }
 
