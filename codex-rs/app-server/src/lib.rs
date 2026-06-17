@@ -631,7 +631,7 @@ pub async fn run_main_with_transport_options(
     }
     if let Some(warning) = codex_core::config::system_bwrap_warning(
         config.permissions.permission_profile(),
-        config.managed_network_requirements_enabled(),
+        config.permissions.network.is_some(),
     ) {
         config_warnings.push(ConfigWarningNotification {
             summary: warning,

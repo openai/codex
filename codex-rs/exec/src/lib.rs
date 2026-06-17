@@ -847,7 +847,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     if !json_mode
         && let Some(message) = codex_core::config::system_bwrap_warning(
             config.permissions.permission_profile(),
-            config.managed_network_requirements_enabled(),
+            config.permissions.network.is_some(),
         )
     {
         event_processor.process_warning(message);

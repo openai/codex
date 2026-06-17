@@ -1436,6 +1436,7 @@ async fn network_proxy_feature_uses_profile_network_proxy_settings() -> std::io:
         config.permissions.network_sandbox_policy(),
         NetworkSandboxPolicy::Enabled
     );
+    assert!(!config.managed_network_requirements_enabled());
     let network = config
         .permissions
         .network

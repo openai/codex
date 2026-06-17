@@ -1,4 +1,6 @@
 use super::*;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::path::PathBuf;
@@ -140,34 +142,39 @@ exit 1
 }
 
 #[test]
-fn system_bwrap_probe_only_unshares_network_when_required() {
+fn active_managed_proxy_probes_network_for_network_enabled_profile() {
     let fake_bwrap = write_fake_bwrap(
         r#"#!/bin/sh
 for arg in "$@"; do
   if [ "$arg" = "--unshare-net" ]; then
-    exit 17
+    echo 'loopback: Failed RTM_NEWLINK' >&2
+    exit 1
   fi
 done
 exit 0
 "#,
     );
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::unrestricted(),
+        NetworkSandboxPolicy::Enabled,
+    );
     let fake_bwrap_path: &Path = fake_bwrap.as_ref();
 
     assert_eq!(
-        probe_system_bwrap(
-            fake_bwrap_path,
-            SYSTEM_BWRAP_PROBE_TIMEOUT,
-            /*unshare_network*/ false,
+        system_bwrap_warning_with_path(
+            &permission_profile,
+            /*managed_network_active*/ false,
+            Some(fake_bwrap_path),
         ),
-        SystemBwrapProbeResult::Available
+        None
     );
     assert_eq!(
-        probe_system_bwrap(
-            fake_bwrap_path,
-            SYSTEM_BWRAP_PROBE_TIMEOUT,
-            /*unshare_network*/ true,
+        system_bwrap_warning_with_path(
+            &permission_profile,
+            /*managed_network_active*/ true,
+            Some(fake_bwrap_path),
         ),
-        SystemBwrapProbeResult::Failed
+        Some(USER_NAMESPACE_WARNING.to_string())
     );
 }
 
