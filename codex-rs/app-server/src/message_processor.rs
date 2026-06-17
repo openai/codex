@@ -92,6 +92,8 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
+use crate::models_refresh_worker::ModelsRefreshWorker;
+
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECTION_RPC_DRAIN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 30);
 
@@ -182,6 +184,7 @@ impl ExternalAuth for ExternalAuthRefreshBridge {
 
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
+    models_refresh_worker: ModelsRefreshWorker,
     skills_watcher: Arc<SkillsWatcher>,
     account_processor: AccountRequestProcessor,
     apps_processor: AppsRequestProcessor,
@@ -371,6 +374,8 @@ impl MessageProcessor {
                 )),
             )
         });
+        let models_manager = thread_manager.get_models_manager();
+        let models_refresh_worker = crate::models_refresh_worker::spawn(&models_manager);
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());
@@ -537,6 +542,7 @@ impl MessageProcessor {
 
         Self {
             outgoing,
+            models_refresh_worker,
             skills_watcher,
             account_processor,
             apps_processor,
@@ -566,6 +572,7 @@ impl MessageProcessor {
     pub(crate) fn clear_runtime_references(&self) {
         self.account_processor.clear_external_auth();
         self.apps_processor.shutdown();
+        self.models_refresh_worker.shutdown();
         self.skills_watcher.shutdown();
     }
 
@@ -742,6 +749,7 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn drain_background_tasks(&self) {
+        self.models_refresh_worker.shutdown();
         self.thread_processor.drain_background_tasks().await;
     }
 
