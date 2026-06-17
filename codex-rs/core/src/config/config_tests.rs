@@ -409,6 +409,76 @@ async fn rotating_workload_credential_denies_its_secret_directory() -> anyhow::R
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn workload_credential_symlink_denies_external_target() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let secret_dir = codex_home.path().join("projected-secret");
+    let external_dir = codex_home.path().join("external-secret");
+    std::fs::create_dir_all(&secret_dir)?;
+    std::fs::create_dir_all(&external_dir)?;
+    let target = external_dir.join("token");
+    std::fs::write(&target, "subject-token")?;
+    let token_file = secret_dir.join("token");
+    std::os::unix::fs::symlink(&target, &token_file)?;
+
+    let cfg = ConfigToml {
+        workload_identity: Some(WorkloadIdentityConfig {
+            identity_provider_id: "idp_example".to_string(),
+            identity_provider_mapping_id: "idpm_example".to_string(),
+            audience: "openai-audience".to_string(),
+            token_url: "https://auth.openai.com/oauth/token".to_string(),
+            credential_source: CredentialSourceConfig::File {
+                path: token_file.clone(),
+            },
+        }),
+        ..Default::default()
+    };
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    let file_system_policy = config.permissions.file_system_sandbox_policy();
+    let matcher = ReadDenyMatcher::new(&file_system_policy, config.cwd.as_path())
+        .expect("workload credential should install a deny-read matcher");
+    assert!(matcher.is_read_denied(&token_file));
+    assert!(matcher.is_read_denied(&target));
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn workload_identity_enables_windows_restricted_token_sandbox() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        workload_identity: Some(WorkloadIdentityConfig {
+            identity_provider_id: "idp_example".to_string(),
+            identity_provider_mapping_id: "idpm_example".to_string(),
+            audience: "openai-audience".to_string(),
+            token_url: "https://auth.openai.com/oauth/token".to_string(),
+            credential_source: CredentialSourceConfig::Environment {
+                variable: "WORKLOAD_IDENTITY_TOKEN".to_string(),
+            },
+        }),
+        ..Default::default()
+    };
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.permissions.windows_sandbox_mode,
+        Some(WindowsSandboxModeToml::Unelevated)
+    );
+    Ok(())
+}
+
 async fn derive_legacy_sandbox_policy_for_test(
     cfg: &ConfigToml,
     sandbox_mode_override: Option<SandboxMode>,

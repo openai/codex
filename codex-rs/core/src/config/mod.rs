@@ -2353,7 +2353,7 @@ fn apply_workload_identity_filesystem_constraints(
         .credential_source
         .credential_file_paths()
         .into_iter()
-        .filter_map(workload_identity_credential_deny_path)
+        .flat_map(workload_identity_credential_deny_paths)
         .map(|path| codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::Path { path },
             access: codex_protocol::permissions::FileSystemAccessMode::Deny,
@@ -2367,23 +2367,38 @@ fn apply_workload_identity_filesystem_constraints(
         .preserve_deny_read_restrictions_from(&FileSystemSandboxPolicy::restricted(entries));
 }
 
-fn workload_identity_credential_deny_path(path: PathBuf) -> Option<AbsolutePathBuf> {
-    let path = AbsolutePathBuf::relative_to_current_dir(path).ok()?;
+fn workload_identity_credential_deny_paths(path: PathBuf) -> Vec<AbsolutePathBuf> {
+    let Ok(path) = AbsolutePathBuf::relative_to_current_dir(path) else {
+        return Vec::new();
+    };
     let Some(parent) = path.as_path().parent() else {
-        return Some(path);
+        return vec![path];
     };
     let parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
 
     // Projected service-account tokens are symlinks whose targets rotate. Mask
     // the containing secret directory so a rotation cannot expose a new target.
-    let deny_path = if std::fs::symlink_metadata(path.as_path())
-        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    let is_symlink = std::fs::symlink_metadata(path.as_path())
+        .is_ok_and(|metadata| metadata.file_type().is_symlink());
+    if !is_symlink {
+        return path
+            .as_path()
+            .file_name()
+            .and_then(|file_name| AbsolutePathBuf::from_absolute_path(parent.join(file_name)).ok())
+            .into_iter()
+            .collect();
+    }
+
+    let mut deny_paths = AbsolutePathBuf::from_absolute_path(&parent)
+        .into_iter()
+        .collect::<Vec<_>>();
+    if let Ok(target) = std::fs::canonicalize(path.as_path())
+        && !target.starts_with(&parent)
+        && let Ok(target) = AbsolutePathBuf::from_absolute_path(target)
     {
-        parent
-    } else {
-        parent.join(path.as_path().file_name()?)
-    };
-    AbsolutePathBuf::from_absolute_path(deny_path).ok()
+        deny_paths.push(target);
+    }
+    deny_paths
 }
 
 /// Optional overrides for user configuration (e.g., from CLI flags).
@@ -2868,7 +2883,12 @@ impl Config {
         )?;
         let respect_system_proxy = features.enabled(Feature::RespectSystemProxy);
         let enable_network_proxy = features.enabled(Feature::NetworkProxy);
-        let configured_windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg);
+        // A restricted child token is the Windows boundary that prevents model-controlled
+        // processes from inspecting WIF credentials held by the parent process.
+        let configured_windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg).or_else(|| {
+            (cfg!(target_os = "windows") && cfg.workload_identity.is_some())
+                .then_some(WindowsSandboxModeToml::Unelevated)
+        });
         // Keep the configured mode separate so a requirement-constrained mode
         // does not look like it was explicitly selected in config.
         let selected_windows_sandbox_mode = configured_windows_sandbox_mode.or_else(|| {
@@ -2885,6 +2905,15 @@ impl Config {
             &mut startup_warnings,
         )?;
         let effective_windows_sandbox_mode = *constrained_windows_sandbox_mode.get();
+        if cfg!(target_os = "windows")
+            && cfg.workload_identity.is_some()
+            && effective_windows_sandbox_mode.is_none()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "`workload_identity` requires the Windows restricted-token sandbox",
+            ));
+        }
         let windows_sandbox_mode = if constrained_windows_sandbox_mode.source.is_some() {
             effective_windows_sandbox_mode
         } else {

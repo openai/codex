@@ -13,6 +13,11 @@ pub(super) struct WorkloadIdentityExternalAuth {
 
 impl WorkloadIdentityExternalAuth {
     pub(super) fn new(client: ConfiguredWorkloadIdentityClient) -> Self {
+        #[cfg(target_os = "windows")]
+        // Core config forces WIF sessions onto the Windows restricted-token sandbox, which keeps
+        // model-controlled child processes from opening the parent process.
+        let process_isolation_error = None;
+        #[cfg(not(target_os = "windows"))]
         let process_isolation_error = codex_process_hardening::disable_process_inspection()
             .err()
             .map(|error| format!("workload identity process isolation failed: {error}"));
