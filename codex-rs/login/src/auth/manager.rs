@@ -41,6 +41,7 @@ use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
 use crate::default_client::build_reqwest_client;
 use crate::default_client::create_client;
+use crate::default_client::try_build_reqwest_client_without_redirects;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
 use crate::token_data::parse_jwt_expiration;
@@ -141,6 +142,7 @@ impl Debug for ExternalAuthTokens {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExternalAuthChatgptMetadata {
     pub account_id: String,
+    pub user_id: Option<String>,
     pub plan_type: Option<String>,
 }
 
@@ -161,6 +163,23 @@ impl ExternalAuthTokens {
             access_token: access_token.into(),
             chatgpt_metadata: Some(ExternalAuthChatgptMetadata {
                 account_id: chatgpt_account_id.into(),
+                user_id: None,
+                plan_type: chatgpt_plan_type,
+            }),
+        }
+    }
+
+    pub fn chatgpt_with_user_id(
+        access_token: impl Into<String>,
+        chatgpt_user_id: impl Into<String>,
+        chatgpt_account_id: impl Into<String>,
+        chatgpt_plan_type: Option<String>,
+    ) -> Self {
+        Self {
+            access_token: access_token.into(),
+            chatgpt_metadata: Some(ExternalAuthChatgptMetadata {
+                account_id: chatgpt_account_id.into(),
+                user_id: Some(chatgpt_user_id.into()),
                 plan_type: chatgpt_plan_type,
             }),
         }
@@ -1171,6 +1190,10 @@ impl AuthDotJson {
         let mut token_info =
             parse_chatgpt_jwt_claims(&external.access_token).map_err(std::io::Error::other)?;
         token_info.chatgpt_account_id = Some(chatgpt_metadata.account_id.clone());
+        token_info.chatgpt_user_id = chatgpt_metadata
+            .user_id
+            .clone()
+            .or(token_info.chatgpt_user_id);
         token_info.chatgpt_plan_type = chatgpt_metadata
             .plan_type
             .as_deref()
@@ -2000,7 +2023,7 @@ impl AuthManager {
             let external_auth = shared_workload_identity_external_auth(
                 workload_identity,
                 oauth_client_id(),
-                build_reqwest_client(),
+                try_build_reqwest_client_without_redirects().map_err(std::io::Error::from),
             );
             auth_manager.set_external_auth(external_auth);
         }
@@ -2239,6 +2262,15 @@ impl AuthManager {
     }
 
     pub fn current_auth_uses_codex_backend(&self) -> bool {
+        if self
+            .external_auth()
+            .is_some_and(|external_auth| external_auth.requires_successful_resolution())
+        {
+            return self
+                .auth_cached()
+                .as_ref()
+                .is_some_and(|auth| auth.api_auth_mode().uses_codex_backend());
+        }
         self.get_api_auth_mode()
             .is_some_and(AuthMode::uses_codex_backend)
     }

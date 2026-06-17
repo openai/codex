@@ -14,7 +14,7 @@ use super::ExternalAuthRefreshContext;
 use super::ExternalAuthTokens;
 
 pub(super) struct WorkloadIdentityExternalAuth {
-    client: ConfiguredWorkloadIdentityClient,
+    client: Result<ConfiguredWorkloadIdentityClient, String>,
     process_isolation_error: Option<String>,
 }
 
@@ -32,7 +32,7 @@ fn shared_workload_identity_auths() -> &'static Mutex<Vec<SharedWorkloadIdentity
 pub(super) fn shared_workload_identity_external_auth(
     config: WorkloadIdentityConfig,
     client_id: String,
-    http: reqwest::Client,
+    no_redirect_http: std::io::Result<reqwest::Client>,
 ) -> Arc<dyn ExternalAuth> {
     let mut shared_auths = shared_workload_identity_auths()
         .lock()
@@ -47,7 +47,11 @@ pub(super) fn shared_workload_identity_external_auth(
     }
 
     let auth = Arc::new(WorkloadIdentityExternalAuth::new(
-        build_workload_identity_client(config.clone(), client_id.clone(), http),
+        no_redirect_http
+            .map(|http| build_workload_identity_client(config.clone(), client_id.clone(), http))
+            .map_err(|error| {
+                format!("workload identity HTTP client initialization failed: {error}")
+            }),
     ));
     shared_auths.push(SharedWorkloadIdentityExternalAuth {
         config,
@@ -58,7 +62,7 @@ pub(super) fn shared_workload_identity_external_auth(
 }
 
 impl WorkloadIdentityExternalAuth {
-    pub(super) fn new(client: ConfiguredWorkloadIdentityClient) -> Self {
+    pub(super) fn new(client: Result<ConfiguredWorkloadIdentityClient, String>) -> Self {
         #[cfg(target_os = "windows")]
         // Core config forces WIF sessions onto the Windows restricted-token sandbox, which keeps
         // model-controlled child processes from opening the parent process.
@@ -77,15 +81,20 @@ impl WorkloadIdentityExternalAuth {
         if let Some(error) = self.process_isolation_error.as_ref() {
             return Err(std::io::Error::other(error.clone()));
         }
+        let client = self
+            .client
+            .as_ref()
+            .map_err(|error| std::io::Error::other(error.clone()))?;
         let token = if force_refresh {
-            self.client.refresh().await
+            client.refresh().await
         } else {
-            self.client.resolve().await
+            client.resolve().await
         }
         .map_err(std::io::Error::other)?;
 
-        Ok(ExternalAuthTokens::chatgpt(
+        Ok(ExternalAuthTokens::chatgpt_with_user_id(
             token.access_token,
+            token.user_id,
             token.chatgpt_account_id,
             token.chatgpt_plan_type,
         ))

@@ -1,11 +1,18 @@
+use std::time::Duration;
+
 use codex_workload_identity::SubjectToken;
 use codex_workload_identity::SubjectTokenError;
 use codex_workload_identity::SubjectTokenProvider;
 use spiffe::SpiffeId;
 use spiffe::WorkloadApiClient;
 use spiffe::transport::Endpoint;
+use tokio::time::timeout;
 
 const SPIFFE_ENDPOINT_SOCKET_ENV: &str = "SPIFFE_ENDPOINT_SOCKET";
+#[cfg(not(test))]
+const WORKLOAD_API_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const WORKLOAD_API_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Debug)]
 pub struct SpiffeSubjectTokenProvider {
@@ -50,46 +57,21 @@ impl SubjectTokenProvider for SpiffeSubjectTokenProvider {
             .map(str::parse::<SpiffeId>)
             .transpose()
             .map_err(|_| SubjectTokenError::InvalidConfiguration { provider: "spiffe" })?;
-        let client = WorkloadApiClient::connect(endpoint)
-            .await
-            .map_err(|_| SubjectTokenError::Unavailable { provider: "spiffe" })?;
-        let jwt_svid = client
-            .fetch_jwt_svid([self.audience.as_str()], spiffe_id.as_ref())
-            .await
-            .map_err(|_| SubjectTokenError::InvalidResponse { provider: "spiffe" })?;
+        let jwt_svid = timeout(WORKLOAD_API_TIMEOUT, async {
+            let client = WorkloadApiClient::connect(endpoint)
+                .await
+                .map_err(|_| SubjectTokenError::Unavailable { provider: "spiffe" })?;
+            client
+                .fetch_jwt_svid([self.audience.as_str()], spiffe_id.as_ref())
+                .await
+                .map_err(|_| SubjectTokenError::InvalidResponse { provider: "spiffe" })
+        })
+        .await
+        .map_err(|_| SubjectTokenError::Unavailable { provider: "spiffe" })??;
         SubjectToken::jwt(jwt_svid.token(), "spiffe")
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn rejects_invalid_explicit_spiffe_id_before_connecting() {
-        let source = SpiffeSubjectTokenProvider::new(
-            Some("unix:/tmp/does-not-exist.sock".to_string()),
-            Some("not-a-spiffe-id".to_string()),
-            "openai-audience".to_string(),
-        );
-
-        assert!(matches!(
-            source.subject_token().await,
-            Err(SubjectTokenError::InvalidConfiguration { provider: "spiffe" })
-        ));
-    }
-
-    #[tokio::test]
-    async fn rejects_tcp_endpoint() {
-        let source = SpiffeSubjectTokenProvider::new(
-            Some("tcp://127.0.0.1:8081".to_string()),
-            /*spiffe_id*/ None,
-            "openai-audience".to_string(),
-        );
-
-        assert!(matches!(
-            source.subject_token().await,
-            Err(SubjectTokenError::InvalidConfiguration { provider: "spiffe" })
-        ));
-    }
-}
+#[path = "spiffe_tests.rs"]
+mod tests;

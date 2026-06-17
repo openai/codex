@@ -3655,6 +3655,12 @@ impl Config {
             workload_identity.validate().map_err(|error| {
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
             })?;
+            if effective_permission_profile.enforcement() == SandboxEnforcement::External {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "`workload_identity` requires Codex-managed filesystem enforcement so credential paths can be denied",
+                ));
+            }
             let credential_deny_paths =
                 workload_identity_credential_deny_paths(workload_identity);
             let enforcement_only_paths = credential_deny_paths

@@ -10,9 +10,11 @@ workspace = true
 [dependencies]
 codex-workload-identity = { workspace = true }
 spiffe = { workspace = true, features = ["workload-api-jwt"] }
+tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "time"] }
 
 [lib]
 doctest = false

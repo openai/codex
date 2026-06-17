@@ -82,13 +82,13 @@ impl SubjectTokenProvider for ConfiguredSubjectTokenProvider {
 pub fn build_client(
     config: WorkloadIdentityConfig,
     client_id: impl Into<String>,
-    http: reqwest::Client,
+    no_redirect_http: reqwest::Client,
 ) -> ConfiguredWorkloadIdentityClient {
     let source = ConfiguredSubjectTokenProvider::from_config(
         &config.credential_source,
         &config.identity_provider_id,
         &config.audience,
-        http.clone(),
+        no_redirect_http.clone(),
     );
-    ConfiguredWorkloadIdentityClient::new(config, client_id, http, source)
+    ConfiguredWorkloadIdentityClient::new(config, client_id, no_redirect_http, source)
 }

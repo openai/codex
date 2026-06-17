@@ -31,9 +31,41 @@ async fn test_client(
             },
         },
         "app_codex_cli",
-        reqwest::Client::new(),
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?,
         FileSubjectTokenSource::new(token_file),
     ))
+}
+
+#[tokio::test]
+async fn token_exchange_does_not_follow_redirects() -> anyhow::Result<()> {
+    let redirect_target = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(exchange_response("redirected.access.token"))
+        .expect(0)
+        .mount(&redirect_target)
+        .await;
+    let token_endpoint = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(
+            ResponseTemplate::new(307)
+                .insert_header("Location", format!("{}/stolen", redirect_target.uri())),
+        )
+        .expect(1)
+        .mount(&token_endpoint)
+        .await;
+    let client = test_client(&token_endpoint).await?;
+
+    assert!(matches!(
+        client.resolve().await,
+        Err(WorkloadIdentityError::Rejected { status, .. })
+            if status == StatusCode::TEMPORARY_REDIRECT
+    ));
+    token_endpoint.verify().await;
+    redirect_target.verify().await;
+    Ok(())
 }
 
 fn exchange_request() -> serde_json::Value {

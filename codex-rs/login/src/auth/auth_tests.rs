@@ -562,6 +562,32 @@ fn external_auth_tokens_debug_redacts_access_token() {
     assert!(debug.contains("[REDACTED]"));
 }
 
+#[test]
+fn external_auth_metadata_overrides_chatgpt_user_id_claim() {
+    let token = fake_jwt_for_auth_file_params(&AuthFileParams {
+        openai_api_key: None,
+        chatgpt_plan_type: Some("enterprise".to_string()),
+        chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
+    })
+    .expect("build test access token");
+    let external = ExternalAuthTokens::chatgpt_with_user_id(
+        token,
+        "mapped-user-id",
+        WORKSPACE_ID_ALLOWED,
+        Some("enterprise".to_string()),
+    );
+
+    let auth = AuthDotJson::from_external_tokens(&external).expect("build external ChatGPT auth");
+
+    assert_eq!(
+        auth.tokens
+            .expect("external auth should contain tokens")
+            .id_token
+            .chatgpt_user_id,
+        Some("mapped-user-id".to_string())
+    );
+}
+
 struct TestExternalChatgptAuth {
     initial: ExternalAuthTokens,
     refreshed: ExternalAuthTokens,
@@ -670,6 +696,7 @@ async fn external_chatgpt_auth_resolves_and_refreshes_without_writing_auth_file(
 
     assert_eq!(manager.auth_mode(), None);
     assert_eq!(manager.get_api_auth_mode(), None);
+    assert!(!manager.current_auth_uses_codex_backend());
     let auth = manager
         .auth()
         .await
@@ -687,6 +714,7 @@ async fn external_chatgpt_auth_resolves_and_refreshes_without_writing_auth_file(
         manager.get_api_auth_mode(),
         Some(AuthMode::ChatgptAuthTokens)
     );
+    assert!(manager.current_auth_uses_codex_backend());
     assert_eq!(auth.get_token().unwrap(), token);
     assert_eq!(auth.get_account_id().as_deref(), Some(WORKSPACE_ID_ALLOWED));
     assert!(!get_auth_file(codex_home.path()).exists());
@@ -795,6 +823,7 @@ async fn auth_result_preserves_external_auth_resolution_errors() {
         manager.get_api_auth_mode(),
         Some(ApiAuthMode::ChatgptAuthTokens)
     );
+    assert!(!manager.current_auth_uses_codex_backend());
     let error = manager
         .auth_result()
         .await

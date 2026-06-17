@@ -215,6 +215,26 @@ pub fn build_reqwest_client() -> reqwest::Client {
     })
 }
 
+/// Tries to build the default Codex HTTP client with redirects disabled.
+///
+/// Credential-bearing requests such as workload-identity token exchange must not replay their
+/// bodies to a redirect target. This keeps the normal Codex transport configuration while making
+/// any redirect visible to the caller as the original response.
+pub fn try_build_reqwest_client_without_redirects()
+-> Result<reqwest::Client, BuildCustomCaTransportError> {
+    let builder = reqwest::Client::builder()
+        .default_headers(default_headers())
+        .redirect(reqwest::redirect::Policy::none());
+    let builder = if is_sandboxed() {
+        builder.no_proxy()
+    } else {
+        builder
+    };
+    let builder = with_chatgpt_cloudflare_cookie_store(builder);
+
+    build_reqwest_client_with_custom_ca(builder)
+}
+
 /// Tries to build the default reqwest client used for ordinary Codex HTTP traffic.
 ///
 /// Callers that need a structured CA-loading failure instead of the legacy logged fallback can use

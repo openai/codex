@@ -69,6 +69,18 @@ fn remote_plugin_install_suggestions_skip_core_installed_verification() {
 }
 
 #[test]
+fn plugin_install_auth_error_redacts_credential_details() {
+    let error = model_safe_plugin_install_auth_error(std::io::Error::other(
+        "failed to read /run/secrets/codex-wif/subject-token",
+    ));
+
+    let FunctionCallError::Fatal(message) = error else {
+        panic!("auth resolution should be a fatal tool error");
+    };
+    assert_eq!(message, "failed to resolve auth after plugin installation");
+}
+
+#[test]
 fn recommended_plugin_install_args_accept_legacy_tool_id() {
     let current: RecommendedPluginInstallArgs = serde_json::from_value(json!({
         "plugin_id": "google-drive@openai-curated-remote",

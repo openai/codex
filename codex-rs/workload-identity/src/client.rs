@@ -94,7 +94,7 @@ pub struct WorkloadIdentityClient<S> {
     token_url: String,
     client_id: String,
     source: S,
-    http: reqwest::Client,
+    no_redirect_http: reqwest::Client,
     cache: Mutex<CacheState>,
     exchange_lock: Semaphore,
 }
@@ -106,7 +106,7 @@ where
     pub fn new(
         config: WorkloadIdentityConfig,
         client_id: impl Into<String>,
-        http: reqwest::Client,
+        no_redirect_http: reqwest::Client,
         source: S,
     ) -> Self {
         Self {
@@ -115,7 +115,7 @@ where
             token_url: config.token_url,
             client_id: client_id.into(),
             source,
-            http,
+            no_redirect_http,
             cache: Mutex::new(CacheState::default()),
             exchange_lock: Semaphore::new(/*permits*/ 1),
         }
@@ -221,7 +221,7 @@ where
     ) -> Result<WorkloadIdentityAccessToken, WorkloadIdentityError> {
         let subject_token = self.source.subject_token().await?;
         let response = self
-            .http
+            .no_redirect_http
             .post(&self.token_url)
             .timeout(TOKEN_EXCHANGE_TIMEOUT)
             .json(&TokenExchangeRequest {

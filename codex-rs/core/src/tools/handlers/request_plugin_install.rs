@@ -192,11 +192,12 @@ impl RequestPluginInstallHandler {
             .is_some_and(|response| response.action == ElicitationAction::Accept);
 
         let completed = if user_confirmed {
-            let auth = session.services.auth_manager.auth().await.map_err(|err| {
-                FunctionCallError::Fatal(format!(
-                    "failed to resolve auth after plugin installation: {err}"
-                ))
-            })?;
+            let auth = session
+                .services
+                .auth_manager
+                .auth()
+                .await
+                .map_err(model_safe_plugin_install_auth_error)?;
             verify_request_plugin_install_completed(&session, &turn, &tool, auth.as_ref()).await
         } else {
             false
@@ -402,6 +403,14 @@ async fn refresh_missing_requested_connectors(
             None
         }
     }
+}
+
+fn model_safe_plugin_install_auth_error(error: std::io::Error) -> FunctionCallError {
+    warn!(
+        error = %error,
+        "failed to resolve auth after plugin installation"
+    );
+    FunctionCallError::Fatal("failed to resolve auth after plugin installation".to_string())
 }
 
 fn verified_plugin_install_completed(

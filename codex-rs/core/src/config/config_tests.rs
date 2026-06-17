@@ -421,6 +421,42 @@ async fn workload_identity_rejects_forced_api_key_login() -> anyhow::Result<()> 
     Ok(())
 }
 
+#[tokio::test]
+async fn workload_identity_rejects_external_filesystem_enforcement() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        workload_identity: Some(WorkloadIdentityConfig {
+            identity_provider_id: "idp_example".to_string(),
+            identity_provider_mapping_id: "idpm_example".to_string(),
+            audience: "openai-audience".to_string(),
+            token_url: "https://auth.openai.com/oauth/token".to_string(),
+            credential_source: CredentialSourceConfig::File {
+                path: codex_home.path().join("subject-token"),
+            },
+        }),
+        ..Default::default()
+    };
+
+    let error = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            permission_profile: Some(PermissionProfile::External {
+                network: NetworkSandboxPolicy::Restricted,
+            }),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("external filesystem enforcement must reject workload identity");
+
+    assert_eq!(
+        error.to_string(),
+        "`workload_identity` requires Codex-managed filesystem enforcement so credential paths can be denied"
+    );
+    Ok(())
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn rotating_workload_credential_denies_its_secret_directory() -> anyhow::Result<()> {

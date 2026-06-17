@@ -21,12 +21,12 @@ fn identical_config_reuses_process_scoped_external_auth() {
     let first = shared_workload_identity_external_auth(
         config.clone(),
         "client-test".to_string(),
-        reqwest::Client::new(),
+        Ok(reqwest::Client::new()),
     );
     let second = shared_workload_identity_external_auth(
         config,
         "client-test".to_string(),
-        reqwest::Client::new(),
+        Ok(reqwest::Client::new()),
     );
 
     assert!(Arc::ptr_eq(&first, &second));
@@ -37,13 +37,32 @@ fn different_config_uses_distinct_external_auth() {
     let first = shared_workload_identity_external_auth(
         test_config("idpm_first"),
         "client-test".to_string(),
-        reqwest::Client::new(),
+        Ok(reqwest::Client::new()),
     );
     let second = shared_workload_identity_external_auth(
         test_config("idpm_second"),
         "client-test".to_string(),
-        reqwest::Client::new(),
+        Ok(reqwest::Client::new()),
     );
 
     assert!(!Arc::ptr_eq(&first, &second));
+}
+
+#[tokio::test]
+async fn http_client_initialization_failure_is_preserved() {
+    let auth = shared_workload_identity_external_auth(
+        test_config("idpm_client_failure"),
+        "client-test".to_string(),
+        Err(std::io::Error::other("custom CA is invalid")),
+    );
+
+    let error = auth
+        .resolve()
+        .await
+        .expect_err("required WIF must fail when its HTTP client cannot be built");
+
+    assert_eq!(
+        error.to_string(),
+        "workload identity HTTP client initialization failed: custom CA is invalid"
+    );
 }

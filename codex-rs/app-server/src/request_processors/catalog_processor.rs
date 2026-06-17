@@ -246,16 +246,7 @@ impl CatalogRequestProcessor {
     }
 
     async fn auth_for_optional_workspace_settings(&self) -> Option<CodexAuth> {
-        match self.auth_manager.auth().await {
-            Ok(auth) => auth,
-            Err(err) => {
-                warn!(
-                    error = %err,
-                    "failed to resolve auth for optional workspace settings; using defaults"
-                );
-                None
-            }
-        }
+        self.auth_manager.auth_for_optional_use().await
     }
 
     async fn list_models(

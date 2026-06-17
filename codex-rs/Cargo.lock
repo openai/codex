@@ -4493,6 +4493,7 @@ version = "0.0.0"
 dependencies = [
  "codex-workload-identity",
  "spiffe",
+ "tempfile",
  "tokio",
 ]
 
