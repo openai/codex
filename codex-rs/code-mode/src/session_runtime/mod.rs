@@ -41,10 +41,15 @@ pub struct SessionRuntime<D: SessionRuntimeDelegate> {
 
 struct Inner<D: SessionRuntimeDelegate> {
     stored_values: Mutex<HashMap<String, JsonValue>>,
-    cells: Mutex<HashMap<CellId, CellHandle>>,
+    cells: Mutex<HashMap<CellId, CellState>>,
     delegate: Arc<D>,
     shutting_down: AtomicBool,
     next_cell_id: AtomicU64,
+}
+
+enum CellState {
+    Live(CellHandle),
+    Closing,
 }
 
 impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
@@ -91,28 +96,25 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         cell_id: &CellId,
         mode: ObserveMode,
     ) -> Result<PendingEvent, Error> {
-        let handle = self
-            .inner
-            .cells
-            .lock()
-            .await
-            .get(cell_id)
-            .cloned()
-            .ok_or_else(|| Error::MissingCell(cell_id.clone()))?;
+        let cells = self.inner.cells.lock().await;
+        let Some(CellState::Live(handle)) = cells.get(cell_id) else {
+            return Err(Error::MissingCell(cell_id.clone()));
+        };
+        let handle = handle.clone();
+        drop(cells);
         Ok(PendingEvent {
             event: map_actor_event(cell_id.clone(), handle.observe(mode)),
         })
     }
 
     pub async fn terminate(&self, cell_id: &CellId) -> Result<CellEvent, Error> {
-        let handle = self
-            .inner
-            .cells
-            .lock()
-            .await
-            .get(cell_id)
-            .cloned()
-            .ok_or_else(|| Error::MissingCell(cell_id.clone()))?;
+        let handle = {
+            let cells = self.inner.cells.lock().await;
+            let Some(CellState::Live(handle)) = cells.get(cell_id) else {
+                return Err(Error::MissingCell(cell_id.clone()));
+            };
+            handle.clone()
+        };
         handle
             .terminate()
             .await
@@ -127,7 +129,10 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
             .lock()
             .await
             .values()
-            .cloned()
+            .filter_map(|state| match state {
+                CellState::Live(handle) => Some(handle.clone()),
+                CellState::Closing => None,
+            })
             .collect::<Vec<_>>();
         for handle in handles {
             handle.shutdown();
@@ -168,7 +173,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         let (handle, initial_event, task) =
             CellActor::prepare(request, stored_values, host, initial_observe_mode)
                 .map_err(Error::Runtime)?;
-        cells.insert(cell_id.clone(), handle);
+        cells.insert(cell_id.clone(), CellState::Live(handle));
         drop(cells);
         tokio::spawn(task);
         Ok(map_actor_event(cell_id, initial_event))
@@ -177,8 +182,10 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
     fn begin_shutdown(&self) {
         self.inner.shutting_down.store(true, Ordering::Release);
         if let Ok(cells) = self.inner.cells.try_lock() {
-            for handle in cells.values() {
-                handle.shutdown();
+            for state in cells.values() {
+                if let CellState::Live(handle) = state {
+                    handle.shutdown();
+                }
             }
         }
     }
@@ -260,6 +267,11 @@ impl<D: SessionRuntimeDelegate> CellHost for RuntimeCellHost<D> {
     }
 
     async fn closed(&self) {
+        self.inner
+            .cells
+            .lock()
+            .await
+            .insert(self.cell_id.clone(), CellState::Closing);
         if let Err(err) = self.inner.delegate.cell_closed(&self.cell_id).await {
             warn!(
                 "failed to close code mode delegate state for cell {}: {err}",
@@ -281,3 +293,7 @@ fn actor_error(cell_id: &CellId, error: CellError) -> Error {
         CellError::Closed => Error::MissingCell(cell_id.clone()),
     }
 }
+
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;

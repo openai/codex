@@ -384,6 +384,7 @@ async fn run_cell<H: CellHost>(
             }
         }
     }
+    drop(command_rx);
     begin_termination(
         &runtime_tx,
         &runtime_control_tx,
