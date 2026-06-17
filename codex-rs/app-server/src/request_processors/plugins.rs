@@ -809,11 +809,16 @@ impl PluginRequestProcessor {
         if !config.features.enabled(Feature::Plugins) {
             return Ok(empty_response());
         }
-        let auth = self
-            .auth_manager
-            .auth()
-            .await
-            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
+        let requires_resolved_auth = config.features.enabled(Feature::RemotePlugin)
+            || config.features.enabled(Feature::PluginSharing);
+        let auth = if requires_resolved_auth {
+            self.auth_manager
+                .auth()
+                .await
+                .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?
+        } else {
+            self.auth_manager.auth_cached()
+        };
         if !self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
             .await

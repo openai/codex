@@ -207,7 +207,7 @@ pub(crate) struct MessageProcessor {
     thread_processor: ThreadRequestProcessor,
     turn_processor: TurnRequestProcessor,
     windows_sandbox_processor: WindowsSandboxRequestProcessor,
-    owns_external_auth_refresh_bridge: bool,
+    external_auth_refresh_bridge: Option<Arc<dyn ExternalAuth>>,
     request_serialization_queues: RequestSerializationQueues,
 }
 
@@ -321,10 +321,13 @@ impl MessageProcessor {
             remote_control_handle,
             plugin_startup_tasks,
         } = args;
-        let owns_external_auth_refresh_bridge =
-            auth_manager.set_external_auth_if_absent(Arc::new(ExternalAuthRefreshBridge {
+        let external_auth_refresh_bridge: Arc<dyn ExternalAuth> =
+            Arc::new(ExternalAuthRefreshBridge {
                 outgoing: outgoing.clone(),
-            }));
+            });
+        let external_auth_refresh_bridge = auth_manager
+            .replace_non_required_external_auth(Arc::clone(&external_auth_refresh_bridge))
+            .then_some(external_auth_refresh_bridge);
         let thread_state_manager = ThreadStateManager::new();
         // The thread store is intentionally process-scoped. Config reloads can
         // affect per-thread behavior, but they must not move newly started,
@@ -567,14 +570,15 @@ impl MessageProcessor {
             thread_processor,
             turn_processor,
             windows_sandbox_processor,
-            owns_external_auth_refresh_bridge,
+            external_auth_refresh_bridge,
             request_serialization_queues: RequestSerializationQueues::default(),
         }
     }
 
     pub(crate) fn clear_runtime_references(&self) {
-        if self.owns_external_auth_refresh_bridge {
-            self.account_processor.clear_external_auth();
+        if let Some(external_auth_refresh_bridge) = &self.external_auth_refresh_bridge {
+            self.account_processor
+                .clear_external_auth_if(external_auth_refresh_bridge);
         }
         self.apps_processor.shutdown();
         self.models_refresh_worker.shutdown();

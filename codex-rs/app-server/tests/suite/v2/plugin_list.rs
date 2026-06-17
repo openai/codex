@@ -77,6 +77,7 @@ fn write_plugins_enabled_config_with_workload_identity(
     codex_home: &std::path::Path,
     server: &MockServer,
     token_path: &std::path::Path,
+    extra_config: &str,
 ) -> std::io::Result<()> {
     let token_path = toml::Value::String(token_path.to_string_lossy().into_owned());
     let chatgpt_base_url = toml::Value::String(format!("{}/backend-api", server.uri()));
@@ -99,6 +100,8 @@ token_url = {token_url}
 [workload_identity.credential_source]
 type = "file"
 path = {token_path}
+
+{extra_config}
 "#,
         ),
     )
@@ -183,7 +186,12 @@ async fn plugin_list_local_succeeds_when_workload_identity_becomes_unavailable()
     let server = MockServer::start().await;
     let token_path = codex_home.path().join("projected-workload-token");
     std::fs::write(&token_path, "external-subject-token\n")?;
-    write_plugins_enabled_config_with_workload_identity(codex_home.path(), &server, &token_path)?;
+    write_plugins_enabled_config_with_workload_identity(
+        codex_home.path(),
+        &server,
+        &token_path,
+        "",
+    )?;
 
     let access_token = workload_identity_access_token();
     Mock::given(method("POST"))
@@ -234,6 +242,83 @@ async fn plugin_list_local_succeeds_when_workload_identity_becomes_unavailable()
     let response: PluginListResponse = to_response(response)?;
 
     assert!(response.marketplace_load_errors.is_empty());
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_installed_local_succeeds_when_workload_identity_becomes_unavailable() -> Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    let token_path = codex_home.path().join("projected-workload-token");
+    std::fs::write(&token_path, "external-subject-token\n")?;
+    write_openai_curated_marketplace(codex_home.path(), &["linear"])?;
+    write_installed_plugin(&codex_home, "openai-curated", "linear")?;
+    write_plugins_enabled_config_with_workload_identity(
+        codex_home.path(),
+        &server,
+        &token_path,
+        r#"[plugins."linear@openai-curated"]
+enabled = true"#,
+    )?;
+
+    let access_token = workload_identity_access_token();
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": access_token.clone(),
+            "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "user_id": "user_test",
+            "chatgpt_account_id": "workspace_test",
+            "chatgpt_plan_type": "enterprise",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/config/bundle"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/accounts/workspace_test/settings"))
+        .and(header("authorization", format!("Bearer {access_token}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "beta_settings": { "enable_plugins": true },
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    std::fs::remove_file(token_path)?;
+
+    let request_id = mcp
+        .send_plugin_installed_request(PluginInstalledParams {
+            cwds: None,
+            install_suggestion_plugin_names: None,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginInstalledResponse = to_response(response)?;
+
+    assert!(response.marketplace_load_errors.is_empty());
+    assert!(response.marketplaces.iter().any(|marketplace| {
+        marketplace
+            .plugins
+            .iter()
+            .any(|plugin| plugin.id == "linear@openai-curated" && plugin.installed)
+    }));
     server.verify().await;
     Ok(())
 }

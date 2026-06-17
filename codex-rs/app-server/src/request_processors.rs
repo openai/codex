@@ -363,6 +363,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
+use codex_login::auth::ExternalAuth;
 use codex_login::auth::login_with_chatgpt_auth_tokens;
 use codex_login::complete_device_code_login;
 use codex_login::login_with_api_key;

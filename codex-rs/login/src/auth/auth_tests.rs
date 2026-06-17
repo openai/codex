@@ -569,6 +569,7 @@ struct TestExternalChatgptAuth {
 }
 
 struct FailingExternalChatgptAuth(&'static str);
+struct OptionalFailingExternalChatgptAuth(&'static str);
 
 impl ExternalAuth for FailingExternalChatgptAuth {
     fn auth_mode(&self) -> AuthMode {
@@ -577,6 +578,25 @@ impl ExternalAuth for FailingExternalChatgptAuth {
 
     fn requires_successful_resolution(&self) -> bool {
         true
+    }
+
+    fn resolve(&self) -> ExternalAuthFuture<'_, Option<ExternalAuthTokens>> {
+        let message = self.0;
+        Box::pin(async move { Err(std::io::Error::other(message)) })
+    }
+
+    fn refresh(
+        &self,
+        _context: ExternalAuthRefreshContext,
+    ) -> ExternalAuthFuture<'_, ExternalAuthTokens> {
+        let message = self.0;
+        Box::pin(async move { Err(std::io::Error::other(message)) })
+    }
+}
+
+impl ExternalAuth for OptionalFailingExternalChatgptAuth {
+    fn auth_mode(&self) -> AuthMode {
+        AuthMode::Chatgpt
     }
 
     fn resolve(&self) -> ExternalAuthFuture<'_, Option<ExternalAuthTokens>> {
@@ -782,7 +802,7 @@ async fn auth_result_preserves_external_auth_resolution_errors() {
 }
 
 #[tokio::test]
-async fn set_external_auth_if_absent_preserves_existing_provider() {
+async fn replace_non_required_external_auth_preserves_required_provider() {
     let manager = AuthManager::shared(
         PathBuf::from("non-existent"),
         /*enable_codex_api_key_env*/ false,
@@ -792,22 +812,42 @@ async fn set_external_auth_if_absent_preserves_existing_provider() {
     )
     .await;
 
-    assert!(
-        manager.set_external_auth_if_absent(Arc::new(FailingExternalChatgptAuth(
-            "original external auth",
-        )))
-    );
-    assert!(
-        !manager.set_external_auth_if_absent(Arc::new(FailingExternalChatgptAuth(
-            "replacement external auth",
-        )))
-    );
+    manager.set_external_auth(Arc::new(FailingExternalChatgptAuth(
+        "required external auth",
+    )));
+    let optional: Arc<dyn ExternalAuth> =
+        Arc::new(OptionalFailingExternalChatgptAuth("optional external auth"));
+    assert!(!manager.replace_non_required_external_auth(Arc::clone(&optional)));
+    assert!(!manager.clear_external_auth_if(&optional));
 
     let error = manager
         .auth()
         .await
-        .expect_err("the original external auth should remain installed");
-    assert_eq!(error.to_string(), "original external auth");
+        .expect_err("the required external auth should remain installed");
+    assert_eq!(error.to_string(), "required external auth");
+}
+
+#[tokio::test]
+async fn non_required_external_auth_cleanup_is_registration_scoped() {
+    let manager = AuthManager::shared(
+        PathBuf::from("non-existent"),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+    )
+    .await;
+    let first: Arc<dyn ExternalAuth> =
+        Arc::new(OptionalFailingExternalChatgptAuth("first external auth"));
+    let second: Arc<dyn ExternalAuth> =
+        Arc::new(OptionalFailingExternalChatgptAuth("second external auth"));
+
+    assert!(manager.replace_non_required_external_auth(Arc::clone(&first)));
+    assert!(manager.replace_non_required_external_auth(Arc::clone(&second)));
+    assert!(!manager.clear_external_auth_if(&first));
+    assert!(manager.has_external_auth());
+    assert!(manager.clear_external_auth_if(&second));
+    assert!(!manager.has_external_auth());
 }
 
 #[tokio::test]

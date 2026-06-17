@@ -1034,9 +1034,14 @@ fn prune_redundant_unreadable_roots(
             retained.push((candidate, original));
             continue;
         }
-        for (ancestor, _) in &retained {
+        for (ancestor, ancestor_original) in &retained {
             if candidate == *ancestor {
-                continue 'candidate;
+                if original == *ancestor_original {
+                    continue 'candidate;
+                }
+                // Distinct symlink and canonical spellings need separate
+                // mounts even when they resolve to the same inode.
+                continue;
             }
             if !candidate.starts_with(ancestor) {
                 continue;
@@ -2685,6 +2690,25 @@ mod tests {
             ),
             vec![denied_parent, denied_grandchild]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_and_canonical_deny_spellings_are_both_retained() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let target = temp_dir.path().join("target-token");
+        let symlink = temp_dir.path().join("projected-token");
+        std::fs::write(&target, "secret").expect("write token");
+        std::os::unix::fs::symlink(&target, &symlink).expect("create token symlink");
+
+        let retained = prune_redundant_unreadable_roots(
+            vec![symlink.clone(), target.clone()],
+            /*allowed_write_paths*/ &[],
+        );
+
+        assert_eq!(retained.len(), 2);
+        assert!(retained.contains(&symlink));
+        assert!(retained.contains(&target));
     }
 
     #[test]

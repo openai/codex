@@ -158,11 +158,12 @@ impl AccountRequestProcessor {
         }
     }
 
-    pub(crate) fn clear_external_auth(&self) {
-        self.auth_manager.clear_external_auth();
-        self.thread_manager
-            .plugins_manager()
-            .set_auth_mode(self.auth_manager.get_api_auth_mode());
+    pub(crate) fn clear_external_auth_if(&self, expected: &Arc<dyn ExternalAuth>) {
+        if self.auth_manager.clear_external_auth_if(expected) {
+            self.thread_manager
+                .plugins_manager()
+                .set_auth_mode(self.auth_manager.get_api_auth_mode());
+        }
     }
 
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {

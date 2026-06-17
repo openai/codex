@@ -1878,20 +1878,33 @@ impl AuthManager {
         }
     }
 
-    pub fn set_external_auth_if_absent(&self, external_auth: Arc<dyn ExternalAuth>) -> bool {
-        if let Ok(mut guard) = self.external_auth.write()
-            && guard.is_none()
-        {
+    pub fn replace_non_required_external_auth(&self, external_auth: Arc<dyn ExternalAuth>) -> bool {
+        if external_auth.requires_successful_resolution() {
+            return false;
+        }
+        if let Ok(mut guard) = self.external_auth.write() {
+            if guard
+                .as_ref()
+                .is_some_and(|current| current.requires_successful_resolution())
+            {
+                return false;
+            }
             *guard = Some(external_auth);
             return true;
         }
         false
     }
 
-    pub fn clear_external_auth(&self) {
-        if let Ok(mut guard) = self.external_auth.write() {
+    pub fn clear_external_auth_if(&self, expected: &Arc<dyn ExternalAuth>) -> bool {
+        if let Ok(mut guard) = self.external_auth.write()
+            && guard
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, expected))
+        {
             *guard = None;
+            return true;
         }
+        false
     }
 
     pub fn set_forced_chatgpt_workspace_id(&self, workspace_id: Option<Vec<String>>) {
