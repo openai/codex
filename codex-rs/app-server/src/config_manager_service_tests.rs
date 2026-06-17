@@ -808,6 +808,26 @@ async fn read_reflects_exact_managed_requirement() {
 }
 
 #[tokio::test]
+async fn read_materializes_default_allow_login_shell() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "").unwrap();
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    let response = service
+        .read(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await
+        .expect("config read should succeed");
+
+    assert_eq!(
+        response.config.additional.get("allow_login_shell"),
+        Some(&serde_json::json!(true))
+    );
+}
+
+#[tokio::test]
 async fn write_value_allows_unmanaged_sibling_of_exact_requirement() {
     let tmp = tempdir().expect("tempdir");
     let path = tmp.path().join(CONFIG_TOML_FILE);

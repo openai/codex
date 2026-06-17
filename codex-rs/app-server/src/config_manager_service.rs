@@ -131,6 +131,7 @@ impl ConfigManager {
         layers
             .requirements_toml()
             .apply_exact_to_config(&mut effective_config_toml);
+        effective_config_toml.allow_login_shell.get_or_insert(true);
 
         let json_value = serde_json::to_value(&effective_config_toml)
             .map_err(|err| ConfigManagerError::json("failed to serialize configuration", err))?;
