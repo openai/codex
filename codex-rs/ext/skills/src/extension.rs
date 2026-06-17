@@ -421,7 +421,7 @@ impl<C> SkillsExtension<C> {
                 fs,
             )
             .await;
-        turn_store.insert(snapshot.clone());
+        turn_store.insert(snapshot);
         turn_store.get::<HostSkillsSnapshot>()
     }
 

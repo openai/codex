@@ -34,7 +34,12 @@ const HOST_AUTHORITY_ID: &str = "host";
 #[derive(Clone, Default)]
 pub struct HostSkillProvider {
     service: Option<Arc<SkillsService>>,
-    managed_service: Arc<Mutex<Option<(HostServiceKey, Arc<SkillsService>)>>>,
+    managed_service: Arc<Mutex<Option<ManagedSkillsService>>>,
+}
+
+struct ManagedSkillsService {
+    key: HostServiceKey,
+    service: Arc<SkillsService>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -73,17 +78,20 @@ impl HostSkillProvider {
                 .managed_service
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some((current_key, service)) = managed_service.as_ref()
-                && current_key == &key
+            if let Some(current) = managed_service.as_ref()
+                && current.key == key
             {
-                return Arc::clone(service);
+                return Arc::clone(&current.service);
             }
             let service = Arc::new(SkillsService::new_with_restriction_product(
                 config.codex_home.clone(),
                 config.load_input.bundled_skills_enabled,
                 restriction_product,
             ));
-            *managed_service = Some((key, Arc::clone(&service)));
+            *managed_service = Some(ManagedSkillsService {
+                key,
+                service: Arc::clone(&service),
+            });
             service
         });
         let mut load_input = config.load_input.clone();
