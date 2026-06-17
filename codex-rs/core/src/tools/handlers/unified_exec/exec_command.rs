@@ -28,6 +28,9 @@ use crate::unified_exec::generate_chunk_id;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::SandboxablePreference;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_output_truncation::approx_token_count;
@@ -141,14 +144,33 @@ impl ExecCommandHandler {
             .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
         let environment = Arc::clone(&turn_environment.environment);
         let fs = environment.get_filesystem();
-        // TODO(anp): Replace AbsolutePathBufGuard with PathUri-aware argument parsing.
+
+        // A foreign cwd cannot seed the AbsolutePathBufGuard used to resolve relative paths in the
+        // permissions config below. Consult the configured platform-sandbox requirement before
+        // deciding whether parsing may continue without that base path.
+        let sandbox = SandboxManager::new().select_initial(
+            &turn.file_system_sandbox_policy(),
+            turn.network_sandbox_policy(),
+            SandboxablePreference::Auto,
+            turn.windows_sandbox_level,
+            turn.network.is_some(),
+        );
+        // TODO(anp): Remove this parsing split once sandboxing supports foreign paths.
         let native_cwd = match cwd.to_abs_path() {
             Ok(cwd) => Some(cwd),
-            Err(_) if environment.is_remote() => None,
+            Err(_) if sandbox == SandboxType::None => {
+                // Parsing without a base only skips relative-path resolution inside the
+                // permissions config. That is safe only for a truly unsandboxed attempt;
+                // sandboxed attempts fall through and return the conversion error below.
+                None
+            }
             Err(err) => return Err(FunctionCallError::RespondToModel(err.to_string())),
         };
         let args: ExecCommandArgs = match native_cwd.as_ref() {
-            Some(native_cwd) => parse_arguments_with_base_path(&arguments, native_cwd)?,
+            Some(native_cwd) => {
+                // The base path only resolves paths nested in the permissions config types.
+                parse_arguments_with_base_path(&arguments, native_cwd)?
+            }
             None => parse_arguments(&arguments)?,
         };
         let hook_command = args.cmd.clone();
