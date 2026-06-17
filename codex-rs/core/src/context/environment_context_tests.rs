@@ -207,7 +207,7 @@ fn enforcement_only_paths_are_omitted_from_environment_context() {
     let model_visible_permission_profile =
         crate::session::turn_context::model_visible_permission_profile(
             &permission_profile,
-            &[credential_path.clone()],
+            std::slice::from_ref(&credential_path),
         );
     let context = FileSystemContext::from_permission_profile(
         &model_visible_permission_profile,
