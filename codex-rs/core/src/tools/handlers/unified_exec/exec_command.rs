@@ -276,6 +276,7 @@ impl ExecCommandHandler {
             }
         };
 
+        // TODO(anp) intercept apply_patch properly when cwd is a foreign path
         if let Some(native_cwd) = native_cwd.as_ref()
             && let Some(output) = intercept_apply_patch(
                 &command,
