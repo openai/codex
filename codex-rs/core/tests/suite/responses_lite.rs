@@ -60,9 +60,9 @@ fn additional_tools(body: &Value) -> Result<&[Value]> {
     body["input"]
         .as_array()
         .context("Responses request input should be an array")?
-        .iter()
-        .find(|item| item.get("type").and_then(Value::as_str) == Some("additional_tools"))
-        .context("Responses request should contain additional_tools")?["tools"]
+        .first()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("additional_tools"))
+        .context("Responses request should start with additional_tools")?["tools"]
         .as_array()
         .map(Vec::as_slice)
         .context("additional_tools tools should be an array")
