@@ -34,6 +34,7 @@ use codex_sandboxing::SandboxablePreference;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_output_truncation::approx_token_count;
+use codex_utils_path_uri::PathConvention;
 
 use super::super::shell_spec::CommandToolOptions;
 use super::super::shell_spec::create_exec_command_tool_with_environment_id;
@@ -155,11 +156,21 @@ impl ExecCommandHandler {
             turn.windows_sandbox_level,
             turn.network.is_some(),
         );
+        // `to_abs_path()` alone cannot identify foreign drive paths: `file:///C:/repo` is
+        // representable as `/C:/repo` on POSIX. Require the inferred convention to match too.
+        let cwd_uses_native_convention =
+            cwd.infer_path_convention() == Some(PathConvention::native());
         // TODO(anp): Remove this parsing split once sandboxing supports foreign paths.
         let native_cwd = match cwd.to_abs_path() {
-            Ok(cwd) => Some(cwd),
-            Err(_) if sandbox == SandboxType::None => None,
+            Ok(cwd) if cwd_uses_native_convention => Some(cwd),
+            _ if sandbox == SandboxType::None => None,
             Err(err) => return Err(FunctionCallError::RespondToModel(err.to_string())),
+            Ok(_) => {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "path URI `{cwd}` does not use the host's native {} path convention",
+                    PathConvention::native()
+                )));
+            }
         };
         let args: ExecCommandArgs = match native_cwd.as_ref() {
             Some(native_cwd) => {
