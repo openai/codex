@@ -94,6 +94,7 @@ pub(crate) async fn list_accessible_and_enabled_connectors_from_manager(
     .collect()
 }
 
+#[instrument(level = "trace", skip_all)]
 pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
     config: &Config,
     plugins_manager: &PluginsManager,

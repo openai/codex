@@ -27,6 +27,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
+use tracing::instrument;
 use url::Url;
 
 mod catalog_cache;
@@ -805,6 +806,7 @@ pub async fn fetch_and_cache_global_remote_plugin_catalog(
     Ok(())
 }
 
+#[instrument(level = "trace", skip_all)]
 pub async fn fetch_recommended_plugins(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,

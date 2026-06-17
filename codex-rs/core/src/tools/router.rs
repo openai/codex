@@ -240,6 +240,7 @@ impl ToolRouter {
     }
 }
 
+#[instrument(level = "trace", skip_all)]
 pub(crate) fn extension_tool_executors(
     session: &Session,
 ) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {

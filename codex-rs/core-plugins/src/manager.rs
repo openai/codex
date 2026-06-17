@@ -88,7 +88,9 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tokio::sync::OnceCell;
 use tokio::sync::Semaphore;
+use tracing::Instrument;
 use tracing::instrument;
+use tracing::trace_span;
 use tracing::warn;
 
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
@@ -487,7 +489,12 @@ impl PluginsManager {
             return self.resolve_loaded_plugins_for_auth(plugins);
         }
 
-        let Ok(_load_permit) = self.loaded_plugins_load_semaphore.acquire().await else {
+        let Ok(_load_permit) = self
+            .loaded_plugins_load_semaphore
+            .acquire()
+            .instrument(trace_span!("plugins_for_config.wait_for_load_permit"))
+            .await
+        else {
             warn!("plugin load semaphore closed");
             return PluginLoadOutcome::default();
         };
@@ -941,6 +948,14 @@ impl PluginsManager {
         Ok(featured_plugin_ids)
     }
 
+    #[instrument(
+        level = "trace",
+        skip_all,
+        fields(
+            plugins_enabled = config.plugins_enabled,
+            remote_plugin_enabled = config.remote_plugin_enabled
+        )
+    )]
     pub async fn recommended_plugins_mode_for_config(
         &self,
         config: &PluginsConfigInput,
@@ -1013,6 +1028,7 @@ impl PluginsManager {
 
     /// Returns endpoint recommendations eligible for installation in the current client.
     /// `None` selects the legacy discovery workflow.
+    #[instrument(level = "trace", skip_all)]
     pub async fn recommended_plugin_candidates_for_config(
         &self,
         input: RecommendedPluginCandidatesInput<'_>,
