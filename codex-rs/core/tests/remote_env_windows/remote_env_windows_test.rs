@@ -164,14 +164,10 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
             assert_eq!((end.exit_code, end.status), (0, ExecCommandStatus::Completed));
             */
 
-            loop {
-                if matches!(
-                    wait_for_event(&test.codex, |_| true).await,
-                    EventMsg::TurnComplete(_)
-                ) {
-                    break;
-                }
-            }
+            wait_for_event(&test.codex, |event| {
+                matches!(event, EventMsg::TurnComplete(_))
+            })
+            .await;
 
             let request = response_mock
                 .last_request()
