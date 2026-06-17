@@ -508,6 +508,9 @@
             "guardian_approval": {
               "type": "boolean"
             },
+            "guardian_manual_approval_fallback": {
+              "type": "boolean"
+            },
             "hooks": {
               "type": "boolean"
             },
@@ -4667,6 +4670,9 @@
           "type": "boolean"
         },
         "guardian_approval": {
+          "type": "boolean"
+        },
+        "guardian_manual_approval_fallback": {
           "type": "boolean"
         },
         "hooks": {

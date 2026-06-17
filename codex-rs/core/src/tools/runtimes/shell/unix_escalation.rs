@@ -351,6 +351,55 @@ struct PromptDecision {
     rejection_message: Option<String>,
 }
 
+struct ExecvePromptRequest {
+    session: Arc<crate::session::session::Session>,
+    turn: Arc<crate::session::turn_context::TurnContext>,
+    call_id: String,
+    approval_id: Option<String>,
+    command: Vec<String>,
+    workdir: AbsolutePathBuf,
+    additional_permissions: Option<AdditionalPermissionProfile>,
+}
+
+impl ExecvePromptRequest {
+    async fn resolve_guardian_decision(
+        self,
+        guardian_review_id: Option<String>,
+        decision: ReviewDecision,
+    ) -> PromptDecision {
+        if !matches!(decision, ReviewDecision::TimedOut)
+            || !self.turn.guardian_timeout_manual_fallback_enabled()
+        {
+            return PromptDecision {
+                decision,
+                guardian_review_id,
+                rejection_message: None,
+            };
+        }
+
+        let decision = self
+            .session
+            .request_command_approval(
+                &self.turn,
+                self.call_id,
+                self.approval_id,
+                self.command,
+                self.workdir,
+                Some(guardian_timeout_message()),
+                /*network_approval_context*/ None,
+                /*proposed_execpolicy_amendment*/ None,
+                self.additional_permissions,
+                Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
+            )
+            .await;
+        PromptDecision {
+            decision,
+            guardian_review_id: None,
+            rejection_message: None,
+        }
+    }
+}
+
 fn execve_prompt_is_rejected_by_policy(
     approval_policy: AskForApproval,
     decision_source: &DecisionSource,
@@ -419,11 +468,11 @@ impl CoreShellActionProvider {
         additional_permissions: Option<AdditionalPermissionProfile>,
     ) -> anyhow::Result<PromptDecision> {
         let command = join_program_and_argv(program, argv);
+        let approval_id = Some(Uuid::new_v4().to_string());
         let workdir = workdir.clone();
         let session = self.session.clone();
         let turn = self.turn.clone();
         let call_id = self.call_id.clone();
-        let approval_id = Some(Uuid::new_v4().to_string());
         let source = self.tool_name;
         let guardian_review_id = routes_approval_to_guardian(&turn).then(new_guardian_review_id);
         Ok(stopwatch
@@ -460,7 +509,7 @@ impl CoreShellActionProvider {
                 }
 
                 // 2) Route to Guardian if configured
-                if let Some(review_id) = guardian_review_id.clone() {
+                let manual_prompt_reason = if let Some(review_id) = guardian_review_id.clone() {
                     let decision = review_approval_request(
                         &session,
                         &turn,
@@ -471,17 +520,26 @@ impl CoreShellActionProvider {
                             program: program.to_string_lossy().into_owned(),
                             argv: argv.to_vec(),
                             cwd: workdir.clone(),
-                            additional_permissions,
+                            additional_permissions: additional_permissions.clone(),
                         },
                         /*retry_reason*/ None,
                     )
                     .await;
-                    return PromptDecision {
-                        decision,
-                        guardian_review_id,
-                        rejection_message: None,
+                    let prompt_request = ExecvePromptRequest {
+                        session: session.clone(),
+                        turn: turn.clone(),
+                        call_id: call_id.clone(),
+                        approval_id: approval_id.clone(),
+                        command: command.clone(),
+                        workdir: workdir.clone(),
+                        additional_permissions: additional_permissions.clone(),
                     };
-                }
+                    return prompt_request
+                        .resolve_guardian_decision(guardian_review_id, decision)
+                        .await;
+                } else {
+                    None
+                };
 
                 // 3) Fall back to regular user prompt
                 let decision = session
@@ -491,7 +549,7 @@ impl CoreShellActionProvider {
                         approval_id,
                         command,
                         workdir.clone(),
-                        /*reason*/ None,
+                        manual_prompt_reason,
                         /*network_approval_context*/ None,
                         /*proposed_execpolicy_amendment*/ None,
                         additional_permissions,

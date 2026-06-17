@@ -1411,6 +1411,7 @@ impl ThreadManagerState {
             mcp_manager: Arc::clone(&self.mcp_manager),
             extensions: Arc::clone(&self.extensions),
             conversation_history: initial_history,
+            client_session_source: self.session_source.clone(),
             session_source,
             forked_from_thread_id,
             parent_thread_id,

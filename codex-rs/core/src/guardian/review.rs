@@ -57,9 +57,8 @@ const GUARDIAN_REJECTION_INSTRUCTIONS: &str = concat!(
 );
 
 const GUARDIAN_TIMEOUT_INSTRUCTIONS: &str = concat!(
-    "The automatic permission approval review did not finish before its deadline. ",
-    "Do not assume the action is unsafe based on the timeout alone. ",
-    "You may retry once, or ask the user for guidance or explicit approval.",
+    "Automatic approval review timed out. ",
+    "Please review this request manually.",
 );
 
 const GUARDIAN_REVIEW_MAX_ATTEMPTS: i64 = 3;

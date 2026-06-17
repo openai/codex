@@ -257,6 +257,7 @@ pub struct TestCodexBuilder {
     user_shell_override: Option<Shell>,
     exec_server_url: Option<String>,
     extensions: Arc<ExtensionRegistry<Config>>,
+    session_source: SessionSource,
     user_instructions_provider: Option<Arc<dyn UserInstructionsProvider>>,
 }
 
@@ -343,6 +344,11 @@ impl TestCodexBuilder {
 
     pub fn with_extensions(mut self, extensions: Arc<ExtensionRegistry<Config>>) -> Self {
         self.extensions = extensions;
+        self
+    }
+
+    pub fn with_session_source(mut self, session_source: SessionSource) -> Self {
+        self.session_source = session_source;
         self
     }
 
@@ -551,7 +557,7 @@ impl TestCodexBuilder {
         let thread_manager = ThreadManager::new(
             &config,
             codex_core::test_support::auth_manager_from_auth(auth.clone()),
-            SessionSource::Exec,
+            self.session_source.clone(),
             Arc::clone(&environment_manager),
             Arc::clone(&self.extensions),
             user_instructions_provider,
@@ -1142,6 +1148,7 @@ pub fn test_codex() -> TestCodexBuilder {
         user_shell_override: None,
         exec_server_url: None,
         extensions: empty_extension_registry(),
+        session_source: SessionSource::Exec,
         user_instructions_provider: None,
     }
 }

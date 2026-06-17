@@ -112,6 +112,7 @@ pub struct TurnContext {
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
+    pub(crate) manual_approval_fallback_enabled: bool,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) environments: TurnEnvironmentSnapshot,
     /// The session's absolute working directory. All relative paths provided
@@ -150,6 +151,10 @@ enum TurnMultiAgentRuntime {
 }
 
 impl TurnContext {
+    pub(crate) fn guardian_timeout_manual_fallback_enabled(&self) -> bool {
+        self.manual_approval_fallback_enabled
+    }
+
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
         self.permission_profile.clone()
     }
@@ -266,6 +271,7 @@ impl TurnContext {
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
+            manual_approval_fallback_enabled: self.manual_approval_fallback_enabled,
             parent_thread_id: self.parent_thread_id,
             environments: self.environments.clone(),
             #[allow(deprecated)]
@@ -549,6 +555,8 @@ impl Session {
             reasoning_effort,
             reasoning_summary,
             session_source,
+            manual_approval_fallback_enabled: session_configuration
+                .manual_approval_fallback_enabled,
             parent_thread_id: session_configuration.parent_thread_id,
             environments,
             #[allow(deprecated)]

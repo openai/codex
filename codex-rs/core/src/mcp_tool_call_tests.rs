@@ -1705,7 +1705,7 @@ async fn guardian_review_decision_maps_to_mcp_tool_decision() {
     else {
         panic!("guardian timeout should carry a timeout message");
     };
-    assert!(message.contains("did not finish before its deadline"));
+    assert!(message.contains("Automatic approval review timed out"));
     assert!(!message.contains("unacceptable risk"));
     assert_eq!(
         mcp_tool_approval_decision_from_guardian(
