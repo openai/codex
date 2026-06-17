@@ -5241,7 +5241,7 @@
           "$ref": "#/definitions/StandaloneWebSearchMethod"
         }
       ],
-      "description": "Controls page access for the standalone web search executor."
+      "description": "Controls page access for the standalone web search executor. Defaults to the corresponding `web_search` mode when unset."
     },
     "suppress_unstable_features_warning": {
       "description": "Suppress warnings about unstable (under development) features.",

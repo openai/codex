@@ -994,7 +994,7 @@ pub struct Config {
     /// Explicit or feature-derived web search mode.
     pub web_search_mode: Constrained<WebSearchMode>,
 
-    /// Page-access method used by the standalone web search executor.
+    /// Resolved page-access method used by the standalone web search executor.
     pub standalone_web_search_method: StandaloneWebSearchMethod,
 
     /// Additional parameters for the web search tool when it is enabled.
@@ -3121,7 +3121,6 @@ impl Config {
         }
         let web_search_mode =
             resolve_web_search_mode(&cfg, &features).unwrap_or(WebSearchMode::Cached);
-        let standalone_web_search_method = cfg.standalone_web_search_method.unwrap_or_default();
         let web_search_config = resolve_web_search_config(&cfg);
         let experimental_request_user_input_enabled =
             resolve_experimental_request_user_input_enabled(&cfg);
@@ -3452,6 +3451,31 @@ impl Config {
             &mut constrained_web_search_mode,
             &mut startup_warnings,
         )?;
+        let default_standalone_web_search_method = match constrained_web_search_mode.value() {
+            WebSearchMode::Disabled | WebSearchMode::Cached => StandaloneWebSearchMethod::Offline,
+            WebSearchMode::IndexGated => StandaloneWebSearchMethod::IndexGated,
+            WebSearchMode::Live => StandaloneWebSearchMethod::Online,
+        };
+        let web_search_mode_constraint = constrained_web_search_mode.value.clone();
+        let mut constrained_standalone_web_search_method = ConstrainedWithSource::new(
+            Constrained::new(default_standalone_web_search_method, move |method| {
+                let corresponding_web_search_mode = match method {
+                    StandaloneWebSearchMethod::Offline => WebSearchMode::Disabled,
+                    StandaloneWebSearchMethod::IndexGated => WebSearchMode::IndexGated,
+                    StandaloneWebSearchMethod::Online => WebSearchMode::Live,
+                };
+                web_search_mode_constraint.can_set(&corresponding_web_search_mode)
+            })?,
+            constrained_web_search_mode.source.clone(),
+        );
+        apply_requirement_constrained_value(
+            "standalone_web_search_method",
+            cfg.standalone_web_search_method
+                .unwrap_or(default_standalone_web_search_method),
+            &mut constrained_standalone_web_search_method,
+            &mut startup_warnings,
+        )?;
+        let standalone_web_search_method = constrained_standalone_web_search_method.value();
 
         let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;

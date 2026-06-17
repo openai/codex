@@ -413,7 +413,8 @@ pub struct ConfigToml {
     /// Controls the web search tool mode: disabled, cached, index-gated, or live.
     pub web_search: Option<WebSearchMode>,
 
-    /// Controls page access for the standalone web search executor.
+    /// Controls page access for the standalone web search executor. Defaults to the corresponding
+    /// `web_search` mode when unset.
     pub standalone_web_search_method: Option<StandaloneWebSearchMethod>,
 
     /// Nested tools section for feature toggles
