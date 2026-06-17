@@ -805,7 +805,7 @@ async fn import_home_migrates_supported_config_fields_skills_and_agents_md() {
             .join("skill-a")
             .join("SKILL.md"),
         format!(
-            "Use {SOURCE_EXTERNAL_AGENT_PRODUCT_NAME} and {SOURCE_EXTERNAL_AGENT_UPPER_NAME} utilities."
+            "---\nname: skill-a\ndescription: Source skill\n---\nUse {SOURCE_EXTERNAL_AGENT_PRODUCT_NAME} and {SOURCE_EXTERNAL_AGENT_UPPER_NAME} utilities.\n"
         ),
     )
     .expect("write skill");
@@ -865,7 +865,7 @@ MY_TEAM = "codex"
     assert_eq!(
         fs::read_to_string(agents_skills.join("skill-a").join("SKILL.md"))
             .expect("read copied skill"),
-        "Use Codex and Codex utilities."
+        "---\nname: skill-a\ndescription: Source skill\n---\nUse Codex and Codex utilities.\n"
     );
 }
 
@@ -2769,22 +2769,81 @@ async fn import_plugins_supports_project_relative_external_agent_plugin_marketpl
     assert!(config.contains("enabled = true"));
 }
 
-#[test]
-fn import_skills_returns_only_new_skill_directory_names() {
+#[tokio::test]
+async fn import_skills_returns_only_new_skill_directory_names() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
     let agents_skills = codex_home
         .parent()
         .map(|parent| parent.join(".agents").join("skills"))
         .unwrap_or_else(|| PathBuf::from(".agents").join("skills"));
-    fs::create_dir_all(external_agent_home.join("skills").join("skill-a"))
-        .expect("create source a");
-    fs::create_dir_all(external_agent_home.join("skills").join("skill-b"))
-        .expect("create source b");
+    let source_skill_a = external_agent_home.join("skills").join("skill-a");
+    let source_skill_b = external_agent_home.join("skills").join("skill-b");
+    fs::create_dir_all(&source_skill_a).expect("create source a");
+    fs::create_dir_all(&source_skill_b).expect("create source b");
+    fs::write(
+        source_skill_a.join("SKILL.md"),
+        "---\nname: skill-a\ndescription: source a\n---\n",
+    )
+    .expect("write source a skill");
+    fs::write(
+        source_skill_b.join("SKILL.md"),
+        "---\nname: skill-b\ndescription: source b\n---\n",
+    )
+    .expect("write source b skill");
     fs::create_dir_all(agents_skills.join("skill-a")).expect("create existing target");
 
     let copied_names = service_for_paths(external_agent_home, codex_home)
         .import_skills(/*cwd*/ None)
+        .await
         .expect("import skills");
 
     assert_eq!(copied_names, vec!["skill-b".to_string()]);
+}
+
+#[tokio::test]
+async fn import_skills_rejects_invalid_skill_without_copying() {
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    let source_skill = external_agent_home.join("skills").join("broken-skill");
+    let agents_skills = codex_home
+        .parent()
+        .map(|parent| parent.join(".agents").join("skills"))
+        .unwrap_or_else(|| PathBuf::from(".agents").join("skills"));
+    fs::create_dir_all(&source_skill).expect("create source skill");
+    fs::write(source_skill.join("SKILL.md"), "missing frontmatter\n").expect("write invalid skill");
+
+    let outcome = service_for_paths(external_agent_home, codex_home)
+        .import(vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Skills,
+            description: "Import skills".to_string(),
+            cwd: None,
+            details: None,
+        }])
+        .await;
+
+    assert_eq!(outcome.pending_plugin_imports, Vec::new());
+    let item_result = outcome
+        .item_results
+        .into_iter()
+        .next()
+        .expect("skills import result");
+    assert_eq!(
+        item_result.item_type,
+        ExternalAgentConfigMigrationItemType::Skills
+    );
+    assert_eq!(item_result.success_count, 0);
+    assert_eq!(item_result.error_count, 1);
+    assert_eq!(item_result.successes, Vec::new());
+    assert_eq!(item_result.raw_errors.len(), 1);
+    let raw_error = &item_result.raw_errors[0];
+    assert_eq!(raw_error.failure_stage, "import_request_failed");
+    assert_eq!(
+        raw_error.error_type.as_deref(),
+        Some("external_agent_config_import_error")
+    );
+    assert!(
+        raw_error
+            .message
+            .contains("missing YAML frontmatter delimited by ---")
+    );
+    assert!(!agents_skills.join("broken-skill").exists());
 }

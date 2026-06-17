@@ -1,6 +1,8 @@
 use codex_config::types::PluginConfig;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
+use codex_core::skills::loader::SkillRoot;
+use codex_core::skills::loader::load_skills_from_roots;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::PluginsManager;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
@@ -8,6 +10,7 @@ use codex_core_plugins::marketplace::find_marketplace_manifest_path;
 use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
 use codex_core_plugins::marketplace_add::add_marketplace;
 use codex_core_plugins::marketplace_add::is_local_marketplace_source;
+use codex_exec_server::LOCAL_FS;
 use codex_external_agent_migration::build_mcp_config_from_external;
 use codex_external_agent_migration::count_missing_commands;
 use codex_external_agent_migration::count_missing_subagents;
@@ -21,6 +24,8 @@ use codex_external_agent_sessions::ExternalAgentSessionMigration;
 use codex_external_agent_sessions::detect_recent_sessions;
 use codex_plugin::PluginId;
 use codex_protocol::protocol::Product;
+use codex_protocol::protocol::SkillScope;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -30,6 +35,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use toml::Value as TomlValue;
 
 const EXTERNAL_AGENT_CONFIG_DETECT_METRIC: &str = "codex.external_agent_config.detect";
@@ -262,18 +268,19 @@ impl ExternalAgentConfigService {
                     );
                     Ok(())
                 })(),
-                ExternalAgentConfigMigrationItemType::Skills => (|| {
-                    let imported_skills = self.import_skills(migration_item.cwd.as_deref())?;
-                    emit_migration_metric(
-                        EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
-                        ExternalAgentConfigMigrationItemType::Skills,
-                        Some(imported_skills.len()),
-                    );
-                    for skill_name in imported_skills {
-                        item_result.record_success(Some(skill_name.clone()), Some(skill_name));
-                    }
-                    Ok(())
-                })(),
+                ExternalAgentConfigMigrationItemType::Skills => self
+                    .import_skills(migration_item.cwd.as_deref())
+                    .await
+                    .map(|imported_skills| {
+                        emit_migration_metric(
+                            EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
+                            ExternalAgentConfigMigrationItemType::Skills,
+                            Some(imported_skills.len()),
+                        );
+                        for skill_name in imported_skills {
+                            item_result.record_success(Some(skill_name.clone()), Some(skill_name));
+                        }
+                    }),
                 ExternalAgentConfigMigrationItemType::AgentsMd => (|| {
                     if let Some((source, target)) =
                         self.import_agents_md(migration_item.cwd.as_deref())?
@@ -1149,7 +1156,7 @@ impl ExternalAgentConfigService {
         import_commands(&source_commands, &target_skills)
     }
 
-    fn import_skills(&self, cwd: Option<&Path>) -> io::Result<Vec<String>> {
+    async fn import_skills(&self, cwd: Option<&Path>) -> io::Result<Vec<String>> {
         let (source_skills, target_skills) = if let Some(repo_root) = find_repo_root(cwd)? {
             (
                 repo_root.join(EXTERNAL_AGENT_DIR).join("skills"),
@@ -1165,6 +1172,30 @@ impl ExternalAgentConfigService {
         };
         if !source_skills.is_dir() {
             return Ok(Vec::new());
+        }
+        let source_skills_root = AbsolutePathBuf::from_absolute_path_checked(&source_skills)
+            .map_err(|err| {
+                invalid_data_error(format!(
+                    "invalid skills root {}: {err}",
+                    source_skills.display()
+                ))
+            })?;
+        let skill_load_outcome = load_skills_from_roots([SkillRoot {
+            path: source_skills_root,
+            scope: SkillScope::User,
+            file_system: Arc::clone(&LOCAL_FS),
+            plugin_id: None,
+            plugin_root: None,
+        }])
+        .await;
+        if !skill_load_outcome.errors.is_empty() {
+            let details = skill_load_outcome
+                .errors
+                .iter()
+                .map(|error| format!("{}: {}", error.path.display(), error.message))
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(invalid_data_error(format!("invalid skills: {details}")));
         }
 
         fs::create_dir_all(&target_skills)?;
