@@ -207,13 +207,14 @@ fn resolve_plugin_script_execution(
     req: &UnifiedExecRequest,
     ctx: &ToolCtx,
 ) -> Option<Arc<PluginScriptExecution>> {
+    let cwd = req.cwd.to_abs_path().ok()?;
     should_track_plugin_script(req)
         .then(|| {
             PluginScriptExecution::resolve(
                 ctx.session.as_ref(),
                 ctx.turn.as_ref(),
                 &req.hook_command,
-                &req.cwd,
+                &cwd,
                 req.shell_type,
             )
         })
