@@ -158,12 +158,7 @@ impl ExecCommandHandler {
         // TODO(anp): Remove this parsing split once sandboxing supports foreign paths.
         let native_cwd = match cwd.to_abs_path() {
             Ok(cwd) => Some(cwd),
-            Err(_) if sandbox == SandboxType::None => {
-                // Parsing without a base only skips relative-path resolution inside the
-                // permissions config. That is safe only for a truly unsandboxed attempt;
-                // sandboxed attempts fall through and return the conversion error below.
-                None
-            }
+            Err(_) if sandbox == SandboxType::None => None,
             Err(err) => return Err(FunctionCallError::RespondToModel(err.to_string())),
         };
         let args: ExecCommandArgs = match native_cwd.as_ref() {
@@ -171,7 +166,12 @@ impl ExecCommandHandler {
                 // The base path only resolves paths nested in the permissions config types.
                 parse_arguments_with_base_path(&arguments, native_cwd)?
             }
-            None => parse_arguments(&arguments)?,
+            None => {
+                // Parsing without a base only skips relative-path resolution inside the
+                // permissions config. That is safe only for a truly unsandboxed attempt;
+                // sandboxed attempts fall through and return the conversion error below.
+                parse_arguments(&arguments)?
+            }
         };
         let hook_command = args.cmd.clone();
         if let Some(native_cwd) = native_cwd.as_ref() {
