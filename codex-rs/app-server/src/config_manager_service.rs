@@ -125,9 +125,12 @@ impl ConfigManager {
         };
 
         let effective = layers.effective_config();
-        let effective_config_toml: ConfigToml = effective
+        let mut effective_config_toml: ConfigToml = effective
             .try_into()
             .map_err(|err| ConfigManagerError::toml("invalid configuration", err))?;
+        layers
+            .requirements_toml()
+            .apply_exact_to_config(&mut effective_config_toml);
 
         let json_value = serde_json::to_value(&effective_config_toml)
             .map_err(|err| ConfigManagerError::json("failed to serialize configuration", err))?;
@@ -237,6 +240,15 @@ impl ConfigManager {
             let segments = parse_key_path(&key_path).map_err(|message| {
                 ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
             })?;
+            if let Some(field) = layers
+                .requirements_toml()
+                .exact_requirement_for_config_path(&segments)
+            {
+                return Err(ConfigManagerError::write(
+                    ConfigWriteErrorCode::ConfigRequirementReadonly,
+                    format!("`{field}` is managed by requirements and cannot be changed"),
+                ));
+            }
             if !value.is_null() {
                 match segments.as_slice() {
                     [segment] if segment == "profile" => {

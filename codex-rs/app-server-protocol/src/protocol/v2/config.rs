@@ -335,6 +335,7 @@ pub struct ConfigWriteResponse {
 #[ts(export_to = "v2/")]
 pub enum ConfigWriteErrorCode {
     ConfigLayerReadonly,
+    ConfigRequirementReadonly,
     ConfigVersionConflict,
     ConfigValidationError,
     ConfigPathNotFound,

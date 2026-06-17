@@ -18,6 +18,7 @@ use super::requirements_exec_policy::RequirementsExecPolicyToml;
 use crate::Constrained;
 use crate::ConstraintError;
 use crate::ManagedHooksRequirementsToml;
+use crate::config_toml::ConfigToml;
 use crate::mcp_types::AppToolApproval;
 use crate::permissions_toml::PermissionProfileToml;
 use crate::types::FeedbackConfigToml;
@@ -1208,6 +1209,92 @@ impl ConfigRequirementsToml {
                 .as_deref()
                 .is_none_or(|value| value.trim().is_empty())
     }
+
+    /// Applies the requirements whose values replace config values.
+    ///
+    /// This projection is shared by config/read and config-lock export so
+    /// both surfaces describe the same behavior as the final runtime config.
+    pub fn apply_exact_to_config(&self, config: &mut ConfigToml) {
+        macro_rules! apply_exact {
+            ($field:ident) => {
+                if let Some(value) = self.$field.as_ref() {
+                    config.$field = Some(value.clone());
+                }
+            };
+        }
+
+        apply_exact!(sqlite_home);
+        apply_exact!(log_dir);
+        apply_exact!(model_catalog_json);
+        apply_exact!(check_for_update_on_startup);
+        apply_exact!(allow_login_shell);
+
+        if let Some(enabled) = self.feedback.as_ref().and_then(|feedback| feedback.enabled) {
+            config.feedback.get_or_insert_default().enabled = Some(enabled);
+        }
+        if let Some(sandbox_private_desktop) = self
+            .windows
+            .as_ref()
+            .and_then(|windows| windows.sandbox_private_desktop)
+        {
+            config
+                .windows
+                .get_or_insert_default()
+                .sandbox_private_desktop = Some(sandbox_private_desktop);
+        }
+    }
+
+    /// Returns the exact managed field affected by editing `segments`.
+    pub fn exact_requirement_for_config_path(&self, segments: &[String]) -> Option<&'static str> {
+        let managed_fields: [(bool, &[&str], &'static str); 7] = [
+            (self.sqlite_home.is_some(), &["sqlite_home"], "sqlite_home"),
+            (self.log_dir.is_some(), &["log_dir"], "log_dir"),
+            (
+                self.model_catalog_json.is_some(),
+                &["model_catalog_json"],
+                "model_catalog_json",
+            ),
+            (
+                self.check_for_update_on_startup.is_some(),
+                &["check_for_update_on_startup"],
+                "check_for_update_on_startup",
+            ),
+            (
+                self.allow_login_shell.is_some(),
+                &["allow_login_shell"],
+                "allow_login_shell",
+            ),
+            (
+                self.feedback
+                    .as_ref()
+                    .and_then(|feedback| feedback.enabled)
+                    .is_some(),
+                &["feedback", "enabled"],
+                "feedback.enabled",
+            ),
+            (
+                self.windows
+                    .as_ref()
+                    .and_then(|windows| windows.sandbox_private_desktop)
+                    .is_some(),
+                &["windows", "sandbox_private_desktop"],
+                "windows.sandbox_private_desktop",
+            ),
+        ];
+
+        managed_fields
+            .into_iter()
+            .find_map(|(is_managed, managed_path, field)| {
+                (is_managed && config_paths_overlap(segments, managed_path)).then_some(field)
+            })
+    }
+}
+
+fn config_paths_overlap(segments: &[String], managed_path: &[&str]) -> bool {
+    segments
+        .iter()
+        .zip(managed_path)
+        .all(|(segment, managed_segment)| segment == managed_segment)
 }
 
 impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {

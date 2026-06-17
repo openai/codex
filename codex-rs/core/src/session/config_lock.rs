@@ -88,6 +88,10 @@ fn session_configuration_to_lock_config_toml(
         .effective_config()
         .try_into()
         .context("failed to deserialize effective config for config lock")?;
+    config
+        .config_layer_stack
+        .requirements_toml()
+        .apply_exact_to_config(&mut lock_config);
 
     if config.config_lock_save_fields_resolved_from_model_catalog {
         save_session_resolved_fields(sc, &mut lock_config);
@@ -203,6 +207,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_config::test_support::CloudConfigBundleFixture;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
 
@@ -300,6 +305,58 @@ mod tests {
         assert_eq!(lock.personality, None);
         assert_eq!(lock.approval_policy, None);
         assert_eq!(lock.approvals_reviewer, None);
+    }
+
+    #[tokio::test]
+    async fn lock_contains_exact_managed_requirements() {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let sqlite_home = codex_home.path().join("managed-state");
+        let log_dir = codex_home.path().join("managed-logs");
+        let requirements = format!(
+            r#"
+sqlite_home = {:?}
+log_dir = {:?}
+check_for_update_on_startup = false
+allow_login_shell = false
+
+[feedback]
+enabled = false
+
+[windows]
+sandbox_private_desktop = false
+"#,
+            sqlite_home.display(),
+            log_dir.display(),
+        );
+        let config = crate::config::ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_config_bundle(
+                CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements),
+            )
+            .build()
+            .await
+            .expect("config should load");
+        let mut sc = crate::session::tests::make_session_configuration_for_tests().await;
+        sc.original_config_do_not_use = Arc::new(config);
+
+        let lockfile = sc.to_config_lockfile_toml().expect("lock should serialize");
+        let lock = &lockfile.config;
+
+        assert_eq!(lock.sqlite_home.as_deref(), Some(sqlite_home.as_path()));
+        assert_eq!(lock.log_dir.as_deref(), Some(log_dir.as_path()));
+        assert_eq!(lock.check_for_update_on_startup, Some(false));
+        assert_eq!(lock.allow_login_shell, Some(false));
+        assert_eq!(
+            lock.feedback.as_ref().and_then(|feedback| feedback.enabled),
+            Some(false)
+        );
+        assert_eq!(
+            lock.windows
+                .as_ref()
+                .and_then(|windows| windows.sandbox_private_desktop),
+            Some(false)
+        );
     }
 
     #[tokio::test]
