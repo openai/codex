@@ -90,6 +90,14 @@ impl RolloutBudget {
         );
     }
 
+    /// Forces the next sampling request for `thread_id` to restate the current remainder.
+    pub(crate) fn rearm_reminder(&self, thread_id: ThreadId) {
+        let Some(mut state) = self.lock() else {
+            return;
+        };
+        state.deliveries.remove(&thread_id);
+    }
+
     fn lock(&self) -> Option<MutexGuard<'_, RolloutBudgetState>> {
         self.state.get().map(|state| {
             state

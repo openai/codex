@@ -256,3 +256,49 @@ async fn restates_the_current_remainder_after_compaction() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restates_the_current_remainder_after_rollback() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_completed_with_tokens("resp-1", /*total_tokens*/ 30),
+            ]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.rollout_budget = Some(RolloutBudgetConfig {
+                reminder_interval_tokens: 50,
+                ..ROLLOUT_BUDGET
+            });
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("rolled-back turn").await?;
+    test.codex
+        .submit(Op::ThreadRollback { num_turns: 1 })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ThreadRolledBack(_))
+    })
+    .await;
+    test.submit_turn("turn after rollback").await?;
+
+    let requests = responses.requests();
+    assert_eq!(
+        rollout_budget_texts(&requests[1]),
+        vec![rollout_budget_message(/*remaining_tokens*/ 70)],
+        "rollback should rearm the current budget reminder without refunding usage"
+    );
+
+    Ok(())
+}
