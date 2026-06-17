@@ -8,6 +8,7 @@ use codex_app_server_protocol::RuntimeInstallManifestParams;
 use codex_app_server_protocol::RuntimeInstallPaths;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
+use url::Url;
 
 use crate::errors::internal_error;
 use crate::errors::invalid_params;
@@ -16,7 +17,29 @@ use crate::executor::RuntimeExecutor;
 use crate::executor::TargetPlatform;
 use crate::executor::path_uri;
 
+#[cfg(test)]
+#[path = "validation_tests.rs"]
+mod tests;
+
 pub(crate) const PUBLISHED_ARTIFACT_NAME: &str = "codex-primary-runtime";
+const LATEST_RELEASE: &str = "latest";
+const LATEST_ALPHA_RELEASE: &str = "latest-alpha";
+const LATEST_ARCHIVE_LOCATION: ApprovedArchiveLocation = ApprovedArchiveLocation {
+    base_url: "https://persistent.oaistatic.com/codex-primary-runtime",
+    host: "persistent.oaistatic.com",
+    path_prefix: "/codex-primary-runtime/",
+};
+const LATEST_ALPHA_ARCHIVE_LOCATION: ApprovedArchiveLocation = ApprovedArchiveLocation {
+    base_url: "https://oaisidekickupdates.blob.core.windows.net/owl/codex-primary-runtime/alpha",
+    host: "oaisidekickupdates.blob.core.windows.net",
+    path_prefix: "/owl/codex-primary-runtime/alpha/",
+};
+
+struct ApprovedArchiveLocation {
+    base_url: &'static str,
+    host: &'static str,
+    path_prefix: &'static str,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,13 +52,10 @@ pub(crate) struct InstalledRuntimeMetadata {
 }
 
 pub(crate) fn validate_manifest(
+    release: &str,
     manifest: &RuntimeInstallManifestParams,
 ) -> Result<(), JSONRPCErrorError> {
-    if manifest.archive_url.trim().is_empty() {
-        return Err(invalid_params(
-            "runtime manifest archiveUrl must not be empty",
-        ));
-    }
+    validate_archive_url(release, &manifest.archive_url)?;
     if !is_sha256(&manifest.archive_sha256) {
         return Err(invalid_params(
             "runtime manifest archiveSha256 must be a 64-character hex digest",
@@ -48,6 +68,50 @@ pub(crate) fn validate_manifest(
         validate_path_segment(runtime_root_directory_name, "runtimeRootDirectoryName")?;
     }
     Ok(())
+}
+
+fn validate_archive_url(release: &str, archive_url: &str) -> Result<(), JSONRPCErrorError> {
+    let approved_location = match release {
+        LATEST_RELEASE => &LATEST_ARCHIVE_LOCATION,
+        LATEST_ALPHA_RELEASE => &LATEST_ALPHA_ARCHIVE_LOCATION,
+        _ => {
+            return Err(invalid_params(format!(
+                "unsupported runtime release: {release}"
+            )));
+        }
+    };
+    let archive_url = Url::parse(archive_url)
+        .map_err(|_| invalid_archive_url(release, approved_location.base_url))?;
+    let archive_path = archive_url
+        .path()
+        .strip_prefix(approved_location.path_prefix)
+        .unwrap_or_default();
+    let mut path_segments = archive_path.split('/');
+    let has_archive_layout = path_segments
+        .next()
+        .is_some_and(|segment| !segment.is_empty())
+        && path_segments
+            .next()
+            .is_some_and(|segment| !segment.is_empty())
+        && path_segments.next().is_none();
+    if archive_url.scheme() != "https"
+        || archive_url.host_str() != Some(approved_location.host)
+        || archive_url.port_or_known_default() != Some(443)
+        || !archive_url.username().is_empty()
+        || archive_url.password().is_some()
+        || archive_url.query().is_some()
+        || archive_url.fragment().is_some()
+        || !has_archive_layout
+    {
+        return Err(invalid_archive_url(release, approved_location.base_url));
+    }
+    Ok(())
+}
+
+fn invalid_archive_url(release: &str, approved_base_url: &str) -> JSONRPCErrorError {
+    invalid_params(format!(
+        "runtime manifest archiveUrl for release '{release}' must match the approved OpenAI runtime asset location {approved_base_url}/<version>/<archive>"
+    ))
 }
 
 fn is_sha256(value: &str) -> bool {

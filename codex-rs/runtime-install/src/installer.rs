@@ -105,7 +105,7 @@ async fn install_runtime_with_root_and_control(
     progress: Option<RuntimeInstallProgressSender>,
     cancellation: CancellationToken,
 ) -> Result<RuntimeInstallResponse, JSONRPCErrorError> {
-    validate_manifest(&params.manifest)?;
+    validate_manifest(&params.release, &params.manifest)?;
     let archive_format = runtime_archive_format(&params.manifest)?;
     let archive_name = params
         .manifest

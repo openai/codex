@@ -29,6 +29,7 @@ tokio = { workspace = true, features = [
 ] }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
+url = { workspace = true }
 uuid = { workspace = true, features = ["v7"] }
 
 [dev-dependencies]

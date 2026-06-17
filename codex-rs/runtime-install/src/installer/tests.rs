@@ -44,14 +44,15 @@ async fn install_runtime_reuses_current_runtime_without_downloading_archive() {
         .await
         .expect("write archive");
     let mut manifest = manifest_for_archive(&archive_path, "v1").await;
-    manifest.archive_url = "not a valid archive URL".to_string();
+    manifest.archive_url =
+        "https://persistent.oaistatic.com/codex-primary-runtime/v1/runtime.tar.xz".to_string();
 
     let response = install_runtime_with_root_and_control(
         &executor,
         RuntimeInstallParams {
             environment_id: None,
             manifest: Box::new(manifest),
-            release: "primary".to_string(),
+            release: "latest".to_string(),
         },
         install_root,
         local_platform(),
