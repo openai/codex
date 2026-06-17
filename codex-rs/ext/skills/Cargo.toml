@@ -16,7 +16,9 @@ workspace = true
 [dependencies]
 codex-analytics = { workspace = true }
 codex-connectors = { workspace = true }
+codex-config = { workspace = true }
 codex-core-skills = { workspace = true }
+codex-core-plugins = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-mcp = { workspace = true }
@@ -25,6 +27,7 @@ codex-protocol = { workspace = true }
 codex-tools = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
+codex-utils-plugins = { workspace = true }
 codex-utils-string = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

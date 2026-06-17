@@ -50,6 +50,7 @@ pub use contributors::TokenUsageContributor;
 pub use contributors::ToolCallOutcome;
 pub use contributors::ToolCallSource;
 pub use contributors::ToolContributor;
+pub use contributors::ToolDispatchInput;
 pub use contributors::ToolFinishInput;
 pub use contributors::ToolLifecycleContributor;
 pub use contributors::ToolLifecycleFuture;

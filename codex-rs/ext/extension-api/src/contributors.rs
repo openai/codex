@@ -29,6 +29,7 @@ pub use thread_lifecycle::ThreadStartInput;
 pub use thread_lifecycle::ThreadStopInput;
 pub use tool_lifecycle::ToolCallOutcome;
 pub use tool_lifecycle::ToolCallSource;
+pub use tool_lifecycle::ToolDispatchInput;
 pub use tool_lifecycle::ToolFinishInput;
 pub use tool_lifecycle::ToolLifecycleFuture;
 pub use tool_lifecycle::ToolStartInput;
@@ -235,6 +236,11 @@ pub trait ToolContributor: Send + Sync {
 pub trait ToolLifecycleContributor: Send + Sync {
     /// Called once the host has accepted a tool call for execution.
     fn on_tool_start<'a>(&'a self, _input: ToolStartInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(std::future::ready(()))
+    }
+
+    /// Called with the final payload immediately before dispatch to the tool handler.
+    fn on_tool_dispatch<'a>(&'a self, _input: ToolDispatchInput<'a>) -> ToolLifecycleFuture<'a> {
         Box::pin(std::future::ready(()))
     }
 

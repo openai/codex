@@ -222,6 +222,10 @@ mod tests {
                 SessionSource::Exec.restriction_product(),
             ),
         );
+        let skills_service = Arc::new(codex_core_skills::SkillsService::new(
+            good_config.codex_home.clone(),
+            good_config.bundled_skills_enabled(),
+        ));
         let thread_manager = Arc::new_cyclic(|thread_manager| {
             ThreadManager::new(
                 &good_config,
@@ -239,6 +243,7 @@ mod tests {
                         goal_service: Arc::new(codex_goal_extension::GoalService::new()),
                         environment_manager: Arc::clone(&environment_manager),
                         executor_skill_provider: Arc::clone(&executor_skill_provider),
+                        skills_service: Arc::clone(&skills_service),
                         thread_store: Arc::clone(&thread_store),
                     },
                 ),

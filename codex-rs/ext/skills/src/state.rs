@@ -1,11 +1,14 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
 use codex_mcp::McpResourceClient;
 use codex_mcp::McpResourceClientCacheKey;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::protocol::Product;
 use tokio::sync::OnceCell;
 
 use crate::SkillsExtensionConfig;
@@ -28,6 +31,7 @@ pub(crate) struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
     selected_roots: Vec<SelectedCapabilityRoot>,
     orchestrator_skills_enabled: bool,
+    restriction_product: Option<Product>,
     orchestrator_cache: Mutex<Option<Arc<OrchestratorGenerationCache>>>,
 }
 
@@ -36,11 +40,13 @@ impl SkillsThreadState {
         config: SkillsExtensionConfig,
         selected_roots: Vec<SelectedCapabilityRoot>,
         orchestrator_skills_enabled: bool,
+        restriction_product: Option<Product>,
     ) -> Self {
         Self {
             config: Mutex::new(config),
             selected_roots,
             orchestrator_skills_enabled,
+            restriction_product,
             orchestrator_cache: Mutex::new(None),
         }
     }
@@ -65,6 +71,10 @@ impl SkillsThreadState {
 
     pub(crate) fn orchestrator_skills_enabled(&self) -> bool {
         self.orchestrator_skills_enabled
+    }
+
+    pub(crate) fn restriction_product(&self) -> Option<Product> {
+        self.restriction_product
     }
 
     pub(crate) async fn orchestrator_catalog_snapshot(
@@ -140,6 +150,13 @@ impl SkillsThreadState {
         *cache = Some(Arc::clone(&next_cache));
         next_cache
     }
+}
+
+pub(crate) struct ImplicitSkillInvocationState {
+    pub(crate) model: String,
+    pub(crate) environment_cwds: HashMap<String, PathBuf>,
+    pub(crate) primary_environment_id: Option<String>,
+    pub(crate) seen_skills: Mutex<HashSet<String>>,
 }
 
 struct OrchestratorGenerationCache {

@@ -7,7 +7,6 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
 use crate::function_tool::FunctionCallError;
-use crate::maybe_emit_implicit_skill_invocation;
 use crate::session::turn_context::TurnContext;
 use crate::shell::Shell;
 use crate::tools::context::ToolInvocation;
@@ -173,15 +172,6 @@ impl ShellCommandHandler {
         #[allow(deprecated)]
         let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
         let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
-        #[allow(deprecated)]
-        let workdir = turn.resolve_path(params.workdir.clone());
-        maybe_emit_implicit_skill_invocation(
-            session.as_ref(),
-            turn.as_ref(),
-            &params.command,
-            &workdir,
-        )
-        .await;
         let prefix_rule = params.prefix_rule.clone();
         let exec_params = Self::to_exec_params(
             &params,

@@ -59,6 +59,7 @@ pub(crate) struct ConfigRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     config_manager: ConfigManager,
     thread_manager: Arc<ThreadManager>,
+    skills_service: Arc<codex_core_skills::SkillsService>,
     analytics_events_client: AnalyticsEventsClient,
 }
 
@@ -67,12 +68,14 @@ impl ConfigRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         config_manager: ConfigManager,
         thread_manager: Arc<ThreadManager>,
+        skills_service: Arc<codex_core_skills::SkillsService>,
         analytics_events_client: AnalyticsEventsClient,
     ) -> Self {
         Self {
             outgoing,
             config_manager,
             thread_manager,
+            skills_service,
             analytics_events_client,
         }
     }
@@ -169,7 +172,7 @@ impl ConfigRequestProcessor {
 
     pub(crate) async fn handle_config_mutation(&self) {
         self.thread_manager.plugins_manager().clear_cache();
-        self.thread_manager.skills_service().clear_cache();
+        self.skills_service.clear_cache();
     }
 
     async fn handle_config_mutation_result<T>(

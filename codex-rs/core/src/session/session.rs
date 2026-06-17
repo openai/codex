@@ -5,7 +5,6 @@ use crate::config::ConstraintError;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::shell_snapshot::ShellSnapshot;
-use crate::skills::SkillError;
 use crate::state::ActiveTurn;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::SessionId;
@@ -435,25 +434,6 @@ pub(crate) struct AppServerClientMetadata {
     pub(crate) client_version: Option<String>,
 }
 
-async fn warm_plugins_and_skills_for_session_init(
-    config: Arc<Config>,
-    plugins_manager: Arc<PluginsManager>,
-    skills_service: Arc<SkillsService>,
-    turn_environments: &TurnEnvironmentSnapshot,
-) -> Vec<SkillError> {
-    let fs = turn_environments.primary_filesystem();
-    let plugins_input = config.plugins_config_input();
-    let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
-    let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-    let skills_input = skills_load_input_from_config(config.as_ref(), effective_skill_roots);
-    skills_service
-        .snapshot_for_config(&skills_input, fs)
-        .await
-        .outcome()
-        .errors
-        .clone()
-}
-
 impl Session {
     /// Returns the concrete identity for this thread.
     pub(crate) fn thread_id(&self) -> ThreadId {
@@ -479,7 +459,6 @@ impl Session {
         agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
         session_source: SessionSource,
-        skills_service: Arc<SkillsService>,
         plugins_manager: Arc<PluginsManager>,
         mcp_manager: Arc<McpManager>,
         extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
@@ -827,24 +806,6 @@ impl Session {
                 &resolved_environments,
             )
             .await;
-            let plugin_skill_errors = warm_plugins_and_skills_for_session_init(
-                Arc::clone(&config),
-                Arc::clone(&plugins_manager),
-                Arc::clone(&skills_service),
-                &resolved_environments,
-            )
-            .instrument(info_span!(
-                "session_init.plugin_skill_warmup",
-                otel.name = "session_init.plugin_skill_warmup",
-            ))
-            .await;
-            for err in &plugin_skill_errors {
-                error!(
-                    "failed to load skill {}: {}",
-                    err.path.display(),
-                    err.message
-                );
-            }
             let thread_name =
                 thread_title_from_thread_store(live_thread_init.as_ref(), &thread_store, thread_id)
                     .instrument(info_span!(
@@ -1002,7 +963,6 @@ impl Session {
                 guardian_rejections: Mutex::new(HashMap::new()),
                 guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
                 runtime_handle: tokio::runtime::Handle::current(),
-                skills_service,
                 plugins_manager: Arc::clone(&plugins_manager),
                 mcp_manager: Arc::clone(&mcp_manager),
                 extensions,

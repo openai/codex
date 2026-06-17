@@ -45,7 +45,6 @@ pub use codex_core::config::ThreadStoreConfig;
 pub use codex_core::config::find_codex_home;
 pub use codex_core::init_state_db;
 pub use codex_core::resolve_installation_id;
-pub use codex_core::skills::SkillsService;
 pub use codex_core::thread_store_from_config;
 pub use codex_exec_server::EnvironmentManager;
 pub use codex_exec_server::EnvironmentRegistryConnectRequest;
@@ -108,6 +107,12 @@ pub fn default_extension_registry() -> std::sync::Arc<codex_extension_api::Exten
         codex_skills_extension::SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             bundled_skills_enabled: config.bundled_skills_enabled(),
+            host: Some(codex_skills_extension::HostSkillsConfig::new(
+                config.codex_home.clone(),
+                config.cwd.clone(),
+                config.config_layer_stack.clone(),
+                config.bundled_skills_enabled(),
+            )),
         }
     });
     std::sync::Arc::new(builder.build())

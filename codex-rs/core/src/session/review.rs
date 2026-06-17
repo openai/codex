@@ -1,4 +1,6 @@
 use super::*;
+use codex_core_plugins::PluginLoadOutcome;
+use codex_exec_server::ExecutorFileSystem;
 use std::sync::atomic::AtomicBool;
 
 /// Spawn a review thread using the given prompt.
@@ -100,7 +102,18 @@ pub(super) async fn spawn_review_thread(
         review_turn_id.clone(),
     ));
     extension_data.insert(session_telemetry_for_context.clone());
-    extension_data.insert(parent_turn_context.turn_skills.snapshot.clone());
+    if let Some(plugins) = parent_turn_context
+        .extension_data
+        .get::<PluginLoadOutcome>()
+    {
+        extension_data.insert(plugins.as_ref().clone());
+    }
+    if let Some(fs) = parent_turn_context
+        .extension_data
+        .get::<Arc<dyn ExecutorFileSystem>>()
+    {
+        extension_data.insert(Arc::clone(fs.as_ref()));
+    }
 
     let review_turn_context = TurnContext {
         sub_id: review_turn_id.clone(),
@@ -136,7 +149,6 @@ pub(super) async fn spawn_review_thread(
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         turn_metadata_state,
         extension_data,
-        turn_skills: TurnSkillsContext::new(parent_turn_context.turn_skills.snapshot.clone()),
         turn_timing_state: Arc::new(TurnTimingState::default()),
         terminal_error: Arc::new(Mutex::new(None)),
         server_model_warning_emitted: AtomicBool::new(false),

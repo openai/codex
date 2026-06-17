@@ -16,7 +16,7 @@ pub(crate) struct CatalogRequestProcessor {
 const SKILLS_LIST_CWD_CONCURRENCY: usize = 5;
 
 fn skills_to_info(
-    skills: &[codex_core::skills::SkillMetadata],
+    skills: &[codex_core_skills::SkillMetadata],
     disabled_paths: &HashSet<AbsolutePathBuf>,
 ) -> Vec<codex_app_server_protocol::SkillMetadata> {
     skills
@@ -85,7 +85,7 @@ fn hooks_to_info(hooks: &[codex_hooks::HookListEntry]) -> Vec<HookMetadata> {
 }
 
 fn errors_to_info(
-    errors: &[codex_core::skills::SkillError],
+    errors: &[codex_core_skills::SkillError],
 ) -> Vec<codex_app_server_protocol::SkillErrorInfo> {
     errors
         .iter()
@@ -511,7 +511,7 @@ impl CatalogRequestProcessor {
         let workspace_codex_plugins_enabled = self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
             .await;
-        let skills_service = self.thread_manager.skills_service();
+        let skills_service = self.skills_watcher.skills_service();
         let plugins_manager = self.thread_manager.plugins_manager();
         let fs = self
             .thread_manager
@@ -553,7 +553,7 @@ impl CatalogRequestProcessor {
                     } else {
                         Vec::new()
                     };
-                    let skills_input = codex_core::skills::SkillsLoadInput::new(
+                    let skills_input = codex_core_skills::SkillsLoadInput::new(
                         cwd_abs.clone(),
                         effective_skill_roots,
                         config_layer_stack,
@@ -590,7 +590,7 @@ impl CatalogRequestProcessor {
         let SkillsExtraRootsSetParams { extra_roots } = params;
         self.skills_watcher
             .register_runtime_extra_roots(&extra_roots);
-        self.thread_manager
+        self.skills_watcher
             .skills_service()
             .set_extra_roots(extra_roots);
         self.outgoing
@@ -704,7 +704,7 @@ impl CatalogRequestProcessor {
             .await
             .map(|()| {
                 self.thread_manager.plugins_manager().clear_cache();
-                self.thread_manager.skills_service().clear_cache();
+                self.skills_watcher.skills_service().clear_cache();
                 SkillsConfigWriteResponse {
                     effective_enabled: enabled,
                 }

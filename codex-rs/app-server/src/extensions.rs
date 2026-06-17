@@ -10,6 +10,7 @@ use codex_core::NewThread;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
+use codex_core_skills::SkillsService;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::AgentSpawnFuture;
 use codex_extension_api::AgentSpawner;
@@ -38,6 +39,7 @@ pub(crate) struct ThreadExtensionDependencies {
     pub(crate) goal_service: Arc<GoalService>,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider>,
+    pub(crate) skills_service: Arc<SkillsService>,
     /// Process-scoped persistence backend for extensions that need stored thread history.
     pub(crate) thread_store: Arc<dyn ThreadStore>,
 }
@@ -58,6 +60,7 @@ where
         goal_service,
         environment_manager,
         executor_skill_provider,
+        skills_service,
         thread_store: _thread_store,
     } = dependencies;
     let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(event_sink);
@@ -84,14 +87,20 @@ where
         .with_executor_provider(executor_skill_provider)
         .with_orchestrator_provider(Arc::new(
             codex_skills_extension::OrchestratorSkillProvider::new(),
-        ))
-        .with_host_provider(Arc::new(codex_skills_extension::HostSkillProvider::new()));
-    codex_skills_extension::install_with_providers(
+        ));
+    codex_skills_extension::install_with_host_service(
         &mut builder,
+        skills_service,
         skill_providers,
         |config: &Config| codex_skills_extension::SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             bundled_skills_enabled: config.bundled_skills_enabled(),
+            host: Some(codex_skills_extension::HostSkillsConfig::new(
+                config.codex_home.clone(),
+                config.cwd.clone(),
+                config.config_layer_stack.clone(),
+                config.bundled_skills_enabled(),
+            )),
         },
     );
     Arc::new(builder.build())

@@ -20,7 +20,6 @@ codex-context-fragments = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider = { workspace = true }
-codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-skills = { workspace = true }

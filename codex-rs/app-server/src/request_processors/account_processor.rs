@@ -60,6 +60,7 @@ impl Drop for ActiveLogin {
 pub(crate) struct AccountRequestProcessor {
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
+    skills_service: Arc<codex_core_skills::SkillsService>,
     outgoing: Arc<OutgoingMessageSender>,
     config: Arc<Config>,
     config_manager: ConfigManager,
@@ -70,6 +71,7 @@ impl AccountRequestProcessor {
     pub(crate) fn new(
         auth_manager: Arc<AuthManager>,
         thread_manager: Arc<ThreadManager>,
+        skills_service: Arc<codex_core_skills::SkillsService>,
         outgoing: Arc<OutgoingMessageSender>,
         config: Arc<Config>,
         config_manager: ConfigManager,
@@ -77,6 +79,7 @@ impl AccountRequestProcessor {
         Self {
             auth_manager,
             thread_manager,
+            skills_service,
             outgoing,
             config,
             config_manager,
@@ -176,6 +179,7 @@ impl AccountRequestProcessor {
     async fn maybe_refresh_plugin_caches_for_current_config(
         config_manager: &ConfigManager,
         thread_manager: &Arc<ThreadManager>,
+        skills_service: &Arc<codex_core_skills::SkillsService>,
         auth: Option<CodexAuth>,
     ) {
         thread_manager
@@ -191,6 +195,7 @@ impl AccountRequestProcessor {
         {
             Ok(config) => {
                 let refresh_thread_manager = Arc::clone(thread_manager);
+                let refresh_skills_service = Arc::clone(skills_service);
                 let refresh_config_manager = config_manager.clone();
                 thread_manager
                     .plugins_manager()
@@ -200,6 +205,7 @@ impl AccountRequestProcessor {
                         Some(Arc::new(move || {
                             Self::spawn_effective_plugins_changed_task(
                                 Arc::clone(&refresh_thread_manager),
+                                Arc::clone(&refresh_skills_service),
                                 refresh_config_manager.clone(),
                             );
                         })),
@@ -215,11 +221,12 @@ impl AccountRequestProcessor {
 
     fn spawn_effective_plugins_changed_task(
         thread_manager: Arc<ThreadManager>,
+        skills_service: Arc<codex_core_skills::SkillsService>,
         config_manager: ConfigManager,
     ) {
         tokio::spawn(async move {
             thread_manager.plugins_manager().clear_cache();
-            thread_manager.skills_service().clear_cache();
+            skills_service.clear_cache();
             if thread_manager.list_thread_ids().await.is_empty() {
                 return;
             }
@@ -407,6 +414,7 @@ impl AccountRequestProcessor {
         let outgoing_clone = self.outgoing.clone();
         let config_manager = self.config_manager.clone();
         let thread_manager = Arc::clone(&self.thread_manager);
+        let skills_service = Arc::clone(&self.skills_service);
         let chatgpt_base_url = self.config.chatgpt_base_url.clone();
         let active_login = self.active_login.clone();
         let auth_url = server.auth_url.clone();
@@ -429,6 +437,7 @@ impl AccountRequestProcessor {
                 &outgoing_clone,
                 config_manager,
                 thread_manager,
+                skills_service,
                 chatgpt_base_url,
                 login_id,
                 success,
@@ -483,6 +492,7 @@ impl AccountRequestProcessor {
         let outgoing_clone = self.outgoing.clone();
         let config_manager = self.config_manager.clone();
         let thread_manager = Arc::clone(&self.thread_manager);
+        let skills_service = Arc::clone(&self.skills_service);
         let chatgpt_base_url = self.config.chatgpt_base_url.clone();
         let active_login = self.active_login.clone();
         tokio::spawn(async move {
@@ -502,6 +512,7 @@ impl AccountRequestProcessor {
                 &outgoing_clone,
                 config_manager,
                 thread_manager,
+                skills_service,
                 chatgpt_base_url,
                 login_id,
                 success,
@@ -624,6 +635,7 @@ impl AccountRequestProcessor {
         Self::maybe_refresh_plugin_caches_for_current_config(
             &self.config_manager,
             &self.thread_manager,
+            &self.skills_service,
             self.auth_manager.auth_cached(),
         )
         .await;
@@ -650,6 +662,7 @@ impl AccountRequestProcessor {
         outgoing: &OutgoingMessageSender,
         config_manager: ConfigManager,
         thread_manager: Arc<ThreadManager>,
+        skills_service: Arc<codex_core_skills::SkillsService>,
         chatgpt_base_url: String,
         login_id: Uuid,
         success: bool,
@@ -677,6 +690,7 @@ impl AccountRequestProcessor {
             Self::maybe_refresh_plugin_caches_for_current_config(
                 &config_manager,
                 &thread_manager,
+                &skills_service,
                 auth.clone(),
             )
             .await;
@@ -709,6 +723,7 @@ impl AccountRequestProcessor {
         Self::maybe_refresh_plugin_caches_for_current_config(
             &self.config_manager,
             &self.thread_manager,
+            &self.skills_service,
             self.auth_manager.auth_cached(),
         )
         .await;

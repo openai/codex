@@ -596,6 +596,12 @@ fn default_extensions(
         codex_skills_extension::SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             bundled_skills_enabled: config.bundled_skills_enabled(),
+            host: Some(codex_skills_extension::HostSkillsConfig::new(
+                config.codex_home.clone(),
+                config.cwd.clone(),
+                config.config_layer_stack.clone(),
+                config.bundled_skills_enabled(),
+            )),
         }
     });
     Arc::new(builder.build())

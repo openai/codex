@@ -4,6 +4,9 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use tracing::warn;
+
+use crate::ConfigLayerStack;
 
 const fn default_enabled() -> bool {
     true
@@ -33,6 +36,26 @@ pub struct SkillsConfig {
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config: Vec<SkillConfig>,
+}
+
+pub fn bundled_skills_enabled_from_stack(config_layer_stack: &ConfigLayerStack) -> bool {
+    let effective_config = config_layer_stack.effective_config();
+    let Some(skills_value) = effective_config
+        .as_table()
+        .and_then(|table| table.get("skills"))
+    else {
+        return true;
+    };
+
+    let skills: SkillsConfig = match skills_value.clone().try_into() {
+        Ok(skills) => skills,
+        Err(err) => {
+            warn!("invalid skills config: {err}");
+            return true;
+        }
+    };
+
+    skills.bundled.unwrap_or_default().enabled
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]

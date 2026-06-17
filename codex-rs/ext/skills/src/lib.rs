@@ -9,8 +9,10 @@ mod sources;
 mod state;
 mod tools;
 
+pub use config::HostSkillsConfig;
 pub use config::SkillsExtensionConfig;
 pub use extension::install;
+pub use extension::install_with_host_service;
 pub use extension::install_with_providers;
 pub use provider::ExecutorSkillProvider;
 pub use provider::HostSkillProvider;

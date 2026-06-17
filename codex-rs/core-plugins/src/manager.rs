@@ -11,10 +11,10 @@ use crate::loader::load_plugin_apps;
 use crate::loader::load_plugin_hooks;
 use crate::loader::load_plugin_hooks_from_layer_stack;
 use crate::loader::load_plugin_mcp_servers;
-use crate::loader::load_plugin_skills;
 use crate::loader::load_plugins_from_layer_stack;
 use crate::loader::log_plugin_load_errors;
 use crate::loader::materialize_marketplace_plugin_source;
+use crate::loader::plugin_skill_roots;
 use crate::loader::plugin_telemetry_metadata_from_root;
 use crate::loader::refresh_curated_plugin_cache;
 use crate::loader::refresh_non_curated_plugin_cache;
@@ -59,9 +59,6 @@ use codex_config::set_user_plugin_enabled;
 use codex_config::types::PluginConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
-use codex_core_skills::SkillMetadata;
-use codex_core_skills::config_rules::SkillConfigRules;
-use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_hooks::plugin_hook_declarations;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -276,8 +273,8 @@ pub struct PluginDetail {
     pub keywords: Vec<String>,
     pub installed: bool,
     pub enabled: bool,
-    pub skills: Vec<SkillMetadata>,
-    pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
+    pub plugin_root: Option<AbsolutePathBuf>,
+    pub skill_roots: Vec<AbsolutePathBuf>,
     pub hooks: Vec<PluginHookSummary>,
     pub apps: Vec<AppConnectorId>,
     pub app_category_by_id: HashMap<String, String>,
@@ -326,11 +323,7 @@ pub struct ConfiguredMarketplaceListOutcome {
 
 impl From<PluginDetail> for PluginCapabilitySummary {
     fn from(value: PluginDetail) -> Self {
-        let has_skills = value.skills.iter().any(|skill| {
-            !value
-                .disabled_skill_paths
-                .contains(&skill.path_to_skills_md)
-        });
+        let has_skills = !value.skill_roots.is_empty();
         Self {
             config_name: value.id,
             display_name: value.name,
@@ -377,7 +370,6 @@ struct LoadedPluginsCache {
 #[derive(Clone, PartialEq, Eq)]
 struct PluginLoadCacheKey {
     configured_plugins: HashMap<String, PluginConfig>,
-    skill_config_rules: SkillConfigRules,
     remote_plugin_enabled: bool,
 }
 
@@ -486,7 +478,6 @@ impl PluginsManager {
 
         let cache_key = PluginLoadCacheKey {
             configured_plugins: configured_plugins_from_stack(&config.config_layer_stack),
-            skill_config_rules: skill_config_rules_from_stack(&config.config_layer_stack),
             remote_plugin_enabled: config.remote_plugin_enabled,
         };
         if !force_reload && let Some(plugins) = self.cached_loaded_plugins(&cache_key) {
@@ -1506,7 +1497,7 @@ impl PluginsManager {
     #[instrument(level = "trace", skip_all)]
     pub async fn read_plugin_detail_for_marketplace_plugin(
         &self,
-        config: &PluginsConfigInput,
+        _config: &PluginsConfigInput,
         marketplace_name: &str,
         plugin: ConfiguredMarketplacePlugin,
     ) -> Result<PluginDetail, MarketplaceError> {
@@ -1537,8 +1528,8 @@ impl PluginsManager {
                 keywords: plugin.keywords,
                 installed: plugin.installed,
                 enabled: plugin.enabled,
-                skills: Vec::new(),
-                disabled_skill_paths: HashSet::new(),
+                plugin_root: None,
+                skill_roots: Vec::new(),
                 hooks: Vec::new(),
                 apps: Vec::new(),
                 app_category_by_id: HashMap::new(),
@@ -1588,16 +1579,7 @@ impl PluginsManager {
             manifest.interface.clone(),
             marketplace_category,
         );
-        let resolved_skills = load_plugin_skills(
-            &source_path,
-            &plugin_id,
-            &manifest,
-            self.restriction_product,
-            &codex_core_skills::config_rules::skill_config_rules_from_stack(
-                &config.config_layer_stack,
-            ),
-        )
-        .await;
+        let skill_roots = plugin_skill_roots(&source_path, &manifest.paths);
         let plugin_data_root = self.store.plugin_data_root(&plugin_id);
         let (hook_sources, _hook_load_warnings) =
             load_plugin_hooks(&source_path, &plugin_id, &plugin_data_root, &manifest.paths);
@@ -1644,8 +1626,8 @@ impl PluginsManager {
             keywords: manifest.keywords,
             installed: plugin.installed,
             enabled: plugin.enabled,
-            skills: resolved_skills.skills,
-            disabled_skill_paths: resolved_skills.disabled_skill_paths,
+            plugin_root: Some(source_path),
+            skill_roots,
             hooks,
             apps,
             app_category_by_id,

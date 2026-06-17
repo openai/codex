@@ -36,7 +36,6 @@ use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::session::turn_context::TurnEnvironment;
 use crate::session_prefix::format_inter_agent_completion_message;
-use crate::skills_load_input_from_config;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
 use async_channel::Receiver;
@@ -229,7 +228,6 @@ pub(crate) use self::session::SessionSettingsUpdate;
 use self::turn::AssistantMessageStreamParsers;
 use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
-use self::turn_context::TurnSkillsContext;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 
@@ -286,7 +284,6 @@ pub(crate) struct PreviousTurnSettings {
     pub(crate) realtime_active: Option<bool>,
 }
 
-use crate::SkillsService;
 use crate::agents_md::load_project_instructions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
@@ -295,10 +292,6 @@ use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::rollout::map_session_init_error;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
-#[cfg(test)]
-use crate::skills::SkillLoadOutcome;
-#[cfg(test)]
-use crate::skills::SkillMetadata;
 use crate::state::AutoCompactWindowSnapshot;
 use crate::state::PendingRequestPermissions;
 use crate::state::SessionServices;
@@ -404,7 +397,6 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: SharedModelsManager,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
-    pub(crate) skills_service: Arc<SkillsService>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
@@ -490,7 +482,6 @@ impl Codex {
             auth_manager,
             models_manager,
             environment_manager,
-            skills_service,
             plugins_manager,
             mcp_manager,
             extensions,
@@ -646,7 +637,6 @@ impl Codex {
             agent_status_tx.clone(),
             conversation_history,
             session_source_clone,
-            skills_service,
             plugins_manager,
             mcp_manager.clone(),
             extensions,
@@ -1502,7 +1492,6 @@ impl Session {
             (previous_config, new_config, config)
         };
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
-        self.services.skills_service.clear_cache();
         self.services.plugins_manager.clear_cache();
         let environments = self.services.turn_environments.snapshot().await;
         let hooks = build_hooks_for_config(

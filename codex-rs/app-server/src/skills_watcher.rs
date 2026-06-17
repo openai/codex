@@ -7,8 +7,8 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SkillsChangedNotification;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_core::skills::SkillsLoadInput;
-use codex_core::skills::SkillsService;
+use codex_core_skills::SkillsLoadInput;
+use codex_core_skills::SkillsService;
 use codex_file_watcher::FileWatcher;
 use codex_file_watcher::FileWatcherSubscriber;
 use codex_file_watcher::Receiver;
@@ -27,6 +27,7 @@ const WATCHER_THROTTLE_INTERVAL: Duration = Duration::from_secs(10);
 const WATCHER_THROTTLE_INTERVAL: Duration = Duration::from_millis(50);
 
 pub(crate) struct SkillsWatcher {
+    skills_service: Arc<SkillsService>,
     subscriber: FileWatcherSubscriber,
     runtime_extra_roots_registration: Mutex<WatchRegistration>,
     shutdown_token: CancellationToken,
@@ -48,8 +49,14 @@ impl SkillsWatcher {
         let (subscriber, rx) = file_watcher.add_subscriber();
         let shutdown_token = CancellationToken::new();
         let shutdown_drop_guard = shutdown_token.clone().drop_guard();
-        Self::spawn_event_loop(rx, skills_service, outgoing, shutdown_token.child_token());
+        Self::spawn_event_loop(
+            rx,
+            Arc::clone(&skills_service),
+            outgoing,
+            shutdown_token.child_token(),
+        );
         Arc::new(Self {
+            skills_service,
             subscriber,
             runtime_extra_roots_registration: Mutex::new(WatchRegistration::default()),
             shutdown_token,
@@ -59,6 +66,10 @@ impl SkillsWatcher {
 
     pub(crate) fn shutdown(&self) {
         self.shutdown_token.cancel();
+    }
+
+    pub(crate) fn skills_service(&self) -> Arc<SkillsService> {
+        Arc::clone(&self.skills_service)
     }
 
     pub(crate) fn register_runtime_extra_roots(&self, extra_roots: &[AbsolutePathBuf]) {
@@ -109,8 +120,8 @@ impl SkillsWatcher {
             config.config_layer_stack.clone(),
             config.bundled_skills_enabled(),
         );
-        let roots = thread_manager
-            .skills_service()
+        let roots = self
+            .skills_service
             .skill_roots_for_config(&skills_input, Some(environment.get_filesystem()))
             .await
             .into_iter()

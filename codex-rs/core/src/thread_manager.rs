@@ -1,4 +1,3 @@
-use crate::SkillsService;
 use crate::agent::AgentControl;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
@@ -207,7 +206,6 @@ pub(crate) struct ThreadManagerState {
     auth_manager: Arc<AuthManager>,
     models_manager: SharedModelsManager,
     environment_manager: Arc<EnvironmentManager>,
-    skills_service: Arc<SkillsService>,
     plugins_manager: Arc<PluginsManager>,
     mcp_manager: Arc<McpManager>,
     extensions: Arc<ExtensionRegistry<Config>>,
@@ -281,18 +279,12 @@ impl ThreadManager {
             Arc::clone(&plugins_manager),
             Arc::clone(&extensions),
         ));
-        let skills_service = Arc::new(SkillsService::new_with_restriction_product(
-            codex_home,
-            config.bundled_skills_enabled(),
-            restriction_product,
-        ));
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: build_models_manager(config, auth_manager.clone()),
                 environment_manager,
-                skills_service,
                 plugins_manager,
                 mcp_manager,
                 extensions,
@@ -361,10 +353,6 @@ impl ThreadManager {
         set_thread_manager_test_mode_for_tests(/*enabled*/ true);
         let auth_manager = AuthManager::from_auth_for_testing(auth);
         let installation_id = uuid::Uuid::new_v4().to_string();
-        let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
-            Ok(codex_home) => codex_home,
-            Err(err) => panic!("test codex_home should be absolute: {err}"),
-        };
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let restriction_product = SessionSource::Exec.restriction_product();
         let plugins_manager = Arc::new(PluginsManager::new_with_options(
@@ -373,11 +361,6 @@ impl ThreadManager {
             auth_manager.get_api_auth_mode(),
         ));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-        let skills_service = Arc::new(SkillsService::new_with_restriction_product(
-            skills_codex_home,
-            /*bundled_skills_enabled*/ true,
-            restriction_product,
-        ));
         // This test constructor has no Config input. Tests that need a non-local
         // process store should construct ThreadManager::new with an explicit store.
         let thread_store: Arc<dyn ThreadStore> = Arc::new(LocalThreadStore::new(
@@ -395,7 +378,6 @@ impl ThreadManager {
                 models_manager: create_model_provider(provider, Some(auth_manager.clone()))
                     .models_manager(codex_home, /*config_model_catalog*/ None),
                 environment_manager,
-                skills_service,
                 plugins_manager,
                 mcp_manager,
                 extensions: empty_extension_registry(),
@@ -422,10 +404,6 @@ impl ThreadManager {
 
     pub fn auth_manager(&self) -> Arc<AuthManager> {
         self.state.auth_manager.clone()
-    }
-
-    pub fn skills_service(&self) -> Arc<SkillsService> {
-        self.state.skills_service.clone()
     }
 
     pub fn plugins_manager(&self) -> Arc<PluginsManager> {
@@ -1406,7 +1384,6 @@ impl ThreadManagerState {
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
             environment_manager: Arc::clone(&self.environment_manager),
-            skills_service: Arc::clone(&self.skills_service),
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),
             extensions: Arc::clone(&self.extensions),

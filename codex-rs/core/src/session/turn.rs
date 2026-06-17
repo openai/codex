@@ -21,7 +21,7 @@ use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_legacy_after_agent_hook;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_turn_stop_hooks;
-use crate::mcp_skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
+use crate::mcp_dependencies::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
@@ -153,7 +153,8 @@ pub(crate) async fn run_turn(
         .await;
 
     let (injection_items, explicitly_enabled_connectors) =
-        build_skills_and_plugins(&sess, turn_context.as_ref(), &input, &cancellation_token).await?;
+        build_capability_injections(&sess, turn_context.as_ref(), &input, &cancellation_token)
+            .await?;
 
     if run_pending_session_start_hooks(&sess, &turn_context).await {
         return None;
@@ -452,7 +453,7 @@ async fn run_hooks_and_record_inputs(
 }
 
 #[instrument(level = "trace", skip_all)]
-async fn build_skills_and_plugins(
+async fn build_capability_injections(
     sess: &Arc<Session>,
     turn_context: &TurnContext,
     input: &[TurnInput],
@@ -542,7 +543,7 @@ async fn build_skills_and_plugins(
         Some(sess.mcp_elicitation_reviewer()),
     )
     .await;
-    let skill_connector_ids = turn_context
+    let extension_connector_ids = turn_context
         .extension_data
         .get::<codex_connectors::ExplicitConnectorMentions>()
         .map(|mentions| mentions.resolve(&available_connectors))
@@ -550,7 +551,7 @@ async fn build_skills_and_plugins(
     let plugin_items =
         build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
     let mut explicitly_enabled_connectors = collect_explicit_app_ids(&user_input);
-    explicitly_enabled_connectors.extend(skill_connector_ids);
+    explicitly_enabled_connectors.extend(extension_connector_ids);
     let connector_names_by_id = available_connectors
         .iter()
         .map(|connector| (connector.id.as_str(), connector.name.as_str()))

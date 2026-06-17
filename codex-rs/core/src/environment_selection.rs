@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use codex_exec_server::EnvironmentManager;
-use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -206,11 +205,6 @@ impl TurnEnvironmentSnapshot {
             .iter()
             .map(TurnEnvironment::selection)
             .collect()
-    }
-
-    pub(crate) fn primary_filesystem(&self) -> Option<Arc<dyn ExecutorFileSystem>> {
-        self.primary()
-            .map(|environment| environment.environment.get_filesystem())
     }
 
     pub(crate) fn single_local_environment(&self) -> Option<&TurnEnvironment> {

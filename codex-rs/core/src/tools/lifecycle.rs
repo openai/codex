@@ -1,5 +1,6 @@
 use codex_extension_api::ToolCallOutcome;
 use codex_extension_api::ToolCallSource as ExtensionToolCallSource;
+use codex_extension_api::ToolDispatchInput;
 use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolStartInput;
 use codex_tools::ToolName;
@@ -25,6 +26,28 @@ pub(crate) async fn notify_tool_start(invocation: &ToolInvocation) {
                 call_id: invocation.call_id.as_str(),
                 tool_name: &invocation.tool_name,
                 source: extension_tool_call_source(invocation.source.clone()),
+            })
+            .await;
+    }
+}
+
+pub(crate) async fn notify_tool_dispatch(invocation: &ToolInvocation) {
+    for contributor in invocation
+        .session
+        .services
+        .extensions
+        .tool_lifecycle_contributors()
+    {
+        contributor
+            .on_tool_dispatch(ToolDispatchInput {
+                session_store: &invocation.session.services.session_extension_data,
+                thread_store: &invocation.session.services.thread_extension_data,
+                turn_store: invocation.turn.extension_data.as_ref(),
+                turn_id: invocation.turn.sub_id.as_str(),
+                call_id: invocation.call_id.as_str(),
+                tool_name: &invocation.tool_name,
+                source: extension_tool_call_source(invocation.source.clone()),
+                payload: &invocation.payload,
             })
             .await;
     }

@@ -2,6 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use codex_tools::ToolName;
+use codex_tools::ToolPayload;
 
 use crate::ExtensionData;
 
@@ -59,6 +60,26 @@ pub struct ToolStartInput<'a> {
     pub tool_name: &'a ToolName,
     /// Source that issued the tool call.
     pub source: ToolCallSource,
+}
+
+/// Input supplied after host policy and hooks have accepted the final tool payload.
+pub struct ToolDispatchInput<'a> {
+    /// Store scoped to the host session runtime.
+    pub session_store: &'a ExtensionData,
+    /// Store scoped to this thread runtime.
+    pub thread_store: &'a ExtensionData,
+    /// Store scoped to this turn runtime.
+    pub turn_store: &'a ExtensionData,
+    /// Current turn submission id.
+    pub turn_id: &'a str,
+    /// Model-visible tool call id.
+    pub call_id: &'a str,
+    /// Tool name as routed by the host.
+    pub tool_name: &'a ToolName,
+    /// Source that issued the tool call.
+    pub source: ToolCallSource,
+    /// Final payload after host policy and pre-tool hooks.
+    pub payload: &'a ToolPayload,
 }
 
 /// Input supplied when the host finishes executing one tool call.

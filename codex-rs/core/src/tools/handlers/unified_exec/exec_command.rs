@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crate::function_tool::FunctionCallError;
-use crate::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -185,16 +184,6 @@ impl ExecCommandHandler {
             }
         };
         let hook_command = args.cmd.clone();
-        // TODO(anp) wire PathUri through implicit skills instead of skipping on foreign paths
-        if let Some(native_cwd) = native_cwd.as_ref() {
-            maybe_emit_implicit_skill_invocation(
-                session.as_ref(),
-                context.turn.as_ref(),
-                &hook_command,
-                native_cwd,
-            )
-            .await;
-        }
         let process_id = manager.allocate_process_id().await;
         let shell_mode =
             shell_mode_for_environment(&turn.unified_exec_shell_mode, environment.as_ref());

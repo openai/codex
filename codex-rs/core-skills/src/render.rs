@@ -5,11 +5,6 @@ use std::path::Path;
 
 use crate::model::SkillLoadOutcome;
 use crate::model::SkillMetadata;
-use codex_otel::SessionTelemetry;
-use codex_otel::THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC;
-use codex_otel::THREAD_SKILLS_ENABLED_TOTAL_METRIC;
-use codex_otel::THREAD_SKILLS_KEPT_TOTAL_METRIC;
-use codex_otel::THREAD_SKILLS_TRUNCATED_METRIC;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
@@ -164,14 +159,6 @@ pub struct SkillRenderReport {
     pub truncated_description_count: usize,
 }
 
-#[derive(Clone, Copy)]
-pub enum SkillRenderSideEffects<'a> {
-    None,
-    ThreadStart {
-        session_telemetry: &'a SessionTelemetry,
-    },
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AvailableSkills {
     pub skill_root_lines: Vec<String>,
@@ -200,17 +187,9 @@ pub fn default_skill_metadata_budget(context_window: Option<i64>) -> SkillMetada
 pub fn build_available_skills(
     outcome: &SkillLoadOutcome,
     budget: SkillMetadataBudget,
-    side_effects: SkillRenderSideEffects<'_>,
 ) -> Option<AvailableSkills> {
     let skills = outcome.allowed_skills_for_implicit_invocation();
     if skills.is_empty() {
-        record_skill_render_side_effects(
-            side_effects,
-            /*total_count*/ 0,
-            /*included_count*/ 0,
-            /*omitted_count*/ 0,
-            /*truncated_description_chars*/ 0,
-        );
         return None;
     }
 
@@ -235,7 +214,7 @@ pub fn build_available_skills(
             absolute
         };
 
-    record_available_skills_side_effects(&selected, budget, side_effects);
+    record_available_skills_truncation(&selected, budget);
     Some(selected)
 }
 
@@ -290,18 +269,7 @@ fn build_available_skills_from_lines(
     Some(available)
 }
 
-fn record_available_skills_side_effects(
-    available: &AvailableSkills,
-    budget: SkillMetadataBudget,
-    side_effects: SkillRenderSideEffects<'_>,
-) {
-    record_skill_render_side_effects(
-        side_effects,
-        available.report.total_count,
-        available.report.included_count,
-        available.report.omitted_count,
-        available.report.truncated_description_chars,
-    );
+fn record_available_skills_truncation(available: &AvailableSkills, budget: SkillMetadataBudget) {
     if available.report.omitted_count > 0 || available.report.truncated_description_chars > 0 {
         tracing::info!(
             budget_limit = budget.limit(),
@@ -324,40 +292,6 @@ fn budget_warning_prefix(budget: SkillMetadataBudget, prefix: &str) -> String {
             1,
         ),
         SkillMetadataBudget::Characters(_) => prefix.to_string(),
-    }
-}
-
-fn record_skill_render_side_effects(
-    side_effects: SkillRenderSideEffects<'_>,
-    total_count: usize,
-    included_count: usize,
-    omitted_count: usize,
-    truncated_description_chars: usize,
-) {
-    match side_effects {
-        SkillRenderSideEffects::None => {}
-        SkillRenderSideEffects::ThreadStart { session_telemetry } => {
-            session_telemetry.histogram(
-                THREAD_SKILLS_ENABLED_TOTAL_METRIC,
-                i64::try_from(total_count).unwrap_or(i64::MAX),
-                &[],
-            );
-            session_telemetry.histogram(
-                THREAD_SKILLS_KEPT_TOTAL_METRIC,
-                i64::try_from(included_count).unwrap_or(i64::MAX),
-                &[],
-            );
-            session_telemetry.histogram(
-                THREAD_SKILLS_TRUNCATED_METRIC,
-                if omitted_count > 0 { 1 } else { 0 },
-                &[],
-            );
-            session_telemetry.histogram(
-                THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC,
-                i64::try_from(truncated_description_chars).unwrap_or(i64::MAX),
-                &[],
-            );
-        }
     }
 }
 
@@ -1256,12 +1190,9 @@ mod tests {
             vec![root],
         );
 
-        let rendered = build_available_skills(
-            &outcome,
-            SkillMetadataBudget::Characters(usize::MAX),
-            SkillRenderSideEffects::None,
-        )
-        .expect("skills should render");
+        let rendered =
+            build_available_skills(&outcome, SkillMetadataBudget::Characters(usize::MAX))
+                .expect("skills should render");
 
         assert!(rendered.skill_root_lines.is_empty());
         assert_eq!(rendered.report.included_count, 2);
@@ -1302,12 +1233,9 @@ mod tests {
             "test fixture should make aliases cheaper"
         );
 
-        let rendered = build_available_skills(
-            &outcome,
-            SkillMetadataBudget::Characters(alias_minimum),
-            SkillRenderSideEffects::None,
-        )
-        .expect("skills should render");
+        let rendered =
+            build_available_skills(&outcome, SkillMetadataBudget::Characters(alias_minimum))
+                .expect("skills should render");
 
         assert_eq!(rendered.report.included_count, skills.len());
         assert_eq!(rendered.report.omitted_count, 0);

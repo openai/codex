@@ -1,6 +1,15 @@
+use std::sync::Arc;
+use std::sync::Mutex;
+
+use codex_core_plugins::PluginLoadOutcome;
+use codex_core_skills::HostSkillsSnapshot;
 use codex_core_skills::SkillLoadOutcome;
 use codex_core_skills::SkillMetadata;
+use codex_core_skills::SkillsService;
+use codex_exec_server::ExecutorFileSystem;
+use codex_protocol::protocol::Product;
 
+use crate::HostSkillsConfig;
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
@@ -23,11 +32,65 @@ const HOST_AUTHORITY_ID: &str = "host";
 /// Discovery and caching belong to `SkillsService`; this provider only maps a
 /// snapshot into the authority-aware catalog/read contract.
 #[derive(Clone, Default)]
-pub struct HostSkillProvider;
+pub struct HostSkillProvider {
+    service: Option<Arc<SkillsService>>,
+    managed_service: Arc<Mutex<Option<(HostServiceKey, Arc<SkillsService>)>>>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct HostServiceKey {
+    codex_home: codex_utils_absolute_path::AbsolutePathBuf,
+    restriction_product: Option<Product>,
+    bundled_skills_enabled: bool,
+}
 
 impl HostSkillProvider {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    pub fn with_service(service: Arc<SkillsService>) -> Self {
+        Self {
+            service: Some(service),
+            managed_service: Arc::default(),
+        }
+    }
+
+    pub(crate) async fn snapshot_for_turn(
+        &self,
+        config: &HostSkillsConfig,
+        restriction_product: Option<Product>,
+        plugins: Option<&PluginLoadOutcome>,
+        fs: Option<Arc<dyn ExecutorFileSystem>>,
+    ) -> HostSkillsSnapshot {
+        let service = self.service.as_ref().cloned().unwrap_or_else(|| {
+            let key = HostServiceKey {
+                codex_home: config.codex_home.clone(),
+                restriction_product,
+                bundled_skills_enabled: config.load_input.bundled_skills_enabled,
+            };
+            let mut managed_service = self
+                .managed_service
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some((current_key, service)) = managed_service.as_ref()
+                && current_key == &key
+            {
+                return Arc::clone(service);
+            }
+            let service = Arc::new(SkillsService::new_with_restriction_product(
+                config.codex_home.clone(),
+                config.load_input.bundled_skills_enabled,
+                restriction_product,
+            ));
+            *managed_service = Some((key, Arc::clone(&service)));
+            service
+        });
+        let mut load_input = config.load_input.clone();
+        load_input.effective_skill_roots = plugins
+            .map(PluginLoadOutcome::effective_plugin_skill_roots)
+            .unwrap_or_default();
+        service.snapshot_for_config(&load_input, fs).await
     }
 }
 

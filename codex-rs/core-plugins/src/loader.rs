@@ -19,13 +19,6 @@ use codex_config::HooksFile;
 use codex_config::types::McpServerConfig;
 use codex_config::types::PluginConfig;
 use codex_config::types::PluginMcpServerConfig;
-use codex_core_skills::SkillMetadata;
-use codex_core_skills::config_rules::SkillConfigRules;
-use codex_core_skills::config_rules::resolve_disabled_skill_paths;
-use codex_core_skills::config_rules::skill_config_rules_from_stack;
-use codex_core_skills::loader::SkillRoot;
-use codex_core_skills::loader::load_skills_from_roots;
-use codex_exec_server::LOCAL_FS;
 use codex_mcp::PluginMcpServerPlacement;
 use codex_mcp::parse_plugin_mcp_config;
 use codex_plugin::AppConnectorId;
@@ -38,7 +31,6 @@ use codex_plugin::PluginIdError;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_plugin::app_connector_ids_from_declarations;
 use codex_protocol::protocol::Product;
-use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::find_plugin_manifest_path;
 use indexmap::IndexMap;
@@ -49,7 +41,6 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::sync::Arc;
 use tempfile::TempDir;
 use tracing::instrument;
 use tracing::warn;
@@ -68,11 +59,8 @@ pub struct PluginHookLoadOutcome {
     pub hook_load_warnings: Vec<String>,
 }
 
-enum PluginLoadScope<'a> {
-    AllCapabilities {
-        restriction_product: Option<Product>,
-        skill_config_rules: &'a SkillConfigRules,
-    },
+enum PluginLoadScope {
+    AllCapabilities,
     HooksOnly,
 }
 
@@ -113,19 +101,15 @@ pub(crate) async fn load_plugins_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
     extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
-    restriction_product: Option<Product>,
+    _restriction_product: Option<Product>,
     prefer_remote_curated_conflicts: bool,
 ) -> Vec<LoadedPlugin<McpServerConfig>> {
-    let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
     load_plugins_from_layer_stack_with_scope(
         config_layer_stack,
         extra_plugins,
         store,
         prefer_remote_curated_conflicts,
-        PluginLoadScope::AllCapabilities {
-            restriction_product,
-            skill_config_rules: &skill_config_rules,
-        },
+        PluginLoadScope::AllCapabilities,
     )
     .await
 }
@@ -135,7 +119,7 @@ async fn load_plugins_from_layer_stack_with_scope(
     extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
     prefer_remote_curated_conflicts: bool,
-    scope: PluginLoadScope<'_>,
+    scope: PluginLoadScope,
 ) -> Vec<LoadedPlugin<McpServerConfig>> {
     let configured_plugins = merge_configured_plugins_with_remote_installed(
         configured_plugins_from_stack(config_layer_stack),
@@ -649,7 +633,7 @@ async fn load_plugin(
     config_name: String,
     plugin: &PluginConfig,
     store: &PluginStore,
-    scope: &PluginLoadScope<'_>,
+    scope: &PluginLoadScope,
 ) -> LoadedPlugin<McpServerConfig> {
     let plugin_id = PluginId::parse(&config_name);
     let active_plugin_root = plugin_id
@@ -670,8 +654,6 @@ async fn load_plugin(
         root,
         enabled: plugin.enabled,
         skill_roots: Vec::new(),
-        disabled_skill_paths: HashSet::new(),
-        has_enabled_skills: false,
         mcp_servers: HashMap::new(),
         apps: Vec::new(),
         hook_sources: Vec::new(),
@@ -710,24 +692,10 @@ async fn load_plugin(
     let manifest_paths = &manifest.paths;
     loaded_plugin.plugin_namespace = Some(manifest.name.clone());
     match scope {
-        PluginLoadScope::AllCapabilities {
-            restriction_product,
-            skill_config_rules,
-        } => {
+        PluginLoadScope::AllCapabilities => {
             loaded_plugin.manifest_name = Some(manifest.display_name().to_string());
             loaded_plugin.manifest_description = manifest.description.clone();
             loaded_plugin.skill_roots = plugin_skill_roots(&plugin_root, manifest_paths);
-            let resolved_skills = load_plugin_skills(
-                &plugin_root,
-                &loaded_plugin_id,
-                &manifest,
-                *restriction_product,
-                skill_config_rules,
-            )
-            .await;
-            let has_enabled_skills = resolved_skills.has_enabled_skills();
-            loaded_plugin.disabled_skill_paths = resolved_skills.disabled_skill_paths;
-            loaded_plugin.has_enabled_skills = has_enabled_skills;
             loaded_plugin.mcp_servers = load_plugin_mcp_servers_from_manifest(
                 plugin_root.as_path(),
                 manifest_paths,
@@ -768,58 +736,7 @@ fn apply_plugin_mcp_server_policy(config: &mut McpServerConfig, policy: &PluginM
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ResolvedPluginSkills {
-    pub skills: Vec<SkillMetadata>,
-    pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
-    pub had_errors: bool,
-}
-
-impl ResolvedPluginSkills {
-    pub fn has_enabled_skills(&self) -> bool {
-        self.had_errors
-            || self
-                .skills
-                .iter()
-                .any(|skill| !self.disabled_skill_paths.contains(&skill.path_to_skills_md))
-    }
-}
-
-pub async fn load_plugin_skills(
-    plugin_root: &AbsolutePathBuf,
-    plugin_id: &PluginId,
-    manifest: &PluginManifest,
-    restriction_product: Option<Product>,
-    skill_config_rules: &SkillConfigRules,
-) -> ResolvedPluginSkills {
-    let roots = plugin_skill_roots(plugin_root, &manifest.paths)
-        .into_iter()
-        .map(|path| SkillRoot {
-            path,
-            scope: SkillScope::User,
-            file_system: Arc::clone(&LOCAL_FS),
-            plugin_id: Some(plugin_id.as_key()),
-            plugin_namespace: Some(manifest.name.clone()),
-            plugin_root: Some(plugin_root.clone()),
-        })
-        .collect::<Vec<_>>();
-    let outcome = load_skills_from_roots(roots).await;
-    let had_errors = !outcome.errors.is_empty();
-    let skills = outcome
-        .skills
-        .into_iter()
-        .filter(|skill| skill.matches_product_restriction_for_product(restriction_product))
-        .collect::<Vec<_>>();
-    let disabled_skill_paths = resolve_disabled_skill_paths(&skills, skill_config_rules);
-
-    ResolvedPluginSkills {
-        skills,
-        disabled_skill_paths,
-        had_errors,
-    }
-}
-
-fn plugin_skill_roots(
+pub(crate) fn plugin_skill_roots(
     plugin_root: &AbsolutePathBuf,
     manifest_paths: &PluginManifestPaths,
 ) -> Vec<AbsolutePathBuf> {
