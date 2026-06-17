@@ -8,4 +8,7 @@ codex_rust_crate(
         "src/seatbelt_network_policy.sbpl",
     ],
     crate_name = "codex_sandboxing",
+    test_sizes = {
+        "sandboxing-unit-tests-windows-cross": "medium",
+    },
 )
