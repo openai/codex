@@ -1263,6 +1263,12 @@
             "id": {
               "type": "string"
             },
+            "linkId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "mcpAppResourceUri": {
               "type": [
                 "string",
