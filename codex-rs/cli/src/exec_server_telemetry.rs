@@ -5,34 +5,26 @@ const DEFAULT_ANALYTICS_ENABLED: bool = false;
 const DEFAULT_LOG_FILTER: &str = "error,opentelemetry_sdk=off,opentelemetry_otlp=off";
 const OTEL_SERVICE_NAME: &str = "codex-exec-server";
 
-pub(crate) fn init(config: Option<&codex_core::config::Config>) -> impl Send + Sync {
+pub(crate) fn init(
+    config: Option<&codex_core::config::Config>,
+) -> Result<impl Send + Sync, Box<dyn std::error::Error>> {
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_filter(stderr_env_filter());
-    let otel = config.and_then(|config| {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            codex_core::otel_init::build_provider(
-                config,
-                env!("CARGO_PKG_VERSION"),
-                Some(OTEL_SERVICE_NAME),
-                DEFAULT_ANALYTICS_ENABLED,
-            )
-        })) {
-            Ok(Ok(otel)) => otel,
-            Ok(Err(err)) => {
-                eprintln!("Could not create otel exporter: {err}");
-                None
-            }
-            Err(_) => {
-                eprintln!("Could not create otel exporter: panicked during initialization");
-                None
-            }
-        }
-    });
-    codex_core::otel_init::record_process_start(otel.as_ref(), OTEL_SERVICE_NAME);
+    let otel = match config {
+        Some(config) => codex_core::otel_init::build_provider(
+            config,
+            env!("CARGO_PKG_VERSION"),
+            Some(OTEL_SERVICE_NAME),
+            DEFAULT_ANALYTICS_ENABLED,
+        ),
+        None => Ok(None),
+    };
+    let provider = otel.as_ref().ok().and_then(Option::as_ref);
+    codex_core::otel_init::record_process_start(provider, OTEL_SERVICE_NAME);
 
-    let otel_logger_layer = otel.as_ref().and_then(|otel| otel.logger_layer());
-    let otel_tracing_layer = otel.as_ref().and_then(|otel| otel.tracing_layer());
+    let otel_logger_layer = provider.and_then(|otel| otel.logger_layer());
+    let otel_tracing_layer = provider.and_then(|otel| otel.tracing_layer());
     let _ = tracing_subscriber::registry()
         .with(fmt_layer)
         .with(otel_tracing_layer)
