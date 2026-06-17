@@ -245,6 +245,36 @@ impl ChatWidget {
             ));
     }
 
+    pub(crate) fn open_plugins_list(&mut self, cwd: PathBuf, response: PluginListResponse) {
+        if self.config.cwd.as_path() != cwd.as_path() {
+            return;
+        }
+
+        let response = match self.plugins_cache_for_current_cwd() {
+            PluginsCacheState::Ready(current_response) => current_response,
+            PluginsCacheState::Uninitialized
+            | PluginsCacheState::Loading
+            | PluginsCacheState::Failed(_) => response,
+        };
+        self.plugins_fetch_state.cache_cwd = Some(cwd);
+        self.plugins_cache = PluginsCacheState::Ready(response.clone());
+        let active_tab_id = self
+            .bottom_pane
+            .active_tab_id_for_active_view(PLUGINS_SELECTION_VIEW_ID)
+            .map(str::to_string)
+            .or_else(|| self.plugins_active_tab_id.clone())
+            .or_else(|| Some(ALL_PLUGINS_TAB_ID.to_string()));
+        self.plugins_active_tab_id = active_tab_id.clone();
+        let params =
+            self.plugins_popup_params(&response, active_tab_id, /*initial_selected_idx*/ None);
+        if !self
+            .bottom_pane
+            .replace_selection_view_if_active(PLUGINS_SELECTION_VIEW_ID, params)
+        {
+            self.open_plugins_popup(&response);
+        }
+    }
+
     pub(crate) fn open_marketplace_add_prompt(&mut self) {
         self.plugins_active_tab_id = Some(ADD_MARKETPLACE_TAB_ID.to_string());
         let tx = self.app_event_tx.clone();
