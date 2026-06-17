@@ -1730,6 +1730,7 @@ impl PluginRequestProcessor {
             ),
             connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
                 config,
+                auth,
                 /*force_refetch*/ true,
                 Arc::clone(&environment_manager),
                 self.thread_manager.mcp_manager(),
@@ -1757,8 +1758,7 @@ impl PluginRequestProcessor {
                     "failed to load accessible apps after plugin install: {err:#}"
                 );
                 (
-                    connectors::list_cached_accessible_connectors_from_mcp_tools(config)
-                        .await
+                    connectors::list_cached_accessible_connectors_from_mcp_tools(config, auth)
                         .unwrap_or_default(),
                     false,
                 )

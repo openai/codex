@@ -176,6 +176,7 @@ impl AppsRequestProcessor {
             mcp_manager,
             plugins_manager,
         } = load_context;
+        plugins_manager.set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
         let AppsListParams {
             cursor,
             limit,
@@ -194,19 +195,21 @@ impl AppsRequestProcessor {
             .plugins_for_config(&config.plugins_config_input())
             .await
             .effective_apps();
-        let (mut accessible_connectors, mut all_connectors) = tokio::join!(
-            connectors::list_cached_accessible_connectors_from_mcp_tools(&config),
-            connectors::list_cached_all_connectors(&config, auth.as_ref(), &plugin_apps)
-        );
+        let mut accessible_connectors =
+            connectors::list_cached_accessible_connectors_from_mcp_tools(&config, auth.as_ref());
+        let mut all_connectors =
+            connectors::list_cached_all_connectors(&config, auth.as_ref(), &plugin_apps).await;
         let cached_all_connectors = all_connectors.clone();
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
         let accessible_config = config.clone();
+        let accessible_auth = auth.clone();
         let accessible_tx = tx.clone();
         tokio::spawn(async move {
             let result = connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
                 &accessible_config,
+                accessible_auth.as_ref(),
                 force_refetch,
                 Arc::clone(&environment_manager),
                 mcp_manager,

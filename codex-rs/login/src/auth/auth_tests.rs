@@ -819,10 +819,7 @@ async fn auth_result_preserves_external_auth_resolution_errors() {
     )));
 
     assert_eq!(manager.auth_mode(), Some(AuthMode::Chatgpt));
-    assert_eq!(
-        manager.get_api_auth_mode(),
-        Some(ApiAuthMode::ChatgptAuthTokens)
-    );
+    assert_eq!(manager.get_api_auth_mode(), None);
     assert!(!manager.current_auth_uses_codex_backend());
     let error = manager
         .auth_result()

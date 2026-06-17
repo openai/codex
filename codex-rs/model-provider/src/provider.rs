@@ -223,10 +223,12 @@ impl ModelProvider for ConfiguredModelProvider {
     }
 
     fn supports_attestation(&self) -> bool {
-        self.auth_manager
-            .as_ref()
-            .and_then(|auth_manager| auth_manager.get_api_auth_mode())
-            .is_some_and(codex_models_manager::AuthMode::has_chatgpt_account)
+        self.info.requires_openai_auth
+            && self
+                .auth_manager
+                .as_ref()
+                .and_then(|auth_manager| auth_manager.auth_mode())
+                .is_some_and(codex_models_manager::AuthMode::has_chatgpt_account)
     }
 
     fn auth(&self) -> ModelProviderFuture<'_, codex_protocol::error::Result<Option<CodexAuth>>> {
@@ -454,6 +456,17 @@ mod tests {
         );
 
         assert!(provider.supports_attestation());
+    }
+
+    #[test]
+    fn unauthenticated_provider_does_not_enable_attestation_for_external_auth() {
+        let auth_manager = required_external_auth_manager_without_cached_auth();
+        let provider = create_model_provider(
+            provider_for("https://example.test/v1".to_string()),
+            Some(auth_manager),
+        );
+
+        assert!(!provider.supports_attestation());
     }
 
     fn remote_model(slug: &str) -> ModelInfo {

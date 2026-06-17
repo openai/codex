@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use anyhow::bail;
 use base64::Engine;
+use codex_app_server_protocol::AuthMode;
 use codex_config::types::ShellEnvironmentPolicyToml;
 use codex_protocol::permissions::ReadDenyMatcher;
 use codex_workload_identity::CredentialSourceConfig;
@@ -121,6 +122,10 @@ async fn configured_workload_identity_authenticates_responses_turn() -> Result<(
     let config_toml = workload_identity_config_toml(&server, token_path.clone())?;
     let mut builder = test_codex_with_workload_identity(config_toml);
     let test = builder.build(&server).await?;
+    assert_eq!(
+        test.thread_manager.plugins_manager().auth_mode(),
+        Some(AuthMode::ChatgptAuthTokens)
+    );
     test.submit_turn("authenticate with workload identity")
         .await?;
 
@@ -270,6 +275,7 @@ async fn unauthenticated_provider_skips_unavailable_workload_identity() -> Resul
         config.model_provider.requires_openai_auth = false;
     });
     let test = builder.build(&server).await?;
+    assert_eq!(test.thread_manager.plugins_manager().auth_mode(), None);
     test.submit_turn("use the unauthenticated provider").await?;
 
     assert_eq!(response_mock.single_request().header("authorization"), None);

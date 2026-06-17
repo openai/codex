@@ -2239,12 +2239,17 @@ impl AuthManager {
         Ok(result)
     }
 
+    /// Returns the mode of auth currently available to API-facing optional features.
+    ///
+    /// Required external ChatGPT auth is not active until it has resolved into the auth cache.
+    /// Callers that need configured intent before resolution, such as request attestation, should
+    /// use [`Self::auth_mode`].
     pub fn get_api_auth_mode(&self) -> Option<ApiAuthMode> {
         match self.external_auth_mode() {
             Some(AuthMode::ApiKey) => return Some(ApiAuthMode::ApiKey),
-            Some(AuthMode::Chatgpt) => return Some(ApiAuthMode::ChatgptAuthTokens),
             Some(
-                AuthMode::ChatgptAuthTokens
+                AuthMode::Chatgpt
+                | AuthMode::ChatgptAuthTokens
                 | AuthMode::AgentIdentity
                 | AuthMode::PersonalAccessToken
                 | AuthMode::BedrockApiKey,

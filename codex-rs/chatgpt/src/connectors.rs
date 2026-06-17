@@ -49,7 +49,7 @@ pub async fn list_connectors(
     }
     let (connectors_result, accessible_result) = tokio::join!(
         list_all_connectors(config, auth),
-        list_accessible_connectors_from_mcp_tools(config),
+        list_accessible_connectors_from_mcp_tools(config, auth),
     );
     let connectors = connectors_result?;
     let accessible = accessible_result?;

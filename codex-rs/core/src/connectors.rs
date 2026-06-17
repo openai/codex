@@ -29,7 +29,6 @@ use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::PluginsManager;
 use codex_features::Feature;
-use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::originator;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -71,10 +70,11 @@ pub struct AccessibleConnectorsStatus {
 
 pub async fn list_accessible_connectors_from_mcp_tools(
     config: &Config,
+    auth: Option<&CodexAuth>,
 ) -> anyhow::Result<Vec<AppInfo>> {
     Ok(
         list_accessible_connectors_from_mcp_tools_with_options_and_status(
-            config, /*force_refetch*/ false,
+            config, auth, /*force_refetch*/ false,
         )
         .await?
         .connectors,
@@ -129,25 +129,17 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
         .collect())
 }
 
-pub async fn list_cached_accessible_connectors_from_mcp_tools(
+pub fn list_cached_accessible_connectors_from_mcp_tools(
     config: &Config,
+    auth: Option<&CodexAuth>,
 ) -> Option<Vec<AppInfo>> {
-    let auth_manager =
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
-    let auth = match auth_manager.auth().await {
-        Ok(auth) => auth,
-        Err(err) => {
-            tracing::warn!(error = %err, "failed to resolve auth for cached connectors");
-            return None;
-        }
-    };
     if !config
         .features
-        .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
+        .apps_enabled_for_auth(auth.is_some_and(CodexAuth::uses_codex_backend))
     {
         return Some(Vec::new());
     }
-    let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
+    let cache_key = accessible_connectors_cache_key(config, auth);
     read_cached_accessible_connectors(&cache_key).map(|connectors| {
         codex_connectors::filter::filter_disallowed_connectors(
             connectors,
@@ -175,17 +167,23 @@ pub(crate) fn refresh_accessible_connectors_cache_from_mcp_tools(
 
 pub async fn list_accessible_connectors_from_mcp_tools_with_options(
     config: &Config,
+    auth: Option<&CodexAuth>,
     force_refetch: bool,
 ) -> anyhow::Result<Vec<AppInfo>> {
     Ok(
-        list_accessible_connectors_from_mcp_tools_with_options_and_status(config, force_refetch)
-            .await?
-            .connectors,
+        list_accessible_connectors_from_mcp_tools_with_options_and_status(
+            config,
+            auth,
+            force_refetch,
+        )
+        .await?
+        .connectors,
     )
 }
 
 pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     config: &Config,
+    auth: Option<&CodexAuth>,
     force_refetch: bool,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
     // TODO: Wire callers that already own an EnvironmentManager into
@@ -200,6 +198,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
             .await?;
     list_accessible_connectors_from_mcp_tools_with_environment_manager(
         config,
+        auth,
         force_refetch,
         Arc::new(environment_manager),
     )
@@ -208,6 +207,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
 
 pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     config: &Config,
+    auth: Option<&CodexAuth>,
     force_refetch: bool,
     environment_manager: Arc<EnvironmentManager>,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
@@ -215,6 +215,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     let mcp_manager = Arc::new(McpManager::new(plugins_manager));
     list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         config,
+        auth,
         force_refetch,
         environment_manager,
         mcp_manager,
@@ -224,23 +225,21 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
 
 pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     config: &Config,
+    auth: Option<&CodexAuth>,
     force_refetch: bool,
     environment_manager: Arc<EnvironmentManager>,
     mcp_manager: Arc<McpManager>,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
-    let auth_manager =
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
-    let auth = auth_manager.auth().await?;
     if !config
         .features
-        .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
+        .apps_enabled_for_auth(auth.is_some_and(CodexAuth::uses_codex_backend))
     {
         return Ok(AccessibleConnectorsStatus {
             connectors: Vec::new(),
             codex_apps_ready: true,
         });
     }
-    let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
+    let cache_key = accessible_connectors_cache_key(config, auth);
     let mcp_config = mcp_manager.runtime_config(config).await;
     let tool_plugin_provenance = tool_plugin_provenance(&mcp_config);
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
@@ -256,9 +255,9 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         });
     }
 
-    let mut mcp_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
+    let mut mcp_servers = effective_mcp_servers(&mcp_config, auth);
     mcp_servers.retain(|name, _| name == CODEX_APPS_MCP_SERVER_NAME);
-    let host_owned_codex_apps_enabled = host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
+    let host_owned_codex_apps_enabled = host_owned_codex_apps_enabled(&mcp_config, auth);
     if mcp_servers.is_empty() {
         return Ok(AccessibleConnectorsStatus {
             connectors: Vec::new(),
@@ -270,7 +269,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         mcp_servers.iter(),
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
-        auth.as_ref(),
+        auth,
     )
     .await;
 
@@ -292,12 +291,12 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         // one exists, but do not reintroduce the old hidden-local fallback.
         McpRuntimeContext::new(environment_manager, config.cwd.to_path_buf()),
         config.codex_home.to_path_buf(),
-        codex_apps_tools_cache_key(auth.as_ref()),
+        codex_apps_tools_cache_key(auth),
         host_owned_codex_apps_enabled,
         mcp_config.prefix_mcp_tool_names,
         mcp_config.client_elicitation_capability,
         ToolPluginProvenance::default(),
-        auth.as_ref(),
+        auth,
         /*elicitation_reviewer*/ None,
     )
     .await;
@@ -458,21 +457,6 @@ async fn cached_directory_connectors_for_tool_suggest_with_auth(
         return Vec::new();
     }
 
-    let loaded_auth;
-    let auth = if let Some(auth) = auth {
-        Some(auth)
-    } else {
-        let auth_manager =
-            AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
-        loaded_auth = match auth_manager.auth().await {
-            Ok(auth) => auth,
-            Err(err) => {
-                tracing::warn!(error = %err, "failed to resolve auth for connector directory cache");
-                return Vec::new();
-            }
-        };
-        loaded_auth.as_ref()
-    };
     let Some(auth) = auth.filter(|auth| auth.uses_codex_backend()) else {
         return Vec::new();
     };

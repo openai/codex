@@ -602,6 +602,7 @@ impl Session {
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
+        let plugins_manager_for_mcp = Arc::clone(&plugins_manager);
         let mcp_thread_init_for_startup = &mcp_thread_init;
         let auth_and_mcp_fut = async move {
             let auth = if config_for_mcp.model_provider.requires_openai_auth {
@@ -609,6 +610,7 @@ impl Session {
             } else {
                 auth_manager_clone.auth_for_optional_use().await
             };
+            plugins_manager_for_mcp.set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
             let mcp_config = mcp_manager_for_mcp
                 .runtime_config_for_thread(&config_for_mcp, mcp_thread_init_for_startup)
                 .await;
