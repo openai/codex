@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
@@ -35,6 +36,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
+use codex_login::AuthKeyringBackendKind;
 use codex_login::save_auth;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
@@ -122,6 +124,7 @@ async fn list_apps_returns_empty_with_api_key_auth() -> Result<()> {
             bedrock_api_key: None,
         },
         AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
     )?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
@@ -206,6 +209,50 @@ async fn list_apps_returns_empty_when_workspace_codex_plugins_disabled() -> Resu
 
     let AppsListResponse { data, next_cursor } = to_response(response)?;
     assert!(data.is_empty());
+    assert!(next_cursor.is_none());
+
+    server_handle.abort();
+    let _ = server_handle.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_apps_includes_plugin_apps_for_chatgpt_auth() -> Result<()> {
+    let (server_url, server_handle) =
+        start_apps_server_with_delays(Vec::new(), Vec::new(), Duration::ZERO, Duration::ZERO)
+            .await?;
+
+    let codex_home = TempDir::new()?;
+    write_connectors_and_plugins_config(codex_home.path(), &server_url)?;
+    write_plugin_app_fixture(codex_home.path(), "sample", "connector_sample")?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-plugin-apps")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_apps_list_request(AppsListParams {
+            limit: None,
+            cursor: None,
+            thread_id: None,
+            force_refetch: false,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let AppsListResponse { data, next_cursor } = to_response(response)?;
+
+    assert!(data.iter().any(|app| app.id == "connector_sample"));
     assert!(next_cursor.is_none());
 
     server_handle.abort();
@@ -1620,4 +1667,46 @@ connectors = true
 "#
         ),
     )
+}
+
+fn write_connectors_and_plugins_config(codex_home: &Path, base_url: &str) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+chatgpt_base_url = "{base_url}"
+mcp_oauth_credentials_store = "file"
+
+[features]
+connectors = true
+plugins = true
+
+[plugins."sample@test"]
+enabled = true
+"#
+        ),
+    )
+}
+
+fn write_plugin_app_fixture(codex_home: &Path, plugin_name: &str, app_id: &str) -> Result<()> {
+    let plugin_root = codex_home
+        .join("plugins/cache")
+        .join("test")
+        .join(plugin_name)
+        .join("local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        format!(r#"{{"name":"{plugin_name}"}}"#),
+    )?;
+    std::fs::write(
+        plugin_root.join(".app.json"),
+        serde_json::to_vec_pretty(&json!({
+            "apps": {
+                plugin_name: { "id": app_id }
+            }
+        }))?,
+    )?;
+    Ok(())
 }

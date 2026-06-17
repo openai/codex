@@ -220,6 +220,11 @@ impl Session {
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
                     active_segment.counts_as_user_turn |= is_user_turn_boundary(response_item);
                 }
+                RolloutItem::InterAgentCommunication(_) => {
+                    let active_segment =
+                        active_segment.get_or_insert_with(ActiveReplaySegment::default);
+                    active_segment.counts_as_user_turn = true;
+                }
                 RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => {}
             }
 
@@ -266,7 +271,14 @@ impl Session {
                 RolloutItem::ResponseItem(response_item) => {
                     history.record_items(
                         std::iter::once(response_item),
-                        turn_context.truncation_policy,
+                        turn_context.model_info.truncation_policy.into(),
+                    );
+                }
+                RolloutItem::InterAgentCommunication(communication) => {
+                    let response_item = communication.to_model_input_item();
+                    history.record_items(
+                        std::iter::once(&response_item),
+                        turn_context.model_info.truncation_policy.into(),
                     );
                 }
                 RolloutItem::Compacted(compacted) => {
@@ -284,7 +296,7 @@ impl Session {
                         // prompt shape.
                         // TODO(ccunningham): if we drop support for None replacement_history compaction items,
                         // we can get rid of this second loop entirely and just build `history` directly in the first loop.
-                        let user_messages = collect_user_messages(history.raw_items());
+                        let user_messages = compact::collect_user_messages(history.raw_items());
                         let rebuilt = compact::build_compacted_history(
                             Vec::new(),
                             &user_messages,

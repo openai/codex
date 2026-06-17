@@ -63,8 +63,12 @@ fn build_permissions_update_item(
             exec_policy,
             #[allow(deprecated)]
             &next.cwd,
-            next.features.enabled(Feature::ExecPermissionApprovals),
-            next.features.enabled(Feature::RequestPermissionsTool),
+            next.config
+                .features
+                .enabled(Feature::ExecPermissionApprovals),
+            next.config
+                .features
+                .enabled(Feature::RequestPermissionsTool),
         )
         .render(),
     )
@@ -203,6 +207,7 @@ fn build_text_message(role: &str, text_sections: Vec<String>) -> Option<Response
         role: role.to_string(),
         content,
         phase: None,
+        metadata: None,
     })
 }
 

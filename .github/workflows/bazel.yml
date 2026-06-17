@@ -21,8 +21,8 @@ jobs:
     # PRs use the sharded Windows cross-compiled test jobs below. Post-merge
     # pushes to main also run the native Windows test job for broader Windows
     # signal without putting PR latency back on the critical path. When
-    # authenticated RBE is available, the Windows-cross shards exercise the
-    # source-built V8/code-mode targets.
+    # Code-mode unit tests run on every Bazel target. When authenticated RBE
+    # is available, the Windows-cross shards exercise the source-built V8 path.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -95,10 +95,6 @@ jobs:
             # path. V8 consumers under `//codex-rs/...` still participate
             # transitively through `//...`.
             -//third_party/v8:all
-            # Keep V8-backed code-mode tests out of the ordinary macOS/Linux
-            # legs; authenticated Windows-cross shards below exercise the
-            # source-built gnullvm V8 path.
-            -//codex-rs/code-mode:code-mode-unit-tests
             -//codex-rs/v8-poc:v8-poc-unit-tests
           )
 
@@ -299,9 +295,6 @@ jobs:
             # path. V8 consumers under `//codex-rs/...` still participate
             # transitively through `//...`.
             -//third_party/v8:all
-            # Keep this job broad and cheap; authenticated Windows-cross jobs
-            # add source-built V8-backed code-mode coverage.
-            -//codex-rs/code-mode:code-mode-unit-tests
             -//codex-rs/v8-poc:v8-poc-unit-tests
           )
 

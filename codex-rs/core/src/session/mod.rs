@@ -30,13 +30,15 @@ use crate::context::ContextualUserFragment;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
+use crate::context::RecommendedPluginsInstructions;
 use crate::default_skill_metadata_budget;
-use crate::environment_selection::ResolvedTurnEnvironments;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::ExecPolicyManager;
 use crate::image_preparation::prepare_response_items;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
-use crate::session_prefix::format_subagent_notification_message;
+use crate::session::turn_context::TurnEnvironment;
+use crate::session_prefix::format_inter_agent_completion_message;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
 use crate::turn_metadata::TurnMetadataState;
@@ -50,10 +52,10 @@ use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::TurnCodexErrorFact;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
+use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
-use codex_exec_server::FileSystemSandboxContext;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::LoadedUserInstructions;
 use codex_extension_api::PromptSlot;
@@ -147,7 +149,7 @@ use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
-use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use futures::future::Shared;
 use futures::prelude::*;
@@ -179,6 +181,7 @@ use uuid::Uuid;
 
 use crate::client::ModelClient;
 use crate::codex_thread::ThreadConfigSnapshot;
+#[cfg(test)]
 use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::Constrained;
@@ -194,7 +197,6 @@ use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::McpServerConfig;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
@@ -218,6 +220,7 @@ use self::config_lock::validate_config_lock_if_configured;
 #[cfg(test)]
 use self::handlers::submission_dispatch_span;
 use self::handlers::submission_loop;
+pub(crate) use self::input_queue::InputQueueActivity;
 pub(crate) use self::input_queue::TurnInput;
 pub(crate) use self::input_queue::TurnInputQueue;
 use self::review::spawn_review_thread;
@@ -289,10 +292,8 @@ pub(crate) struct PreviousTurnSettings {
 }
 
 #[cfg(test)]
-use crate::SkillLoadOutcome;
-#[cfg(test)]
 use crate::SkillMetadata;
-use crate::SkillsManager;
+use crate::SkillsService;
 use crate::agents_md::load_project_instructions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
@@ -301,7 +302,8 @@ use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::rollout::map_session_init_error;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
-use crate::shell_snapshot::ShellSnapshot;
+#[cfg(test)]
+use crate::skills::SkillLoadOutcome;
 use crate::state::AutoCompactWindowSnapshot;
 use crate::state::PendingRequestPermissions;
 use crate::state::SessionServices;
@@ -322,6 +324,7 @@ use crate::turn_timing::record_turn_ttfm_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core_plugins::PluginsManager;
+use codex_core_plugins::RecommendedPluginCandidatesInput;
 use codex_git_utils::get_git_repo_root;
 use codex_mcp::McpConfig;
 use codex_mcp::compute_auth_statuses;
@@ -406,7 +409,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: SharedModelsManager,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
-    pub(crate) skills_manager: Arc<SkillsManager>,
+    pub(crate) skills_service: Arc<SkillsService>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
@@ -418,8 +421,8 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) agent_control: AgentControl,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) metrics_service_name: Option<String>,
-    pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
+    pub(crate) inherited_environments: Option<TurnEnvironmentSnapshot>,
     /// Parent rollout trace used only to derive fresh spawned child traces.
     ///
     /// Root sessions and non-thread-spawn subagents pass a disabled context;
@@ -427,7 +430,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) parent_rollout_thread_trace: ThreadTraceContext,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
-    pub(crate) environment_selections: ResolvedTurnEnvironments,
+    pub(crate) environment_selections: Vec<TurnEnvironmentSelection>,
     pub(crate) thread_extension_init: ExtensionDataInit,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
@@ -492,7 +495,7 @@ impl Codex {
             auth_manager,
             models_manager,
             environment_manager,
-            skills_manager,
+            skills_service,
             plugins_manager,
             mcp_manager,
             extensions,
@@ -504,9 +507,9 @@ impl Codex {
             agent_control,
             dynamic_tools,
             metrics_service_name,
-            inherited_shell_snapshot,
             user_shell_override,
             inherited_exec_policy,
+            inherited_environments,
             parent_rollout_thread_trace,
             parent_trace: _,
             environment_selections,
@@ -527,10 +530,6 @@ impl Codex {
         config
             .startup_warnings
             .extend(user_instruction_provider_warnings);
-        let loaded_agents_md =
-            load_project_instructions(&mut config, user_instructions, &environment_selections)
-                .await;
-
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
             // not on caller-provided exec-policy rules that could shape the
@@ -609,7 +608,7 @@ impl Codex {
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier,
             developer_instructions: config.developer_instructions.clone(),
-            loaded_agents_md,
+            loaded_agents_md: None,
             personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
@@ -619,7 +618,7 @@ impl Codex {
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             environments: TurnEnvironmentSelections::new(
                 config.cwd.clone(),
-                environment_selections.to_selections(),
+                environment_selections,
             ),
             workspace_roots: config.workspace_roots.clone(),
             codex_home: config.codex_home.clone(),
@@ -633,7 +632,6 @@ impl Codex {
             parent_thread_id,
             thread_source,
             dynamic_tools,
-            inherited_shell_snapshot,
             user_shell_override,
         };
 
@@ -644,6 +642,7 @@ impl Codex {
         let session = Box::pin(Session::new(
             session_configuration,
             config.clone(),
+            user_instructions,
             installation_id,
             auth_manager.clone(),
             models_manager.clone(),
@@ -652,13 +651,14 @@ impl Codex {
             agent_status_tx.clone(),
             conversation_history,
             session_source_clone,
-            skills_manager,
+            skills_service,
             plugins_manager,
             mcp_manager.clone(),
             extensions,
             thread_extension_init,
             agent_control,
             environment_manager,
+            inherited_environments,
             analytics_events_client,
             thread_store,
             parent_rollout_thread_trace,
@@ -1307,6 +1307,14 @@ impl Session {
         }
     }
 
+    #[instrument(
+        level = "trace",
+        skip_all,
+        fields(
+            thread_id = %self.thread_id(),
+            rollout_item_count = rollout_items.len()
+        )
+    )]
     async fn apply_rollout_reconstruction(
         &self,
         turn_context: &TurnContext,
@@ -1320,7 +1328,11 @@ impl Session {
         } = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
-        if turn_context.features.enabled(Feature::ResizeAllImages) {
+        if turn_context
+            .config
+            .features
+            .enabled(Feature::ResizeAllImages)
+        {
             // Keep the recorded rollout unchanged. Prepare its reconstructed history before
             // installing it, so legacy images are processed once for this resume or fork and
             // will be processed again if the rollout is reconstructed in a future session.
@@ -1386,53 +1398,12 @@ impl Session {
         state.set_previous_turn_settings(previous_turn_settings);
     }
 
-    fn maybe_refresh_shell_snapshot_for_cwd(
-        &self,
-        previous_cwd: &AbsolutePathBuf,
-        next_cwd: &AbsolutePathBuf,
-        codex_home: &AbsolutePathBuf,
-        session_source: &SessionSource,
-    ) {
-        if previous_cwd == next_cwd {
-            return;
-        }
-
-        if !self.features.enabled(Feature::ShellSnapshot) {
-            return;
-        }
-
-        if matches!(
-            session_source,
-            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
-        ) {
-            return;
-        }
-
-        ShellSnapshot::refresh_snapshot(
-            codex_home.clone(),
-            self.thread_id,
-            next_cwd.clone(),
-            self.services.user_shell.as_ref().clone(),
-            self.services.shell_snapshot_tx.clone(),
-            self.services.session_telemetry.clone(),
-            self.services.state_db.clone(),
-        );
-    }
-
     pub(crate) async fn update_settings(
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
-        let (
-            previous_config,
-            new_config,
-            previous_cwd,
-            permission_profile_changed,
-            next_cwd,
-            codex_home,
-            session_source,
-        ) = {
+        let (previous_config, new_config, permission_profile_changed) = {
             let mut state = self.state.lock().await;
             let updated = match state.session_configuration.apply(&updates) {
                 Ok(updated) => updated,
@@ -1446,33 +1417,19 @@ impl Session {
                 .then(|| Self::build_effective_session_config(&state.session_configuration));
             let new_config =
                 notify_config_contributors.then(|| Self::build_effective_session_config(&updated));
-            let previous_cwd = state.session_configuration.cwd().clone();
             let previous_permission_profile = state.session_configuration.permission_profile();
             let updated_permission_profile = updated.permission_profile();
             let permission_profile_changed =
                 previous_permission_profile != updated_permission_profile;
-            let next_cwd = updated.cwd().clone();
-            let codex_home = updated.codex_home.clone();
-            let session_source = updated.session_source.clone();
+            if updates.environments.is_some() {
+                self.services
+                    .turn_environments
+                    .update_selections(updated.environment_selections());
+            }
             state.session_configuration = updated;
-            (
-                previous_config,
-                new_config,
-                previous_cwd,
-                permission_profile_changed,
-                next_cwd,
-                codex_home,
-                session_source,
-            )
+            (previous_config, new_config, permission_profile_changed)
         };
-
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
-        self.maybe_refresh_shell_snapshot_for_cwd(
-            &previous_cwd,
-            &next_cwd,
-            &codex_home,
-            &session_source,
-        );
         if permission_profile_changed {
             self.refresh_managed_network_proxy_for_current_permission_profile()
                 .await;
@@ -1550,12 +1507,13 @@ impl Session {
             (previous_config, new_config, config)
         };
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
-        self.services.skills_manager.clear_cache();
+        self.services.skills_service.clear_cache();
         self.services.plugins_manager.clear_cache();
+        let environments = self.services.turn_environments.snapshot().await;
         let hooks = build_hooks_for_config(
             config.as_ref(),
             self.services.plugins_manager.as_ref(),
-            self.services.user_shell.as_ref(),
+            environments.single_local_environment(),
         )
         .await;
 
@@ -1700,6 +1658,18 @@ impl Session {
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
+        if let EventMsg::Error(error) = &legacy_source
+            && error
+                .codex_error_info
+                .as_ref()
+                .is_some_and(CodexErrorInfo::affects_turn_status)
+        {
+            turn_context
+                .terminal_error
+                .lock()
+                .await
+                .replace(error.message.clone());
+        }
         self.services
             .rollout_thread_trace
             .record_codex_turn_event(&turn_context.sub_id, &legacy_source);
@@ -1751,8 +1721,18 @@ impl Session {
             return;
         };
 
-        let Some(status) = agent_status_from_event(msg) else {
-            return;
+        let status = match turn_context.terminal_error.lock().await.take() {
+            Some(error) => {
+                let status = AgentStatus::Errored(error);
+                self.agent_status.send_replace(status.clone());
+                status
+            }
+            None => {
+                let Some(status) = agent_status_from_event(msg) else {
+                    return;
+                };
+                status
+            }
         };
         if !is_final(&status) {
             return;
@@ -1783,7 +1763,13 @@ impl Session {
             return;
         };
 
-        let message = format_subagent_notification_message(child_agent_path.as_str(), &status);
+        let Some(message) = format_inter_agent_completion_message(
+            parent_agent_path.clone(),
+            child_agent_path.clone(),
+            &status,
+        ) else {
+            return;
+        };
         // `communication` owns the message. Keep a second copy only when the
         // recorder will actually need it after parent delivery succeeds.
         let trace_message = self
@@ -2197,6 +2183,18 @@ impl Session {
         }
 
         let requested_permissions = args.permissions;
+        // TODO(anp): Migrate request_permissions to support paths from foreign environments.
+        let Ok(native_environment_cwd) = environment.cwd.to_abs_path() else {
+            warn!(
+                cwd = %environment.cwd,
+                "request_permissions requires a cwd native to the Codex host"
+            );
+            return Some(RequestPermissionsResponse {
+                permissions: RequestPermissionProfile::default(),
+                scope: PermissionGrantScope::Turn,
+                strict_auto_review: false,
+            });
+        };
 
         if crate::guardian::routes_approval_to_guardian(turn_context.as_ref()) {
             let originating_turn_state = {
@@ -2264,7 +2262,7 @@ impl Session {
             let response = Self::normalize_request_permissions_response(
                 requested_permissions,
                 response,
-                environment.cwd.as_path(),
+                native_environment_cwd.as_path(),
             );
             self.record_granted_request_permissions_for_turn(
                 &response,
@@ -2304,7 +2302,7 @@ impl Session {
             started_at_ms: now_unix_timestamp_ms(),
             reason: args.reason,
             permissions: requested_permissions,
-            cwd: Some(environment.cwd),
+            cwd: Some(native_environment_cwd),
         });
         self.send_event(turn_context.as_ref(), event).await;
         tokio::select! {
@@ -2345,7 +2343,7 @@ impl Session {
             });
         };
         let mut environment = turn_environment.selection();
-        environment.cwd = cwd;
+        environment.cwd = PathUri::from_abs_path(&cwd);
         self.request_permissions_for_environment(
             turn_context,
             call_id,
@@ -2448,11 +2446,26 @@ impl Session {
         };
         match entry {
             Some(entry) => {
-                let response = Self::normalize_request_permissions_response(
-                    entry.requested_permissions,
-                    response,
-                    entry.environment.cwd.as_path(),
-                );
+                // TODO(anp): Migrate request_permissions to support paths from foreign environments.
+                let response = match entry.environment.cwd.to_abs_path() {
+                    Ok(native_environment_cwd) => Self::normalize_request_permissions_response(
+                        entry.requested_permissions,
+                        response,
+                        native_environment_cwd.as_path(),
+                    ),
+                    Err(err) => {
+                        warn!(
+                            cwd = %entry.environment.cwd,
+                            %err,
+                            "request_permissions requires a cwd native to the Codex host"
+                        );
+                        RequestPermissionsResponse {
+                            permissions: RequestPermissionProfile::default(),
+                            scope: PermissionGrantScope::Turn,
+                            strict_auto_review: false,
+                        }
+                    }
+                };
                 self.record_granted_request_permissions_for_turn(
                     &response,
                     &entry.environment.environment_id,
@@ -2619,7 +2632,11 @@ impl Session {
         turn_context: &TurnContext,
         items: &'a [ResponseItem],
     ) -> Cow<'a, [ResponseItem]> {
-        if !turn_context.features.enabled(Feature::ResizeAllImages) {
+        if !turn_context
+            .config
+            .features
+            .enabled(Feature::ResizeAllImages)
+        {
             return Cow::Borrowed(items);
         }
 
@@ -2633,7 +2650,11 @@ impl Session {
         turn_context: &TurnContext,
         input: Vec<UserInput>,
     ) -> ResponseItem {
-        let local_image_preparation = if turn_context.features.enabled(Feature::ResizeAllImages) {
+        let local_image_preparation = if turn_context
+            .config
+            .features
+            .enabled(Feature::ResizeAllImages)
+        {
             LocalImagePreparation::Defer
         } else {
             LocalImagePreparation::Process
@@ -2653,9 +2674,35 @@ impl Session {
         let items = items.as_ref();
         {
             let mut state = self.state.lock().await;
-            state.record_items(items.iter(), turn_context.truncation_policy);
+            state.record_items(
+                items.iter(),
+                turn_context.model_info.truncation_policy.into(),
+            );
         }
         self.persist_rollout_response_items(items).await;
+        self.send_raw_response_items(turn_context, items).await;
+    }
+
+    pub(crate) async fn record_inter_agent_communication(
+        &self,
+        turn_context: &TurnContext,
+        communication: InterAgentCommunication,
+    ) {
+        let response_item = communication.to_model_input_item();
+        let items = self.prepare_conversation_items_for_history(
+            turn_context,
+            std::slice::from_ref(&response_item),
+        );
+        let items = items.as_ref();
+        {
+            let mut state = self.state.lock().await;
+            state.record_items(
+                items.iter(),
+                turn_context.model_info.truncation_policy.into(),
+            );
+        }
+        self.persist_rollout_items(&[RolloutItem::InterAgentCommunication(communication)])
+            .await;
         self.send_raw_response_items(turn_context, items).await;
     }
 
@@ -2854,9 +2901,11 @@ impl Session {
                     #[allow(deprecated)]
                     &turn_context.cwd,
                     turn_context
+                        .config
                         .features
                         .enabled(Feature::ExecPermissionApprovals),
                     turn_context
+                        .config
                         .features
                         .enabled(Feature::RequestPermissionsTool),
                 )
@@ -2920,7 +2969,7 @@ impl Session {
         }
         if turn_context.config.include_skill_instructions {
             let available_skills = build_available_skills(
-                &turn_context.turn_skills.outcome,
+                turn_context.turn_skills.snapshot.outcome(),
                 default_skill_metadata_budget(turn_context.model_info.context_window),
                 SkillRenderSideEffects::ThreadStart {
                     session_telemetry: &self.services.session_telemetry,
@@ -2946,6 +2995,29 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&turn_context.config.plugins_config_input())
             .await;
+        let recommended_plugin_candidates =
+            if crate::tools::spec_plan::tool_suggest_enabled(turn_context) {
+                let auth = self.services.auth_manager.auth().await;
+                let plugins_config = turn_context.config.plugins_config_input();
+                self.services
+                    .plugins_manager
+                    .recommended_plugin_candidates_for_config(RecommendedPluginCandidatesInput {
+                        plugins_config: &plugins_config,
+                        loaded_plugins: &loaded_plugins,
+                        auth: auth.as_ref(),
+                        disabled_tools: &turn_context.config.tool_suggest.disabled_tools,
+                        app_server_client_name: turn_context.app_server_client_name.as_deref(),
+                    })
+                    .await
+            } else {
+                None
+            };
+        if let Some(recommended_plugins) = recommended_plugin_candidates
+            .as_deref()
+            .and_then(RecommendedPluginsInstructions::from_plugins)
+        {
+            contextual_user_sections.push(recommended_plugins.render());
+        }
         if let Some(plugin_instructions) =
             AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
         {
@@ -2977,7 +3049,7 @@ impl Session {
             contextual_user_sections.push(user_instructions.to_string());
         }
         // This is full-context metadata. Steady-state context diffs should not re-emit it.
-        if turn_context.features.enabled(Feature::TokenBudget)
+        if turn_context.config.features.enabled(Feature::TokenBudget)
             && let Some(model_context_window) = turn_context.model_context_window()
         {
             developer_sections.push(
@@ -3529,11 +3601,17 @@ pub(crate) fn emit_subagent_session_started(
 async fn build_hooks_for_config(
     config: &Config,
     plugins_manager: &PluginsManager,
-    user_shell: &crate::shell::Shell,
+    environment: Option<&TurnEnvironment>,
 ) -> Hooks {
-    let mut hook_shell_argv = user_shell.derive_exec_args("", /*use_login_shell*/ false);
-    let hook_shell_program = hook_shell_argv.remove(0);
-    let _ = hook_shell_argv.pop();
+    let (hook_shell_program, hook_shell_argv) = environment
+        .and_then(|environment| environment.shell.as_ref())
+        .map(|shell| {
+            let mut argv = shell.derive_exec_args("", /*use_login_shell*/ false);
+            let program = argv.remove(0);
+            let _ = argv.pop();
+            (Some(program), argv)
+        })
+        .unwrap_or_default();
     let plugins_input = config.plugins_config_input();
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let plugin_hook_sources = plugin_outcome.effective_plugin_hook_sources();
@@ -3545,7 +3623,7 @@ async fn build_hooks_for_config(
         config_layer_stack: Some(config.config_layer_stack.clone()),
         plugin_hook_sources,
         plugin_hook_load_warnings,
-        shell_program: Some(hook_shell_program),
+        shell_program: hook_shell_program,
         shell_args: hook_shell_argv,
     })
 }

@@ -117,17 +117,33 @@ impl ImageGenerationTool {
                 saved_path: None,
             }))
             .await;
-        let response = match request {
+        let result = match request {
             ImageRequest::Generate(request) => self.backend.generate(request).await,
             ImageRequest::Edit(request) => self.backend.edit(request).await,
         }
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("image generation failed: {err}"))
-        })?;
-        let Some(result) = response.data.into_iter().next().map(|data| data.b64_json) else {
-            return Err(FunctionCallError::RespondToModel(
-                "image generation returned no image data".to_string(),
-            ));
+        .map_err(|err| format!("image generation failed: {err}"))
+        .and_then(|response| {
+            response
+                .data
+                .into_iter()
+                .next()
+                .map(|data| data.b64_json)
+                .ok_or_else(|| "image generation returned no image data".to_string())
+        });
+        let result = match result {
+            Ok(result) => result,
+            Err(message) => {
+                call.turn_item_emitter
+                    .emit_completed(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
+                        id: call.call_id.clone(),
+                        status: "failed".to_string(),
+                        revised_prompt: Some(args.prompt.clone()),
+                        result: String::new(),
+                        saved_path: None,
+                    }))
+                    .await;
+                return Err(FunctionCallError::RespondToModel(message));
+            }
         };
         call.turn_item_emitter
             .emit_completed(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
@@ -251,7 +267,7 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::Compaction { .. }
-            | ResponseItem::CompactionTrigger
+            | ResponseItem::CompactionTrigger { .. }
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other => {}
         }
@@ -267,9 +283,9 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
                     ContentItem::InputText { .. } | ContentItem::OutputText { .. } => None,
                 }));
             }
-            ResponseItem::FunctionCallOutput { call_id, output }
-                if function_call_ids.contains(call_id.as_str()) =>
-            {
+            ResponseItem::FunctionCallOutput {
+                call_id, output, ..
+            } if function_call_ids.contains(call_id.as_str()) => {
                 image_urls.extend(output_image_urls(output));
             }
             ResponseItem::CustomToolCallOutput {
@@ -292,7 +308,7 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::Compaction { .. }
-            | ResponseItem::CompactionTrigger
+            | ResponseItem::CompactionTrigger { .. }
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other => {}
         }
@@ -325,15 +341,11 @@ async fn image_url(
     path: &AbsolutePathBuf,
     environment: &ToolEnvironment,
 ) -> Result<ImageUrl, FunctionCallError> {
-    let path_uri = PathUri::from_abs_path(path).map_err(|error| {
-        FunctionCallError::RespondToModel(format!(
-            "unable to read referenced image at `{}`: {error}",
-            path.display()
-        ))
-    })?;
+    let path_uri = PathUri::from_abs_path(path);
+    let sandbox = environment.file_system_sandbox_context.clone();
     let bytes = environment
         .file_system
-        .read_file(&path_uri, Some(&environment.file_system_sandbox_context))
+        .read_file(&path_uri, Some(&sandbox))
         .await
         .map_err(|error| {
             FunctionCallError::RespondToModel(format!(

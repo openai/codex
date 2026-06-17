@@ -143,16 +143,21 @@ impl ViewImageHandler {
                 "view_image is unavailable in this session".to_string(),
             ));
         };
-        let cwd = turn_environment.cwd.clone();
-        let abs_path = cwd.join(path);
-        let sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None, &cwd);
-        let fs = turn_environment.environment.get_filesystem();
-        let path_uri = PathUri::from_abs_path(&abs_path).map_err(|error| {
+        // TODO(anp): Resolve tool paths using the selected environment's native path convention
+        // so view_image can support relative paths in foreign environments.
+        let cwd = turn_environment.cwd().to_abs_path().map_err(|err| {
             FunctionCallError::RespondToModel(format!(
-                "unable to locate image at `{}`: {error}",
-                abs_path.display()
+                "environment cwd `{}` is not native to the Codex host: {err}",
+                turn_environment.cwd()
             ))
         })?;
+        let abs_path = cwd.join(path);
+        let sandbox = turn.file_system_sandbox_context(
+            /*additional_permissions*/ None,
+            turn_environment.cwd(),
+        );
+        let fs = turn_environment.environment.get_filesystem();
+        let path_uri = PathUri::from_abs_path(&abs_path);
 
         let metadata = fs
             .get_metadata(&path_uri, Some(&sandbox))
@@ -190,7 +195,7 @@ impl ViewImageHandler {
             DEFAULT_IMAGE_DETAIL
         };
 
-        let image_url = if turn.features.enabled(Feature::ResizeAllImages) {
+        let image_url = if turn.config.features.enabled(Feature::ResizeAllImages) {
             // The history insertion path owns image decoding and resizing when this is enabled.
             data_url_from_bytes("application/octet-stream", &file_bytes)
         } else {
@@ -268,15 +273,33 @@ impl ToolOutput for ViewImageOutput {
 mod tests {
     use super::*;
     use crate::session::tests::make_session_and_context;
+    use crate::session::turn_context::TurnEnvironment;
     use crate::tools::context::ToolCallSource;
     use crate::tools::context::ToolInvocation;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_protocol::models::PermissionProfile;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_path_uri::PathUri;
     use core_test_support::TempDirExt;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::sync::Arc;
     use tokio::sync::Mutex;
+
+    fn replace_primary_environment_cwd(turn: &mut crate::TurnContext, cwd: AbsolutePathBuf) {
+        let current = turn
+            .environments
+            .turn_environments
+            .first()
+            .cloned()
+            .expect("default local turn environment");
+        turn.environments.turn_environments[0] = TurnEnvironment::new(
+            current.environment_id,
+            current.environment,
+            PathUri::from_abs_path(&cwd),
+            current.shell,
+        );
+    }
 
     #[test]
     fn log_preview_omits_image_data() {
@@ -314,11 +337,7 @@ mod tests {
         let image_dir = tempfile::tempdir().expect("create image temp dir");
         let image_cwd = image_dir.abs();
 
-        turn.environments
-            .turn_environments
-            .first_mut()
-            .expect("default local turn environment")
-            .cwd = image_cwd.clone();
+        replace_primary_environment_cwd(&mut turn, image_cwd.clone());
         let image_path = image_cwd.join("image.png");
         std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
         turn.permission_profile = PermissionProfile::read_only();
@@ -381,11 +400,7 @@ mod tests {
         let image_dir = tempfile::tempdir().expect("create image temp dir");
         let image_cwd = image_dir.abs();
 
-        turn.environments
-            .turn_environments
-            .first_mut()
-            .expect("default local turn environment")
-            .cwd = image_cwd.clone();
+        replace_primary_environment_cwd(&mut turn, image_cwd.clone());
         let image_path = image_cwd.join("image.png");
         std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
         turn.permission_profile = PermissionProfile::Disabled;

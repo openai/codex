@@ -2,6 +2,8 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::FILE_READ_CHUNK_SIZE;
+use codex_exec_server::FileMetadata;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -10,6 +12,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
 use codex_utils_path_uri::PathUri;
+use futures::TryStreamExt;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -29,7 +32,8 @@ fn sandbox_context_from_profile_preserves_workspace_write_read_only_subpaths() -
     std::fs::create_dir_all(&git_dir)?;
 
     let sandbox = workspace_write_sandbox(writable_dir.clone());
-    let policy = sandbox.permissions.file_system_sandbox_policy();
+    let permissions: PermissionProfile = sandbox.permissions.try_into()?;
+    let policy = permissions.file_system_sandbox_policy();
     let cwd = absolute_path(writable_dir.clone());
     let writable_roots = policy.get_writable_roots_with_cwd(cwd.as_path());
     let writable_dir = absolute_path(std::fs::canonicalize(writable_dir)?);
@@ -65,18 +69,34 @@ async fn file_system_get_metadata_reports_files_and_directories(
         .get_metadata(&PathUri::from_path(&file_path)?, /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={implementation}"))?;
-    assert_eq!(file_metadata.is_directory, false);
-    assert_eq!(file_metadata.is_file, true);
-    assert_eq!(file_metadata.is_symlink, false);
+    assert_eq!(
+        file_metadata,
+        FileMetadata {
+            is_directory: false,
+            is_file: true,
+            is_symlink: false,
+            size: 5,
+            created_at_ms: file_metadata.created_at_ms,
+            modified_at_ms: file_metadata.modified_at_ms,
+        }
+    );
     assert!(file_metadata.modified_at_ms > 0);
 
     let directory_metadata = file_system
         .get_metadata(&PathUri::from_path(&directory_path)?, /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={implementation}"))?;
-    assert_eq!(directory_metadata.is_directory, true);
-    assert_eq!(directory_metadata.is_file, false);
-    assert_eq!(directory_metadata.is_symlink, false);
+    assert_eq!(
+        directory_metadata,
+        FileMetadata {
+            is_directory: true,
+            is_file: false,
+            is_symlink: false,
+            size: std::fs::metadata(&directory_path)?.len(),
+            created_at_ms: directory_metadata.created_at_ms,
+            modified_at_ms: directory_metadata.modified_at_ms,
+        }
+    );
     assert!(directory_metadata.modified_at_ms > 0);
 
     Ok(())
@@ -172,6 +192,45 @@ async fn file_system_read_file_returns_bytes(
         .await
         .with_context(|| format!("mode={implementation}"))?;
     assert_eq!(contents, b"hello from trait");
+
+    Ok(())
+}
+
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_read_file_stream_returns_bounded_chunks(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let file_path = tmp.path().join("blocks.bin");
+    let contents = (0..FILE_READ_CHUNK_SIZE * 2 + 17)
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<_>>();
+    std::fs::write(&file_path, &contents)?;
+
+    let chunks = file_system
+        .read_file_stream(&PathUri::from_path(file_path)?, /*sandbox*/ None)
+        .await
+        .with_context(|| format!("mode={implementation}"))?
+        .try_collect::<Vec<_>>()
+        .await?;
+
+    assert!(
+        chunks
+            .iter()
+            .all(|chunk| !chunk.is_empty() && chunk.len() <= FILE_READ_CHUNK_SIZE)
+    );
+    assert_eq!(
+        chunks
+            .iter()
+            .flat_map(|chunk| chunk.iter().copied())
+            .collect::<Vec<_>>(),
+        contents
+    );
 
     Ok(())
 }
@@ -379,10 +438,7 @@ async fn file_system_copy_rejects_directory_without_recursive(
             /*sandbox*/ None,
         )
         .await;
-    let error = match error {
-        Ok(()) => panic!("copy should fail"),
-        Err(error) => error,
-    };
+    let error = error.expect_err("copying a directory without recursion should fail");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert_eq!(
         error.to_string(),
@@ -395,7 +451,7 @@ async fn file_system_copy_rejects_directory_without_recursive(
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_sandboxed_read_allows_readable_root(
+async fn file_system_sandboxed_metadata_and_read_allow_readable_root(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
     let context = create_file_system_context(implementation).await?;
@@ -407,6 +463,22 @@ async fn file_system_sandboxed_read_allows_readable_root(
     std::fs::create_dir_all(&allowed_dir)?;
     std::fs::write(&file_path, "sandboxed hello")?;
     let sandbox = read_only_sandbox(allowed_dir);
+
+    let metadata = file_system
+        .get_metadata(&PathUri::from_path(&file_path)?, Some(&sandbox))
+        .await
+        .with_context(|| format!("mode={implementation}"))?;
+    assert_eq!(
+        metadata,
+        FileMetadata {
+            is_directory: false,
+            is_file: true,
+            is_symlink: false,
+            size: 15,
+            created_at_ms: metadata.created_at_ms,
+            modified_at_ms: metadata.modified_at_ms,
+        }
+    );
 
     let contents = file_system
         .read_file(&PathUri::from_path(&file_path)?, Some(&sandbox))
@@ -501,19 +573,21 @@ async fn file_system_sandboxed_write_allows_additional_write_root(
             Some(vec![absolute_path(writable_dir)]),
         )),
     };
+    let native_permissions: PermissionProfile = sandbox.permissions.clone().try_into()?;
     let file_system_policy = effective_file_system_sandbox_policy(
-        &sandbox.permissions.file_system_sandbox_policy(),
+        &native_permissions.file_system_sandbox_policy(),
         Some(&additional_permissions),
     );
     let network_policy = effective_network_sandbox_policy(
-        sandbox.permissions.network_sandbox_policy(),
+        native_permissions.network_sandbox_policy(),
         Some(&additional_permissions),
     );
     sandbox.permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
-        sandbox.permissions.enforcement(),
+        native_permissions.enforcement(),
         &file_system_policy,
         network_policy,
-    );
+    )
+    .into();
 
     file_system
         .write_file(
@@ -549,10 +623,7 @@ async fn file_system_copy_rejects_copying_directory_into_descendant(
             /*sandbox*/ None,
         )
         .await;
-    let error = match error {
-        Ok(()) => panic!("copy should fail"),
-        Err(error) => error,
-    };
+    let error = error.expect_err("copying a directory into itself should fail");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert_eq!(
         error.to_string(),

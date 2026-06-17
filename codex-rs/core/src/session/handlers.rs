@@ -1,5 +1,6 @@
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
+use crate::realtime_conversation::handle_speech as handle_realtime_conversation_speech;
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use async_channel::Receiver;
@@ -273,7 +274,7 @@ pub(super) async fn user_input_or_turn_inner(
     }
 }
 
-/// Records an inter-agent assistant envelope, then lets the shared pending-work scheduler
+/// Queues an inter-agent message, then lets the shared pending-work scheduler
 /// decide whether an idle session should start a regular turn.
 pub async fn inter_agent_communication(
     sess: &Arc<Session>,
@@ -735,6 +736,10 @@ pub(super) async fn submission_loop(
                 }
                 Op::RealtimeConversationText(params) => {
                     handle_realtime_conversation_text(&sess, sub.id.clone(), params).await;
+                    false
+                }
+                Op::RealtimeConversationSpeech(params) => {
+                    handle_realtime_conversation_speech(&sess, sub.id.clone(), params).await;
                     false
                 }
                 Op::RealtimeConversationClose => {

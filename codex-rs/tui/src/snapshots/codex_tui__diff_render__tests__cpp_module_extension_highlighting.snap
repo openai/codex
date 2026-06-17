@@ -1,0 +1,34 @@
+---
+source: tui/src/diff_render.rs
+expression: highlighted_tokens
+---
+[
+    (
+        "cpp",
+        "export| module math|;|export| |int| |sum|(|int| |a|,| |int| |b|)| |{| |return| a |+| b|;| |}",
+    ),
+    (
+        "cppm",
+        "export| module math|;|export| |int| |sum|(|int| |a|,| |int| |b|)| |{| |return| a |+| b|;| |}",
+    ),
+    (
+        "CPPM",
+        "export| module math|;|export| |int| |sum|(|int| |a|,| |int| |b|)| |{| |return| a |+| b|;| |}",
+    ),
+    (
+        "cxxm",
+        "export| module math|;|export| |int| |sum|(|int| |a|,| |int| |b|)| |{| |return| a |+| b|;| |}",
+    ),
+    (
+        "CxXm",
+        "export| module math|;|export| |int| |sum|(|int| |a|,| |int| |b|)| |{| |return| a |+| b|;| |}",
+    ),
+    (
+        "ixx",
+        "export| module math|;|export| |int| |sum|(|int| |a|,| |int| |b|)| |{| |return| a |+| b|;| |}",
+    ),
+    (
+        "IXX",
+        "export| module math|;|export| |int| |sum|(|int| |a|,| |int| |b|)| |{| |return| a |+| b|;| |}",
+    ),
+]

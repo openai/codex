@@ -13,6 +13,7 @@ use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::bottom_pane::slash_commands::SlashCommandItem;
 use crate::bottom_pane::slash_commands::find_slash_command;
 use crate::goal_display::GOAL_USAGE;
+use crate::goal_files::GoalDraft;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -23,6 +24,7 @@ enum SlashCommandDispatchSource {
 struct PreparedSlashCommandArgs {
     args: String,
     text_elements: Vec<TextElement>,
+    pending_pastes: Vec<(String, String)>,
     local_images: Vec<LocalImageAttachment>,
     remote_image_urls: Vec<String>,
     mention_bindings: Vec<MentionBinding>,
@@ -34,6 +36,7 @@ const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str =
     "Press Ctrl+C to return to the main thread first.";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
+const USAGE_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /usage.";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -261,22 +264,6 @@ impl ChatWidget {
             SlashCommand::Model => {
                 self.open_model_popup();
             }
-            SlashCommand::Realtime => {
-                if !self.realtime_conversation_enabled() {
-                    return;
-                }
-                if self.realtime_conversation.is_live() {
-                    self.stop_realtime_conversation_from_ui();
-                } else {
-                    self.start_realtime_conversation();
-                }
-            }
-            SlashCommand::Settings => {
-                if !self.realtime_audio_device_selection_enabled() {
-                    return;
-                }
-                self.open_realtime_audio_popup();
-            }
             SlashCommand::Personality => {
                 self.open_personality_popup();
             }
@@ -446,6 +433,11 @@ impl ChatWidget {
                     );
                 }
             }
+            SlashCommand::Usage => {
+                if self.ensure_usage_command_available() {
+                    self.open_usage_menu();
+                }
+            }
             SlashCommand::Ide => {
                 self.handle_ide_command();
             }
@@ -569,6 +561,22 @@ impl ChatWidget {
             return;
         }
 
+        if cmd == SlashCommand::Goal {
+            self.dispatch_prepared_command_with_args(
+                cmd,
+                PreparedSlashCommandArgs {
+                    args,
+                    text_elements,
+                    pending_pastes: self.bottom_pane.composer_pending_pastes(),
+                    local_images: self.bottom_pane.composer_local_images(),
+                    remote_image_urls: self.bottom_pane.remote_image_urls(),
+                    mention_bindings: Vec::new(),
+                    source: SlashCommandDispatchSource::Live,
+                },
+            );
+            return;
+        }
+
         let Some((prepared_args, prepared_elements)) =
             self.prepare_live_inline_args(args, text_elements)
         else {
@@ -579,6 +587,7 @@ impl ChatWidget {
             PreparedSlashCommandArgs {
                 args: prepared_args,
                 text_elements: prepared_elements,
+                pending_pastes: Vec::new(),
                 local_images: Vec::new(),
                 remote_image_urls: Vec::new(),
                 mention_bindings: Vec::new(),
@@ -603,6 +612,7 @@ impl ChatWidget {
     fn clear_live_goal_submission(&mut self) {
         self.bottom_pane
             .set_composer_text(String::new(), Vec::new(), Vec::new());
+        self.bottom_pane.set_composer_pending_pastes(Vec::new());
         self.bottom_pane.drain_pending_submission_state();
     }
 
@@ -639,6 +649,7 @@ impl ChatWidget {
         let PreparedSlashCommandArgs {
             args,
             text_elements,
+            pending_pastes,
             local_images,
             remote_image_urls,
             mention_bindings,
@@ -646,6 +657,16 @@ impl ChatWidget {
         } = prepared;
         let trimmed = args.trim();
         match cmd {
+            SlashCommand::Usage => {
+                if self.ensure_usage_command_available() {
+                    match tokens::TokenActivityView::parse(trimmed) {
+                        Some(view) => self.add_token_activity_output(view),
+                        None => self.add_error_message(
+                            "Usage: /usage [daily|weekly|cumulative]".to_string(),
+                        ),
+                    }
+                }
+            }
             SlashCommand::Ide => {
                 self.handle_ide_command_args(trimmed);
             }
@@ -766,18 +787,36 @@ impl ChatWidget {
                     }
                     return;
                 }
-                let objective = args.trim();
+                let draft = GoalDraft {
+                    objective: args,
+                    text_elements,
+                    pending_pastes,
+                    local_images,
+                    remote_image_urls,
+                };
                 let Some(thread_id) = self.thread_id else {
                     if source == SlashCommandDispatchSource::Live {
+                        const GOAL_PREFIX: &str = "/goal ";
+                        let text_elements = draft
+                            .text_elements
+                            .into_iter()
+                            .map(|element| {
+                                element.map_range(|range| ByteRange {
+                                    start: range.start + GOAL_PREFIX.len(),
+                                    end: range.end + GOAL_PREFIX.len(),
+                                })
+                            })
+                            .collect();
                         self.queue_user_message_with_options(
                             UserMessage {
-                                text: format!("/goal {args}"),
-                                local_images: Vec::new(),
-                                remote_image_urls: Vec::new(),
-                                text_elements: Vec::new(),
+                                text: format!("{GOAL_PREFIX}{}", draft.objective),
+                                local_images: draft.local_images,
+                                remote_image_urls: draft.remote_image_urls,
+                                text_elements,
                                 mention_bindings: Vec::new(),
                             },
                             QueuedInputAction::ParseSlash,
+                            draft.pending_pastes,
                         );
                         self.clear_live_goal_submission();
                     } else {
@@ -788,12 +827,13 @@ impl ChatWidget {
                     }
                     return;
                 };
-                self.app_event_tx.send(AppEvent::SetThreadGoalObjective {
+                let history_objective = draft.objective.clone();
+                self.app_event_tx.send(AppEvent::SetThreadGoalDraft {
                     thread_id,
-                    objective: objective.to_string(),
+                    draft,
                     mode: ThreadGoalSetMode::ConfirmIfExists,
                 });
-                self.append_message_history_entry(format!("/goal {trimmed}"));
+                self.append_message_history_entry(format!("/goal {history_objective}"));
                 if source == SlashCommandDispatchSource::Live {
                     self.clear_live_goal_submission();
                 }
@@ -847,7 +887,15 @@ impl ChatWidget {
         }
     }
 
-    pub(super) fn submit_queued_slash_prompt(&mut self, user_message: UserMessage) -> QueueDrain {
+    pub(super) fn submit_queued_slash_prompt(
+        &mut self,
+        queued_message: QueuedUserMessage,
+    ) -> QueueDrain {
+        let QueuedUserMessage {
+            user_message,
+            pending_pastes,
+            ..
+        } = queued_message;
         let UserMessage {
             text,
             local_images,
@@ -937,6 +985,7 @@ impl ChatWidget {
             PreparedSlashCommandArgs {
                 args: trimmed_rest.to_string(),
                 text_elements: args_elements,
+                pending_pastes,
                 local_images,
                 remote_image_urls,
                 mention_bindings,
@@ -959,14 +1008,21 @@ impl ChatWidget {
             collaboration_modes_enabled: self.collaboration_modes_enabled(),
             connectors_enabled: self.connectors_enabled(),
             plugins_command_enabled: self.config.features.enabled(Feature::Plugins),
+            token_activity_command_enabled: self.has_codex_backend_auth,
             goal_command_enabled: self.config.features.enabled(Feature::Goals),
             service_tier_commands_enabled: self.fast_mode_enabled(),
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
-            realtime_conversation_enabled: self.realtime_conversation_enabled(),
-            audio_device_selection_enabled: self.realtime_audio_device_selection_enabled(),
             allow_elevate_sandbox,
             side_conversation_active: self.active_side_conversation,
         }
+    }
+
+    fn ensure_usage_command_available(&mut self) -> bool {
+        if self.has_codex_backend_auth {
+            return true;
+        }
+        self.add_error_message(USAGE_CHATGPT_LOGIN_REQUIRED.to_string());
+        false
     }
 
     fn queued_command_drain_result(&self, cmd: SlashCommand) -> QueueDrain {
@@ -976,6 +1032,7 @@ impl ChatWidget {
         match cmd {
             SlashCommand::Ide
             | SlashCommand::Status
+            | SlashCommand::Usage
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop
@@ -1003,8 +1060,6 @@ impl ChatWidget {
             | SlashCommand::Compact
             | SlashCommand::Review
             | SlashCommand::Model
-            | SlashCommand::Realtime
-            | SlashCommand::Settings
             | SlashCommand::Personality
             | SlashCommand::Plan
             | SlashCommand::Goal

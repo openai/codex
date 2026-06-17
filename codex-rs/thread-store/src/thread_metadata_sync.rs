@@ -227,9 +227,9 @@ impl ThreadMetadataSync {
                     }
                 }
                 RolloutItem::TurnContext(turn_ctx) => {
-                    if !self.cwd_seen && !turn_ctx.cwd.as_os_str().is_empty() {
+                    if !self.cwd_seen {
                         self.cwd_seen = true;
-                        update.cwd = Some(turn_ctx.cwd.clone());
+                        update.cwd = Some(turn_ctx.cwd.clone().into_path_buf());
                     }
                     update.model = Some(turn_ctx.model.clone());
                     update.reasoning_effort = turn_ctx.effort.clone();
@@ -272,6 +272,7 @@ impl ThreadMetadataSync {
                 RolloutItem::SessionMeta(_)
                 | RolloutItem::EventMsg(_)
                 | RolloutItem::ResponseItem(_)
+                | RolloutItem::InterAgentCommunication(_)
                 | RolloutItem::Compacted(_) => {}
             }
         }

@@ -107,7 +107,7 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
         .header("x-codex-turn-metadata")
         .as_deref()
         .map(parse_json_header)
-        .unwrap_or_else(|| panic!("missing x-codex-turn-metadata header"));
+        .expect("x-codex-turn-metadata header should be present");
     assert_eq!(metadata["fiber_run_id"].as_str(), Some("fiber-start-123"));
     assert_eq!(metadata["origin"].as_str(), Some("gaas"));
     assert_eq!(metadata["thread_source"].as_str(), Some("client-supplied"));
@@ -188,7 +188,7 @@ async fn turn_start_sends_fork_lineage_in_turn_metadata_for_thread_fork_v2() -> 
         .header("x-codex-turn-metadata")
         .as_deref()
         .map(parse_json_header)
-        .unwrap_or_else(|| panic!("missing x-codex-turn-metadata header"));
+        .expect("x-codex-turn-metadata header should be present");
     assert_eq!(
         metadata["forked_from_thread_id"].as_str(),
         Some(source_thread_id.as_str())
@@ -273,7 +273,7 @@ async fn review_start_sends_parent_lineage_in_turn_metadata_for_thread_fork_v2()
         .header("x-codex-turn-metadata")
         .as_deref()
         .map(parse_json_header)
-        .unwrap_or_else(|| panic!("missing x-codex-turn-metadata header"));
+        .expect("x-codex-turn-metadata header should be present");
     assert_eq!(
         request.header("x-openai-subagent").as_deref(),
         Some("review")
@@ -285,7 +285,7 @@ async fn review_start_sends_parent_lineage_in_turn_metadata_for_thread_fork_v2()
     );
     let review_request_thread_id = metadata["thread_id"]
         .as_str()
-        .unwrap_or_else(|| panic!("missing review request thread_id"));
+        .expect("review request thread_id should be present");
     assert!(review_request_thread_id != review_thread_id.as_str());
     assert_eq!(
         request
@@ -384,7 +384,7 @@ async fn turn_start_sends_other_subagent_lineage_after_cold_thread_resume_v2() -
         .header("x-codex-turn-metadata")
         .as_deref()
         .map(parse_json_header)
-        .unwrap_or_else(|| panic!("missing x-codex-turn-metadata header"));
+        .expect("x-codex-turn-metadata header should be present");
     assert_eq!(
         metadata["parent_thread_id"].as_str(),
         Some(parent_thread_id_str.as_str())
@@ -502,7 +502,7 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
         .header("x-codex-turn-metadata")
         .as_deref()
         .map(parse_json_header)
-        .unwrap_or_else(|| panic!("missing first x-codex-turn-metadata header"));
+        .expect("first x-codex-turn-metadata header should be present");
     assert_eq!(
         first_metadata["fiber_run_id"].as_str(),
         Some("fiber-start-123")
@@ -513,7 +513,7 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
         .header("x-codex-turn-metadata")
         .as_deref()
         .map(parse_json_header)
-        .unwrap_or_else(|| panic!("missing second x-codex-turn-metadata header"));
+        .expect("second x-codex-turn-metadata header should be present");
     assert_eq!(
         second_metadata["fiber_run_id"].as_str(),
         Some("fiber-steer-456")
@@ -608,7 +608,7 @@ async fn turn_start_forwards_client_metadata_to_responses_websocket_request_body
     let metadata = request["client_metadata"]["x-codex-turn-metadata"]
         .as_str()
         .map(parse_json_header)
-        .unwrap_or_else(|| panic!("missing websocket x-codex-turn-metadata client metadata"));
+        .expect("websocket x-codex-turn-metadata client metadata should be present");
     assert_eq!(metadata["fiber_run_id"].as_str(), Some("fiber-start-123"));
     assert_eq!(metadata["origin"].as_str(), Some("gaas"));
     assert_eq!(metadata["turn_id"].as_str(), Some(turn.id.as_str()));
@@ -670,10 +670,7 @@ async fn fork_fake_rollout_thread(
 }
 
 fn parse_json_header(value: &str) -> serde_json::Value {
-    match serde_json::from_str(value) {
-        Ok(value) => value,
-        Err(err) => panic!("metadata header should be valid json: {err}"),
-    }
+    serde_json::from_str(value).expect("metadata header should contain valid JSON")
 }
 
 async fn wait_for_request_count(

@@ -348,7 +348,7 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
+async fn builtin_image_generation_call_persisted() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -369,7 +369,7 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
 
     let first_response = sse(vec![
         ev_response_created("resp-1"),
-        ev_image_generation_call(call_id, "completed", "A tiny blue square", "Zm9v"),
+        ev_image_generation_call(call_id, "generating", "A tiny blue square", "Zm9v"),
         ev_completed("resp-1"),
     ]);
     mount_sse_once(&server, first_response).await;
@@ -422,7 +422,7 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
     assert_eq!(completed.0.id, call_id);
     assert!(completed.1 > 0);
     assert_eq!(end.call_id, call_id);
-    assert_eq!(end.status, "completed");
+    assert_eq!(end.status, "generating");
     assert_eq!(end.revised_prompt, Some("A tiny blue square".to_string()));
     assert_eq!(end.result, "Zm9v");
     assert_eq!(

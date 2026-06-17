@@ -218,6 +218,14 @@
           ],
           "description": "Reviewer for approval prompts unless overridden by per-app settings."
         },
+        "default_tools_approval_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
+            }
+          ],
+          "description": "Approval mode for tools unless overridden by per-app or per-tool settings."
+        },
         "destructive_enabled": {
           "description": "Whether tools with `destructive_hint = true` are allowed by default.",
           "type": "boolean"
@@ -587,6 +595,9 @@
             "resize_all_images": {
               "type": "boolean"
             },
+            "respect_system_proxy": {
+              "type": "boolean"
+            },
             "responses_websockets": {
               "type": "boolean"
             },
@@ -597,6 +608,9 @@
               "type": "boolean"
             },
             "search_tool": {
+              "type": "boolean"
+            },
+            "secret_auth_storage": {
               "type": "boolean"
             },
             "shell_snapshot": {
@@ -612,6 +626,9 @@
               "type": "boolean"
             },
             "skill_mcp_dependency_install": {
+              "type": "boolean"
+            },
+            "sleep_tool": {
               "type": "boolean"
             },
             "sqlite": {
@@ -2450,6 +2467,13 @@
       },
       "type": "object"
     },
+    "RealtimeConversationArchitecture": {
+      "enum": [
+        "realtimeapi",
+        "avas"
+      ],
+      "type": "string"
+    },
     "RealtimeConversationVersion": {
       "enum": [
         "v1",
@@ -2460,6 +2484,9 @@
     "RealtimeToml": {
       "additionalProperties": false,
       "properties": {
+        "architecture": {
+          "$ref": "#/definitions/RealtimeConversationArchitecture"
+        },
         "transport": {
           "$ref": "#/definitions/RealtimeTransport"
         },
@@ -4496,6 +4523,10 @@
       "description": "Experimental / do not use. Replaces the built-in realtime start instructions inserted into developer messages when realtime becomes active.",
       "type": "string"
     },
+    "experimental_realtime_webrtc_call_base_url": {
+      "description": "Experimental / do not use. Overrides only the WebRTC realtime call creation base URL. This is separate from `experimental_realtime_ws_base_url` because WebRTC call creation is HTTP, while sideband control is websocket.",
+      "type": "string"
+    },
     "experimental_realtime_ws_backend_prompt": {
       "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport instructions (the `Op::RealtimeConversation` `/ws` session.update instructions) without changing normal prompts.",
       "type": "string"
@@ -4725,6 +4756,9 @@
         "resize_all_images": {
           "type": "boolean"
         },
+        "respect_system_proxy": {
+          "type": "boolean"
+        },
         "responses_websockets": {
           "type": "boolean"
         },
@@ -4735,6 +4769,9 @@
           "type": "boolean"
         },
         "search_tool": {
+          "type": "boolean"
+        },
+        "secret_auth_storage": {
           "type": "boolean"
         },
         "shell_snapshot": {
@@ -4750,6 +4787,9 @@
           "type": "boolean"
         },
         "skill_mcp_dependency_install": {
+          "type": "boolean"
+        },
+        "sleep_tool": {
           "type": "boolean"
         },
         "sqlite": {

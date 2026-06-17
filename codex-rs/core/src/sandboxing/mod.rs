@@ -10,7 +10,6 @@ ExecRequest for execution.
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec::StdoutStream;
-use crate::exec::WindowsSandboxFilesystemOverrides;
 use crate::exec::execute_exec_request;
 #[cfg(target_os = "macos")]
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
@@ -24,6 +23,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxType;
+use codex_sandboxing::WindowsSandboxFilesystemOverrides;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 
@@ -103,12 +103,12 @@ impl ExecRequest {
     pub(crate) fn from_sandbox_exec_request(
         request: SandboxExecRequest,
         options: ExecOptions,
-        windows_sandbox_policy_cwd: AbsolutePathBuf,
         windows_sandbox_workspace_roots: Vec<AbsolutePathBuf>,
     ) -> Self {
         let SandboxExecRequest {
             command,
             cwd,
+            sandbox_policy_cwd: windows_sandbox_policy_cwd,
             mut env,
             network,
             sandbox,

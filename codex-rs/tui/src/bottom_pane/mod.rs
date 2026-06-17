@@ -326,6 +326,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_token_activity_command_enabled(&mut self, enabled: bool) {
+        self.composer.set_token_activity_command_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub fn set_mentions_v2_enabled(&mut self, enabled: bool) {
         self.composer.set_mentions_v2_enabled(enabled);
         self.request_redraw();
@@ -424,16 +429,6 @@ impl BottomPane {
 
     pub fn set_goal_command_enabled(&mut self, enabled: bool) {
         self.composer.set_goal_command_enabled(enabled);
-        self.request_redraw();
-    }
-
-    pub fn set_realtime_conversation_enabled(&mut self, enabled: bool) {
-        self.composer.set_realtime_conversation_enabled(enabled);
-        self.request_redraw();
-    }
-
-    pub fn set_audio_device_selection_enabled(&mut self, enabled: bool) {
-        self.composer.set_audio_device_selection_enabled(enabled);
         self.request_redraw();
     }
 
@@ -739,7 +734,23 @@ impl BottomPane {
     fn pre_draw_tick_at(&mut self, now: Instant) {
         self.composer.sync_popups();
         self.maybe_show_delayed_approval_requests_at(now);
+        self.tick_active_view(now);
         self.schedule_active_view_frame();
+    }
+
+    fn tick_active_view(&mut self, now: Instant) {
+        let Some(view) = self.view_stack.last_mut() else {
+            return;
+        };
+        let needs_redraw = view.pre_draw_tick(now);
+        let view_complete = view.is_complete();
+        if view_complete {
+            self.view_stack.clear();
+            self.on_active_view_complete();
+        }
+        if needs_redraw || view_complete {
+            self.request_redraw();
+        }
     }
 
     fn schedule_active_view_frame(&self) {
@@ -839,7 +850,6 @@ impl BottomPane {
         self.composer.text_elements()
     }
 
-    #[cfg(test)]
     pub(crate) fn composer_local_images(&self) -> Vec<LocalImageAttachment> {
         self.composer.local_images()
     }
@@ -856,6 +866,10 @@ impl BottomPane {
     /// Returns whether the composer currently accepts interactive draft edits.
     pub(crate) fn composer_input_enabled(&self) -> bool {
         self.composer.input_enabled()
+    }
+
+    pub(crate) fn composer_pending_pastes(&self) -> Vec<(String, String)> {
+        self.composer.pending_pastes()
     }
 
     pub(crate) fn apply_external_edit(&mut self, text: String) {
@@ -885,7 +899,6 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    #[cfg(test)]
     pub(crate) fn remote_image_urls(&self) -> Vec<String> {
         self.composer.remote_image_urls()
     }
@@ -1073,6 +1086,14 @@ impl BottomPane {
     }
 
     fn apply_standard_popup_hint(&self, params: &mut list_selection_view::SelectionViewParams) {
+        if !params.allow_cancel {
+            if params.footer_hint.is_none()
+                || params.footer_hint.as_ref() == Some(&popup_consts::standard_popup_hint_line())
+            {
+                params.footer_hint = None;
+            }
+            return;
+        }
         if params.footer_hint.is_none()
             || params.footer_hint.as_ref() == Some(&popup_consts::standard_popup_hint_line())
         {
@@ -1102,6 +1123,34 @@ impl BottomPane {
             self.keymap.list.clone(),
         );
         self.push_view(Box::new(view));
+        true
+    }
+
+    /// Replace the newest matching selection view without disturbing views stacked above it.
+    pub(crate) fn replace_selection_view_if_present(
+        &mut self,
+        view_id: &'static str,
+        mut params: list_selection_view::SelectionViewParams,
+    ) -> bool {
+        let Some(index) = self
+            .view_stack
+            .iter()
+            .rposition(|view| view.view_id() == Some(view_id))
+        else {
+            return false;
+        };
+
+        let replaces_active_view = index + 1 == self.view_stack.len();
+        self.apply_standard_popup_hint(&mut params);
+        self.view_stack[index] = Box::new(list_selection_view::ListSelectionView::new(
+            params,
+            self.app_event_tx.clone(),
+            self.keymap.list.clone(),
+        ));
+        if replaces_active_view {
+            self.schedule_active_view_frame();
+        }
+        self.request_redraw();
         true
     }
 
@@ -1171,6 +1220,25 @@ impl BottomPane {
         }
 
         self.view_stack.pop();
+        self.request_redraw();
+        true
+    }
+
+    /// Dismiss the newest matching view without disturbing views stacked above it.
+    pub(crate) fn dismiss_view_by_id(&mut self, view_id: &'static str) -> bool {
+        let Some(index) = self
+            .view_stack
+            .iter()
+            .rposition(|view| view.view_id() == Some(view_id))
+        else {
+            return false;
+        };
+
+        let removed_active_view = index + 1 == self.view_stack.len();
+        self.view_stack.remove(index);
+        if removed_active_view {
+            self.schedule_active_view_frame();
+        }
         self.request_redraw();
         true
     }
@@ -1742,31 +1810,6 @@ impl Renderable for ChatComposerRightReserveRenderable<'_> {
 
     fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
         self.composer.cursor_style(area)
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-impl BottomPane {
-    pub(crate) fn insert_recording_meter_placeholder(&mut self, text: &str) -> String {
-        let id = self.composer.insert_recording_meter_placeholder(text);
-        self.composer.sync_popups();
-        self.request_redraw();
-        id
-    }
-
-    pub(crate) fn update_recording_meter_in_place(&mut self, id: &str, text: &str) -> bool {
-        let updated = self.composer.update_recording_meter_in_place(id, text);
-        if updated {
-            self.composer.sync_popups();
-            self.request_redraw();
-        }
-        updated
-    }
-
-    pub(crate) fn remove_recording_meter_placeholder(&mut self, id: &str) {
-        self.composer.remove_recording_meter_placeholder(id);
-        self.composer.sync_popups();
-        self.request_redraw();
     }
 }
 

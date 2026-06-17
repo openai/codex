@@ -10,6 +10,8 @@ use winapi_util::sysinfo::get_computer_name;
 
 static HOST_NAME: LazyLock<Option<String>> = LazyLock::new(compute_host_name);
 
+/// Returns a process-cached canonical hostname, falling back to the normalized
+/// kernel hostname. The first call on Unix may perform blocking DNS resolution.
 pub fn host_name() -> Option<String> {
     HOST_NAME.clone()
 }

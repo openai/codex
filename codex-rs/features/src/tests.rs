@@ -32,8 +32,7 @@ fn default_enabled_features_are_stable() {
     for spec in crate::FEATURES {
         if spec.default_enabled {
             assert!(
-                matches!(spec.stage, Stage::Stable | Stage::Removed)
-                    || spec.id == Feature::TerminalResizeReflow,
+                matches!(spec.stage, Stage::Stable | Stage::Removed),
                 "feature `{}` is enabled by default but is not stable/removed ({:?})",
                 spec.key,
                 spec.stage
@@ -151,16 +150,33 @@ fn request_permissions_tool_is_under_development() {
 }
 
 #[test]
-fn terminal_resize_reflow_is_experimental_and_enabled_by_default() {
+fn terminal_resize_reflow_is_removed_and_enabled_by_default() {
     assert_eq!(
         feature_for_key("terminal_resize_reflow"),
         Some(Feature::TerminalResizeReflow)
     );
-    assert!(matches!(
-        Feature::TerminalResizeReflow.stage(),
-        Stage::Experimental { .. }
-    ));
+    assert_eq!(Feature::TerminalResizeReflow.stage(), Stage::Removed);
     assert_eq!(Feature::TerminalResizeReflow.default_enabled(), true);
+}
+
+#[test]
+fn from_sources_ignores_removed_terminal_resize_reflow_feature_key() {
+    let features_toml = FeaturesToml::from(BTreeMap::from([(
+        "terminal_resize_reflow".to_string(),
+        false,
+    )]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
+    assert_eq!(features.enabled(Feature::TerminalResizeReflow), true);
 }
 
 #[test]
@@ -187,6 +203,16 @@ fn tool_search_is_removed_and_disabled_by_default() {
     assert_eq!(Feature::ToolSearch.stage(), Stage::Removed);
     assert_eq!(Feature::ToolSearch.default_enabled(), false);
     assert_eq!(feature_for_key("tool_search"), Some(Feature::ToolSearch));
+}
+
+#[test]
+fn secret_auth_storage_defaults_to_windows_only() {
+    assert_eq!(Feature::SecretAuthStorage.stage(), Stage::Stable);
+    assert_eq!(Feature::SecretAuthStorage.default_enabled(), cfg!(windows));
+    assert_eq!(
+        feature_for_key("secret_auth_storage"),
+        Some(Feature::SecretAuthStorage)
+    );
 }
 
 #[test]
@@ -300,9 +326,9 @@ fn auth_elicitation_is_under_development() {
 }
 
 #[test]
-fn mentions_v2_is_under_development_and_disabled_by_default() {
-    assert_eq!(Feature::MentionsV2.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::MentionsV2.default_enabled(), false);
+fn mentions_v2_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::MentionsV2.stage(), Stage::Stable);
+    assert_eq!(Feature::MentionsV2.default_enabled(), true);
     assert_eq!(feature_for_key("mentions_v2"), Some(Feature::MentionsV2));
 }
 
@@ -623,6 +649,7 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
     features.enable(Feature::CodeMode);
     features.enable(Feature::MultiAgentV2);
     features.enable(Feature::NetworkProxy);
+    features.enable(Feature::RespectSystemProxy);
 
     let mut features_toml = FeaturesToml {
         multi_agent_v2: Some(FeatureToml::Config(crate::MultiAgentV2ConfigToml {
@@ -701,4 +728,35 @@ fn unstable_warning_event_only_mentions_enabled_under_development_features() {
     assert!(message.contains("child_agents_md"));
     assert!(!message.contains("personality"));
     assert!(message.contains("/tmp/config.toml"));
+}
+
+#[test]
+fn unstable_warning_event_mentions_enabled_structured_under_development_feature() {
+    let configured_features: Table = toml::from_str(
+        r#"
+multi_agent_v2 = { enabled = true, tool_namespace = "agents" }
+code_mode = true
+"#,
+    )
+    .expect("features table should deserialize");
+
+    let mut features = Features::with_defaults();
+    features.enable(Feature::MultiAgentV2);
+    features.enable(Feature::CodeMode);
+
+    let warning = unstable_features_warning_event(
+        Some(&configured_features),
+        /*suppress_unstable_features_warning*/ false,
+        &features,
+        "/tmp/config.toml",
+    )
+    .expect("warning event");
+
+    let EventMsg::Warning(WarningEvent { message }) = warning.msg else {
+        panic!("expected warning event");
+    };
+    assert_eq!(
+        "Under-development features enabled: code_mode, multi_agent_v2. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /tmp/config.toml.".to_string(),
+        message
+    );
 }

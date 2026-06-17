@@ -27,6 +27,7 @@ codex-model-provider = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
+codex-tools = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-plugins = { workspace = true }
@@ -51,4 +52,6 @@ zip = { workspace = true }
 libc = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-test = { workspace = true, features = ["no-env-filter"] }
 wiremock = { workspace = true }

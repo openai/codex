@@ -1,3 +1,4 @@
+use super::RemoteControlEnableError;
 use super::RemoteControlHandle;
 use super::RemoteControlUnavailable;
 use super::enroll::update_persisted_remote_control_enrollment;
@@ -51,6 +52,9 @@ impl RemoteControlHandle {
         &self,
         app_server_client_name: Option<&str>,
     ) -> io::Result<bool> {
+        if self.ensure_remote_control_allowed().is_err() {
+            return Ok(false);
+        }
         let _transition = self
             .desired_state_rpc_lock
             .acquire()
@@ -93,6 +97,8 @@ impl RemoteControlHandle {
         &self,
         app_server_client_name: Option<&str>,
     ) -> io::Result<RemoteControlStatusChangedNotification> {
+        self.ensure_remote_control_allowed()
+            .map_err(|err| io::Error::new(io::ErrorKind::PermissionDenied, err))?;
         let _transition = self
             .desired_state_rpc_lock
             .acquire()
@@ -149,8 +155,15 @@ impl RemoteControlHandle {
             .await?;
         }
         publish_current_enrollment(&mut current_enrollment, &enrollment);
-        self.enable_with_preference(Some(true))
-            .map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
+        self.enable_with_preference(Some(true)).map_err(|err| {
+            let kind = match err {
+                RemoteControlEnableError::Unavailable(_) => io::ErrorKind::NotFound,
+                RemoteControlEnableError::DisabledByRequirements(_) => {
+                    io::ErrorKind::PermissionDenied
+                }
+            };
+            io::Error::new(kind, err)
+        })?;
         RemoteControlStatusPublisher::new(self.status_tx.as_ref().clone())
             .publish_environment_id(Some(enrollment.environment_id));
         Ok(self.status())

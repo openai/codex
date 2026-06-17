@@ -24,6 +24,7 @@ use crate::request_processors::CommandExecRequestProcessor;
 use crate::request_processors::ConfigRequestProcessor;
 use crate::request_processors::EnvironmentRequestProcessor;
 use crate::request_processors::ExternalAgentConfigRequestProcessor;
+use crate::request_processors::ExternalAgentConfigRequestProcessorArgs;
 use crate::request_processors::FeedbackRequestProcessor;
 use crate::request_processors::FsRequestProcessor;
 use crate::request_processors::GitRequestProcessor;
@@ -91,8 +92,21 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
+use crate::models_refresh_worker::ModelsRefreshWorker;
+
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECTION_RPC_DRAIN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 30);
+
+fn deserialize_client_request(
+    request: &JSONRPCRequest,
+) -> Result<ClientRequest, JSONRPCErrorError> {
+    serde_json::to_value(request)
+        .map_err(|err| invalid_request(format!("Invalid request: {err}")))
+        .and_then(|request_json| {
+            serde_json::from_value(request_json)
+                .map_err(|err| invalid_request(format!("Invalid request: {err}")))
+        })
+}
 
 #[derive(Clone)]
 struct ExternalAuthRefreshBridge {
@@ -170,6 +184,7 @@ impl ExternalAuth for ExternalAuthRefreshBridge {
 
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
+    models_refresh_worker: ModelsRefreshWorker,
     skills_watcher: Arc<SkillsWatcher>,
     account_processor: AccountRequestProcessor,
     apps_processor: AppsRequestProcessor,
@@ -318,7 +333,7 @@ impl MessageProcessor {
         let restriction_product = session_source.restriction_product();
         let executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider> = Arc::new(
             codex_skills_extension::ExecutorSkillProvider::new_with_restriction_product(
-                environment_manager_for_extensions,
+                Arc::clone(&environment_manager_for_extensions),
                 restriction_product,
             ),
         );
@@ -341,6 +356,7 @@ impl MessageProcessor {
                         analytics_events_client: analytics_events_client.clone(),
                         thread_manager: thread_manager.clone(),
                         goal_service: Arc::clone(&goal_service),
+                        environment_manager: Arc::clone(&environment_manager_for_extensions),
                         executor_skill_provider: Arc::clone(&executor_skill_provider),
                         thread_store: Arc::clone(&thread_store),
                     },
@@ -358,10 +374,12 @@ impl MessageProcessor {
                 )),
             )
         });
+        let models_manager = thread_manager.get_models_manager();
+        let models_refresh_worker = crate::models_refresh_worker::spawn(&models_manager);
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());
-        let skills_watcher = SkillsWatcher::new(thread_manager.skills_manager(), outgoing.clone());
+        let skills_watcher = SkillsWatcher::new(thread_manager.skills_service(), outgoing.clone());
 
         let pending_thread_unloads = Arc::new(Mutex::new(HashSet::new()));
         let thread_watch_manager =
@@ -463,7 +481,7 @@ impl MessageProcessor {
             thread_watch_manager.clone(),
             Arc::clone(&thread_list_state_permit),
             thread_goal_processor.clone(),
-            state_db,
+            state_db.clone(),
             log_db,
             Arc::clone(&skills_watcher),
         );
@@ -499,15 +517,17 @@ impl MessageProcessor {
             thread_manager.clone(),
             analytics_events_client,
         );
-        let external_agent_config_processor = ExternalAgentConfigRequestProcessor::new(
-            outgoing.clone(),
-            Arc::clone(&thread_manager),
-            Arc::clone(&thread_store),
-            config_manager.clone(),
-            config_processor.clone(),
-            arg0_paths,
-            config.codex_home.to_path_buf(),
-        );
+        let external_agent_config_processor =
+            ExternalAgentConfigRequestProcessor::new(ExternalAgentConfigRequestProcessorArgs {
+                outgoing: outgoing.clone(),
+                thread_manager: Arc::clone(&thread_manager),
+                thread_store: Arc::clone(&thread_store),
+                config_manager: config_manager.clone(),
+                config_processor: config_processor.clone(),
+                state_db,
+                arg0_paths,
+                codex_home: config.codex_home.to_path_buf(),
+            });
         let environment_processor =
             EnvironmentRequestProcessor::new(thread_manager.environment_manager());
         let fs_processor = FsRequestProcessor::new(
@@ -522,6 +542,7 @@ impl MessageProcessor {
 
         Self {
             outgoing,
+            models_refresh_worker,
             skills_watcher,
             account_processor,
             apps_processor,
@@ -551,6 +572,7 @@ impl MessageProcessor {
     pub(crate) fn clear_runtime_references(&self) {
         self.account_processor.clear_external_auth();
         self.apps_processor.shutdown();
+        self.models_refresh_worker.shutdown();
         self.skills_watcher.shutdown();
     }
 
@@ -582,12 +604,7 @@ impl MessageProcessor {
             Arc::clone(&self.outgoing),
             request_context.clone(),
             async {
-                let codex_request = serde_json::to_value(&request)
-                    .map_err(|err| invalid_request(format!("Invalid request: {err}")))
-                    .and_then(|request_json| {
-                        serde_json::from_value::<ClientRequest>(request_json)
-                            .map_err(|err| invalid_request(format!("Invalid request: {err}")))
-                    });
+                let codex_request = deserialize_client_request(&request);
                 let result = match codex_request {
                     Ok(codex_request) => {
                         // Websocket callers finalize outbound readiness in lib.rs after mirroring
@@ -732,6 +749,7 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn drain_background_tasks(&self) {
+        self.models_refresh_worker.shutdown();
         self.thread_processor.drain_background_tasks().await;
     }
 
@@ -940,6 +958,11 @@ impl MessageProcessor {
                 .import(request_id.clone(), params)
                 .await
                 .map(|()| None),
+            ClientRequest::ExternalAgentConfigImportHistoriesRead { .. } => self
+                .external_agent_config_processor
+                .read_import_histories()
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::ConfigValueWrite { params, .. } => {
                 self.config_processor.value_write(params).await.map(Some)
             }
@@ -1310,6 +1333,11 @@ impl MessageProcessor {
                     .thread_realtime_append_text(&request_id, params)
                     .await
             }
+            ClientRequest::ThreadRealtimeAppendSpeech { params, .. } => {
+                self.turn_processor
+                    .thread_realtime_append_speech(&request_id, params)
+                    .await
+            }
             ClientRequest::ThreadRealtimeStop { params, .. } => {
                 self.turn_processor
                     .thread_realtime_stop(&request_id, params)
@@ -1368,6 +1396,11 @@ impl MessageProcessor {
             }
             ClientRequest::GetAccountRateLimits { .. } => {
                 self.account_processor.get_account_rate_limits().await
+            }
+            ClientRequest::ConsumeAccountRateLimitResetCredit { params, .. } => {
+                self.account_processor
+                    .consume_account_rate_limit_reset_credit(params)
+                    .await
             }
             ClientRequest::GetAccountTokenUsage { .. } => {
                 self.account_processor.get_account_token_usage().await

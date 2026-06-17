@@ -8,6 +8,7 @@ use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::ExecutorFileSystemFuture;
 use codex_exec_server::FileMetadata;
+use codex_exec_server::FileSystemReadStream;
 use codex_exec_server::FileSystemResult;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
@@ -89,6 +90,14 @@ impl ExecutorFileSystem for SyntheticPluginFileSystem {
         })
     }
 
+    fn read_file_stream<'a>(
+        &'a self,
+        _path: &'a PathUri,
+        _sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
+        Box::pin(async { Self::unsupported() })
+    }
+
     fn write_file<'a>(
         &'a self,
         _path: &'a PathUri,
@@ -129,6 +138,7 @@ impl ExecutorFileSystem for SyntheticPluginFileSystem {
                 is_directory,
                 is_file,
                 is_symlink: false,
+                size: 0,
                 created_at_ms: 0,
                 modified_at_ms: 0,
             })

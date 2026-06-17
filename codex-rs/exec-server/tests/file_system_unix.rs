@@ -1,4 +1,5 @@
 #![cfg(unix)]
+#![allow(clippy::expect_used)]
 
 mod common;
 
@@ -21,6 +22,7 @@ use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 #[cfg(target_os = "linux")]
 use codex_exec_server::Environment;
+use codex_exec_server::FileMetadata;
 use codex_exec_server::RemoveOptions;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
@@ -222,9 +224,17 @@ async fn file_system_get_metadata_reports_symlink_targets(
         .get_metadata(&PathUri::from_path(&symlink_path)?, /*sandbox*/ None)
         .await
         .with_context(|| format!("mode={implementation}"))?;
-    assert_eq!(symlink_metadata.is_directory, false);
-    assert_eq!(symlink_metadata.is_file, true);
-    assert_eq!(symlink_metadata.is_symlink, true);
+    assert_eq!(
+        symlink_metadata,
+        FileMetadata {
+            is_directory: false,
+            is_file: true,
+            is_symlink: true,
+            size: 5,
+            created_at_ms: symlink_metadata.created_at_ms,
+            modified_at_ms: symlink_metadata.modified_at_ms,
+        }
+    );
     assert!(symlink_metadata.modified_at_ms > 0);
 
     let dir_path = tmp.path().join("notes");
@@ -238,9 +248,17 @@ async fn file_system_get_metadata_reports_symlink_targets(
         )
         .await
         .with_context(|| format!("mode={implementation}"))?;
-    assert_eq!(dir_symlink_metadata.is_directory, true);
-    assert_eq!(dir_symlink_metadata.is_file, false);
-    assert_eq!(dir_symlink_metadata.is_symlink, true);
+    assert_eq!(
+        dir_symlink_metadata,
+        FileMetadata {
+            is_directory: true,
+            is_file: false,
+            is_symlink: true,
+            size: std::fs::metadata(&dir_path)?.len(),
+            created_at_ms: dir_symlink_metadata.created_at_ms,
+            modified_at_ms: dir_symlink_metadata.modified_at_ms,
+        }
+    );
 
     Ok(())
 }
@@ -825,10 +843,7 @@ async fn file_system_copy_rejects_standalone_fifo_source(
             /*sandbox*/ None,
         )
         .await;
-    let error = match error {
-        Ok(()) => panic!("copy should fail"),
-        Err(error) => error,
-    };
+    let error = error.expect_err("copying a FIFO should fail");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert_eq!(
         error.to_string(),

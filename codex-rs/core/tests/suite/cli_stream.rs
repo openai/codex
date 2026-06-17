@@ -32,7 +32,6 @@ const CLOUD_CONFIG_BUNDLE_PATH: &str = "/backend-api/wham/config/bundle";
 const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn repo_root() -> std::path::PathBuf {
-    #[expect(clippy::expect_used)]
     codex_utils_cargo_bin::repo_root().expect("failed to resolve repo root")
 }
 
@@ -515,10 +514,9 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     .await?;
 
     // Basic sanity checks on location and metadata.
-    let rel = match path.strip_prefix(&sessions_dir) {
-        Ok(r) => r,
-        Err(_) => panic!("session file should live under sessions/"),
-    };
+    let rel = path
+        .strip_prefix(&sessions_dir)
+        .expect("session file should live under sessions/");
     let comps: Vec<String> = rel
         .components()
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
@@ -550,22 +548,19 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         assert!((1..=31).contains(&d), "Day out of range: {d}");
     }
 
-    let content =
-        std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("Failed to read session file"));
+    let content = std::fs::read_to_string(&path).expect("failed to read session file");
     let mut lines = content.lines();
     let meta_line = lines
         .next()
         .ok_or("missing session meta line")
-        .unwrap_or_else(|_| panic!("missing session meta line"));
-    let meta: serde_json::Value = serde_json::from_str(meta_line)
-        .unwrap_or_else(|_| panic!("Failed to parse session meta line as JSON"));
+        .expect("missing session meta line");
+    let meta: serde_json::Value =
+        serde_json::from_str(meta_line).expect("failed to parse session meta line as JSON");
     assert_eq!(
         meta.get("type").and_then(|v| v.as_str()),
         Some("session_meta")
     );
-    let payload = meta
-        .get("payload")
-        .unwrap_or_else(|| panic!("Missing payload in meta line"));
+    let payload = meta.get("payload").expect("Missing payload in meta line");
     assert!(payload.get("id").is_some(), "SessionMeta missing id");
     assert!(
         payload.get("timestamp").is_some(),

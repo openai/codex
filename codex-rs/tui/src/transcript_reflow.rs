@@ -36,9 +36,9 @@ pub(crate) struct TranscriptReflowState {
 impl TranscriptReflowState {
     /// Reset all width, pending deadline, and stream repair state.
     ///
-    /// Call this when resize reflow is disabled or when the app discards the transcript state that
-    /// pending reflow work would have rebuilt. Leaving stale deadlines behind would make a later
-    /// draw attempt to rebuild history from unrelated cells.
+    /// Call this when the app discards the transcript state that pending reflow work would have
+    /// rebuilt. Leaving stale deadlines behind would make a later draw attempt to rebuild history
+    /// from unrelated cells.
     pub(crate) fn clear(&mut self) {
         *self = Self::default();
     }

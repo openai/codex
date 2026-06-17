@@ -2,6 +2,7 @@
 //!
 //! See [`PathUri`] for scheme, normalization, and serialization behavior.
 
+use base64::Engine;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -16,25 +17,32 @@ use thiserror::Error;
 use ts_rs::TS;
 use url::Url;
 
+mod api_path_string;
+
+pub use api_path_string::LegacyAppPathString;
+pub use api_path_string::LegacyAppPathStringError;
+pub use api_path_string::PathConvention;
+
 pub const FILE_SCHEME: &str = "file";
+const BAD_PATH_URI_PREFIX: &str = "file:///%00/bad/path/";
 
 /// An immutable, cross-platform representation of a `file:` URI.
 ///
 /// Only the `file:` scheme is currently accepted. Construction validates the
 /// URL, and the URI cannot be mutated after construction. [`Self::basename`],
 /// [`Self::parent`], and [`Self::join`] operate on URI path segments without
-/// interpreting them using the operating system running Codex.
+/// interpreting them using the operating system running Codex. Fallback URIs
+/// created by [`Self::from_abs_path`] are opaque to these lexical operations.
 ///
 /// `file:` paths retain their URI spelling so they can be parsed independently
-/// of the current host. In particular, `/C:/src` remains ambiguous between a
-/// Windows drive path and a valid POSIX path until [`Self::to_abs_path`]
-/// applies the current host's rules. A local POSIX `file:` URI can also retain
+/// of the current host. A local POSIX `file:` URI can also retain
 /// percent-encoded non-UTF-8 bytes for lossless native round trips.
 ///
 /// Like [VS Code resources], path operations use `/` URI separators on every
-/// host. They preserve a URL authority but do not infer Windows drive or UNC
-/// roots from path text. Native path normalization, filesystem aliases,
-/// symlinks, case sensitivity, and Unicode normalization are not resolved.
+/// host. Lexical path operations preserve a URL authority without interpreting
+/// Windows drive or UNC roots from path text. Native path normalization,
+/// filesystem aliases, symlinks, case sensitivity, and Unicode normalization
+/// are not resolved.
 ///
 /// Serde represents a `PathUri` as its canonical URI string. Deserialization
 /// also accepts an absolute native path for compatibility with fields that
@@ -57,27 +65,55 @@ impl PathUri {
 
     /// Converts an absolute path on the current host to a `file:` URI.
     ///
-    /// On Windows, paths without a URI representation, including `\\.\` device
-    /// paths and generic `\\?\` verbatim namespaces, are reported as invalid
-    /// input.
-    pub fn from_abs_path(path: &AbsolutePathBuf) -> io::Result<Self> {
-        let url = Url::from_file_path(path.as_path()).map_err(|()| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                PathUriParseError::InvalidFileUriPath,
-            )
-        })?;
-        Self::try_from(url).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
+    /// Paths without a valid URI representation are replaced by
+    /// `file:///%00/bad/path/<base64>`, where `<base64>` is the URL-safe, unpadded
+    /// encoding of the original path (Unix bytes or Windows UTF-16LE). This
+    /// includes paths containing nulls and, on Windows, unsupported prefix
+    /// kinds such as device and generic verbatim namespaces, non-Unicode path
+    /// or UNC components, and UNC server names that are not valid URL hosts.
+    /// The encoded null reserves a URI namespace that cannot collide with a
+    /// real path on Unix or Windows.
+    pub fn from_abs_path(path: &AbsolutePathBuf) -> Self {
+        if let Ok(url) = Url::from_file_path(path.as_path())
+            && let Ok(uri) = Self::try_from(url)
+        {
+            return uri;
+        }
+
+        #[cfg(unix)]
+        let path_bytes = {
+            use std::os::unix::ffi::OsStrExt;
+            path.as_path().as_os_str().as_bytes().to_vec()
+        };
+        #[cfg(windows)]
+        let path_bytes = {
+            use std::os::windows::ffi::OsStrExt;
+            path.as_path()
+                .as_os_str()
+                .encode_wide()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>()
+        };
+        Self::from_opaque_path_bytes(&path_bytes)
+    }
+
+    fn from_opaque_path_bytes(path_bytes: &[u8]) -> Self {
+        let encoded_path = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(path_bytes);
+        let Ok(uri) = Self::parse(&format!("{BAD_PATH_URI_PREFIX}{encoded_path}")) else {
+            unreachable!("URL-safe base64 always produces a valid fallback path URI");
+        };
+        uri
     }
 
     /// Converts a path on the current host to a `file:` URI.
     ///
-    /// Relative paths and paths without a URI representation are reported as
-    /// invalid input.
+    /// Relative paths are reported as invalid input. Absolute paths without a
+    /// valid URI representation use the fallback documented on
+    /// [`Self::from_abs_path`].
     pub fn from_path(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = AbsolutePathBuf::from_absolute_path_checked(path)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
-        Self::from_abs_path(&path)
+        Ok(Self::from_abs_path(&path))
     }
 
     /// Returns the percent-encoded URI path.
@@ -88,20 +124,79 @@ impl PathUri {
         self.0.path()
     }
 
-    /// Returns the decoded final URI path segment, or `None` for the URI root.
+    fn opaque_fallback_bytes(&self) -> Option<Vec<u8>> {
+        decode_bad_path_uri(&self.0)
+    }
+
+    /// Infers the native path convention represented by this URI.
+    ///
+    /// A URI authority is treated as a Windows UNC host, and a leading
+    /// drive-letter segment such as `C:` is treated as a Windows drive. All
+    /// other ordinary file URIs are treated as POSIX paths. This deliberately
+    /// classifies `file:///C:/src` as Windows even though `/C:/src` is also a
+    /// valid POSIX path. In practice, POSIX paths with a drive-shaped first
+    /// component are rare enough that recognizing foreign Windows paths is the
+    /// more useful default.
+    ///
+    /// Opaque fallback URIs are inspected for an absolute POSIX byte prefix or
+    /// an absolute Windows UTF-16LE prefix. `None` is returned when their
+    /// payload does not identify either convention.
+    ///
+    /// TODO(anp): Once `PathUri` carries an environment identifier, prefer the
+    /// environment's declared convention over this spelling-based heuristic.
+    pub fn infer_path_convention(&self) -> Option<PathConvention> {
+        if let Some(path_bytes) = self.opaque_fallback_bytes() {
+            return infer_opaque_path_convention(&path_bytes);
+        }
+        if self.0.host_str().is_some() {
+            return Some(PathConvention::Windows);
+        }
+
+        let has_windows_drive = self
+            .0
+            .path_segments()
+            .and_then(|mut segments| segments.find(|segment| !segment.is_empty()))
+            .is_some_and(is_windows_drive_uri_segment);
+        if has_windows_drive {
+            Some(PathConvention::Windows)
+        } else {
+            Some(PathConvention::Posix)
+        }
+    }
+
+    /// Renders this URI using the native path syntax inferred from its shape.
+    ///
+    /// This is independent of the current host: a Windows URI renders with
+    /// Windows separators on every host. If the convention cannot be inferred
+    /// or the URI cannot be represented using that convention, the canonical
+    /// URI string is returned instead.
+    pub fn inferred_native_path_string(&self) -> String {
+        self.infer_path_convention()
+            .and_then(|convention| LegacyAppPathString::from_path_uri(self, convention).ok())
+            .map(LegacyAppPathString::into_string)
+            .unwrap_or_else(|| self.to_string())
+    }
+
+    /// Returns the decoded final URI path segment, or `None` for the URI root
+    /// or an opaque fallback URI created by [`Self::from_abs_path`].
     ///
     /// If the segment contains non-UTF-8 encoded bytes, its percent-encoded
     /// spelling is returned instead.
     pub fn basename(&self) -> Option<String> {
+        if decode_bad_path_uri(&self.0).is_some() {
+            return None;
+        }
+
         self.0
             .path_segments()?
             .rfind(|segment| !segment.is_empty())
             .map(decode_uri_path)
     }
 
-    /// Returns the parent URI, or `None` for the URI root.
+    /// Returns the parent URI, or `None` for the URI root or an opaque fallback
+    /// URI created by [`Self::from_abs_path`].
     pub fn parent(&self) -> Option<Self> {
-        if self.encoded_path() == "/" {
+        if self.encoded_path() == "/" || decode_bad_path_uri(&self.0).is_some() {
             return None;
         }
 
@@ -122,15 +217,24 @@ impl PathUri {
     /// without escaping the URI root. Literal `%`, `?`, and `#` characters are
     /// percent-encoded as filename text. Paths containing a null character are
     /// rejected because they cannot be safely converted to native paths.
+    /// Opaque fallback URIs created by [`Self::from_abs_path`] reject non-empty
+    /// joins.
     pub fn join(&self, path: &str) -> Result<Self, PathUriParseError> {
         if path.starts_with('/') {
             return Err(PathUriParseError::JoinPathMustBeRelative(path.to_string()));
         }
         if path.contains('\0') {
-            return Err(PathUriParseError::InvalidFileUriPath);
+            return Err(PathUriParseError::InvalidFileUriPath {
+                path: path.to_string(),
+            });
         }
         if path.is_empty() {
             return Ok(self.clone());
+        }
+        if decode_bad_path_uri(&self.0).is_some() {
+            return Err(PathUriParseError::InvalidFileUriPath {
+                path: self.to_string(),
+            });
         }
 
         let mut url = self.0.clone();
@@ -157,21 +261,64 @@ impl PathUri {
     /// Converts this file URI to a path using the current host's path rules.
     ///
     /// Conversion should succeed when the URI was created from an
-    /// [`AbsolutePathBuf`] on the current host. It may fail when the URI came
-    /// from a different operating system and its `file:` URI form cannot be
-    /// represented using the current host's path rules, such as a UNC authority
-    /// on POSIX or a POSIX root on Windows. Because a `file:` URI does not record
-    /// its source operating system, callers should only use this method when the
-    /// URI is known to identify a path on the current host.
+    /// [`AbsolutePathBuf`] on the current host, including fallback URIs created
+    /// by [`Self::from_abs_path`]. It may fail when the URI came from a different
+    /// operating system and its `file:` URI form cannot be represented using
+    /// the current host's path rules, such as a UNC authority on POSIX or a
+    /// POSIX root on Windows. Because a `file:` URI does not record its source
+    /// operating system, callers should only use this method when the URI is
+    /// known to identify a path on the current host.
     pub fn to_abs_path(&self) -> io::Result<AbsolutePathBuf> {
+        if let Some(path_bytes) = decode_bad_path_uri(&self.0) {
+            #[cfg(unix)]
+            let decoded_path = {
+                use std::os::unix::ffi::OsStringExt;
+                Some(std::path::PathBuf::from(std::ffi::OsString::from_vec(
+                    path_bytes,
+                )))
+            };
+            #[cfg(windows)]
+            let decoded_path = {
+                use std::os::windows::ffi::OsStringExt;
+                path_bytes.len().is_multiple_of(2).then(|| {
+                    let path_wide = path_bytes
+                        .chunks_exact(2)
+                        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+                        .collect::<Vec<_>>();
+                    std::path::PathBuf::from(std::ffi::OsString::from_wide(&path_wide))
+                })
+            };
+            if let Some(decoded_path) = decoded_path
+                && let Ok(path) = AbsolutePathBuf::from_absolute_path_checked(decoded_path)
+                && Self::from_abs_path(&path).eq(self)
+            {
+                return Ok(path);
+            }
+
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                PathUriParseError::InvalidFileUriPath {
+                    path: self.to_string(),
+                },
+            ));
+        }
+
         let path = self.0.to_file_path().map_err(|()| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                PathUriParseError::InvalidFileUriPath,
+                PathUriParseError::InvalidFileUriPath {
+                    path: self.to_string(),
+                },
             )
         })?;
-        AbsolutePathBuf::from_absolute_path_checked(path)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
+        AbsolutePathBuf::from_absolute_path_checked(path).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                PathUriParseError::InvalidFileUriPath {
+                    path: self.to_string(),
+                },
+            )
+        })
     }
 
     /// Returns a clone of the canonical URL.
@@ -232,7 +379,7 @@ impl<'de> Deserialize<'de> for PathUri {
                     .map_or_else(|| path_error.to_string(), |error| error.to_string()),
             )
         })?;
-        Self::from_abs_path(&path).map_err(serde::de::Error::custom)
+        Ok(Self::from_abs_path(&path))
     }
 }
 
@@ -290,6 +437,43 @@ fn decode_uri_path(path: &str) -> String {
         .unwrap_or_else(|_| path.to_string())
 }
 
+/// Returns the original platform path bytes from a canonical bad-path URI.
+fn decode_bad_path_uri(url: &Url) -> Option<Vec<u8>> {
+    let encoded_path = url.as_str().strip_prefix(BAD_PATH_URI_PREFIX)?;
+    if encoded_path.is_empty() || encoded_path.contains('/') {
+        return None;
+    }
+
+    let path_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(encoded_path)
+        .ok()?;
+    (base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&path_bytes) == encoded_path)
+        .then_some(path_bytes)
+}
+
+fn is_windows_drive_uri_segment(segment: &str) -> bool {
+    matches!(segment.as_bytes(), [drive, b':'] if drive.is_ascii_alphabetic())
+}
+
+fn infer_opaque_path_convention(path_bytes: &[u8]) -> Option<PathConvention> {
+    if path_bytes.starts_with(b"/") {
+        return Some(PathConvention::Posix);
+    }
+    if !path_bytes.len().is_multiple_of(2) {
+        return None;
+    }
+
+    let mut path_wide = path_bytes
+        .chunks_exact(2)
+        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]));
+    let first = path_wide.next()?;
+    let second = path_wide.next()?;
+    let has_drive = u8::try_from(first).is_ok_and(|drive| drive.is_ascii_alphabetic())
+        && second == u16::from(b':');
+    let has_unc_prefix = first == u16::from(b'\\') && second == u16::from(b'\\');
+    (has_drive || has_unc_prefix).then_some(PathConvention::Windows)
+}
+
 /// Rejects URI metadata that has no defined meaning for `file:` URIs.
 fn validate_common_known_uri(url: &Url) -> Result<(), PathUriParseError> {
     if !url.username().is_empty() || url.password().is_some() {
@@ -312,8 +496,12 @@ fn validate_file_url(url: &Url) -> Result<(), PathUriParseError> {
     validate_common_known_uri(url)?;
     // `Url` accepts `%00`, but native path APIs use null as a terminator and
     // `Url::to_file_path` cannot represent a decoded null byte.
-    if urlencoding::decode_binary(url.path().as_bytes()).contains(&0) {
-        return Err(PathUriParseError::InvalidFileUriPath);
+    if urlencoding::decode_binary(url.path().as_bytes()).contains(&0)
+        && decode_bad_path_uri(url).is_none()
+    {
+        return Err(PathUriParseError::InvalidFileUriPath {
+            path: url.to_string(),
+        });
     }
     Ok(())
 }
@@ -324,8 +512,8 @@ pub enum PathUriParseError {
     InvalidUri(#[from] url::ParseError),
     #[error("unsupported path URI scheme `{0}`")]
     UnsupportedScheme(String),
-    #[error("file URI contains an invalid absolute path")]
-    InvalidFileUriPath,
+    #[error("'{path}' is invalid on '{os}'", os = std::env::consts::OS)]
+    InvalidFileUriPath { path: String },
     #[error("credentials are not allowed in path URIs")]
     CredentialsNotAllowed,
     #[error("ports are not allowed in path URIs")]

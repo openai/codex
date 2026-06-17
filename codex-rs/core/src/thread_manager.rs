@@ -1,11 +1,11 @@
-use crate::SkillsManager;
+use crate::SkillsService;
 use crate::agent::AgentControl;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::config::ThreadStoreConfig;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::default_thread_environment_selections;
-use crate::environment_selection::resolve_environment_selections;
 use crate::mcp::McpManager;
 use crate::rollout::truncation;
 use crate::session::Codex;
@@ -13,7 +13,6 @@ use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::session::resolve_multi_agent_version;
-use crate::shell_snapshot::ShellSnapshot;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_analytics::AnalyticsEventsClient;
@@ -78,6 +77,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
+use tracing::instrument;
 use tracing::warn;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
@@ -194,7 +194,7 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) agent_control: AgentControl,
     pub(crate) session_source: SessionSource,
     pub(crate) parent_thread_id: Option<ThreadId>,
-    pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+    pub(crate) inherited_environments: Option<TurnEnvironmentSnapshot>,
     pub(crate) inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
 }
 
@@ -207,7 +207,7 @@ pub(crate) struct ThreadManagerState {
     auth_manager: Arc<AuthManager>,
     models_manager: SharedModelsManager,
     environment_manager: Arc<EnvironmentManager>,
-    skills_manager: Arc<SkillsManager>,
+    skills_service: Arc<SkillsService>,
     plugins_manager: Arc<PluginsManager>,
     mcp_manager: Arc<McpManager>,
     extensions: Arc<ExtensionRegistry<Config>>,
@@ -272,16 +272,16 @@ impl ThreadManager {
         let codex_home = config.codex_home.clone();
         let restriction_product = session_source.restriction_product();
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
-        let plugins_manager = Arc::new(PluginsManager::new_with_restriction_product(
+        let plugins_manager = Arc::new(PluginsManager::new_with_options(
             codex_home.to_path_buf(),
             restriction_product,
+            auth_manager.get_api_auth_mode(),
         ));
-        plugins_manager.set_auth_mode(auth_manager.get_api_auth_mode());
         let mcp_manager = Arc::new(McpManager::new_with_extensions(
             Arc::clone(&plugins_manager),
             Arc::clone(&extensions),
         ));
-        let skills_manager = Arc::new(SkillsManager::new_with_restriction_product(
+        let skills_service = Arc::new(SkillsService::new_with_restriction_product(
             codex_home,
             config.bundled_skills_enabled(),
             restriction_product,
@@ -292,7 +292,7 @@ impl ThreadManager {
                 thread_created_tx,
                 models_manager: build_models_manager(config, auth_manager.clone()),
                 environment_manager,
-                skills_manager,
+                skills_service,
                 plugins_manager,
                 mcp_manager,
                 extensions,
@@ -367,13 +367,13 @@ impl ThreadManager {
         };
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let restriction_product = SessionSource::Exec.restriction_product();
-        let plugins_manager = Arc::new(PluginsManager::new_with_restriction_product(
+        let plugins_manager = Arc::new(PluginsManager::new_with_options(
             codex_home.clone(),
             restriction_product,
+            auth_manager.get_api_auth_mode(),
         ));
-        plugins_manager.set_auth_mode(auth_manager.get_api_auth_mode());
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-        let skills_manager = Arc::new(SkillsManager::new_with_restriction_product(
+        let skills_service = Arc::new(SkillsService::new_with_restriction_product(
             skills_codex_home,
             /*bundled_skills_enabled*/ true,
             restriction_product,
@@ -395,7 +395,7 @@ impl ThreadManager {
                 models_manager: create_model_provider(provider, Some(auth_manager.clone()))
                     .models_manager(codex_home, /*config_model_catalog*/ None),
                 environment_manager,
-                skills_manager,
+                skills_service,
                 plugins_manager,
                 mcp_manager,
                 extensions: empty_extension_registry(),
@@ -424,8 +424,8 @@ impl ThreadManager {
         self.state.auth_manager.clone()
     }
 
-    pub fn skills_manager(&self) -> Arc<SkillsManager> {
-        self.state.skills_manager.clone()
+    pub fn skills_service(&self) -> Arc<SkillsService> {
+        self.state.skills_service.clone()
     }
 
     pub fn plugins_manager(&self) -> Arc<PluginsManager> {
@@ -638,7 +638,7 @@ impl ThreadManager {
             thread_source,
             options.dynamic_tools,
             options.metrics_service_name,
-            /*inherited_shell_snapshot*/ None,
+            /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             options.parent_trace,
             options.environments,
@@ -702,6 +702,7 @@ impl ThreadManager {
         .await
     }
 
+    #[instrument(level = "trace", skip_all)]
     pub async fn resume_thread_with_history(
         &self,
         config: Config,
@@ -727,7 +728,7 @@ impl ThreadManager {
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
-            /*inherited_shell_snapshot*/ None,
+            /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             parent_trace,
             environments,
@@ -790,7 +791,7 @@ impl ThreadManager {
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
-            /*inherited_shell_snapshot*/ None,
+            /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             /*parent_trace*/ None,
             environments,
@@ -1180,7 +1181,7 @@ impl ThreadManagerState {
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
             /*metrics_service_name*/ None,
-            /*inherited_shell_snapshot*/ None,
+            /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             /*environments*/ None,
         ))
@@ -1197,7 +1198,7 @@ impl ThreadManagerState {
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
         metrics_service_name: Option<String>,
-        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
@@ -1215,7 +1216,7 @@ impl ThreadManagerState {
             thread_source,
             Vec::new(),
             metrics_service_name,
-            inherited_shell_snapshot,
+            inherited_environments,
             inherited_exec_policy,
             /*parent_trace*/ None,
             environments,
@@ -1235,7 +1236,7 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             parent_thread_id,
-            inherited_shell_snapshot,
+            inherited_environments,
             inherited_exec_policy,
         } = options;
         let environments =
@@ -1252,7 +1253,7 @@ impl ThreadManagerState {
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
-            inherited_shell_snapshot,
+            inherited_environments,
             inherited_exec_policy,
             /*parent_trace*/ None,
             environments,
@@ -1272,7 +1273,7 @@ impl ThreadManagerState {
         thread_source: Option<ThreadSource>,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
-        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
@@ -1290,7 +1291,7 @@ impl ThreadManagerState {
             thread_source,
             Vec::new(),
             /*metrics_service_name*/ None,
-            inherited_shell_snapshot,
+            inherited_environments,
             inherited_exec_policy,
             /*parent_trace*/ None,
             environments,
@@ -1329,7 +1330,7 @@ impl ThreadManagerState {
             thread_source,
             dynamic_tools,
             metrics_service_name,
-            /*inherited_shell_snapshot*/ None,
+            /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             parent_trace,
             environments,
@@ -1352,7 +1353,7 @@ impl ThreadManagerState {
         thread_source: Option<ThreadSource>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         metrics_service_name: Option<String>,
-        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
@@ -1381,9 +1382,6 @@ impl ThreadManagerState {
                 threads.remove(&resumed.conversation_id);
             }
         }
-        let environment_selections =
-            resolve_environment_selections(self.environment_manager.as_ref(), &environments)
-                .await?;
         let user_instructions = self
             .user_instructions_for_spawn(&session_source, parent_thread_id, forked_from_thread_id)
             .await;
@@ -1408,7 +1406,7 @@ impl ThreadManagerState {
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
             environment_manager: Arc::clone(&self.environment_manager),
-            skills_manager: Arc::clone(&self.skills_manager),
+            skills_service: Arc::clone(&self.skills_service),
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),
             extensions: Arc::clone(&self.extensions),
@@ -1420,12 +1418,12 @@ impl ThreadManagerState {
             agent_control,
             dynamic_tools,
             metrics_service_name,
-            inherited_shell_snapshot,
+            inherited_environments,
             inherited_exec_policy,
             parent_rollout_thread_trace,
             user_shell_override,
             parent_trace,
-            environment_selections,
+            environment_selections: environments,
             thread_extension_init,
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),

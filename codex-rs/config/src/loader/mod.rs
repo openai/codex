@@ -68,6 +68,7 @@ const PROJECT_LOCAL_CONFIG_DENYLIST: &[&str] = &[
     "notify",
     "profile",
     "profiles",
+    "experimental_realtime_webrtc_call_base_url",
     "experimental_realtime_ws_base_url",
     "otel",
 ];
@@ -472,7 +473,7 @@ async fn load_config_toml_for_required_layer(
     strict_config: bool,
     create_entry: impl FnOnce(TomlValue) -> ConfigLayerEntry,
 ) -> io::Result<ConfigLayerEntry> {
-    let toml_file_uri = PathUri::from_abs_path(toml_file)?;
+    let toml_file_uri = PathUri::from_abs_path(toml_file);
     let toml_value = match fs.read_file_text(&toml_file_uri, /*sandbox*/ None).await {
         Ok(contents) => {
             let config_parent = toml_file.as_path().parent().ok_or_else(|| {
@@ -568,7 +569,7 @@ pub async fn load_requirements_toml(
     fs: &dyn ExecutorFileSystem,
     requirements_toml_file: &AbsolutePathBuf,
 ) -> io::Result<Option<RequirementsLayerEntry>> {
-    let requirements_toml_file_uri = PathUri::from_abs_path(requirements_toml_file)?;
+    let requirements_toml_file_uri = PathUri::from_abs_path(requirements_toml_file);
     match fs
         .read_file_text(&requirements_toml_file_uri, /*sandbox*/ None)
         .await
@@ -944,6 +945,11 @@ fn sanitize_project_config(config: &mut TomlValue) -> Vec<String> {
             ignored_keys.push((*key).to_string());
         }
     }
+    if let Some(features) = table.get_mut("features").and_then(TomlValue::as_table_mut)
+        && features.remove("respect_system_proxy").is_some()
+    {
+        ignored_keys.push("features.respect_system_proxy".to_string());
+    }
 
     ignored_keys
 }
@@ -1138,7 +1144,7 @@ async fn find_project_root(
     for ancestor in cwd.ancestors() {
         for marker in project_root_markers {
             let marker_path = ancestor.join(marker);
-            let marker_path_uri = PathUri::from_abs_path(&marker_path)?;
+            let marker_path_uri = PathUri::from_abs_path(&marker_path);
             if fs
                 .get_metadata(&marker_path_uri, /*sandbox*/ None)
                 .await
@@ -1155,7 +1161,7 @@ async fn find_git_checkout_root(
     fs: &dyn ExecutorFileSystem,
     cwd: &AbsolutePathBuf,
 ) -> Option<AbsolutePathBuf> {
-    let cwd_uri = PathUri::from_abs_path(cwd).ok()?;
+    let cwd_uri = PathUri::from_abs_path(cwd);
     let base = match fs.get_metadata(&cwd_uri, /*sandbox*/ None).await {
         Ok(metadata) if metadata.is_directory => cwd.clone(),
         _ => cwd.parent()?,
@@ -1163,7 +1169,7 @@ async fn find_git_checkout_root(
 
     for dir in base.ancestors() {
         let dot_git = dir.join(".git");
-        let dot_git_uri = PathUri::from_abs_path(&dot_git).ok()?;
+        let dot_git_uri = PathUri::from_abs_path(&dot_git);
         if fs
             .get_metadata(&dot_git_uri, /*sandbox*/ None)
             .await
@@ -1216,7 +1222,7 @@ async fn load_project_layers(
     let mut startup_warnings = Vec::new();
     for dir in dirs {
         let dot_codex_abs = dir.join(".codex");
-        let dot_codex_uri = PathUri::from_abs_path(&dot_codex_abs)?;
+        let dot_codex_uri = PathUri::from_abs_path(&dot_codex_abs);
         if !fs
             .get_metadata(&dot_codex_uri, /*sandbox*/ None)
             .await
@@ -1235,7 +1241,7 @@ async fn load_project_layers(
             continue;
         }
         let config_file = dot_codex_abs.join(CONFIG_TOML_FILE);
-        let config_file_uri = PathUri::from_abs_path(&config_file)?;
+        let config_file_uri = PathUri::from_abs_path(&config_file);
         match fs.read_file_text(&config_file_uri, /*sandbox*/ None).await {
             Ok(contents) => {
                 let config: TomlValue = match toml::from_str(&contents) {
@@ -1339,7 +1345,7 @@ async fn merge_root_checkout_project_hooks(
         return Ok(config);
     };
     let hooks_config_file = hooks_config_folder.join(CONFIG_TOML_FILE);
-    let hooks_config_file_uri = PathUri::from_abs_path(&hooks_config_file)?;
+    let hooks_config_file_uri = PathUri::from_abs_path(&hooks_config_file);
     let root_config = match fs
         .read_file_text(&hooks_config_file_uri, /*sandbox*/ None)
         .await

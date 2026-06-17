@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -171,7 +173,7 @@ impl TurnItemContributor for RecordingTurnItemContributor {
         Box::pin(async move {
             self.calls
                 .lock()
-                .unwrap_or_else(|error| panic!("turn item calls lock poisoned: {error}"))
+                .expect("turn item calls lock should not be poisoned")
                 .push(self.name);
             Ok(())
         })
@@ -250,7 +252,7 @@ impl ApprovalReviewContributor for RecordingApprovalContributor {
         Box::pin(async move {
             self.calls
                 .lock()
-                .unwrap_or_else(|error| panic!("approval calls lock poisoned: {error}"))
+                .expect("approval calls lock should not be poisoned")
                 .push(ApprovalCall {
                     contributor: self.name,
                     session_id: session_store.level_id().to_string(),
@@ -319,7 +321,7 @@ impl ExtensionEventSink for RecordingEventSink {
         };
         self.events
             .lock()
-            .unwrap_or_else(|error| panic!("recording event sink lock poisoned: {error}"))
+            .expect("recording event sink lock should not be poisoned")
             .push((event.id, warning.message));
     }
 }

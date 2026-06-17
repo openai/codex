@@ -189,15 +189,14 @@ fn bash_snapshot_preserves_multiline_exports() -> Result<()> {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn try_new_creates_and_deletes_snapshot_file() -> Result<()> {
+async fn try_create_creates_and_deletes_snapshot_file() -> Result<()> {
     let dir = tempdir()?;
     let shell = Shell {
         shell_type: ShellType::Bash,
         shell_path: PathBuf::from("/bin/bash"),
-        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     };
 
-    let snapshot = ShellSnapshot::try_new(
+    let snapshot = ShellSnapshot::try_create(
         &dir.path().abs(),
         ThreadId::new(),
         &dir.path().abs(),
@@ -208,7 +207,6 @@ async fn try_new_creates_and_deletes_snapshot_file() -> Result<()> {
     .expect("snapshot should be created");
     let path = snapshot.path.clone();
     assert!(path.exists());
-    assert_eq!(snapshot.cwd, dir.path().abs());
 
     drop(snapshot);
 
@@ -219,16 +217,15 @@ async fn try_new_creates_and_deletes_snapshot_file() -> Result<()> {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn try_new_uses_distinct_generation_paths() -> Result<()> {
+async fn try_create_uses_distinct_generation_paths() -> Result<()> {
     let dir = tempdir()?;
     let session_id = ThreadId::new();
     let shell = Shell {
         shell_type: ShellType::Bash,
         shell_path: PathBuf::from("/bin/bash"),
-        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     };
 
-    let initial_snapshot = ShellSnapshot::try_new(
+    let initial_snapshot = ShellSnapshot::try_create(
         &dir.path().abs(),
         session_id,
         &dir.path().abs(),
@@ -237,7 +234,7 @@ async fn try_new_uses_distinct_generation_paths() -> Result<()> {
     )
     .await
     .expect("initial snapshot should be created");
-    let refreshed_snapshot = ShellSnapshot::try_new(
+    let refreshed_snapshot = ShellSnapshot::try_create(
         &dir.path().abs(),
         session_id,
         &dir.path().abs(),
@@ -248,7 +245,6 @@ async fn try_new_uses_distinct_generation_paths() -> Result<()> {
     .expect("refreshed snapshot should be created");
     let initial_path = initial_snapshot.path.clone();
     let refreshed_path = refreshed_snapshot.path.clone();
-
     assert_ne!(initial_path, refreshed_path);
     assert_eq!(initial_path.exists(), true);
     assert_eq!(refreshed_path.exists(), true);
@@ -282,7 +278,6 @@ async fn snapshot_shell_does_not_inherit_stdin() -> Result<()> {
     let shell = Shell {
         shell_type: ShellType::Bash,
         shell_path: PathBuf::from("/bin/bash"),
-        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     };
 
     let home_display = home.display();
@@ -331,7 +326,6 @@ async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
     let shell = Shell {
         shell_type: ShellType::Sh,
         shell_path: PathBuf::from("/bin/sh"),
-        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     };
 
     let err = run_script_with_timeout(

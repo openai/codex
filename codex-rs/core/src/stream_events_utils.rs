@@ -578,7 +578,9 @@ pub(crate) async fn finalize_turn_item(
             agent_message.memory_citation = memory_citation;
         }
     }
-    if let TurnItem::ImageGeneration(image_item) = &mut *turn_item {
+    if let TurnItem::ImageGeneration(image_item) = &mut *turn_item
+        && !image_item.result.is_empty()
+    {
         persist_image_generation_item(sess, turn_context, image_item).await;
     }
 }
@@ -624,6 +626,7 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
             Some(ResponseItem::FunctionCallOutput {
                 call_id: call_id.clone(),
                 output: output.clone(),
+                metadata: None,
             })
         }
         ResponseInputItem::CustomToolCallOutput {
@@ -634,12 +637,14 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
             call_id: call_id.clone(),
             name: name.clone(),
             output: output.clone(),
+            metadata: None,
         }),
         ResponseInputItem::McpToolCallOutput { call_id, output } => {
             let output = output.as_function_call_output_payload();
             Some(ResponseItem::FunctionCallOutput {
                 call_id: call_id.clone(),
                 output,
+                metadata: None,
             })
         }
         ResponseInputItem::ToolSearchOutput {
@@ -652,6 +657,7 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
             status: status.clone(),
             execution: execution.clone(),
             tools: tools.clone(),
+            metadata: None,
         }),
         _ => None,
     }

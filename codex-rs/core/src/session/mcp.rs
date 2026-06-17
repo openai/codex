@@ -299,6 +299,7 @@ impl Session {
         turn_context: &TurnContext,
         mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
         let auth = self.services.auth_manager.auth().await;
@@ -309,19 +310,26 @@ impl Session {
             effective_mcp_servers_from_configured(mcp_servers, &mcp_config, auth.as_ref());
         let host_owned_codex_apps_enabled =
             host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
-        let auth_statuses =
-            compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
-        let mcp_runtime_context = match turn_context.environments.primary() {
-            Some(turn_environment) => McpRuntimeContext::new(
-                Arc::clone(&self.services.environment_manager),
-                turn_environment.cwd.to_path_buf(),
-            ),
-            None => McpRuntimeContext::new(
-                Arc::clone(&self.services.environment_manager),
+        let auth_statuses = compute_auth_statuses(
+            mcp_servers.iter(),
+            store_mode,
+            keyring_backend_kind,
+            auth.as_ref(),
+        )
+        .await;
+        let environment_manager = self.services.turn_environments.environment_manager();
+        // TODO(anp): Migrate MCP runtime cwd plumbing to PathUri so foreign environment cwd
+        // values can be used without falling back to the legacy host cwd.
+        let cwd = turn_context
+            .environments
+            .primary()
+            .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
+            .map(|cwd| cwd.to_path_buf())
+            .unwrap_or_else(|| {
                 #[allow(deprecated)]
-                turn_context.cwd.to_path_buf(),
-            ),
-        };
+                turn_context.cwd.to_path_buf()
+            });
+        let mcp_runtime_context = McpRuntimeContext::new(environment_manager, cwd);
         let mcp_startup_cancellation_token = {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             guard.cancel();
@@ -332,6 +340,7 @@ impl Session {
         let refreshed_manager = McpConnectionManager::new(
             &mcp_servers,
             store_mode,
+            keyring_backend_kind,
             auth_statuses,
             &turn_context.approval_policy,
             turn_context.sub_id.clone(),
@@ -371,6 +380,7 @@ impl Session {
         let McpServerRefreshConfig {
             mcp_servers,
             mcp_oauth_credentials_store_mode,
+            auth_keyring_backend_kind,
         } = refresh_config;
 
         let mcp_servers =
@@ -390,9 +400,23 @@ impl Session {
                 return;
             }
         };
+        let keyring_backend_kind =
+            match serde_json::from_value::<AuthKeyringBackendKind>(auth_keyring_backend_kind) {
+                Ok(kind) => kind,
+                Err(err) => {
+                    warn!("failed to parse MCP auth keyring backend refresh config: {err}");
+                    return;
+                }
+            };
 
-        self.refresh_mcp_servers_inner(turn_context, mcp_servers, store_mode, elicitation_reviewer)
-            .await;
+        self.refresh_mcp_servers_inner(
+            turn_context,
+            mcp_servers,
+            store_mode,
+            keyring_backend_kind,
+            elicitation_reviewer,
+        )
+        .await;
     }
 
     pub(crate) async fn refresh_mcp_servers_now(
@@ -400,10 +424,17 @@ impl Session {
         turn_context: &TurnContext,
         mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
-        self.refresh_mcp_servers_inner(turn_context, mcp_servers, store_mode, elicitation_reviewer)
-            .await;
+        self.refresh_mcp_servers_inner(
+            turn_context,
+            mcp_servers,
+            store_mode,
+            keyring_backend_kind,
+            elicitation_reviewer,
+        )
+        .await;
     }
 
     #[cfg(test)]

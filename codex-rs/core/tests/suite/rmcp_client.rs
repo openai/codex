@@ -1,10 +1,7 @@
-#![allow(clippy::expect_used)]
-
 use anyhow::Context as _;
 use anyhow::ensure;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use core_test_support::test_codex::local_selections;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -50,15 +47,16 @@ use codex_protocol::user_input::UserInput;
 use codex_utils_cargo_bin::cargo_bin;
 use codex_utils_path_uri::PathUri;
 use core_test_support::assert_regex_match;
-use core_test_support::remote_env_env_var;
 use core_test_support::responses;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
+use core_test_support::test_environment;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_mcp_server;
 use image::DynamicImage;
@@ -85,20 +83,18 @@ fn assert_wall_time_line(line: &str) {
 }
 
 fn split_wall_time_wrapped_output(output: &str) -> &str {
-    let Some((wall_time, rest)) = output.split_once('\n') else {
-        panic!("wall-time output should contain an Output section: {output}");
-    };
+    let (wall_time, rest) = output
+        .split_once('\n')
+        .expect("wall-time output should contain an Output section");
     assert_wall_time_line(wall_time);
-    let Some(output) = rest.strip_prefix("Output:\n") else {
-        panic!("wall-time output should contain Output marker: {output}");
-    };
-    output
+    rest.strip_prefix("Output:\n")
+        .expect("wall-time output should contain Output marker")
 }
 
 fn assert_wall_time_header(output: &str) {
-    let Some((wall_time, marker)) = output.split_once('\n') else {
-        panic!("wall-time header should contain an Output marker: {output}");
-    };
+    let (wall_time, marker) = output
+        .split_once('\n')
+        .expect("wall-time header should contain an Output marker");
     assert_wall_time_line(wall_time);
     assert_eq!(marker, "Output:");
 }
@@ -142,7 +138,6 @@ fn user_turn_with_permission_profile(
         responsesapi_client_metadata: None,
         additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            environments: Some(local_selections(cwd)),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),
             permission_profile,
@@ -168,12 +163,11 @@ enum McpCallEvent {
 const REMOTE_MCP_ENVIRONMENT: &str = "remote";
 
 fn remote_aware_environment_id() -> String {
-    // These tests run locally in normal CI and against the Docker-backed
-    // executor in full-ci. Match that shared test environment instead of
-    // parameterizing each stdio MCP test with its own local/remote cases.
-    std::env::var_os(remote_env_env_var())
-        .map(|_| REMOTE_MCP_ENVIRONMENT.to_string())
-        .unwrap_or_else(|| codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string())
+    if test_environment().is_remote() {
+        REMOTE_MCP_ENVIRONMENT.to_string()
+    } else {
+        codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string()
+    }
 }
 
 /// Returns the stdio MCP test server command path for the active test placement.
@@ -185,7 +179,8 @@ fn remote_aware_environment_id() -> String {
 /// container and return that in-container path instead.
 fn remote_aware_stdio_server_bin() -> anyhow::Result<String> {
     let bin = stdio_server_bin()?;
-    let Some(container_name) = remote_env_container_name()? else {
+    let environment = test_environment();
+    let Some(container_name) = environment.docker_container_name() else {
         return Ok(bin);
     };
 
@@ -198,17 +193,7 @@ fn remote_aware_stdio_server_bin() -> anyhow::Result<String> {
     // path instead of the host build artifact path.
     // Several remote-aware MCP tests can run in parallel; give each copied
     // binary its own path so one test cannot replace another test's executable.
-    copy_binary_to_remote_env(&container_name, Path::new(&bin), "test_stdio_server")
-}
-
-/// Returns the Docker container used by remote-aware MCP tests, when active.
-fn remote_env_container_name() -> anyhow::Result<Option<String>> {
-    let Some(container_name) = std::env::var_os(remote_env_env_var()) else {
-        return Ok(None);
-    };
-    Ok(Some(container_name.into_string().map_err(|value| {
-        anyhow::anyhow!("remote env container name must be utf-8: {value:?}")
-    })?))
+    copy_binary_to_remote_env(container_name, Path::new(&bin), "test_stdio_server")
 }
 
 /// Builds a collision-resistant in-container path for copied test binaries.
@@ -343,9 +328,10 @@ fn insert_mcp_server(
             tools: HashMap::new(),
         },
     );
-    if let Err(err) = config.mcp_servers.set(servers) {
-        panic!("test mcp servers should accept any configuration: {err}");
-    }
+    config
+        .mcp_servers
+        .set(servers)
+        .expect("test mcp servers should accept any configuration");
 }
 
 async fn call_cwd_tool(
@@ -408,7 +394,7 @@ fn assert_cwd_tool_output(structured: &Value, expected_cwd: &Path) {
         .and_then(Value::as_str)
         .expect("cwd tool should return a string cwd");
 
-    if std::env::var_os(remote_env_env_var()).is_some() {
+    if test_environment().is_remote() {
         assert_eq!(
             structured,
             &json!({
@@ -433,6 +419,11 @@ fn assert_cwd_tool_output(structured: &Value, expected_cwd: &Path) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
 async fn stdio_server_round_trip() -> anyhow::Result<()> {
+    // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -528,9 +519,9 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
         .structured_content
         .as_ref()
         .expect("structured content");
-    let Value::Object(map) = structured else {
-        panic!("structured content should be an object: {structured:?}");
-    };
+    let map = structured
+        .as_object()
+        .expect("structured content should be an object");
     let echo_value = map
         .get("echo")
         .and_then(Value::as_str)
@@ -616,6 +607,11 @@ async fn shutdown_cancels_startup_prewarm_waiting_for_mcp_startup() -> anyhow::R
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_cwd)]
 async fn stdio_server_uses_configured_cwd_before_runtime_fallback() -> anyhow::Result<()> {
+    // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -741,6 +737,11 @@ async fn local_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() ->
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()> {
+    // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -807,9 +808,9 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
     let wrapped_payload = split_wall_time_wrapped_output(output_text);
     let output_json: Value = serde_json::from_str(wrapped_payload)
         .expect("wrapped MCP output should preserve sandbox metadata JSON");
-    let Value::Object(meta) = output_json else {
-        panic!("sandbox_meta should return metadata object: {output_json:?}");
-    };
+    let meta = output_json
+        .as_object()
+        .expect("sandbox_meta should return metadata object");
 
     let sandbox_meta = meta
         .get(MCP_SANDBOX_STATE_META_CAPABILITY)
@@ -834,6 +835,11 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::Result<()> {
+    // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -949,6 +955,11 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stdio_mcp_read_only_tool_calls_run_concurrently_without_server_opt_in()
 -> anyhow::Result<()> {
+    // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1046,6 +1057,11 @@ async fn stdio_mcp_read_only_tool_calls_run_concurrently_without_server_opt_in()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Result<()> {
+    // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1134,6 +1150,11 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
 async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
+    // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1271,6 +1292,11 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
 async fn stdio_image_responses_resize_large_image() -> anyhow::Result<()> {
+    // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1372,6 +1398,11 @@ async fn stdio_image_responses_resize_large_image() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
 async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Result<()> {
+    // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1458,6 +1489,11 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
 async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Result<()> {
+    // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1611,6 +1647,11 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
 async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
+    // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1704,9 +1745,9 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
         .structured_content
         .as_ref()
         .expect("structured content");
-    let Value::Object(map) = structured else {
-        panic!("structured content should be an object: {structured:?}");
-    };
+    let map = structured
+        .as_object()
+        .expect("structured content should be an object");
     let echo_value = map
         .get("echo")
         .and_then(Value::as_str)
@@ -1728,6 +1769,11 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_env_source)]
 async fn stdio_server_propagates_explicit_local_env_var_source() -> anyhow::Result<()> {
+    // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1819,8 +1865,13 @@ async fn stdio_server_propagates_explicit_local_env_var_source() -> anyhow::Resu
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_env_source)]
 async fn remote_stdio_env_var_source_does_not_copy_local_env() -> anyhow::Result<()> {
+    // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
     skip_if_no_network!(Ok(()));
-    if std::env::var_os(remote_env_env_var()).is_none() {
+    if !test_environment().is_remote() {
         return Ok(());
     }
 
@@ -2108,9 +2159,9 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
         .structured_content
         .as_ref()
         .expect("structured content");
-    let Value::Object(map) = structured else {
-        panic!("structured content should be an object: {structured:?}");
-    };
+    let map = structured
+        .as_object()
+        .expect("structured content should be an object");
     let echo_value = map
         .get("echo")
         .and_then(Value::as_str)
@@ -2159,7 +2210,6 @@ fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
     }
 }
 
-#[allow(clippy::expect_used)]
 async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2298,9 +2348,9 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
         .structured_content
         .as_ref()
         .expect("structured content");
-    let Value::Object(map) = structured else {
-        panic!("structured content should be an object: {structured:?}");
-    };
+    let map = structured
+        .as_object()
+        .expect("structured content should be an object");
     let echo_value = map
         .get("echo")
         .and_then(Value::as_str)
@@ -2336,10 +2386,11 @@ async fn start_streamable_http_test_server(
         }
     };
 
-    if let Some(container_name) = remote_env_container_name()? {
+    let environment = test_environment();
+    if let Some(container_name) = environment.docker_container_name() {
         return Ok(Some(
             start_remote_streamable_http_test_server(
-                &container_name,
+                container_name,
                 &rmcp_http_server_bin,
                 expected_env_value,
                 expected_token,

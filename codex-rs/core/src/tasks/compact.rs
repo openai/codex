@@ -31,6 +31,7 @@ impl SessionTask for CompactTask {
         let session = session.clone_session();
         let _ = if crate::compact::should_use_remote_compact_task(ctx.provider.info()) {
             if ctx
+                .config
                 .features
                 .enabled(codex_features::Feature::RemoteCompactionV2)
             {
@@ -55,7 +56,12 @@ impl SessionTask for CompactTask {
                 /*manual*/ true,
             );
             let input = vec![UserInput::Text {
-                text: ctx.compact_prompt().to_string(),
+                text: ctx
+                    .config
+                    .compact_prompt
+                    .as_deref()
+                    .unwrap_or(crate::compact::SUMMARIZATION_PROMPT)
+                    .to_string(),
                 // Compaction prompt is synthesized; no UI element ranges to preserve.
                 text_elements: Vec::new(),
             }];

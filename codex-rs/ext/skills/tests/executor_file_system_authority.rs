@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
-use codex_core_skills::HostLoadedSkills;
+use codex_core_skills::HostSkillsSnapshot;
 use codex_core_skills::loader::SkillRoot;
 use codex_core_skills::loader::load_skills_from_roots;
 use codex_exec_server::CopyOptions;
@@ -12,6 +12,7 @@ use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::ExecutorFileSystemFuture;
 use codex_exec_server::FileMetadata;
+use codex_exec_server::FileSystemReadStream;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
@@ -38,10 +39,10 @@ impl SyntheticFileSystem {
     async fn canonicalize(&self, path: &PathUri) -> io::Result<PathUri> {
         let path = path.to_abs_path()?;
         if path == self.alias_root {
-            return PathUri::from_abs_path(&self.canonical_root);
+            return Ok(PathUri::from_abs_path(&self.canonical_root));
         }
         self.metadata(&path)?;
-        PathUri::from_abs_path(&path)
+        Ok(PathUri::from_abs_path(&path))
     }
 
     async fn read_file(&self, path: &PathUri) -> io::Result<Vec<u8>> {
@@ -85,6 +86,7 @@ impl SyntheticFileSystem {
             is_directory,
             is_file,
             is_symlink: false,
+            size: 0,
             created_at_ms: 0,
             modified_at_ms: 0,
         })
@@ -106,6 +108,19 @@ impl ExecutorFileSystem for SyntheticFileSystem {
         _sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
         Box::pin(SyntheticFileSystem::read_file(self, path))
+    }
+
+    fn read_file_stream<'a>(
+        &'a self,
+        _path: &'a PathUri,
+        _sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
+        Box::pin(async {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "synthetic filesystem does not support streaming reads",
+            ))
+        })
     }
 
     fn write_file<'a>(
@@ -193,7 +208,7 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
         skill.path_to_skills_md,
         canonical_root.join("skill/SKILL.md")
     );
-    let loaded = HostLoadedSkills::new(Arc::new(outcome));
+    let loaded = HostSkillsSnapshot::new(Arc::new(outcome));
     assert_eq!(
         loaded.read_skill_text(&skill).await.expect("skill body"),
         SKILL_CONTENTS
@@ -227,7 +242,7 @@ async fn selected_root_id_distinguishes_identical_executor_paths() {
                     },
                 })
                 .collect(),
-            host: None,
+            host_snapshot: None,
             include_host_skills: false,
             include_bundled_skills: true,
             include_orchestrator_skills: false,

@@ -14,6 +14,7 @@ use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
+use codex_app_server_protocol::ConfigRequirementsReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::ForcedChatgptWorkspaceIds;
@@ -45,6 +46,33 @@ fn write_config(codex_home: &TempDir, contents: &str) -> Result<()> {
         codex_home.path().join("config.toml"),
         contents,
     )?)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_requirements_read_includes_allow_remote_control() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        "allow_remote_control = false\n",
+    )?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_config_requirements_read_request().await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ConfigRequirementsReadResponse = to_response(response)?;
+    assert_eq!(
+        response
+            .requirements
+            .expect("managed requirements should be returned")
+            .allow_remote_control,
+        Some(false)
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -335,6 +363,7 @@ async fn config_read_includes_apps() -> Result<()> {
         r#"
 [apps._default]
 approvals_reviewer = "auto_review"
+default_tools_approval_mode = "approve"
 
 [apps.app1]
 enabled = false
@@ -374,6 +403,7 @@ default_tools_approval_mode = "prompt"
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
                 destructive_enabled: true,
                 open_world_enabled: true,
+                default_tools_approval_mode: Some(AppToolApproval::Approve),
             }),
             apps: std::collections::HashMap::from([(
                 "app1".to_string(),
@@ -392,6 +422,16 @@ default_tools_approval_mode = "prompt"
     assert_eq!(
         origins
             .get("apps._default.approvals_reviewer")
+            .expect("origin")
+            .name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+            profile: None,
+        }
+    );
+    assert_eq!(
+        origins
+            .get("apps._default.default_tools_approval_mode")
             .expect("origin")
             .name,
         ConfigLayerSource::User {
