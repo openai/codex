@@ -111,10 +111,6 @@ const ENVIRONMENT_STARTUP_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const ENVIRONMENT_INITIAL_RETRY_DELAY: Duration = Duration::from_secs(1);
 const ENVIRONMENT_MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 
-// ThreadEnvironments::snapshot() currently waits for Environment::info(), so this
-// must land with the follow-up that stops snapshots from waiting on starting environments.
-// Otherwise an unavailable executor can delay session startup for five minutes.
-
 impl Default for ExecServerClientConnectOptions {
     fn default() -> Self {
         Self {
