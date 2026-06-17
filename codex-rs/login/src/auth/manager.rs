@@ -1731,6 +1731,30 @@ impl AuthManager {
         Ok(self.auth_cached())
     }
 
+    /// Resolves auth for optional OpenAI-backed features while another model provider is active.
+    ///
+    /// A required external auth source belongs to the primary model provider and must not be
+    /// invoked merely to initialize an optional feature. Managed ChatGPT auth and optional
+    /// external auth still use the normal resolution path, including proactive token refresh.
+    pub async fn auth_for_optional_use(&self) -> Option<CodexAuth> {
+        if self
+            .external_auth()
+            .is_some_and(|external_auth| external_auth.requires_successful_resolution())
+        {
+            return self.auth_cached();
+        }
+
+        match self.auth().await {
+            Ok(auth) => auth,
+            Err(error) => {
+                // The external auth registration can race with the check above. Optional features
+                // should keep using the last managed credential instead of failing startup.
+                tracing::error!("Failed to resolve optional feature auth: {error}");
+                self.auth_cached()
+            }
+        }
+    }
+
     /// Backwards-compatible explicit name for callers that already handle auth resolution errors.
     pub async fn auth_result(&self) -> std::io::Result<Option<CodexAuth>> {
         self.auth().await

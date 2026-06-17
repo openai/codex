@@ -810,8 +810,8 @@ pub struct Config {
     /// Workload identity federation configuration for external ChatGPT auth.
     pub workload_identity: Option<WorkloadIdentityConfig>,
 
-    /// Runtime-only paths added to the sandbox for workload credential isolation.
-    /// These enforcement details must not be exposed in model-visible context.
+    /// Runtime-only paths added to the sandbox solely for workload credential isolation.
+    /// Pre-existing user or managed denies are excluded so they remain model-visible.
     #[doc(hidden)]
     pub workload_identity_credential_deny_paths: Vec<AbsolutePathBuf>,
 
@@ -2370,6 +2370,21 @@ fn apply_workload_identity_filesystem_constraints(
         .preserve_deny_read_restrictions_from(&FileSystemSandboxPolicy::restricted(entries));
 }
 
+fn file_system_policy_has_exact_deny_path(
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    path: &AbsolutePathBuf,
+) -> bool {
+    file_system_sandbox_policy.entries.iter().any(|entry| {
+        entry.access == codex_protocol::permissions::FileSystemAccessMode::Deny
+            && matches!(
+                &entry.path,
+                codex_protocol::permissions::FileSystemPath::Path {
+                    path: denied_path,
+                } if denied_path == path
+            )
+    })
+}
+
 fn workload_identity_credential_deny_paths(
     workload_identity: &WorkloadIdentityConfig,
 ) -> Vec<AbsolutePathBuf> {
@@ -3642,11 +3657,21 @@ impl Config {
             })?;
             let credential_deny_paths =
                 workload_identity_credential_deny_paths(workload_identity);
+            let enforcement_only_paths = credential_deny_paths
+                .iter()
+                .filter(|path| {
+                    !file_system_policy_has_exact_deny_path(
+                        &effective_file_system_sandbox_policy,
+                        path,
+                    )
+                })
+                .cloned()
+                .collect();
             apply_workload_identity_filesystem_constraints(
                 &mut effective_file_system_sandbox_policy,
                 &credential_deny_paths,
             );
-            credential_deny_paths
+            enforcement_only_paths
         } else {
             Vec::new()
         };

@@ -180,6 +180,16 @@ async fn refresh_token_refreshes_when_auth_is_unchanged() -> Result<()> {
 #[serial_test::serial(auth_env)]
 #[tokio::test]
 async fn auth_refreshes_when_access_token_is_near_expiry() -> Result<()> {
+    assert_auth_refreshes_when_access_token_is_near_expiry(/*optional*/ false).await
+}
+
+#[serial_test::serial(auth_env)]
+#[tokio::test]
+async fn optional_auth_refreshes_when_access_token_is_near_expiry() -> Result<()> {
+    assert_auth_refreshes_when_access_token_is_near_expiry(/*optional*/ true).await
+}
+
+async fn assert_auth_refreshes_when_access_token_is_near_expiry(optional: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
@@ -208,12 +218,18 @@ async fn auth_refreshes_when_access_token_is_near_expiry() -> Result<()> {
     };
     ctx.write_auth(&initial_auth).await?;
 
-    let cached_auth = ctx
-        .auth_manager
-        .auth()
-        .await
-        .context("auth should resolve")?
-        .context("auth should be cached")?;
+    let cached_auth = if optional {
+        ctx.auth_manager
+            .auth_for_optional_use()
+            .await
+            .context("optional auth should be cached")?
+    } else {
+        ctx.auth_manager
+            .auth()
+            .await
+            .context("auth should resolve")?
+            .context("auth should be cached")?
+    };
 
     let refreshed_tokens = TokenData {
         access_token: "new-access-token".to_string(),

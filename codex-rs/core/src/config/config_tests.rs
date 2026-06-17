@@ -341,6 +341,53 @@ async fn workload_credential_file_is_denied_even_with_danger_full_access() -> an
 }
 
 #[tokio::test]
+async fn workload_credential_deny_preserves_an_existing_user_deny() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let token_file = codex_home.path().join("subject-token");
+    let token_path = AbsolutePathBuf::try_from(token_file.clone())?;
+    let user_deny = FileSystemSandboxEntry {
+        path: FileSystemPath::Path {
+            path: token_path.clone(),
+        },
+        access: FileSystemAccessMode::Deny,
+    };
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![user_deny.clone()]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let cfg = ConfigToml {
+        workload_identity: Some(WorkloadIdentityConfig {
+            identity_provider_id: "idp_example".to_string(),
+            identity_provider_mapping_id: "idpm_example".to_string(),
+            audience: "openai-audience".to_string(),
+            token_url: "https://auth.openai.com/oauth/token".to_string(),
+            credential_source: CredentialSourceConfig::File { path: token_file },
+        }),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            permission_profile: Some(permission_profile),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(
+        config
+            .permissions
+            .file_system_sandbox_policy()
+            .entries
+            .contains(&user_deny)
+    );
+    assert!(config.workload_identity_credential_deny_paths.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn workload_identity_rejects_forced_api_key_login() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml {

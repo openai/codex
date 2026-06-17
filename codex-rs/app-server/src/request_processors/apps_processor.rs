@@ -90,7 +90,7 @@ impl AppsRequestProcessor {
                 .await
                 .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?
         } else {
-            self.auth_manager.auth_cached()
+            self.auth_manager.auth_for_optional_use().await
         };
         if !config
             .features

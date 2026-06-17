@@ -802,6 +802,30 @@ async fn auth_result_preserves_external_auth_resolution_errors() {
 }
 
 #[tokio::test]
+async fn optional_auth_does_not_resolve_required_external_auth() {
+    let cached = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let manager = AuthManager::from_auth_for_testing(cached.clone());
+    manager.set_external_auth(Arc::new(FailingExternalChatgptAuth(
+        "required external auth must not run",
+    )));
+
+    let resolved = manager
+        .auth_for_optional_use()
+        .await
+        .expect("cached ChatGPT auth should remain available");
+
+    assert_eq!(resolved.get_token().unwrap(), cached.get_token().unwrap());
+    assert_eq!(
+        manager
+            .auth()
+            .await
+            .expect_err("normal auth should still require external resolution")
+            .to_string(),
+        "required external auth must not run"
+    );
+}
+
+#[tokio::test]
 async fn replace_non_required_external_auth_preserves_required_provider() {
     let manager = AuthManager::shared(
         PathBuf::from("non-existent"),
