@@ -42,6 +42,7 @@ pub(super) const ADD_MARKETPLACE_TAB_ID: &str = "add-marketplace";
 pub(super) struct PluginListFetchState {
     pub(super) cache_cwd: Option<PathBuf>,
     pub(super) in_flight_cwd: Option<PathBuf>,
+    pub(super) vertical_section_requested: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -147,6 +148,7 @@ impl ChatWidget {
             Err(err) => {
                 self.plugin_remote_sections_loading = false;
                 self.plugin_remote_sections_loaded = false;
+                self.plugins_fetch_state.vertical_section_requested = false;
                 if should_refresh_plugins_popup {
                     self.plugins_fetch_state.cache_cwd = None;
                     self.plugins_cache = PluginsCacheState::Failed(err.clone());
@@ -175,6 +177,7 @@ impl ChatWidget {
             .is_some();
         self.plugin_remote_sections_loading = false;
         self.plugin_remote_sections_loaded = true;
+        self.plugins_fetch_state.vertical_section_requested = false;
         let refreshed_response = match &mut self.plugins_cache {
             PluginsCacheState::Ready(response)
                 if self.plugins_fetch_state.cache_cwd.as_deref() == Some(cwd.as_path()) =>
@@ -212,6 +215,8 @@ impl ChatWidget {
         }
 
         self.plugins_fetch_state.in_flight_cwd = Some(cwd.clone());
+        self.plugins_fetch_state.vertical_section_requested =
+            !self.config.features.enabled(Feature::RemotePlugin);
         if self.plugins_fetch_state.cache_cwd.as_deref() != Some(cwd.as_path()) {
             self.plugins_cache = PluginsCacheState::Loading;
         }

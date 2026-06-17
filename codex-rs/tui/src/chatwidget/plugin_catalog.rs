@@ -813,10 +813,12 @@ impl ChatWidget {
             .filter(|(_, plugin, _)| plugin.installed)
             .count();
         let curated_has_entries = !curated_entries.is_empty();
+        let curated_loading = self.plugin_remote_sections_loading
+            && self.plugins_fetch_state.vertical_section_requested;
         let by_openai_section_error =
             plugin_remote_section_error(&self.plugin_remote_section_errors, "vertical");
         let (curated_empty_name, curated_empty_description) =
-            if self.plugin_remote_sections_loading && !curated_has_entries {
+            if curated_loading && !curated_has_entries {
                 (
                     "Loading OpenAI Curated plugins...",
                     "This section updates when app-server returns it.",
@@ -838,7 +840,7 @@ impl ChatWidget {
             curated_empty_name,
             curated_empty_description,
         );
-        if self.plugin_remote_sections_loading && curated_has_entries {
+        if curated_loading && curated_has_entries {
             curated_items.push(remote_section_loading_item("OpenAI Curated"));
         }
         if let Some(section_error) = by_openai_section_error

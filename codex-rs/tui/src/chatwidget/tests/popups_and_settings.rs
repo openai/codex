@@ -1101,6 +1101,8 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
             plugins_test_curated_marketplace(Vec::new()),
         ])),
     );
+    let curated_loading_popup =
+        select_tab_containing(&mut chat, "Loading OpenAI Curated plugins...");
     let workspace_loading_popup = select_tab_containing(&mut chat, "Loading Workspace plugins.");
     let shared_loading_popup = select_tab_containing(&mut chat, "Loading Shared with me plugins.");
 
@@ -1127,8 +1129,35 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
     let workspace_error_popup = render_bottom_popup(&chat, /*width*/ 100);
     let shared_error_popup = select_tab_containing(&mut chat, "Shared with me unavailable.");
 
+    let (mut remote_chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    remote_chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+    remote_chat.set_feature_enabled(Feature::RemotePlugin, /*enabled*/ true);
+    remote_chat.add_plugins_output();
+    let remote_cwd = remote_chat.config.cwd.clone();
+    remote_chat.on_plugins_loaded(
+        remote_cwd.to_path_buf(),
+        Ok(plugins_test_response(vec![
+            plugins_test_curated_marketplace(Vec::new()),
+        ])),
+    );
+    let remote_curated_empty_popup =
+        select_tab_containing(&mut remote_chat, "No OpenAI Curated plugins available");
+    let remote_workspace_loading_popup =
+        select_tab_containing(&mut remote_chat, "Loading Workspace plugins.");
+    assert!(
+        !remote_curated_empty_popup.contains("Loading OpenAI Curated plugins")
+            && remote_workspace_loading_popup.contains("Loading Workspace plugins..."),
+        "expected only requested remote sections to show loading, got:\n{remote_curated_empty_popup}\n\n{remote_workspace_loading_popup}"
+    );
+
     insta::assert_snapshot!(
         [
+            remote_section_state(
+                &curated_loading_popup,
+                "OpenAI Curated marketplace.",
+                "Loading OpenAI Curated plugins...",
+                "This section updates when app-server returns it.",
+            ),
             remote_section_state(
                 &workspace_loading_popup,
                 "Loading Workspace plugins.",
@@ -1165,9 +1194,18 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
                 "Shared with me unavailable",
                 "Plugin sharing is disabled for this Codex session.",
             ),
+            remote_section_state(
+                &remote_curated_empty_popup,
+                "OpenAI Curated marketplace.",
+                "No OpenAI Curated plugins available",
+                "No OpenAI Curated plugins available.",
+            ),
         ]
         .join("\n\n"),
         @r###"
+        OpenAI Curated marketplace.
+        Loading OpenAI Curated plugins...  This section updates when app-server returns it.
+
         Loading Workspace plugins.
         Loading Workspace plugins...  This section updates when app-server returns it.
 
@@ -1185,6 +1223,9 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
 
         Shared with me unavailable.
         Shared with me unavailable  Plugin sharing is disabled for this Codex session.
+
+        OpenAI Curated marketplace.
+        No OpenAI Curated plugins available  No OpenAI Curated plugins available.
         "###
     );
 }
