@@ -7909,6 +7909,9 @@
               ],
               "title": "Chatgptv2::LoginAccountParamsType",
               "type": "string"
+            },
+            "useHostedLoginSuccessPage": {
+              "type": "boolean"
             }
           },
           "required": [

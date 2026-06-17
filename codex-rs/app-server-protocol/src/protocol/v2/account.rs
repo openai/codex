@@ -78,6 +78,8 @@ pub enum LoginAccountParams {
     Chatgpt {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         codex_streamlined_login: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        use_hosted_login_success_page: bool,
     },
     #[serde(rename = "chatgptDeviceCode")]
     #[ts(rename = "chatgptDeviceCode")]

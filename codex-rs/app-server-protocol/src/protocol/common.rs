@@ -2715,6 +2715,7 @@ mod tests {
             request_id: RequestId::Integer(3),
             params: v2::LoginAccountParams::Chatgpt {
                 codex_streamlined_login: false,
+                use_hosted_login_success_page: false,
             },
         };
         assert_eq!(
@@ -2736,6 +2737,7 @@ mod tests {
             request_id: RequestId::Integer(3),
             params: v2::LoginAccountParams::Chatgpt {
                 codex_streamlined_login: true,
+                use_hosted_login_success_page: false,
             },
         };
         assert_eq!(
@@ -2745,6 +2747,30 @@ mod tests {
                 "params": {
                     "type": "chatgpt",
                     "codexStreamlinedLogin": true
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_account_login_chatgpt_with_hosted_success_page() -> Result<()> {
+        let request = ClientRequest::LoginAccount {
+            request_id: RequestId::Integer(3),
+            params: v2::LoginAccountParams::Chatgpt {
+                codex_streamlined_login: true,
+                use_hosted_login_success_page: true,
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "account/login/start",
+                "id": 3,
+                "params": {
+                    "type": "chatgpt",
+                    "codexStreamlinedLogin": true,
+                    "useHostedLoginSuccessPage": true
                 }
             }),
             serde_json::to_value(&request)?,

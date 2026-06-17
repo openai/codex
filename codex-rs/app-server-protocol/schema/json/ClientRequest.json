@@ -1465,6 +1465,9 @@
               ],
               "title": "ChatgptLoginAccountParamsType",
               "type": "string"
+            },
+            "useHostedLoginSuccessPage": {
+              "type": "boolean"
             }
           },
           "required": [
