@@ -2634,17 +2634,46 @@ impl Session {
         turn_context: &TurnContext,
         items: &'a [ResponseItem],
     ) -> Cow<'a, [ResponseItem]> {
-        if !turn_context
+        let mut items = Cow::Borrowed(items);
+        if turn_context
             .config
             .features
             .enabled(Feature::ResizeAllImages)
         {
-            return Cow::Borrowed(items);
+            prepare_response_items(items.to_mut());
         }
+        if turn_context.config.features.enabled(Feature::ItemIds) {
+            Self::assign_missing_response_item_ids(&mut items);
+        }
+        items
+    }
 
-        let mut prepared_items = items.to_vec();
-        prepare_response_items(&mut prepared_items);
-        Cow::Owned(prepared_items)
+    fn assign_missing_response_item_ids(items: &mut Cow<'_, [ResponseItem]>) {
+        if items.iter().all(|item| item.id().is_some()) {
+            return;
+        }
+        for item in items.to_mut() {
+            if item.id().is_some() {
+                continue;
+            }
+            let prefix = match item {
+                ResponseItem::Message { .. } => "msg",
+                ResponseItem::AgentMessage { .. } => "amsg",
+                ResponseItem::Reasoning { .. } => "rs",
+                ResponseItem::LocalShellCall { .. } => "lsh",
+                ResponseItem::FunctionCall { .. } => "fc",
+                ResponseItem::ToolSearchCall { .. } => "tsc",
+                ResponseItem::FunctionCallOutput { .. } => "fco",
+                ResponseItem::CustomToolCall { .. } => "ctc",
+                ResponseItem::CustomToolCallOutput { .. } => "ctco",
+                ResponseItem::ToolSearchOutput { .. } => "tso",
+                ResponseItem::WebSearchCall { .. } => "ws",
+                ResponseItem::ImageGenerationCall { .. } => "ig",
+                ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => "cmp",
+                ResponseItem::CompactionTrigger { .. } | ResponseItem::Other => continue,
+            };
+            item.set_id(format!("{prefix}_{}", Uuid::now_v7()));
+        }
     }
 
     pub(crate) fn response_item_from_user_input(

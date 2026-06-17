@@ -134,6 +134,22 @@ fn message_input_text_contains(request: &ResponsesRequest, role: &str, needle: &
         .any(|text| text.contains(needle))
 }
 
+fn response_message_item_id(request: &ResponsesRequest, role: &str, text: &str) -> String {
+    request
+        .inputs_of_type("message")
+        .into_iter()
+        .find(|item| {
+            item.get("role").and_then(serde_json::Value::as_str) == Some(role)
+                && message_input_texts(item).contains(&text)
+        })
+        .and_then(|item| {
+            item.get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| panic!("missing item ID for {role} message {text:?}"))
+}
+
 fn assert_codex_client_metadata(
     request_body: &serde_json::Value,
     installation_id: &str,
@@ -216,7 +232,69 @@ async fn non_openai_responses_requests_omit_item_turn_metadata() {
             item.get("metadata").is_none(),
             "input item should omit metadata: {item}"
         );
+        assert!(
+            item.get("id").is_none(),
+            "input item should omit generated IDs: {item}"
+        );
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn response_item_ids_persist_across_resume_and_preserve_server_ids() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg_server", "first reply"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let mut builder = test_codex().with_config(|config| {
+        let _ = config.features.enable(Feature::ItemIds);
+    });
+    let initial = builder.build(&server).await?;
+    let home = Arc::clone(&initial.home);
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    initial.submit_turn("before resume").await?;
+    initial.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    let resumed = builder.resume(&server, home, rollout_path).await?;
+    resumed.submit_turn("after resume").await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let user_id = response_message_item_id(&requests[0], "user", "before resume");
+    let user_uuid = user_id
+        .strip_prefix("msg_")
+        .expect("message ID should have the Responses API prefix");
+    assert_eq!(
+        Uuid::parse_str(user_uuid)?.get_version(),
+        Some(uuid::Version::SortRand)
+    );
+    assert_eq!(
+        response_message_item_id(&requests[1], "user", "before resume"),
+        user_id
+    );
+    assert_eq!(
+        response_message_item_id(&requests[1], "assistant", "first reply"),
+        "msg_server"
+    );
+
+    Ok(())
 }
 
 /// Writes an `auth.json` into the provided `codex_home` with the specified parameters.

@@ -523,6 +523,9 @@
             "in_app_browser": {
               "type": "boolean"
             },
+            "item_ids": {
+              "type": "boolean"
+            },
             "js_repl": {
               "type": "boolean"
             },
@@ -4682,6 +4685,9 @@
           "type": "boolean"
         },
         "in_app_browser": {
+          "type": "boolean"
+        },
+        "item_ids": {
           "type": "boolean"
         },
         "js_repl": {

@@ -189,6 +189,8 @@ pub enum Feature {
     ImageGenExt,
     /// Resize all inline data-URL images before recording them in history.
     ResizeAllImages,
+    /// Generate Responses API item IDs for client-created history items.
+    ItemIds,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Removed compatibility flag for deleted skill env var dependency prompting.
@@ -1110,6 +1112,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ResizeAllImages,
         key: "resize_all_images",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ItemIds,
+        key: "item_ids",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

@@ -2289,6 +2289,12 @@
               },
               "type": "array"
             },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "metadata": {
               "anyOf": [
                 {
@@ -2339,6 +2345,12 @@
               },
               "type": "array"
             },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "metadata": {
               "anyOf": [
                 {
@@ -2387,6 +2399,12 @@
                 "null"
               ]
             },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "metadata": {
               "anyOf": [
                 {
@@ -2430,6 +2448,13 @@
                 "null"
               ]
             },
+            "id": {
+              "description": "Legacy id field retained for compatibility with older payloads.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "metadata": {
               "anyOf": [
                 {
@@ -2466,6 +2491,12 @@
             },
             "call_id": {
               "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "metadata": {
               "anyOf": [
@@ -2515,6 +2546,12 @@
             "execution": {
               "type": "string"
             },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "metadata": {
               "anyOf": [
                 {
@@ -2552,6 +2589,12 @@
             "call_id": {
               "type": "string"
             },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "metadata": {
               "anyOf": [
                 {
@@ -2585,6 +2628,12 @@
           "properties": {
             "call_id": {
               "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "input": {
               "type": "string"
@@ -2629,6 +2678,12 @@
           "properties": {
             "call_id": {
               "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "metadata": {
               "anyOf": [
@@ -2676,6 +2731,12 @@
             "execution": {
               "type": "string"
             },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "metadata": {
               "anyOf": [
                 {
@@ -2722,6 +2783,12 @@
                 }
               ]
             },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "metadata": {
               "anyOf": [
                 {
@@ -2755,7 +2822,6 @@
         {
           "properties": {
             "id": {
-              "description": "Existing provider ID retained on serialized history for compatibility.",
               "type": [
                 "string",
                 "null"
@@ -2803,6 +2869,12 @@
           "properties": {
             "encrypted_content": {
               "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "metadata": {
               "anyOf": [
@@ -2858,6 +2930,12 @@
         {
           "properties": {
             "encrypted_content": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
               "type": [
                 "string",
                 "null"

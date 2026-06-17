@@ -1660,6 +1660,7 @@ async fn resize_all_images_prepares_failures_before_history_insertion() {
         Vec::new(),
         |config| {
             let _ = config.features.enable(Feature::ResizeAllImages);
+            let _ = config.features.enable(Feature::ItemIds);
         },
     )
     .await;
@@ -1689,8 +1690,18 @@ async fn resize_all_images_prepares_failures_before_history_insertion() {
         .record_conversation_items(turn_context.as_ref(), std::slice::from_ref(&item))
         .await;
 
+    let history = session.state.lock().await.clone_history();
+    let id = history.raw_items()[0]
+        .id()
+        .expect("history item should have an ID")
+        .to_string();
+    let uuid = id
+        .strip_prefix("fco_")
+        .expect("function call output ID should have the Responses API prefix");
+    let parsed_id = Uuid::parse_str(uuid).expect("history item should have a UUID ID");
+    assert_eq!(parsed_id.get_version(), Some(uuid::Version::SortRand));
     let expected = vec![ResponseItem::FunctionCallOutput {
-        id: None,
+        id: Some(id),
         call_id: "call-1".to_string(),
         output: FunctionCallOutputPayload {
             body: FunctionCallOutputBody::ContentItems(vec![
@@ -1709,10 +1720,7 @@ async fn resize_all_images_prepares_failures_before_history_insertion() {
         },
         metadata: None,
     }];
-    assert_eq!(
-        session.state.lock().await.clone_history().raw_items(),
-        expected.as_slice()
-    );
+    assert_eq!(history.raw_items(), expected.as_slice());
 }
 
 #[tokio::test]
