@@ -73,29 +73,37 @@ impl AppsRequestProcessor {
                 .set_enabled(Feature::Apps, thread.enabled(Feature::Apps));
         }
 
-        let auth = self
-            .auth_manager
-            .auth()
-            .await
-            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
+        let empty_response = || AppsListResponse {
+            data: Vec::new(),
+            next_cursor: None,
+        };
+        if !config.features.enabled(Feature::Apps) {
+            return Ok(Some(empty_response()));
+        }
+
+        let auth = if config.model_provider.requires_openai_auth {
+            if !self.auth_manager.is_external_chatgpt_auth_active() {
+                self.auth_manager.reload().await;
+            }
+            self.auth_manager
+                .auth()
+                .await
+                .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?
+        } else {
+            self.auth_manager.auth_cached()
+        };
         if !config
             .features
             .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
         {
-            return Ok(Some(AppsListResponse {
-                data: Vec::new(),
-                next_cursor: None,
-            }));
+            return Ok(Some(empty_response()));
         }
 
         if !self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
             .await
         {
-            return Ok(Some(AppsListResponse {
-                data: Vec::new(),
-                next_cursor: None,
-            }));
+            return Ok(Some(empty_response()));
         }
 
         let request = request_id.clone();

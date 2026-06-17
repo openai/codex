@@ -78,6 +78,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
+use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
@@ -730,9 +731,15 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
         return Ok(meta);
     }
 
+    let permission_profile = turn_context.model_visible_permission_profile();
+    let sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
+        &permission_profile,
+        #[allow(deprecated)]
+        &turn_context.cwd,
+    );
     let sandbox_state = serde_json::to_value(SandboxState {
-        permission_profile: Some(turn_context.permission_profile()),
-        sandbox_policy: turn_context.sandbox_policy(),
+        permission_profile: Some(permission_profile),
+        sandbox_policy,
         codex_linux_sandbox_exe: turn_context.config.codex_linux_sandbox_exe.clone(),
         #[allow(deprecated)]
         sandbox_cwd: turn_context.cwd.to_path_buf(),

@@ -959,7 +959,7 @@ pub async fn run_main(
     let workload_identity = if cli.oss {
         None
     } else {
-        bootstrap_config_toml.workload_identity_for_cloud_config()
+        bootstrap_config_toml.workload_identity_for_cloud_config()?
     };
     let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
         codex_home.to_path_buf(),

@@ -8,7 +8,9 @@ use std::time::Duration;
 use anyhow::Result;
 use anyhow::bail;
 use app_test_support::ChatGptAuthFixture;
+use app_test_support::ChatGptIdTokenClaims;
 use app_test_support::TestAppServer;
+use app_test_support::encode_id_token;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use axum::Json;
@@ -55,10 +57,33 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 // Bazel CI can spend tens of seconds starting app-server subprocesses or
 // processing app-list RPCs under load.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+
+async fn request_apps_list(mcp: &mut TestAppServer) -> Result<AppsListResponse> {
+    let request_id = mcp
+        .send_apps_list_request(AppsListParams {
+            limit: Some(50),
+            cursor: None,
+            thread_id: None,
+            force_refetch: false,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    to_response(response)
+}
 
 #[tokio::test]
 async fn list_apps_returns_empty_when_connectors_disabled() -> Result<()> {
@@ -86,6 +111,105 @@ async fn list_apps_returns_empty_when_connectors_disabled() -> Result<()> {
 
     assert!(data.is_empty());
     assert!(next_cursor.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_apps_disabled_does_not_refresh_workload_identity() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    let token_path = codex_home.path().join("projected-workload-token");
+    std::fs::write(&token_path, "external-subject-token\n")?;
+    write_apps_workload_identity_config(
+        codex_home.path(),
+        &server,
+        &token_path,
+        /*apps_enabled*/ false,
+    )?;
+
+    let access_token = workload_identity_access_token()?;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": access_token,
+            "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+            "token_type": "Bearer",
+            "expires_in": 2,
+            "user_id": "user_test",
+            "chatgpt_account_id": "workspace_test",
+            "chatgpt_plan_type": "enterprise",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/config/bundle"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    std::fs::remove_file(&token_path)?;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let AppsListResponse { data, next_cursor } = request_apps_list(&mut mcp).await?;
+    assert!(data.is_empty());
+    assert!(next_cursor.is_none());
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_apps_local_provider_does_not_resolve_workload_identity() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    let token_path = codex_home.path().join("projected-workload-token");
+    std::fs::write(&token_path, "external-subject-token\n")?;
+    write_local_provider_apps_workload_identity_config(codex_home.path(), &server, &token_path)?;
+
+    let access_token = workload_identity_access_token()?;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": access_token.clone(),
+            "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "user_id": "user_test",
+            "chatgpt_account_id": "workspace_test",
+            "chatgpt_plan_type": "enterprise",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/config/bundle"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/accounts/workspace_test/settings"))
+        .and(header("authorization", format!("Bearer {access_token}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "beta_settings": { "enable_plugins": false },
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    std::fs::remove_file(&token_path)?;
+
+    let AppsListResponse { data, next_cursor } = request_apps_list(&mut mcp).await?;
+    assert!(data.is_empty());
+    assert!(next_cursor.is_none());
+    server.verify().await;
     Ok(())
 }
 
@@ -1651,6 +1775,85 @@ fn connector_tool(connector_id: &str, connector_name: &str) -> Result<Tool> {
         .insert("connector_name".to_string(), json!(connector_name));
     tool.meta = Some(meta);
     Ok(tool)
+}
+
+fn write_apps_workload_identity_config(
+    codex_home: &Path,
+    server: &MockServer,
+    token_path: &Path,
+    apps_enabled: bool,
+) -> std::io::Result<()> {
+    let chatgpt_base_url = toml::Value::String(format!("{}/backend-api", server.uri()));
+    let token_url = toml::Value::String(format!("{}/oauth/token", server.uri()));
+    let token_path = toml::Value::String(token_path.to_string_lossy().into_owned());
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"chatgpt_base_url = {chatgpt_base_url}
+
+[features]
+apps = {apps_enabled}
+
+[workload_identity]
+identity_provider_id = "idp_test"
+identity_provider_mapping_id = "idpm_test"
+audience = "api://codex-test"
+token_url = {token_url}
+
+[workload_identity.credential_source]
+type = "file"
+path = {token_path}
+"#,
+        ),
+    )
+}
+
+fn workload_identity_access_token() -> Result<String> {
+    encode_id_token(
+        &ChatGptIdTokenClaims::new()
+            .email("workload@example.com")
+            .plan_type("enterprise")
+            .chatgpt_user_id("user_test")
+            .chatgpt_account_id("workspace_test"),
+    )
+}
+
+fn write_local_provider_apps_workload_identity_config(
+    codex_home: &Path,
+    server: &MockServer,
+    token_path: &Path,
+) -> std::io::Result<()> {
+    let chatgpt_base_url = toml::Value::String(format!("{}/backend-api", server.uri()));
+    let token_url = toml::Value::String(format!("{}/oauth/token", server.uri()));
+    let token_path = toml::Value::String(token_path.to_string_lossy().into_owned());
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"model_provider = "local"
+chatgpt_base_url = {chatgpt_base_url}
+
+[model_providers.local]
+name = "Local test provider"
+base_url = "http://127.0.0.1:9/v1"
+wire_api = "responses"
+requires_openai_auth = false
+supports_websockets = false
+
+[features]
+apps = true
+
+[workload_identity]
+identity_provider_id = "idp_test"
+identity_provider_mapping_id = "idpm_test"
+audience = "api://codex-test"
+token_url = {token_url}
+
+[workload_identity.credential_source]
+type = "file"
+path = {token_path}
+"#,
+        ),
+    )
 }
 
 fn write_connectors_config(codex_home: &std::path::Path, base_url: &str) -> std::io::Result<()> {

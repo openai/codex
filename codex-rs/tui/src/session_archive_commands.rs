@@ -332,7 +332,7 @@ async fn start_app_server_for_archive_command(
     let workload_identity = if cli.oss {
         None
     } else {
-        config_toml.workload_identity_for_cloud_config()
+        config_toml.workload_identity_for_cloud_config()?
     };
     let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
         codex_home.to_path_buf(),

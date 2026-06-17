@@ -729,14 +729,17 @@ pub struct GhostSnapshotToml {
 }
 
 impl ConfigToml {
-    /// Returns workload identity only when the provider selected by this raw
-    /// config needs OpenAI auth to fetch its cloud-managed config bundle.
+    /// Returns validated workload identity only when the provider selected by
+    /// this raw config needs OpenAI auth to fetch its cloud-managed config
+    /// bundle.
     ///
     /// Unknown provider IDs fail closed here; normal config loading will emit
     /// the more specific provider-not-found error later.
-    pub fn workload_identity_for_cloud_config(&self) -> Option<WorkloadIdentityConfig> {
+    pub fn workload_identity_for_cloud_config(
+        &self,
+    ) -> std::io::Result<Option<WorkloadIdentityConfig>> {
         if self.forced_login_method == Some(ForcedLoginMethod::Api) {
-            return None;
+            return Ok(None);
         }
 
         let provider_id = self.model_provider.as_deref().unwrap_or(OPENAI_PROVIDER_ID);
@@ -750,11 +753,17 @@ impl ConfigToml {
             .or_else(|| self.model_providers.get(provider_id))
             .is_none_or(|provider| provider.requires_openai_auth);
 
-        if requires_openai_auth {
-            self.workload_identity.clone()
-        } else {
-            None
+        if !requires_openai_auth {
+            return Ok(None);
         }
+
+        let Some(workload_identity) = self.workload_identity.as_ref() else {
+            return Ok(None);
+        };
+        workload_identity.validate().map_err(|error| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
+        })?;
+        Ok(Some(workload_identity.clone()))
     }
 
     /// Derive the effective permission profile from legacy sandbox config.
@@ -1016,7 +1025,7 @@ mod tests {
         };
 
         assert_eq!(
-            config.workload_identity_for_cloud_config(),
+            config.workload_identity_for_cloud_config().unwrap(),
             Some(workload_identity)
         );
     }
@@ -1037,7 +1046,7 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(config.workload_identity_for_cloud_config(), None);
+        assert_eq!(config.workload_identity_for_cloud_config().unwrap(), None);
     }
 
     #[test]
@@ -1048,7 +1057,26 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(config.workload_identity_for_cloud_config(), None);
+        assert_eq!(config.workload_identity_for_cloud_config().unwrap(), None);
+    }
+
+    #[test]
+    fn cloud_config_rejects_invalid_workload_identity_before_bootstrap() {
+        let mut workload_identity = workload_identity();
+        workload_identity.token_url = "http://auth.example.com/oauth/token".to_string();
+        let config = ConfigToml {
+            workload_identity: Some(workload_identity),
+            ..Default::default()
+        };
+
+        let error = config
+            .workload_identity_for_cloud_config()
+            .expect_err("non-loopback HTTP token URL must be rejected");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            error.to_string(),
+            "workload_identity.token_url must use https or loopback http"
+        );
     }
 
     #[test]
@@ -1061,7 +1089,7 @@ mod tests {
         };
 
         assert_eq!(
-            config.workload_identity_for_cloud_config(),
+            config.workload_identity_for_cloud_config().unwrap(),
             Some(workload_identity)
         );
     }
