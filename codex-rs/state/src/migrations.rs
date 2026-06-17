@@ -39,7 +39,3 @@ pub(crate) fn runtime_goals_migrator() -> Migrator {
 pub(crate) fn runtime_memories_migrator() -> Migrator {
     runtime_migrator(&MEMORIES_MIGRATOR)
 }
-
-#[cfg(test)]
-#[path = "migrations_tests.rs"]
-mod tests;

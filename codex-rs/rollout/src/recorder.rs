@@ -543,27 +543,6 @@ impl RolloutRecorder {
                     )
                     .await;
                 }
-                if sort_key == ThreadSortKey::RecencyAt {
-                    if let Some(repaired_db_page) = state_db::list_threads_db(
-                        state_db_ctx.as_deref(),
-                        codex_home,
-                        page_size,
-                        cursor,
-                        sort_key,
-                        sort_direction,
-                        allowed_sources,
-                        model_providers,
-                        cwd_filters,
-                        /*parent_thread_id*/ None,
-                        archived,
-                        search_term,
-                    )
-                    .await
-                    {
-                        return Ok(repaired_db_page.into());
-                    }
-                    return Ok(db_page.into());
-                }
                 codex_state::record_fallback(
                     "list_threads",
                     "metadata_filter",
@@ -1006,11 +985,6 @@ fn truncate_fs_page(
         let cursor_token = match sort_key {
             ThreadSortKey::CreatedAt => created_at.format(&Rfc3339).ok()?,
             ThreadSortKey::UpdatedAt => item.updated_at.as_deref()?.to_string(),
-            ThreadSortKey::RecencyAt => item
-                .recency_at
-                .as_deref()
-                .or(item.updated_at.as_deref())?
-                .to_string(),
         };
         parse_cursor(cursor_token.as_str())
     });
@@ -1075,7 +1049,6 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
         cli_version,
         created_at,
         updated_at,
-        recency_at,
     } = state_item;
 
     if item.first_user_message.is_none() {
@@ -1119,9 +1092,6 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
     }
     if item.updated_at.is_none() {
         item.updated_at = updated_at;
-    }
-    if recency_at.is_some() {
-        item.recency_at = recency_at;
     }
 }
 
@@ -1299,20 +1269,9 @@ async fn list_threads_from_files_asc(
         .collect::<Vec<_>>();
 
     if let Some(cursor) = cursor {
-        let anchor = (
-            cursor.timestamp(),
-            cursor
-                .thread_id()
-                .and_then(|id| uuid::Uuid::parse_str(&id.to_string()).ok()),
-        );
-        all_items.retain(|item| {
-            thread_item_sort_key(item, sort_key).is_some_and(|key| match anchor.1 {
-                Some(anchor_id) if sort_key == ThreadSortKey::RecencyAt => {
-                    key > (anchor.0, anchor_id)
-                }
-                _ => key.0 > anchor.0,
-            })
-        });
+        let anchor = cursor.timestamp();
+        all_items
+            .retain(|item| thread_item_sort_key(item, sort_key).is_some_and(|key| key.0 > anchor));
     }
 
     let more_matches_available = all_items.len() > page_size || reached_scan_cap;
@@ -1370,27 +1329,14 @@ fn thread_item_sort_key(
             let updated_at = item.updated_at.as_deref().or(item.created_at.as_deref())?;
             OffsetDateTime::parse(updated_at, &Rfc3339).ok()?
         }
-        ThreadSortKey::RecencyAt => {
-            let recency_at = item
-                .recency_at
-                .as_deref()
-                .or(item.updated_at.as_deref())
-                .or(item.created_at.as_deref())?;
-            OffsetDateTime::parse(recency_at, &Rfc3339).ok()?
-        }
     };
     Some((timestamp, id))
 }
 
 fn cursor_from_thread_item(item: &ThreadItem, sort_key: ThreadSortKey) -> Option<Cursor> {
-    let (timestamp, id) = thread_item_sort_key(item, sort_key)?;
-    match sort_key {
-        ThreadSortKey::RecencyAt => Some(Cursor::with_thread_id(
-            timestamp,
-            ThreadId::from_string(&id.to_string()).ok()?,
-        )),
-        ThreadSortKey::CreatedAt | ThreadSortKey::UpdatedAt => Some(Cursor::new(timestamp)),
-    }
+    let (timestamp, _id) = thread_item_sort_key(item, sort_key)?;
+    let cursor_token = timestamp.format(&Rfc3339).ok()?;
+    parse_cursor(cursor_token.as_str())
 }
 
 struct LogFileInfo {
@@ -1779,7 +1725,6 @@ fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadI
         cli_version: Some(item.cli_version),
         created_at: Some(item.created_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
         updated_at: Some(item.updated_at.to_rfc3339_opts(SecondsFormat::Millis, true)),
-        recency_at: Some(item.recency_at.to_rfc3339_opts(SecondsFormat::Millis, true)),
     }
 }
 

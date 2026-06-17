@@ -115,7 +115,6 @@ pub async fn extract_metadata_from_rollout(
     }
     if let Some(updated_at) = file_modified_time_utc(rollout_path).await {
         metadata.updated_at = updated_at;
-        metadata.recency_at = updated_at;
     }
     Ok(ExtractionOutcome {
         metadata,
