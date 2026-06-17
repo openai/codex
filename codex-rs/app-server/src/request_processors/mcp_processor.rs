@@ -534,7 +534,12 @@ mod tests {
 
         assert_eq!(loader.good_loads.load(Ordering::Relaxed), 1);
         assert_eq!(loader.bad_loads.load(Ordering::Relaxed), 1);
-        assert_oauth_completion(outgoing.receiver, /*success*/ true, None).await;
+        assert_oauth_completion(
+            outgoing.receiver,
+            /*success*/ true,
+            /*error*/ None,
+        )
+        .await;
         Ok(())
     }
 
