@@ -319,7 +319,7 @@ impl ExternalAgentConfigRequestProcessor {
             completed_item_results.extend(background_item_results);
             if has_plugin_imports {
                 thread_manager.plugins_manager().clear_cache();
-                thread_manager.skills_manager().clear_cache();
+                thread_manager.skills_service().clear_cache();
             }
             send_completed_import_notification(
                 &outgoing,

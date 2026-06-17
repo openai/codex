@@ -4433,15 +4433,16 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
         .default_environment()
         .map(|environment| environment.get_filesystem())
         .unwrap_or_else(|| std::sync::Arc::clone(&codex_exec_server::LOCAL_FS));
-    let parent_outcome = session
+    let parent_snapshot = session
         .services
-        .skills_manager
-        .skills_for_cwd(
+        .skills_service
+        .snapshot_for_cwd(
             &crate::skills_load_input_from_config(&parent_config, Vec::new()),
             /*force_reload*/ true,
             Some(Arc::clone(&skill_fs)),
         )
         .await;
+    let parent_outcome = parent_snapshot.outcome();
     let parent_skill = parent_outcome
         .skills
         .iter()
@@ -4824,7 +4825,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(
+    let skills_service = Arc::new(SkillsService::new(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
@@ -4841,7 +4842,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         agent_status_tx,
         InitialHistory::New,
         SessionSource::Exec,
-        skills_manager,
+        skills_service,
         plugins_manager,
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
@@ -4960,7 +4961,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(
+    let skills_service = Arc::new(SkillsService::new(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
@@ -4999,7 +5000,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         guardian_rejections: Mutex::new(std::collections::HashMap::new()),
         guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
         runtime_handle: tokio::runtime::Handle::current(),
-        skills_manager,
+        skills_service,
         plugins_manager,
         mcp_manager,
         extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
@@ -5044,12 +5045,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let skills_input =
         crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
     let skill_fs = environment.get_filesystem();
-    let skills_outcome = Arc::new(
-        services
-            .skills_manager
-            .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
-            .await,
-    );
+    let skills_snapshot = services
+        .skills_service
+        .snapshot_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
+        .await;
     let turn_context = Session::make_turn_context(
         thread_id,
         SessionId::from(thread_id),
@@ -5068,7 +5067,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         resolved_turn_environments,
         session_configuration.cwd().clone(),
         "turn_id".to_string(),
-        skills_outcome,
+        skills_snapshot,
     );
 
     let session = Session {
@@ -5172,7 +5171,7 @@ async fn make_session_with_config_and_rx(
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(
+    let skills_service = Arc::new(SkillsService::new(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
@@ -5190,7 +5189,7 @@ async fn make_session_with_config_and_rx(
         agent_status_tx,
         InitialHistory::New,
         SessionSource::Exec,
-        skills_manager,
+        skills_service,
         plugins_manager,
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
@@ -5276,7 +5275,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(
+    let skills_service = Arc::new(SkillsService::new(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
@@ -5294,7 +5293,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         agent_status_tx,
         initial_history,
         session_source,
-        skills_manager,
+        skills_service,
         plugins_manager,
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
@@ -7005,7 +7004,7 @@ where
     );
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(
+    let skills_service = Arc::new(SkillsService::new(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
@@ -7044,7 +7043,7 @@ where
         guardian_rejections: Mutex::new(std::collections::HashMap::new()),
         guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
         runtime_handle: tokio::runtime::Handle::current(),
-        skills_manager,
+        skills_service,
         plugins_manager,
         mcp_manager,
         extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
@@ -7089,12 +7088,10 @@ where
     let skills_input =
         crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
     let skill_fs = environment.get_filesystem();
-    let skills_outcome = Arc::new(
-        services
-            .skills_manager
-            .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
-            .await,
-    );
+    let skills_snapshot = services
+        .skills_service
+        .snapshot_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
+        .await;
     let turn_context = Arc::new(Session::make_turn_context(
         thread_id,
         SessionId::from(thread_id),
@@ -7113,7 +7110,7 @@ where
         resolved_turn_environments,
         session_configuration.cwd().clone(),
         "turn_id".to_string(),
-        skills_outcome,
+        skills_snapshot,
     ));
 
     let session = Arc::new(Session {

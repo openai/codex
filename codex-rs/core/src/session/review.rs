@@ -1,5 +1,5 @@
 use super::*;
-use codex_core_skills::HostLoadedSkills;
+use codex_core_skills::HostSkillsSnapshot;
 use std::sync::atomic::AtomicBool;
 
 /// Spawn a review thread using the given prompt.
@@ -100,7 +100,7 @@ pub(super) async fn spawn_review_thread(
     let extension_data = Arc::new(codex_extension_api::ExtensionData::new(
         review_turn_id.clone(),
     ));
-    extension_data.insert(HostLoadedSkills::new(
+    extension_data.insert(HostSkillsSnapshot::new(
         parent_turn_context.turn_skills.outcome.clone(),
     ));
 

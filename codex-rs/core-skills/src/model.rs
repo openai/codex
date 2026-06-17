@@ -132,20 +132,24 @@ impl SkillLoadOutcome {
     }
 }
 
-/// Host-loaded skills for one turn, including the filesystem mapping needed to
-/// read skill bodies through the environment that loaded them.
+/// Immutable snapshot of host-owned skills and the filesystem mapping needed
+/// to read each skill through the environment that discovered it.
 #[derive(Debug, Clone)]
-pub struct HostLoadedSkills {
+pub struct HostSkillsSnapshot {
     outcome: Arc<SkillLoadOutcome>,
 }
 
-impl HostLoadedSkills {
+impl HostSkillsSnapshot {
     pub fn new(outcome: Arc<SkillLoadOutcome>) -> Self {
         Self { outcome }
     }
 
     pub fn outcome(&self) -> &SkillLoadOutcome {
         self.outcome.as_ref()
+    }
+
+    pub fn outcome_arc(&self) -> Arc<SkillLoadOutcome> {
+        Arc::clone(&self.outcome)
     }
 
     pub async fn read_skill_text(&self, skill: &SkillMetadata) -> io::Result<String> {

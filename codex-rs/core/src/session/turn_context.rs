@@ -3,7 +3,7 @@ use crate::SkillLoadOutcome;
 use crate::agents_md::LoadedAgentsMd;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::shell_snapshot::ShellSnapshotFile;
-use codex_core_skills::HostLoadedSkills;
+use codex_core_skills::HostSkillsSnapshot;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
@@ -488,7 +488,7 @@ impl Session {
         environments: TurnEnvironmentSnapshot,
         cwd: AbsolutePathBuf,
         sub_id: String,
-        skills_outcome: Arc<SkillLoadOutcome>,
+        skills_snapshot: HostSkillsSnapshot,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration
@@ -531,7 +531,7 @@ impl Session {
         ));
         let (current_date, timezone) = local_time_context();
         let extension_data = Arc::new(codex_extension_api::ExtensionData::new(sub_id.clone()));
-        extension_data.insert(HostLoadedSkills::new(Arc::clone(&skills_outcome)));
+        extension_data.insert(skills_snapshot.clone());
         TurnContext {
             sub_id,
             trace_id: current_span_trace_id(),
@@ -569,7 +569,7 @@ impl Session {
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,
             extension_data,
-            turn_skills: TurnSkillsContext::new(skills_outcome),
+            turn_skills: TurnSkillsContext::new(skills_snapshot.outcome_arc()),
             turn_timing_state: Arc::new(TurnTimingState::default()),
             terminal_error: Arc::new(Mutex::new(None)),
             server_model_warning_emitted: AtomicBool::new(false),
@@ -726,12 +726,11 @@ impl Session {
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
         let fs = primary_turn_environment
             .map(|turn_environment| turn_environment.environment.get_filesystem());
-        let skills_outcome = Arc::new(
-            self.services
-                .skills_manager
-                .skills_for_config(&skills_input, fs)
-                .await,
-        );
+        let skills_snapshot = self
+            .services
+            .skills_service
+            .snapshot_for_config(&skills_input, fs)
+            .await;
         let mut turn_context: TurnContext = Self::make_turn_context(
             self.thread_id(),
             self.session_id(),
@@ -759,7 +758,7 @@ impl Session {
             turn_environments,
             cwd,
             sub_id,
-            skills_outcome,
+            skills_snapshot,
         );
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 

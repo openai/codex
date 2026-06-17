@@ -295,7 +295,7 @@ pub(crate) struct PreviousTurnSettings {
 use crate::SkillLoadOutcome;
 #[cfg(test)]
 use crate::SkillMetadata;
-use crate::SkillsManager;
+use crate::SkillsService;
 use crate::agents_md::load_project_instructions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
@@ -409,7 +409,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: SharedModelsManager,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
-    pub(crate) skills_manager: Arc<SkillsManager>,
+    pub(crate) skills_service: Arc<SkillsService>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
@@ -495,7 +495,7 @@ impl Codex {
             auth_manager,
             models_manager,
             environment_manager,
-            skills_manager,
+            skills_service,
             plugins_manager,
             mcp_manager,
             extensions,
@@ -651,7 +651,7 @@ impl Codex {
             agent_status_tx.clone(),
             conversation_history,
             session_source_clone,
-            skills_manager,
+            skills_service,
             plugins_manager,
             mcp_manager.clone(),
             extensions,
@@ -1507,7 +1507,7 @@ impl Session {
             (previous_config, new_config, config)
         };
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
-        self.services.skills_manager.clear_cache();
+        self.services.skills_service.clear_cache();
         self.services.plugins_manager.clear_cache();
         let environments = self.services.turn_environments.snapshot().await;
         let hooks = build_hooks_for_config(
