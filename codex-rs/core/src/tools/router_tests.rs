@@ -184,6 +184,7 @@ fn build_tool_call_uses_canonical_tool_search_name() -> anyhow::Result<()> {
         status: None,
         execution: "client".to_string(),
         arguments: json!({ "query": "calendar" }),
+        metadata: None,
     })?
     .expect("client tool_search_call should produce a tool call");
 
