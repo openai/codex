@@ -340,7 +340,6 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::LocalImagePreparation;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::ResponseItemMetadata;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
@@ -380,24 +379,6 @@ use codex_tools::UnifiedExecShellMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 #[cfg(test)]
 use codex_utils_stream_parser::ProposedPlanSegment;
-
-struct InterAgentCompletionSourceCallId(String);
-
-pub(crate) fn record_inter_agent_completion_source_call_id(
-    turn_context: &TurnContext,
-    communication: &InterAgentCommunication,
-) {
-    if communication.trigger_turn
-        && let Some(source_call_id) = communication
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.source_call_id.as_ref())
-    {
-        let _ = turn_context
-            .extension_data
-            .get_or_init(|| InterAgentCompletionSourceCallId(source_call_id.clone()));
-    }
-}
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -1792,22 +1773,13 @@ impl Session {
             .rollout_thread_trace
             .is_enabled()
             .then(|| message.clone());
-        let mut communication = InterAgentCommunication::new(
+        let communication = InterAgentCommunication::new(
             child_agent_path.clone(),
             parent_agent_path,
             Vec::new(),
             message,
             /*trigger_turn*/ false,
         );
-        if let Some(source_call_id) = turn_context
-            .extension_data
-            .get::<InterAgentCompletionSourceCallId>()
-        {
-            communication.metadata = Some(ResponseItemMetadata {
-                source_call_id: Some(source_call_id.0.clone()),
-                ..Default::default()
-            });
-        }
         if let Err(err) = self
             .services
             .agent_control
@@ -2701,7 +2673,6 @@ impl Session {
         turn_context: &TurnContext,
         communication: InterAgentCommunication,
     ) {
-        record_inter_agent_completion_source_call_id(turn_context, &communication);
         let response_item = communication.to_model_input_item();
         let items = self.prepare_conversation_items_for_history(
             turn_context,

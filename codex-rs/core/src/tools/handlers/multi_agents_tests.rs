@@ -2007,27 +2007,8 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         .await
         .expect("worker thread should exist");
     let worker_path = AgentPath::try_from("/root/worker").expect("worker path");
-    let spawn_communication = manager
-        .captured_ops()
-        .into_iter()
-        .find_map(|(id, op)| {
-            (id == agent_id).then_some(op).and_then(|op| match op {
-                Op::InterAgentCommunication { communication }
-                    if communication.encrypted_content.as_deref() == Some("boot worker") =>
-                {
-                    Some(communication)
-                }
-                _ => None,
-            })
-        })
-        .expect("spawn communication should be captured");
 
     let first_turn = thread.codex.session.new_default_turn().await;
-    thread
-        .codex
-        .session
-        .record_inter_agent_communication(first_turn.as_ref(), spawn_communication)
-        .await;
     thread
         .codex
         .session
@@ -2043,26 +2024,23 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         )
         .await;
 
-    let mut followup_invocation = invocation(
-        session,
-        turn,
-        "followup_task",
-        function_payload(json!({
-            "target": agent_id.to_string(),
-            "message": "continue",
-        })),
-    );
-    followup_invocation.call_id = "followup-call".to_string();
     FollowupTaskHandlerV2
-        .handle(followup_invocation)
+        .handle(invocation(
+            session,
+            turn,
+            "followup_task",
+            function_payload(json!({
+                "target": agent_id.to_string(),
+                "message": "continue",
+            })),
+        ))
         .await
         .expect("followup_task should succeed");
 
-    let followup_communication = manager
-        .captured_ops()
-        .into_iter()
-        .find_map(|(id, op)| {
-            (id == agent_id).then_some(op).and_then(|op| match op {
+    assert!(manager.captured_ops().iter().any(|(id, op)| {
+        *id == agent_id
+            && matches!(
+                op,
                 Op::InterAgentCommunication { communication }
                     if communication.author == AgentPath::root()
                         && communication.recipient == worker_path
@@ -2071,22 +2049,12 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
                             .metadata
                             .as_ref()
                             .and_then(|metadata| metadata.source_call_id.as_deref())
-                            == Some("followup-call")
-                        && communication.trigger_turn =>
-                {
-                    Some(communication)
-                }
-                _ => None,
-            })
-        })
-        .expect("followup communication should be captured");
+                            == Some("call-1")
+                        && communication.trigger_turn
+            )
+    }));
 
     let second_turn = thread.codex.session.new_default_turn().await;
-    thread
-        .codex
-        .session
-        .record_inter_agent_communication(second_turn.as_ref(), followup_communication)
-        .await;
     thread
         .codex
         .session
@@ -2130,12 +2098,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
                                     && communication.other_recipients.is_empty()
                                     && !communication.trigger_turn =>
                             {
-                                Some((
-                                    communication.content,
-                                    communication
-                                        .metadata
-                                        .and_then(|metadata| metadata.source_call_id),
-                                ))
+                                Some(communication.content)
                             }
                             _ => None,
                         })
@@ -2143,11 +2106,11 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
                 .collect::<Vec<_>>();
             let first_count = notifications
                 .iter()
-                .filter(|(message, _)| *message == first_notification)
+                .filter(|message| **message == first_notification)
                 .count();
             let second_count = notifications
                 .iter()
-                .filter(|(message, _)| *message == second_notification)
+                .filter(|message| **message == second_notification)
                 .count();
             if first_count == 1 && second_count == 1 {
                 break notifications;
@@ -2158,13 +2121,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
     .await
     .expect("parent should receive one completion notification per child turn");
 
-    assert_eq!(
-        notifications,
-        vec![
-            (first_notification, Some("call-1".to_string())),
-            (second_notification, Some("followup-call".to_string())),
-        ]
-    );
+    assert_eq!(notifications.len(), 2);
 }
 
 #[tokio::test]

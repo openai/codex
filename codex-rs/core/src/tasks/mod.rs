@@ -29,7 +29,6 @@ use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::session::TurnInput;
-use crate::session::record_inter_agent_completion_source_call_id;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
@@ -346,11 +345,6 @@ impl Session {
             .clear_turn(&turn_context.sub_id);
 
         let pending_items = self.input_queue.get_pending_input(&self.active_turn).await;
-        for input_item in input.iter().chain(&pending_items) {
-            if let TurnInput::InterAgentCommunication(communication) = input_item {
-                record_inter_agent_completion_source_call_id(&turn_context, communication);
-            }
-        }
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             let turn = active.get_or_insert_with(ActiveTurn::default);
