@@ -541,10 +541,9 @@ async fn plugin_install_tracks_analytics_when_remote_detail_fetch_fails() -> Res
     assert_eq!(event_params["plugin_id"], REMOTE_PLUGIN_ID);
     assert_eq!(event_params["plugin_name"], json!(null));
     assert_eq!(event_params["marketplace_name"], "openai-curated-remote");
-    assert!(
-        event_params["error_message"]
-            .as_str()
-            .is_some_and(|message| message.contains("failed with status 404"))
+    assert_eq!(
+        event_params["error_type"],
+        "remote_catalog_unexpected_status"
     );
     Ok(())
 }
@@ -610,10 +609,9 @@ async fn plugin_install_rejects_remote_plugin_disabled_by_admin_before_download(
     assert_eq!(event_params["plugin_id"], REMOTE_PLUGIN_ID);
     assert_eq!(event_params["plugin_name"], "linear");
     assert_eq!(event_params["marketplace_name"], "openai-curated-remote");
-    assert!(
-        event_params["error_message"]
-            .as_str()
-            .is_some_and(|message| message.contains("disabled by admin"))
+    assert_eq!(
+        event_params["error_type"],
+        "remote_plugin_disabled_by_admin"
     );
     assert!(
         !codex_home
@@ -667,11 +665,7 @@ async fn plugin_install_tracks_analytics_when_remote_plugin_not_available() -> R
     assert_eq!(event_params["plugin_id"], REMOTE_PLUGIN_ID);
     assert_eq!(event_params["plugin_name"], "linear");
     assert_eq!(event_params["marketplace_name"], "openai-curated-remote");
-    assert!(
-        event_params["error_message"]
-            .as_str()
-            .is_some_and(|message| message.contains("not available for install"))
-    );
+    assert_eq!(event_params["error_type"], "remote_plugin_not_available");
     Ok(())
 }
 
@@ -980,11 +974,7 @@ async fn plugin_install_failure_tracks_analytics_event() -> Result<()> {
     assert_eq!(event_params["mcp_server_count"], json!(null));
     assert_eq!(event_params["connector_ids"], json!(null));
     assert_eq!(event_params["product_client_id"], DEFAULT_CLIENT_NAME);
-    assert!(
-        event_params["error_message"]
-            .as_str()
-            .is_some_and(|message| message.contains("missing plugin.json"))
-    );
+    assert_eq!(event_params["error_type"], "store_invalid");
     Ok(())
 }
 
@@ -1096,11 +1086,7 @@ async fn plugin_install_errors_when_remote_bundle_download_fails() -> Result<()>
     assert_eq!(event_params["plugin_id"], REMOTE_PLUGIN_ID);
     assert_eq!(event_params["plugin_name"], "linear");
     assert_eq!(event_params["marketplace_name"], "openai-curated-remote");
-    assert!(
-        event_params["error_message"]
-            .as_str()
-            .is_some_and(|message| message.contains("failed with status 503"))
-    );
+    assert_eq!(event_params["error_type"], "remote_bundle_download_status");
     assert!(
         !codex_home
             .path()

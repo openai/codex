@@ -35,13 +35,3 @@ fn migration_items_that_update_runtime_sources_trigger_refresh() {
         ExternalAgentConfigMigrationItemType::Sessions,
     )]));
 }
-
-#[test]
-fn analytics_raw_error_caps_long_messages() {
-    let message = "a".repeat(MAX_ANALYTICS_RAW_ERROR_CHARS + 1);
-
-    assert_eq!(
-        analytics_raw_error(&message),
-        "a".repeat(MAX_ANALYTICS_RAW_ERROR_CHARS)
-    );
-}

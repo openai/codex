@@ -51,8 +51,6 @@ use super::ConfigRequestProcessor;
 use super::external_agent_session_import::ExternalAgentSessionImporter;
 use uuid::Uuid;
 
-const MAX_ANALYTICS_RAW_ERROR_CHARS: usize = 300;
-
 #[derive(Clone)]
 pub(crate) struct ExternalAgentConfigRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
@@ -567,6 +565,7 @@ async fn send_completed_import_notification(
     item_results: &[CoreImportItemResult],
 ) {
     let notification = completed_notification(import_id, item_results);
+    log_completed_import_failures(&notification);
     track_completed_import_notification(analytics_events_client, &notification);
     if let Some(state_db) = state_db
         && let Err(err) = record_completed_import_notification(state_db, &notification).await
@@ -582,6 +581,23 @@ async fn send_completed_import_notification(
             notification,
         ))
         .await;
+}
+
+fn log_completed_import_failures(notification: &ExternalAgentConfigImportCompletedNotification) {
+    for type_result in &notification.item_type_results {
+        for failure in &type_result.failures {
+            tracing::warn!(
+                import_id = %notification.import_id,
+                item_type = ?failure.item_type,
+                error_type = ?failure.error_type,
+                failure_stage = %failure.failure_stage,
+                cwd = ?failure.cwd,
+                source = ?failure.source,
+                error = %failure.message,
+                "external agent config migration item failed"
+            );
+        }
+    }
 }
 
 fn track_completed_import_notification(
@@ -607,21 +623,9 @@ fn track_completed_import_notification(
                 .to_string(),
                 success_count: type_result.successes.len(),
                 failed_count: type_result.failures.len(),
-                raw_errors: type_result
-                    .failures
-                    .iter()
-                    .map(|failure| analytics_raw_error(&failure.message))
-                    .collect(),
             },
         );
     }
-}
-
-fn analytics_raw_error(message: &str) -> String {
-    message
-        .chars()
-        .take(MAX_ANALYTICS_RAW_ERROR_CHARS)
-        .collect()
 }
 
 async fn record_completed_import_notification(

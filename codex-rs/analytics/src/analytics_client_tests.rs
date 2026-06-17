@@ -59,7 +59,6 @@ use crate::facts::HookRunInput;
 use crate::facts::InputError;
 use crate::facts::InvocationType;
 use crate::facts::PluginInstallFailedInput;
-use crate::facts::PluginInstallFailedPluginInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
@@ -3063,7 +3062,7 @@ fn plugin_install_failed_event_serializes_expected_shape() {
         event_type: "codex_plugin_install_failed",
         event_params: CodexPluginInstallFailedMetadata {
             plugin: codex_plugin_metadata(sample_plugin_metadata()),
-            error_message: "failed to copy plugin source".to_string(),
+            error_type: "store_io".to_string(),
         },
     });
 
@@ -3081,7 +3080,7 @@ fn plugin_install_failed_event_serializes_expected_shape() {
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
                 "product_client_id": originator().value,
-                "error_message": "failed to copy plugin source"
+                "error_type": "store_io"
             }
         })
     );
@@ -3463,8 +3462,8 @@ async fn reducer_ingests_plugin_install_failed_fact() {
         .ingest(
             AnalyticsFact::Custom(CustomAnalyticsFact::PluginInstallFailed(
                 PluginInstallFailedInput {
-                    plugin: PluginInstallFailedPluginInput::Plugin(sample_plugin_metadata()),
-                    error_message: "invalid plugin manifest".to_string(),
+                    plugin: sample_plugin_metadata(),
+                    error_type: "invalid_plugin".to_string(),
                 },
             )),
             &mut events,
@@ -3484,27 +3483,28 @@ async fn reducer_ingests_plugin_install_failed_fact() {
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
                 "product_client_id": originator().value,
-                "error_message": "invalid plugin manifest"
+                "error_type": "invalid_plugin"
             }
         }])
     );
 }
 
 #[tokio::test]
-async fn reducer_ingests_remote_plugin_install_failed_fact_without_detail() {
+async fn reducer_ingests_plugin_install_failed_fact_without_detail() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
+    let mut plugin = PluginTelemetryMetadata::from_plugin_id(
+        &PluginId::parse("unknown@openai-curated-remote").expect("valid plugin id"),
+    );
+    plugin.remote_plugin_id = Some("plugins~Plugin_00000000000000000000000000000000".to_string());
+    plugin.event_plugin_name = None;
 
     reducer
         .ingest(
             AnalyticsFact::Custom(CustomAnalyticsFact::PluginInstallFailed(
                 PluginInstallFailedInput {
-                    plugin: PluginInstallFailedPluginInput::RemotePlugin {
-                        remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000"
-                            .to_string(),
-                        marketplace_name: "openai-curated-remote".to_string(),
-                    },
-                    error_message: "failed to read remote plugin details".to_string(),
+                    plugin,
+                    error_type: "remote_catalog_unexpected_status".to_string(),
                 },
             )),
             &mut events,
@@ -3524,7 +3524,7 @@ async fn reducer_ingests_remote_plugin_install_failed_fact_without_detail() {
                 "mcp_server_count": null,
                 "connector_ids": null,
                 "product_client_id": originator().value,
-                "error_message": "failed to read remote plugin details"
+                "error_type": "remote_catalog_unexpected_status"
             }
         }])
     );
@@ -3544,7 +3544,6 @@ async fn reducer_ingests_external_agent_config_import_completed_fact() {
                     item_type: "PLUGINS".to_string(),
                     success_count: 2,
                     failed_count: 1,
-                    raw_errors: vec!["missing plugin manifest".to_string()],
                 },
             )),
             &mut events,
@@ -3562,7 +3561,6 @@ async fn reducer_ingests_external_agent_config_import_completed_fact() {
                 "type": "PLUGINS",
                 "success_count": 2,
                 "failed_count": 1,
-                "raw_errors": ["missing plugin manifest"],
                 "product_client_id": originator().value,
             }
         }])
@@ -4490,6 +4488,7 @@ fn sample_plugin_metadata() -> PluginTelemetryMetadata {
     PluginTelemetryMetadata {
         plugin_id: PluginId::parse("sample@test").expect("valid plugin id"),
         remote_plugin_id: None,
+        event_plugin_name: Some("sample".to_string()),
         capability_summary: Some(PluginCapabilitySummary {
             config_name: "sample@test".to_string(),
             display_name: "sample".to_string(),

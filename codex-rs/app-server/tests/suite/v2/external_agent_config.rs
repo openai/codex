@@ -280,10 +280,7 @@ async fn external_agent_config_import_completed_tracks_analytics_event() -> Resu
     assert_eq!(event_params["type"], "SESSIONS");
     assert_eq!(event_params["success_count"], 0);
     assert_eq!(event_params["failed_count"], 1);
-    assert_eq!(
-        event_params["raw_errors"][0],
-        serde_json::json!(completed.item_type_results[0].failures[0].message.as_str())
-    );
+    assert!(event_params.get("raw_errors").is_none());
 
     Ok(())
 }

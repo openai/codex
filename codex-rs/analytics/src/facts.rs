@@ -545,16 +545,8 @@ pub(crate) struct PluginStateChangedInput {
 }
 
 pub(crate) struct PluginInstallFailedInput {
-    pub plugin: PluginInstallFailedPluginInput,
-    pub error_message: String,
-}
-
-pub(crate) enum PluginInstallFailedPluginInput {
-    Plugin(PluginTelemetryMetadata),
-    RemotePlugin {
-        remote_plugin_id: String,
-        marketplace_name: String,
-    },
+    pub plugin: PluginTelemetryMetadata,
+    pub error_type: String,
 }
 
 pub struct ExternalAgentConfigImportCompletedInput {
@@ -563,7 +555,6 @@ pub struct ExternalAgentConfigImportCompletedInput {
     pub item_type: String,
     pub success_count: usize,
     pub failed_count: usize,
-    pub raw_errors: Vec<String>,
 }
 
 #[derive(Clone, Copy)]

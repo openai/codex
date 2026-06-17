@@ -26,7 +26,6 @@ use crate::events::CodexOnboardingExternalAgentImportCompleteMetadata;
 use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginInstallFailedEventRequest;
 use crate::events::CodexPluginInstallFailedMetadata;
-use crate::events::CodexPluginMetadata;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexReviewEventParams;
 use crate::events::CodexReviewEventRequest;
@@ -74,7 +73,6 @@ use crate::facts::CustomAnalyticsFact;
 use crate::facts::ExternalAgentConfigImportCompletedInput;
 use crate::facts::HookRunInput;
 use crate::facts::PluginInstallFailedInput;
-use crate::facts::PluginInstallFailedPluginInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
@@ -794,31 +792,13 @@ impl AnalyticsReducer {
         input: PluginInstallFailedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let PluginInstallFailedInput {
-            plugin,
-            error_message,
-        } = input;
-        let plugin = match plugin {
-            PluginInstallFailedPluginInput::Plugin(plugin) => codex_plugin_metadata(plugin),
-            PluginInstallFailedPluginInput::RemotePlugin {
-                remote_plugin_id,
-                marketplace_name,
-            } => CodexPluginMetadata {
-                plugin_id: Some(remote_plugin_id),
-                plugin_name: None,
-                marketplace_name: Some(marketplace_name),
-                has_skills: None,
-                mcp_server_count: None,
-                connector_ids: None,
-                product_client_id: Some(originator().value),
-            },
-        };
+        let PluginInstallFailedInput { plugin, error_type } = input;
         out.push(TrackEventRequest::PluginInstallFailed(
             CodexPluginInstallFailedEventRequest {
                 event_type: "codex_plugin_install_failed",
                 event_params: CodexPluginInstallFailedMetadata {
-                    plugin,
-                    error_message,
+                    plugin: codex_plugin_metadata(plugin),
+                    error_type,
                 },
             },
         ));
@@ -838,7 +818,6 @@ impl AnalyticsReducer {
                     item_type: input.item_type,
                     success_count: input.success_count,
                     failed_count: input.failed_count,
-                    raw_errors: input.raw_errors,
                     product_client_id: Some(originator().value),
                 },
             },
