@@ -611,10 +611,6 @@ impl OAuthPersistor {
             return Ok(());
         }
 
-        let snapshot = {
-            let guard = self.inner.last_credentials.lock().await;
-            guard.clone()
-        };
         let key = compute_store_key(&self.inner.server_name, &self.inner.url)?;
         let _lock = RefreshCredentialLock::acquire(&key).await?;
         let latest = load_oauth_tokens_with_keyring_store(
@@ -625,7 +621,7 @@ impl OAuthPersistor {
             self.inner.keyring_backend_kind,
         )?;
 
-        if latest.is_none() && snapshot.is_some() {
+        let Some(latest) = latest else {
             self.clear_manager_credentials().await;
             let mut last_credentials = self.inner.last_credentials.lock().await;
             *last_credentials = None;
@@ -633,14 +629,14 @@ impl OAuthPersistor {
                 "OAuth tokens for server {} were removed before refresh; authorization required",
                 self.inner.server_name
             );
-        }
+        };
 
-        if latest != snapshot {
-            if let Some(latest) = latest {
-                self.adopt_credentials(latest).await?;
-            }
+        if !token_needs_refresh(latest.expires_at) {
+            self.adopt_credentials(latest).await?;
             return Ok(());
         }
+
+        self.adopt_credentials(latest).await?;
 
         {
             let manager = self.inner.authorization_manager.clone();
@@ -1261,29 +1257,14 @@ mod tests {
     -> Result<()> {
         let _env = TempCodexHome::new();
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/.well-known/oauth-authorization-server/mcp"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "authorization_endpoint": format!("{}/oauth/authorize", server.uri()),
-                "token_endpoint": format!("{}/oauth/token", server.uri()),
-                "scopes_supported": ["scope-a", "scope-b"],
-            })))
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/oauth/token"))
-            .and(body_string_contains("grant_type=refresh_token"))
-            .and(body_string_contains("refresh_token=refresh-token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "access_token": "refreshed-access-token",
-                "token_type": "Bearer",
-                "expires_in": 3600,
-                "refresh_token": "rotated-refresh-token",
-                "scope": "scope-a scope-b",
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
+        mount_oauth_metadata(&server).await;
+        mount_refresh_response(
+            &server,
+            "refresh-token",
+            "refreshed-access-token",
+            "rotated-refresh-token",
+        )
+        .await;
 
         let store = MockKeyringStore::default();
         let initial_tokens = expired_sample_tokens(&format!("{}/mcp", server.uri()));
@@ -1337,6 +1318,195 @@ mod tests {
         assert_eq!(
             refresh_token(&loser_tokens),
             Some("rotated-refresh-token".to_string())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_transaction_adopts_valid_reread_without_provider_refresh() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let server = MockServer::start().await;
+        mount_oauth_metadata(&server).await;
+        let store = MockKeyringStore::default();
+        let mut initial_tokens = expired_sample_tokens(&format!("{}/mcp", server.uri()));
+        initial_tokens
+            .token_response
+            .0
+            .set_refresh_token(Some(RefreshToken::new("stale-refresh-token".to_string())));
+
+        let mut latest_tokens = sample_tokens();
+        latest_tokens.url.clone_from(&initial_tokens.url);
+        latest_tokens
+            .token_response
+            .0
+            .set_access_token(AccessToken::new(
+                "already-refreshed-access-token".to_string(),
+            ));
+        latest_tokens
+            .token_response
+            .0
+            .set_refresh_token(Some(RefreshToken::new(
+                "already-rotated-refresh-token".to_string(),
+            )));
+
+        super::save_oauth_tokens_with_keyring_store(
+            &store,
+            &latest_tokens.server_name,
+            &latest_tokens,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?;
+
+        let manager = authorization_manager_for(&initial_tokens).await?;
+        let persistor = OAuthPersistor::new(
+            initial_tokens.server_name.clone(),
+            initial_tokens.url.clone(),
+            manager.clone(),
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+            Some(initial_tokens),
+        );
+
+        persistor
+            .refresh_if_needed_with_keyring_store(&store)
+            .await?;
+
+        let manager_tokens = tokens_from_manager(&manager).await?;
+        assert_eq!(
+            access_token(&manager_tokens),
+            "already-refreshed-access-token"
+        );
+        assert_eq!(
+            refresh_token(&manager_tokens),
+            Some("already-rotated-refresh-token".to_string())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_transaction_refreshes_when_only_derived_expires_in_drifted() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let server = MockServer::start().await;
+        mount_oauth_metadata(&server).await;
+        mount_refresh_response(
+            &server,
+            "refresh-token",
+            "refreshed-after-expiry-drift",
+            "rotated-after-expiry-drift",
+        )
+        .await;
+
+        let store = MockKeyringStore::default();
+        let mut initial_tokens = sample_tokens();
+        initial_tokens.url = format!("{}/mcp", server.uri());
+        initial_tokens.expires_at = Some(now_millis().saturating_add(5_000));
+        initial_tokens
+            .token_response
+            .0
+            .set_expires_in(Some(&Duration::from_secs(3600)));
+        super::save_oauth_tokens_with_keyring_store(
+            &store,
+            &initial_tokens.server_name,
+            &initial_tokens,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?;
+
+        let manager = authorization_manager_for(&initial_tokens).await?;
+        let persistor = OAuthPersistor::new(
+            initial_tokens.server_name.clone(),
+            initial_tokens.url.clone(),
+            manager,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+            Some(initial_tokens.clone()),
+        );
+
+        persistor
+            .refresh_if_needed_with_keyring_store(&store)
+            .await?;
+
+        server.verify().await;
+        let stored = super::load_oauth_tokens_with_keyring_store(
+            &store,
+            &initial_tokens.server_name,
+            &initial_tokens.url,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?
+        .expect("refreshed tokens should be persisted");
+        assert_eq!(access_token(&stored), "refreshed-after-expiry-drift");
+        assert_eq!(
+            refresh_token(&stored),
+            Some("rotated-after-expiry-drift".to_string())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_transaction_uses_latest_refresh_token_when_reread_is_expired() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let server = MockServer::start().await;
+        mount_oauth_metadata(&server).await;
+        mount_refresh_response(
+            &server,
+            "latest-refresh-token",
+            "refreshed-from-latest-token",
+            "rotated-from-latest-token",
+        )
+        .await;
+
+        let store = MockKeyringStore::default();
+        let mut initial_tokens = expired_sample_tokens(&format!("{}/mcp", server.uri()));
+        initial_tokens
+            .token_response
+            .0
+            .set_refresh_token(Some(RefreshToken::new("stale-refresh-token".to_string())));
+
+        let mut latest_tokens = initial_tokens.clone();
+        latest_tokens
+            .token_response
+            .0
+            .set_access_token(AccessToken::new("latest-expired-access-token".to_string()));
+        latest_tokens
+            .token_response
+            .0
+            .set_refresh_token(Some(RefreshToken::new("latest-refresh-token".to_string())));
+        super::save_oauth_tokens_with_keyring_store(
+            &store,
+            &latest_tokens.server_name,
+            &latest_tokens,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?;
+
+        let manager = authorization_manager_for(&initial_tokens).await?;
+        let persistor = OAuthPersistor::new(
+            initial_tokens.server_name.clone(),
+            initial_tokens.url.clone(),
+            manager,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+            Some(initial_tokens.clone()),
+        );
+
+        persistor
+            .refresh_if_needed_with_keyring_store(&store)
+            .await?;
+
+        server.verify().await;
+        let stored = super::load_oauth_tokens_with_keyring_store(
+            &store,
+            &initial_tokens.server_name,
+            &initial_tokens.url,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?
+        .expect("refreshed tokens should be persisted");
+        assert_eq!(access_token(&stored), "refreshed-from-latest-token");
+        assert_eq!(
+            refresh_token(&stored),
+            Some("rotated-from-latest-token".to_string())
         );
         Ok(())
     }
@@ -1644,6 +1814,42 @@ mod tests {
         Ok(Arc::new(TokioMutex::new(manager)))
     }
 
+    async fn mount_oauth_metadata(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/.well-known/oauth-authorization-server/mcp"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "authorization_endpoint": format!("{}/oauth/authorize", server.uri()),
+                "token_endpoint": format!("{}/oauth/token", server.uri()),
+                "scopes_supported": ["scope-a", "scope-b"],
+            })))
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_refresh_response(
+        server: &MockServer,
+        request_refresh_token: &str,
+        response_access_token: &str,
+        response_refresh_token: &str,
+    ) {
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .and(body_string_contains("grant_type=refresh_token"))
+            .and(body_string_contains(format!(
+                "refresh_token={request_refresh_token}"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": response_access_token,
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "refresh_token": response_refresh_token,
+                "scope": "scope-a scope-b",
+            })))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "AuthorizationManager async access must be serialized through its mutex"
@@ -1684,6 +1890,13 @@ mod tests {
             .0
             .set_expires_in(Some(&Duration::ZERO));
         tokens
+    }
+
+    fn now_millis() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|_| Duration::from_secs(0))
+            .as_millis() as u64
     }
 
     fn sample_tokens() -> StoredOAuthTokens {
