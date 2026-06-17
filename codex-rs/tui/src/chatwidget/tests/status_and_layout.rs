@@ -1410,6 +1410,40 @@ async fn streaming_final_answer_keeps_task_running_state() {
 #[tokio::test]
 async fn ctrl_c_interrupt_pauses_active_goal_turn() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = start_active_goal_turn(&mut chat);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    next_interrupt_op(&mut op_rx);
+    assert_goal_paused_event(&mut rx, thread_id);
+}
+
+#[tokio::test]
+async fn esc_interrupt_pauses_active_goal_turn() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = start_active_goal_turn(&mut chat);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert_goal_paused_event(&mut rx, thread_id);
+    assert_matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt { .. })));
+}
+
+#[tokio::test]
+async fn esc_pending_steers_interrupt_pauses_active_goal_turn() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = start_active_goal_turn(&mut chat);
+    chat.input_queue
+        .pending_steers
+        .push_back(pending_steer("pending steer"));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    next_interrupt_op(&mut op_rx);
+    assert_goal_paused_event(&mut rx, thread_id);
+}
+
+fn start_active_goal_turn(chat: &mut ChatWidget) -> ThreadId {
     let thread_id = ThreadId::new();
     chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.thread_id = Some(thread_id);
@@ -1430,13 +1464,13 @@ async fn ctrl_c_interrupt_pauses_active_goal_turn() {
         /*replay_kind*/ None,
     );
     chat.on_task_started();
+    thread_id
+}
 
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
-
-    match op_rx.try_recv() {
-        Ok(Op::Interrupt { .. }) => {}
-        other => panic!("expected Op::Interrupt, got {other:?}"),
-    }
+fn assert_goal_paused_event(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    thread_id: ThreadId,
+) {
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::SetThreadGoalStatus {

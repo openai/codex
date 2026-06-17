@@ -133,6 +133,7 @@ impl ChatWidget {
             && !self.should_handle_vim_insert_escape(key_event)
         {
             self.input_queue.submit_pending_steers_after_interrupt = true;
+            self.pause_active_goal_for_interrupt();
             if !self.submit_op(AppCommand::interrupt()) {
                 self.input_queue.submit_pending_steers_after_interrupt = false;
             }
@@ -165,6 +166,9 @@ impl ChatWidget {
             }
             _ => {
                 let had_modal_or_popup = !self.bottom_pane.no_modal_or_popup_active();
+                if self.bottom_pane.should_interrupt_running_task(key_event) {
+                    self.pause_active_goal_for_interrupt();
+                }
                 let input_result = self.bottom_pane.handle_key_event(key_event);
                 self.handle_composer_input_result(input_result, had_modal_or_popup);
             }
