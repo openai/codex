@@ -790,7 +790,7 @@
       "type": "object"
     },
     "CredentialSourceConfig": {
-      "description": "Supported runtime credential sources. Implementations are independently feature gated.",
+      "description": "Supported runtime credential sources. Implementations live in separate provider crates.",
       "oneOf": [
         {
           "additionalProperties": false,

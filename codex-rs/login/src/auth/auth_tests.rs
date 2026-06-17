@@ -634,6 +634,7 @@ impl ExternalAuth for TestExternalChatgptAuth {
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn external_chatgpt_auth_resolves_and_refreshes_without_writing_auth_file() {
     let codex_home = tempdir().expect("create temp codex home");
     let token = fake_jwt_for_auth_file_params(&AuthFileParams {
@@ -726,6 +727,7 @@ async fn external_chatgpt_auth_resolves_and_refreshes_without_writing_auth_file(
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn external_chatgpt_auth_allows_host_to_change_account_during_refresh() {
     let codex_home = tempdir().expect("create temp codex home");
     let token = fake_jwt_for_auth_file_params(&AuthFileParams {
@@ -774,6 +776,7 @@ async fn external_chatgpt_auth_allows_host_to_change_account_during_refresh() {
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn auth_result_preserves_external_auth_resolution_errors() {
     let manager = AuthManager::shared(
         PathBuf::from("non-existent"),
@@ -826,6 +829,7 @@ async fn optional_auth_does_not_resolve_required_external_auth() {
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn replace_non_required_external_auth_preserves_required_provider() {
     let manager = AuthManager::shared(
         PathBuf::from("non-existent"),
@@ -852,6 +856,7 @@ async fn replace_non_required_external_auth_preserves_required_provider() {
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn non_required_external_auth_cleanup_is_registration_scoped() {
     let manager = AuthManager::shared(
         PathBuf::from("non-existent"),
