@@ -341,6 +341,7 @@ async fn start_app_server_for_archive_command(
         resolve_bootstrap_auth_keyring_backend_kind(&bootstrap_config)?,
         chatgpt_base_url,
         workload_identity,
+        config_toml.forced_chatgpt_workspace_ids(),
     )
     .await;
 

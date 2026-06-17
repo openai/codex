@@ -729,6 +729,20 @@ pub struct GhostSnapshotToml {
 }
 
 impl ConfigToml {
+    pub fn forced_chatgpt_workspace_ids(&self) -> Option<Vec<String>> {
+        self.forced_chatgpt_workspace_id
+            .clone()
+            .map(ForcedChatgptWorkspaceIds::into_vec)
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|values| !values.is_empty())
+    }
+
     /// Returns validated workload identity only when the provider selected by
     /// this raw config needs OpenAI auth to fetch its cloud-managed config
     /// bundle.

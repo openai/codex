@@ -519,6 +519,20 @@ impl PluginRequestProcessor {
         }
     }
 
+    async fn resolve_optional_plugin_auth(&self, operation: &'static str) -> Option<CodexAuth> {
+        match self.auth_manager.auth().await {
+            Ok(auth) => auth,
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    operation,
+                    "failed to resolve optional plugin auth; using cached or local data"
+                );
+                self.auth_manager.auth_cached()
+            }
+        }
+    }
+
     async fn plugin_list_response(
         &self,
         params: PluginListParams,
@@ -558,11 +572,13 @@ impl PluginRequestProcessor {
             || include_global_remote
             || include_workspace_directory
             || (include_shared_with_me && config.features.enabled(Feature::PluginSharing));
-        let auth = if requires_resolved_auth {
+        let auth = if requires_resolved_auth && explicit_marketplace_kinds {
             self.auth_manager
                 .auth()
                 .await
                 .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?
+        } else if requires_resolved_auth {
+            self.resolve_optional_plugin_auth("plugin/list").await
         } else {
             self.auth_manager.auth_cached()
         };
@@ -812,10 +828,7 @@ impl PluginRequestProcessor {
         let requires_resolved_auth = config.features.enabled(Feature::RemotePlugin)
             || config.features.enabled(Feature::PluginSharing);
         let auth = if requires_resolved_auth {
-            self.auth_manager
-                .auth()
-                .await
-                .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?
+            self.resolve_optional_plugin_auth("plugin/installed").await
         } else {
             self.auth_manager.auth_cached()
         };

@@ -26,6 +26,7 @@ async fn storage_loader_consults_workload_identity_without_stored_auth() {
         AuthKeyringBackendKind::default(),
         "http://127.0.0.1:1/backend-api".to_string(),
         Some(workload_identity),
+        /*forced_chatgpt_workspace_id*/ None,
     )
     .await;
 
@@ -34,4 +35,19 @@ async fn storage_loader_consults_workload_identity_without_stored_auth() {
         .await
         .expect_err("missing WIF source should fail managed config auth");
     assert_eq!(error.code(), CloudConfigBundleLoadErrorCode::Auth);
+}
+
+#[test]
+fn storage_auth_config_propagates_forced_workspace_ids() {
+    let expected = vec!["workspace_allowed".to_string()];
+    let config = StorageAuthManagerConfig {
+        codex_home: PathBuf::new(),
+        credentials_store_mode: AuthCredentialsStoreMode::File,
+        keyring_backend_kind: AuthKeyringBackendKind::default(),
+        chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+        workload_identity: None,
+        forced_chatgpt_workspace_id: Some(expected.clone()),
+    };
+
+    assert_eq!(config.forced_chatgpt_workspace_id(), Some(expected));
 }

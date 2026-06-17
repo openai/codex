@@ -1,4 +1,5 @@
 use super::*;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 
@@ -109,6 +110,21 @@ impl McpRequestProcessor {
         Ok((thread_id, thread))
     }
 
+    async fn auth_for_mcp_server(
+        &self,
+        server_name: &str,
+        apps_enabled: bool,
+    ) -> Result<Option<CodexAuth>, JSONRPCErrorError> {
+        if apps_enabled && server_name == CODEX_APPS_MCP_SERVER_NAME {
+            self.auth_manager
+                .auth()
+                .await
+                .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))
+        } else {
+            Ok(self.auth_manager.auth_cached())
+        }
+    }
+
     async fn mcp_server_oauth_login_response(
         &self,
         params: McpServerOauthLoginParams,
@@ -120,16 +136,15 @@ impl McpRequestProcessor {
             timeout_secs,
         } = params;
 
-        let auth = self
-            .auth_manager
-            .auth()
-            .await
-            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
-        let effective_servers = self
+        let mcp_config = self
             .thread_manager
             .mcp_manager()
-            .effective_servers(&config, auth.as_ref())
+            .runtime_config(&config)
             .await;
+        let auth = self
+            .auth_for_mcp_server(&name, mcp_config.apps_enabled)
+            .await?;
+        let effective_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
         let Some(server) = effective_servers
             .get(&name)
             .and_then(codex_mcp::EffectiveMcpServer::configured_config)
@@ -384,10 +399,8 @@ impl McpRequestProcessor {
             .runtime_config(&config)
             .await;
         let auth = self
-            .auth_manager
-            .auth()
-            .await
-            .map_err(|err| internal_error(format!("failed to resolve auth: {err}")))?;
+            .auth_for_mcp_server(&server, mcp_config.apps_enabled)
+            .await?;
         let environment_manager = self.thread_manager.environment_manager();
         // This threadless resource-read path has no turn cwd or turn-selected
         // environment. Use config cwd only as the local stdio fallback; named

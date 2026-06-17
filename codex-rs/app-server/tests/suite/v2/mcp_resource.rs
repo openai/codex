@@ -6,6 +6,7 @@ use std::time::Duration;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
+use app_test_support::configure_expiring_workload_identity;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use axum::Router;
@@ -55,6 +56,7 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use wiremock::MockServer;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const TEST_RESOURCE_URI: &str = "test://codex/resource";
@@ -486,6 +488,57 @@ apps = true
 
     apps_server_handle.abort();
     let _ = apps_server_handle.await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_resource_read_for_configured_server_survives_unavailable_wif() -> Result<()> {
+    let (mcp_server_url, _mcp_server_calls, mcp_server_handle) =
+        start_resource_apps_mcp_server().await?;
+    let auth_server = MockServer::start().await;
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"
+chatgpt_base_url = "{}/backend-api"
+mcp_oauth_credentials_store = "file"
+
+[mcp_servers.local]
+url = "{mcp_server_url}/api/codex/ps/mcp"
+"#,
+            auth_server.uri(),
+        ),
+    )?;
+    let workload_identity =
+        configure_expiring_workload_identity(codex_home.path(), &auth_server).await?;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    workload_identity.remove_and_wait_for_expiry().await?;
+
+    let read_request_id = mcp
+        .send_mcp_resource_read_request(McpResourceReadParams {
+            thread_id: None,
+            server: "local".to_string(),
+            uri: TEST_RESOURCE_URI.to_string(),
+        })
+        .await?;
+    let read_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_request_id)),
+    )
+    .await??;
+
+    assert_eq!(
+        to_response::<McpResourceReadResponse>(read_response)?,
+        expected_resource_read_response()
+    );
+    auth_server.verify().await;
+
+    mcp_server_handle.abort();
+    let _ = mcp_server_handle.await;
     Ok(())
 }
 

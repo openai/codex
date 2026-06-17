@@ -2795,6 +2795,7 @@ impl Config {
 
         validate_model_providers(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+        let forced_chatgpt_workspace_id = cfg.forced_chatgpt_workspace_ids();
         // Ensure that every field of ConfigRequirements is applied to the final
         // Config.
         let ConfigRequirements {
@@ -3425,19 +3426,6 @@ impl Config {
         };
 
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
-
-        let forced_chatgpt_workspace_id = cfg
-            .forced_chatgpt_workspace_id
-            .clone()
-            .map(codex_config::config_toml::ForcedChatgptWorkspaceIds::into_vec)
-            .map(|values| {
-                values
-                    .into_iter()
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .filter(|values| !values.is_empty());
 
         let forced_login_method = cfg.forced_login_method;
 

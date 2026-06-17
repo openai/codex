@@ -970,6 +970,7 @@ pub async fn run_main(
         resolve_bootstrap_auth_keyring_backend_kind(&bootstrap_config)?,
         chatgpt_base_url,
         workload_identity,
+        bootstrap_config_toml.forced_chatgpt_workspace_ids(),
     )
     .await;
 
@@ -1440,6 +1441,7 @@ async fn run_ratatui_app(
                 initial_config.auth_keyring_backend_kind(),
                 initial_config.chatgpt_base_url.clone(),
                 workload_identity,
+                initial_config.forced_chatgpt_workspace_id.clone(),
             )
             .await;
         }

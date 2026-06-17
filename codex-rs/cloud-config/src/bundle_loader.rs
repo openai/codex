@@ -26,6 +26,7 @@ struct StorageAuthManagerConfig {
     keyring_backend_kind: AuthKeyringBackendKind,
     chatgpt_base_url: String,
     workload_identity: Option<WorkloadIdentityConfig>,
+    forced_chatgpt_workspace_id: Option<Vec<String>>,
 }
 
 impl AuthManagerConfig for StorageAuthManagerConfig {
@@ -42,7 +43,7 @@ impl AuthManagerConfig for StorageAuthManagerConfig {
     }
 
     fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>> {
-        None
+        self.forced_chatgpt_workspace_id.clone()
     }
 
     fn chatgpt_base_url(&self) -> String {
@@ -95,6 +96,7 @@ pub async fn cloud_config_bundle_loader_for_storage(
     keyring_backend_kind: AuthKeyringBackendKind,
     chatgpt_base_url: String,
     workload_identity: Option<WorkloadIdentityConfig>,
+    forced_chatgpt_workspace_id: Option<Vec<String>>,
 ) -> CloudConfigBundleLoader {
     let auth_config = StorageAuthManagerConfig {
         codex_home: codex_home.clone(),
@@ -102,6 +104,7 @@ pub async fn cloud_config_bundle_loader_for_storage(
         keyring_backend_kind,
         chatgpt_base_url: chatgpt_base_url.clone(),
         workload_identity,
+        forced_chatgpt_workspace_id,
     };
     let auth_manager =
         AuthManager::shared_from_config(&auth_config, enable_codex_api_key_env).await;
