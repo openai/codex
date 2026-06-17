@@ -1,7 +1,8 @@
-use super::bedrock_auth::has_managed_login as has_managed_bedrock_login;
-use super::bedrock_auth::login as login_managed_bedrock;
-use super::bedrock_auth::logout as logout_managed_bedrock;
+use super::bedrock_auth::clear_user_model_provider_if_bedrock;
+use super::bedrock_auth::set_user_model_provider_to_bedrock;
+use super::bedrock_auth::user_model_provider_state;
 use super::*;
+use codex_login::AuthMode;
 use codex_model_provider::is_supported_amazon_bedrock_region;
 
 mod rate_limit_resets;
@@ -172,7 +173,7 @@ impl AccountRequestProcessor {
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
         let auth = self.auth_manager.auth_cached();
         AccountUpdatedNotification {
-            auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
+            auth_mode: self.auth_manager.account_auth_mode_cached(),
             plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
         }
     }
@@ -367,8 +368,13 @@ impl AccountRequestProcessor {
                 }
             }
 
-            login_managed_bedrock(&self.config, &self.config_manager, api_key, region).await?;
-            self.auth_manager.reload().await;
+            self.auth_manager
+                .login_with_bedrock_api_key(api_key, region)
+                .await
+                .map_err(|err| {
+                    internal_error(format!("failed to save Amazon Bedrock auth: {err}"))
+                })?;
+            set_user_model_provider_to_bedrock(&self.config_manager).await?;
             Ok(LoginAccountResponse::AmazonBedrock {})
         }
         .await;
@@ -758,9 +764,17 @@ impl AccountRequestProcessor {
             }
         }
 
-        if has_managed_bedrock_login(&self.config)? {
-            logout_managed_bedrock(&self.config, &self.config_manager).await?;
-            self.auth_manager.reload().await;
+        if self
+            .auth_manager
+            .has_stored_bedrock_api_key_auth()
+            .map_err(|err| internal_error(format!("failed to read stored auth: {err}")))?
+        {
+            let user_model_provider = user_model_provider_state(&self.config_manager).await?;
+            self.auth_manager
+                .logout()
+                .await
+                .map_err(|err| internal_error(format!("logout failed: {err}")))?;
+            clear_user_model_provider_if_bedrock(&self.config_manager, user_model_provider).await?;
             return Ok(None);
         }
         if self.config.model_provider.is_amazon_bedrock() {
@@ -790,12 +804,8 @@ impl AccountRequestProcessor {
     }
 
     async fn logout_v2(&self, request_id: ConnectionRequestId) -> Result<(), JSONRPCErrorError> {
-        let skip_account_updated = matches!(has_managed_bedrock_login(&self.config), Ok(true))
-            || self.config.model_provider.is_amazon_bedrock();
         let result = self.logout_common().await;
-        let account_updated = if skip_account_updated {
-            None
-        } else {
+        let account_updated =
             result
                 .as_ref()
                 .ok()
@@ -803,8 +813,7 @@ impl AccountRequestProcessor {
                 .map(|auth_mode| AccountUpdatedNotification {
                     auth_mode,
                     plan_type: None,
-                })
-        };
+                });
         self.outgoing
             .send_result(request_id, result.map(|_| LogoutAccountResponse {}))
             .await;

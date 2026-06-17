@@ -6,37 +6,16 @@ use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::MergeStrategy;
-use codex_core::config::Config;
-use codex_login::AuthDotJson;
-use codex_login::load_auth_dot_json;
-use codex_login::login_with_bedrock_api_key;
-use codex_login::logout as logout_stored_auth;
 use codex_model_provider::AMAZON_BEDROCK_PROVIDER_ID;
 
-struct UserModelProviderState {
+pub(super) struct UserModelProviderState {
     model_provider: Option<String>,
     version: Option<String>,
 }
 
-pub(super) fn has_managed_login(config: &Config) -> Result<bool, JSONRPCErrorError> {
-    load_stored_auth(config).map(|auth| auth.is_some())
-}
-
-pub(super) async fn login(
-    config: &Config,
+pub(super) async fn set_user_model_provider_to_bedrock(
     config_manager: &ConfigManager,
-    api_key: &str,
-    region: &str,
 ) -> Result<(), JSONRPCErrorError> {
-    login_with_bedrock_api_key(
-        &config.codex_home,
-        api_key,
-        region,
-        config.cli_auth_credentials_store_mode,
-        config.auth_keyring_backend_kind(),
-    )
-    .map_err(|err| internal_error(format!("failed to save Amazon Bedrock auth: {err}")))?;
-
     write_user_model_provider(
         config_manager,
         serde_json::json!(AMAZON_BEDROCK_PROVIDER_ID),
@@ -45,18 +24,10 @@ pub(super) async fn login(
     .await
 }
 
-pub(super) async fn logout(
-    config: &Config,
+pub(super) async fn clear_user_model_provider_if_bedrock(
     config_manager: &ConfigManager,
+    user_model_provider: UserModelProviderState,
 ) -> Result<(), JSONRPCErrorError> {
-    let user_model_provider = user_model_provider_state(config_manager).await?;
-    logout_stored_auth(
-        &config.codex_home,
-        config.cli_auth_credentials_store_mode,
-        config.auth_keyring_backend_kind(),
-    )
-    .map_err(|err| internal_error(format!("logout failed: {err}")))?;
-
     if user_model_provider.model_provider.as_deref() == Some(AMAZON_BEDROCK_PROVIDER_ID) {
         write_user_model_provider(
             config_manager,
@@ -69,17 +40,7 @@ pub(super) async fn logout(
     Ok(())
 }
 
-fn load_stored_auth(config: &Config) -> Result<Option<AuthDotJson>, JSONRPCErrorError> {
-    load_auth_dot_json(
-        &config.codex_home,
-        config.cli_auth_credentials_store_mode,
-        config.auth_keyring_backend_kind(),
-    )
-    .map(|auth| auth.filter(AuthDotJson::is_bedrock_api_key))
-    .map_err(|err| internal_error(format!("failed to read stored auth: {err}")))
-}
-
-async fn user_model_provider_state(
+pub(super) async fn user_model_provider_state(
     config_manager: &ConfigManager,
 ) -> Result<UserModelProviderState, JSONRPCErrorError> {
     let user_config_path = config_manager
