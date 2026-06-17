@@ -1,7 +1,6 @@
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::app_mcp_routing::apps_route_available;
 use crate::is_openai_curated_marketplace_name;
-use crate::manifest::PluginManifest;
 use crate::manifest::PluginManifestHooks;
 use crate::manifest::PluginManifestMcpServers;
 use crate::manifest::PluginManifestPaths;
@@ -657,7 +656,7 @@ async fn load_plugin(
     let active_plugin_root = plugin_id
         .as_ref()
         .ok()
-        .and_then(|plugin_id| active_plugin_root(plugin_id, store));
+        .and_then(|plugin_id| store.active_plugin_root(plugin_id));
     let root = active_plugin_root
         .clone()
         .unwrap_or_else(|| match &plugin_id {
@@ -709,7 +708,7 @@ async fn load_plugin(
         return loaded_plugin;
     };
 
-    loaded_plugin.is_first_party = is_openai_curated_plugin(&loaded_plugin_id, &manifest, store);
+    loaded_plugin.is_first_party = is_openai_curated_plugin(&loaded_plugin_id, &plugin_root, store);
     let manifest_paths = &manifest.paths;
     match scope {
         PluginLoadScope::AllCapabilities {
@@ -751,31 +750,12 @@ async fn load_plugin(
     loaded_plugin
 }
 
-fn active_plugin_root(plugin_id: &PluginId, store: &PluginStore) -> Option<AbsolutePathBuf> {
-    if is_openai_curated_marketplace_name(&plugin_id.marketplace_name)
-        && let Some(curated_sha) = read_curated_plugins_sha(store.codex_home())
-    {
-        let expected_version = curated_plugin_cache_version(&curated_sha);
-        let expected_root = store.plugin_root(plugin_id, &expected_version);
-        if expected_root.as_path().is_dir() {
-            return Some(expected_root);
-        }
-    }
-    store.active_plugin_root(plugin_id)
-}
-
 fn is_openai_curated_plugin(
     plugin_id: &PluginId,
-    manifest: &PluginManifest,
+    loaded_root: &AbsolutePathBuf,
     store: &PluginStore,
 ) -> bool {
-    if !is_openai_curated_marketplace_name(&plugin_id.marketplace_name)
-        || manifest
-            .interface
-            .as_ref()
-            .and_then(|interface| interface.developer_name.as_deref())
-            != Some("OpenAI")
-    {
+    if !is_openai_curated_marketplace_name(&plugin_id.marketplace_name) {
         return false;
     }
 
@@ -783,11 +763,8 @@ fn is_openai_curated_plugin(
         return false;
     };
     let expected_version = curated_plugin_cache_version(&curated_sha);
-    if !store
-        .plugin_root(plugin_id, &expected_version)
-        .as_path()
-        .is_dir()
-    {
+    let expected_root = store.plugin_root(plugin_id, &expected_version);
+    if loaded_root != &expected_root || !expected_root.as_path().is_dir() {
         return false;
     }
 

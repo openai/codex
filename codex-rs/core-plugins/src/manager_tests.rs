@@ -574,10 +574,7 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
         &plugin_root.join(".codex-plugin/plugin.json"),
         r#"{
   "name": "sample",
-  "description": "Plugin that includes the sample MCP server and Skills",
-  "interface": {
-    "developerName": "OpenAI"
-  }
+  "description": "Plugin that includes the sample MCP server and Skills"
 }"#,
     );
     write_file(

@@ -248,21 +248,14 @@ enabled = true
     .expect("valid curated plugin config")
 }
 
-fn write_curated_cached_plugin_with_developer(
-    codex_home: &Path,
-    plugin_name: &str,
-    version: &str,
-    developer_name: &str,
-) {
+fn write_curated_cached_plugin(codex_home: &Path, plugin_name: &str, version: &str) {
     let plugin_root = codex_home
         .join("plugins/cache/openai-curated")
         .join(plugin_name)
         .join(version);
     write_file(
         &plugin_root.join(".codex-plugin/plugin.json"),
-        &format!(
-            r#"{{"name":"{plugin_name}","interface":{{"developerName":"{developer_name}"}}}}"#,
-        ),
+        &format!(r#"{{"name":"{plugin_name}"}}"#),
     );
     write_file(&plugin_root.join("skills/SKILL.md"), "skill");
 }
@@ -281,18 +274,12 @@ async fn load_curated_plugin(temp_dir: &TempDir, plugin_name: &str) -> PluginLoa
 }
 
 #[tokio::test]
-async fn load_curated_plugin_prefers_synced_sha_root_over_stale_local_cache() {
+async fn load_curated_plugin_uses_synced_sha_root_when_it_is_only_installed_root() {
     let temp_dir = TempDir::new().expect("tempdir");
     let curated_root = curated_plugins_repo_path(temp_dir.path());
     write_openai_curated_marketplace(&curated_root, &["slack"]);
     write_curated_plugin_sha_with(temp_dir.path(), TEST_CURATED_PLUGIN_SHA);
-    write_curated_cached_plugin_with_developer(temp_dir.path(), "slack", "local", "Third Party");
-    write_curated_cached_plugin_with_developer(
-        temp_dir.path(),
-        "slack",
-        TEST_CURATED_PLUGIN_CACHE_VERSION,
-        "OpenAI",
-    );
+    write_curated_cached_plugin(temp_dir.path(), "slack", TEST_CURATED_PLUGIN_CACHE_VERSION);
 
     let outcome = load_curated_plugin(&temp_dir, "slack").await;
     let plugin = outcome.plugins().first().expect("configured plugin");
@@ -313,12 +300,12 @@ async fn load_curated_plugin_prefers_synced_sha_root_over_stale_local_cache() {
 }
 
 #[tokio::test]
-async fn load_curated_plugin_with_openai_metadata_without_synced_cache_is_not_first_party() {
+async fn load_curated_plugin_without_synced_cache_root_is_not_first_party() {
     let temp_dir = TempDir::new().expect("tempdir");
     let curated_root = curated_plugins_repo_path(temp_dir.path());
     write_openai_curated_marketplace(&curated_root, &["slack"]);
     write_curated_plugin_sha_with(temp_dir.path(), TEST_CURATED_PLUGIN_SHA);
-    write_curated_cached_plugin_with_developer(temp_dir.path(), "slack", "local", "OpenAI");
+    write_curated_cached_plugin(temp_dir.path(), "slack", "local");
 
     let outcome = load_curated_plugin(&temp_dir, "slack").await;
 
@@ -333,17 +320,35 @@ async fn load_curated_plugin_with_openai_metadata_without_synced_cache_is_not_fi
 }
 
 #[tokio::test]
+async fn load_curated_plugin_keeps_local_root_priority_over_synced_sha_root() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let curated_root = curated_plugins_repo_path(temp_dir.path());
+    write_openai_curated_marketplace(&curated_root, &["slack"]);
+    write_curated_plugin_sha_with(temp_dir.path(), TEST_CURATED_PLUGIN_SHA);
+    write_curated_cached_plugin(temp_dir.path(), "slack", "local");
+    write_curated_cached_plugin(temp_dir.path(), "slack", TEST_CURATED_PLUGIN_CACHE_VERSION);
+
+    let outcome = load_curated_plugin(&temp_dir, "slack").await;
+    let plugin = outcome.plugins().first().expect("configured plugin");
+    let local_root = AbsolutePathBuf::try_from(
+        temp_dir
+            .path()
+            .join("plugins/cache/openai-curated/slack/local"),
+    )
+    .expect("local plugin root");
+
+    assert_eq!(plugin.root, local_root);
+    assert!(!plugin.is_first_party);
+    assert_eq!(outcome.effective_first_party_plugin_roots(), Vec::new());
+}
+
+#[tokio::test]
 async fn load_curated_plugin_missing_from_synced_marketplace_is_not_first_party() {
     let temp_dir = TempDir::new().expect("tempdir");
     let curated_root = curated_plugins_repo_path(temp_dir.path());
     write_openai_curated_marketplace(&curated_root, &["github"]);
     write_curated_plugin_sha_with(temp_dir.path(), TEST_CURATED_PLUGIN_SHA);
-    write_curated_cached_plugin_with_developer(
-        temp_dir.path(),
-        "slack",
-        TEST_CURATED_PLUGIN_CACHE_VERSION,
-        "OpenAI",
-    );
+    write_curated_cached_plugin(temp_dir.path(), "slack", TEST_CURATED_PLUGIN_CACHE_VERSION);
 
     let outcome = load_curated_plugin(&temp_dir, "slack").await;
 
