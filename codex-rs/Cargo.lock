@@ -2641,6 +2641,7 @@ dependencies = [
  "codex-network-proxy",
  "codex-otel",
  "codex-plugin",
+ "codex-plugin-installs-extension",
  "codex-prompts",
  "codex-protocol",
  "codex-response-debug-context",
@@ -3599,6 +3600,17 @@ dependencies = [
  "codex-utils-plugins",
  "pretty_assertions",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "codex-plugin-installs-extension"
+version = "0.0.0"
+dependencies = [
+ "codex-app-server-protocol",
+ "codex-tools",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

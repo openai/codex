@@ -1,0 +1,26 @@
+mod domain;
+mod spec;
+mod validation;
+
+pub use domain::REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE;
+pub use domain::REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE;
+pub use domain::REQUEST_PLUGIN_INSTALL_PERSIST_KEY;
+pub use domain::RequestPluginInstallCategoryMeta;
+pub use domain::RequestPluginInstallEntryMeta;
+pub use domain::RequestPluginInstallEntryResult;
+pub use domain::RequestPluginInstallInstalledEntry;
+pub use domain::RequestPluginInstallPickerCategory;
+pub use domain::RequestPluginInstallPickerEntry;
+pub use domain::RequestPluginInstallResolvedPickerEntry;
+pub use domain::RequestPluginInstallsArgs;
+pub use domain::RequestPluginInstallsMeta;
+pub use domain::RequestPluginInstallsResult;
+pub use domain::all_requested_connectors_picked_up;
+pub use domain::build_request_plugin_installs_elicitation_request;
+pub use domain::verified_connector_install_completed;
+pub use spec::ToolSuggestPresentation;
+pub use spec::create_request_plugin_installs_tool;
+pub use spec::create_request_plugin_installs_tool_for_tui;
+pub use validation::MAX_REQUEST_PLUGIN_INSTALLS_ENTRIES;
+pub use validation::request_plugin_install_picker_completed;
+pub use validation::validate_request_plugin_install_picker_args;

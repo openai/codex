@@ -1,16 +1,16 @@
 use std::collections::HashSet;
 
-use crate::DiscoverableTool;
-use crate::DiscoverableToolType;
-use crate::FunctionCallError;
-use crate::LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME;
+use codex_tools::DiscoverableTool;
+use codex_tools::DiscoverableToolType;
+use codex_tools::FunctionCallError;
+use codex_tools::LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME;
 
-use super::RequestPluginInstallEntryResult;
-use super::RequestPluginInstallPickerCategory;
-use super::RequestPluginInstallPickerEntry;
-use super::RequestPluginInstallResolvedPickerEntry;
-use super::RequestPluginInstallsArgs;
-use super::ToolSuggestPresentation;
+use crate::RequestPluginInstallEntryResult;
+use crate::RequestPluginInstallPickerCategory;
+use crate::RequestPluginInstallPickerEntry;
+use crate::RequestPluginInstallResolvedPickerEntry;
+use crate::RequestPluginInstallsArgs;
+use crate::ToolSuggestPresentation;
 
 pub const MAX_REQUEST_PLUGIN_INSTALLS_ENTRIES: usize = 16;
 

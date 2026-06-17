@@ -1,12 +1,12 @@
-use crate::JsonSchema;
-use crate::LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME;
-use crate::REQUEST_PLUGIN_INSTALLS_TOOL_NAME;
-use crate::ResponsesApiTool;
-use crate::ToolSpec;
+use codex_tools::JsonSchema;
+use codex_tools::LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME;
+use codex_tools::REQUEST_PLUGIN_INSTALLS_TOOL_NAME;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ToolSpec;
 use serde_json::json;
 use std::collections::BTreeMap;
 
-use super::MAX_REQUEST_PLUGIN_INSTALLS_ENTRIES;
+use crate::MAX_REQUEST_PLUGIN_INSTALLS_ENTRIES;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolSuggestPresentation {

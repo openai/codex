@@ -9,9 +9,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::DiscoverableTool;
-use crate::DiscoverableToolAction;
-use crate::DiscoverableToolType;
+use codex_tools::DiscoverableTool;
+use codex_tools::DiscoverableToolAction;
+use codex_tools::DiscoverableToolType;
 
 pub const REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE: &str = "tool_suggestion";
 pub const REQUEST_PLUGIN_INSTALL_PERSIST_KEY: &str = "persist";
@@ -215,16 +215,6 @@ fn discoverable_tool_description(tool: &DiscoverableTool) -> Option<&str> {
     }
 }
 
-mod spec;
-mod validation;
-
-pub use spec::ToolSuggestPresentation;
-pub use spec::create_request_plugin_installs_tool;
-pub use spec::create_request_plugin_installs_tool_for_tui;
-pub use validation::MAX_REQUEST_PLUGIN_INSTALLS_ENTRIES;
-pub use validation::request_plugin_install_picker_completed;
-pub use validation::validate_request_plugin_install_picker_args;
-
 #[cfg(test)]
-#[path = "../request_plugin_install_tests.rs"]
+#[path = "domain_tests.rs"]
 mod tests;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::DiscoverablePluginInfo;
+use codex_tools::DiscoverablePluginInfo;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
