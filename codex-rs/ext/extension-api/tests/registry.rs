@@ -12,6 +12,8 @@ use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::PromptFragment;
+use codex_extension_api::SamplingInputContext;
+use codex_extension_api::SamplingInputContributor;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::TokenUsageContributor;
 use codex_extension_api::ToolCall;
@@ -67,6 +69,15 @@ impl TurnInputContributor for AllContributors {
     }
 }
 
+impl SamplingInputContributor for AllContributors {
+    fn contribute<'a>(
+        &'a self,
+        _input: SamplingInputContext<'a>,
+    ) -> ExtensionFuture<'a, Result<(), String>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+}
+
 impl ToolContributor for AllContributors {
     fn tools(
         &self,
@@ -117,6 +128,7 @@ async fn build_round_trips_every_contributor_category() {
     builder.token_usage_contributor(contributor.clone());
     builder.prompt_contributor(contributor.clone());
     builder.turn_input_contributor(contributor.clone());
+    builder.sampling_input_contributor(contributor.clone());
     builder.tool_contributor(contributor.clone());
     builder.tool_lifecycle_contributor(contributor.clone());
     builder.turn_item_contributor(contributor.clone());
@@ -129,6 +141,7 @@ async fn build_round_trips_every_contributor_category() {
     assert_eq!(registry.token_usage_contributors().len(), 1);
     assert_eq!(registry.context_contributors().len(), 1);
     assert_eq!(registry.turn_input_contributors().len(), 1);
+    assert_eq!(registry.sampling_input_contributors().len(), 1);
     assert_eq!(registry.tool_contributors().len(), 1);
     assert_eq!(registry.tool_lifecycle_contributors().len(), 1);
     assert_eq!(registry.turn_item_contributors().len(), 1);

@@ -13,6 +13,7 @@ use crate::ExtensionData;
 
 mod mcp;
 mod prompt;
+mod sampling_input;
 mod thread_lifecycle;
 mod tool_lifecycle;
 mod turn_input;
@@ -22,6 +23,7 @@ pub use mcp::McpServerContribution;
 pub use mcp::McpServerContributionContext;
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
+pub use sampling_input::SamplingInputContext;
 pub use thread_lifecycle::ThreadIdleInput;
 pub use thread_lifecycle::ThreadResumeInput;
 pub use thread_lifecycle::ThreadStartInput;
@@ -168,6 +170,18 @@ pub trait TurnInputContributor: Send + Sync {
         thread_store: &'a ExtensionData,
         turn_store: &'a ExtensionData,
     ) -> ExtensionFuture<'a, Vec<Box<dyn ContextualUserFragment + Send>>>;
+}
+
+/// Extension contribution that can update request-local model input immediately
+/// before each sampling attempt.
+///
+/// Implementations should preserve the ordering and provenance of existing items.
+/// Returning an error prevents the sampling request from being sent.
+pub trait SamplingInputContributor: Send + Sync {
+    fn contribute<'a>(
+        &'a self,
+        input: SamplingInputContext<'a>,
+    ) -> ExtensionFuture<'a, Result<(), String>>;
 }
 
 /// Contributor for host-owned configuration changes.

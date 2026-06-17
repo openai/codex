@@ -9,6 +9,7 @@ use crate::ExtensionData;
 use crate::ExtensionEventSink;
 use crate::McpServerContributor;
 use crate::NoopExtensionEventSink;
+use crate::SamplingInputContributor;
 use crate::ThreadLifecycleContributor;
 use crate::TokenUsageContributor;
 use crate::ToolContributor;
@@ -27,6 +28,7 @@ pub struct ExtensionRegistryBuilder<C: Sync> {
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     mcp_server_contributors: Vec<Arc<dyn McpServerContributor<C>>>,
     turn_input_contributors: Vec<Arc<dyn TurnInputContributor>>,
+    sampling_input_contributors: Vec<Arc<dyn SamplingInputContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
     tool_lifecycle_contributors: Vec<Arc<dyn ToolLifecycleContributor>>,
     turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
@@ -45,6 +47,7 @@ impl<C: Sync> Default for ExtensionRegistryBuilder<C> {
             context_contributors: Vec::new(),
             mcp_server_contributors: Vec::new(),
             turn_input_contributors: Vec::new(),
+            sampling_input_contributors: Vec::new(),
             tool_contributors: Vec::new(),
             tool_lifecycle_contributors: Vec::new(),
             turn_item_contributors: Vec::new(),
@@ -114,6 +117,11 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
         self.turn_input_contributors.push(contributor);
     }
 
+    /// Registers one request-local sampling-input contributor.
+    pub fn sampling_input_contributor(&mut self, contributor: Arc<dyn SamplingInputContributor>) {
+        self.sampling_input_contributors.push(contributor);
+    }
+
     /// Registers one native tool contributor.
     pub fn tool_contributor(&mut self, contributor: Arc<dyn ToolContributor>) {
         self.tool_contributors.push(contributor);
@@ -141,6 +149,7 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
             context_contributors: self.context_contributors,
             mcp_server_contributors: self.mcp_server_contributors,
             turn_input_contributors: self.turn_input_contributors,
+            sampling_input_contributors: self.sampling_input_contributors,
             tool_contributors: self.tool_contributors,
             tool_lifecycle_contributors: self.tool_lifecycle_contributors,
             turn_item_contributors: self.turn_item_contributors,
@@ -158,6 +167,7 @@ pub struct ExtensionRegistry<C: Sync> {
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     mcp_server_contributors: Vec<Arc<dyn McpServerContributor<C>>>,
     turn_input_contributors: Vec<Arc<dyn TurnInputContributor>>,
+    sampling_input_contributors: Vec<Arc<dyn SamplingInputContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
     tool_lifecycle_contributors: Vec<Arc<dyn ToolLifecycleContributor>>,
     turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
@@ -223,6 +233,11 @@ impl<C: Sync> ExtensionRegistry<C> {
     /// Returns the registered turn-input contributors.
     pub fn turn_input_contributors(&self) -> &[Arc<dyn TurnInputContributor>] {
         &self.turn_input_contributors
+    }
+
+    /// Returns the registered request-local sampling-input contributors.
+    pub fn sampling_input_contributors(&self) -> &[Arc<dyn SamplingInputContributor>] {
+        &self.sampling_input_contributors
     }
 
     /// Returns the registered native tool contributors.
