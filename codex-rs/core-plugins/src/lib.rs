@@ -9,6 +9,7 @@ pub mod marketplace_add;
 pub mod marketplace_remove;
 pub mod marketplace_upgrade;
 mod plugin_bundle_archive;
+mod plugin_catalog_revision;
 mod provider;
 pub mod remote;
 pub mod remote_bundle;
@@ -33,6 +34,7 @@ pub type PluginLoadOutcome = codex_plugin::PluginLoadOutcome<codex_config::McpSe
 
 pub use app_mcp_routing::apps_route_available;
 pub use discoverable::ToolSuggestDiscoverablePlugin;
+pub use discoverable::ToolSuggestPluginCatalog;
 pub use discoverable::ToolSuggestPluginDiscoveryInput;
 pub use loader::PluginHookLoadOutcome;
 pub use manager::ConfiguredMarketplace;
@@ -52,6 +54,7 @@ pub use manager::PluginsManager;
 pub use manager::RecommendedPluginCandidatesInput;
 pub use marketplace_upgrade::ConfiguredMarketplaceUpgradeError as PluginMarketplaceUpgradeError;
 pub use marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome as PluginMarketplaceUpgradeOutcome;
+pub use plugin_catalog_revision::PluginCatalogRevision;
 pub use provider::ExecutorPluginProvider;
 pub use provider::ExecutorPluginProviderError;
 pub use provider::ResolvedExecutorPlugin;

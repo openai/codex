@@ -12,6 +12,7 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
 use crate::guardian::GuardianRejectionCircuitBreaker;
 use crate::mcp::McpManager;
+use crate::runtime_tool_catalog::RuntimeToolCatalogManager;
 use crate::tools::code_mode::CodeModeService;
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::network_approval::NetworkApprovalService;
@@ -42,6 +43,7 @@ use tokio_util::sync::CancellationToken;
 pub(crate) struct SessionServices {
     /// The latest manager; callers retain an owned handle while performing MCP I/O.
     pub(crate) mcp_connection_manager: Arc<ArcSwap<McpConnectionManager>>,
+    pub(crate) runtime_tool_catalog_manager: RuntimeToolCatalogManager,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     #[cfg_attr(not(unix), allow(dead_code))]

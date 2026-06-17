@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
@@ -79,6 +80,35 @@ const MCP_UI_META_KEY: &str = "ui";
 const MCP_UI_VISIBILITY_META_KEY: &str = "visibility";
 const MCP_UI_MODEL_VISIBILITY: &str = "model";
 
+static NEXT_HOSTED_CONNECTOR_RUNTIME_REVISION: AtomicU64 = AtomicU64::new(1);
+
+/// Monotonic revision of the host-owned Codex Apps runtime tool snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HostedConnectorRuntimeRevision(u64);
+
+impl HostedConnectorRuntimeRevision {
+    pub fn generation(self) -> u64 {
+        self.0
+    }
+}
+
+/// Complete host-owned Codex Apps tools paired with the revision that covers them.
+#[derive(Clone, Debug)]
+pub struct HostedConnectorToolsSnapshot {
+    pub revision: HostedConnectorRuntimeRevision,
+    pub tools: Vec<ToolInfo>,
+}
+
+fn next_hosted_connector_runtime_revision() -> u64 {
+    NEXT_HOSTED_CONNECTOR_RUNTIME_REVISION.fetch_add(1, Ordering::Relaxed)
+}
+
+#[derive(Clone, Copy)]
+enum McpToolSelection {
+    All,
+    HostedConnectors,
+}
+
 /// Returns whether a tool may be included in model-facing tool declarations.
 ///
 /// Tools without visibility metadata remain visible.
@@ -110,6 +140,7 @@ pub struct McpConnectionManager {
     required_servers: Vec<String>,
     tool_plugin_provenance: Arc<ToolPluginProvenance>,
     host_owned_codex_apps_enabled: bool,
+    hosted_connector_runtime_revision: Arc<AtomicU64>,
     prefix_mcp_tool_names: bool,
     elicitation_requests: ElicitationRequestManager,
     startup_cancellation_token: CancellationToken,
@@ -151,6 +182,8 @@ impl McpConnectionManager {
             initial_permission_profile,
             elicitation_reviewer,
         );
+        let hosted_connector_runtime_revision =
+            Arc::new(AtomicU64::new(next_hosted_connector_runtime_revision()));
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
         let codex_apps_auth_provider = auth
@@ -214,8 +247,15 @@ impl McpConnectionManager {
             let tx_event = tx_event.clone();
             let submit_id = startup_submit_id.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();
+            let advances_hosted_connector_revision =
+                host_owned_codex_apps_enabled && server_name == CODEX_APPS_MCP_SERVER_NAME;
+            let hosted_connector_runtime_revision = Arc::clone(&hosted_connector_runtime_revision);
             join_set.spawn(async move {
                 let mut outcome = async_managed_client.client().await;
+                if advances_hosted_connector_revision && outcome.is_ok() {
+                    hosted_connector_runtime_revision
+                        .store(next_hosted_connector_runtime_revision(), Ordering::Release);
+                }
                 if cancel_token.is_cancelled() {
                     outcome = Err(StartupOutcomeError::Cancelled);
                 }
@@ -251,6 +291,7 @@ impl McpConnectionManager {
             required_servers,
             tool_plugin_provenance,
             host_owned_codex_apps_enabled,
+            hosted_connector_runtime_revision,
             prefix_mcp_tool_names,
             elicitation_requests: elicitation_requests.clone(),
             startup_cancellation_token: startup_cancellation_token.clone(),
@@ -337,6 +378,9 @@ impl McpConnectionManager {
             required_servers: Vec::new(),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             host_owned_codex_apps_enabled: false,
+            hosted_connector_runtime_revision: Arc::new(AtomicU64::new(
+                next_hosted_connector_runtime_revision(),
+            )),
             prefix_mcp_tool_names,
             elicitation_requests: ElicitationRequestManager::new(
                 approval_policy.value(),
@@ -401,6 +445,24 @@ impl McpConnectionManager {
         self.host_owned_codex_apps_enabled && server_name == CODEX_APPS_MCP_SERVER_NAME
     }
 
+    pub fn hosted_connector_runtime_revision(&self) -> Option<HostedConnectorRuntimeRevision> {
+        (self.host_owned_codex_apps_enabled
+            && self.clients.contains_key(CODEX_APPS_MCP_SERVER_NAME))
+        .then(|| {
+            HostedConnectorRuntimeRevision(
+                self.hosted_connector_runtime_revision
+                    .load(Ordering::Acquire),
+            )
+        })
+    }
+
+    fn record_successful_hosted_tools_refresh(&self) {
+        if self.hosted_connector_runtime_revision().is_some() {
+            self.hosted_connector_runtime_revision
+                .store(next_hosted_connector_runtime_revision(), Ordering::Release);
+        }
+    }
+
     pub fn set_approval_policy(&self, approval_policy: &Constrained<AskForApproval>) {
         if let Ok(mut policy) = self.elicitation_requests.approval_policy.lock() {
             *policy = approval_policy.value();
@@ -446,8 +508,61 @@ impl McpConnectionManager {
     /// Returns all tools with model-visible names normalized.
     #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
+        let tools = self
+            .list_tools(McpToolSelection::All, /*hosted_connector_tools*/ None)
+            .await;
+        normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
+    }
+
+    /// Reads a complete host-owned tool snapshot without racing a successful refresh.
+    pub async fn hosted_connector_tools_snapshot(&self) -> Option<HostedConnectorToolsSnapshot> {
+        loop {
+            let revision = self.hosted_connector_runtime_revision()?;
+            let tools = self
+                .list_tools(
+                    McpToolSelection::HostedConnectors,
+                    /*hosted_connector_tools*/ None,
+                )
+                .await;
+            if self.hosted_connector_runtime_revision() == Some(revision) {
+                return Some(HostedConnectorToolsSnapshot { revision, tools });
+            }
+        }
+    }
+
+    /// Combines a reusable hosted fragment with freshly listed non-hosted MCP tools.
+    pub async fn list_all_tools_with_hosted_connector_tools(
+        &self,
+        hosted_connector_tools: &[ToolInfo],
+    ) -> Vec<ToolInfo> {
+        let tools = self
+            .list_tools(McpToolSelection::All, Some(hosted_connector_tools))
+            .await;
+        normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
+    }
+
+    async fn list_tools(
+        &self,
+        selection: McpToolSelection,
+        hosted_connector_tools: Option<&[ToolInfo]>,
+    ) -> Vec<ToolInfo> {
         let mut tools = Vec::new();
         for (server_name, managed_client) in &self.clients {
+            let is_hosted_connector_source =
+                self.host_owned_codex_apps_enabled && server_name == CODEX_APPS_MCP_SERVER_NAME;
+            if is_hosted_connector_source
+                && let Some(hosted_connector_tools) = hosted_connector_tools
+            {
+                tools.extend_from_slice(hosted_connector_tools);
+                continue;
+            }
+            let selected = match selection {
+                McpToolSelection::All => true,
+                McpToolSelection::HostedConnectors => is_hosted_connector_source,
+            };
+            if !selected {
+                continue;
+            }
             let has_cached_tool_info_snapshot = managed_client.cached_tool_info_snapshot.is_some();
             let startup_complete = managed_client
                 .startup_complete
@@ -481,7 +596,7 @@ impl McpConnectionManager {
                     .map(|tool| self.with_server_metadata(tool)),
             );
         }
-        normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
+        tools
     }
 
     /// Force-refresh codex apps tools by bypassing the in-process cache.
@@ -533,10 +648,9 @@ impl McpConnectionManager {
                 tool.tool = tool_with_model_visible_input_schema(&tool.tool);
                 self.with_server_metadata(tool)
             });
-        Ok(normalize_tools_for_model_with_prefix(
-            tools,
-            self.prefix_mcp_tool_names,
-        ))
+        let tools = normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names);
+        self.record_successful_hosted_tools_refresh();
+        Ok(tools)
     }
 
     /// Returns a single map that contains all resources. Each key is the

@@ -3164,6 +3164,77 @@ plugins = true
 }
 
 #[tokio::test]
+async fn curated_catalog_reuses_only_a_current_proven_revision() {
+    let tmp = tempfile::tempdir().unwrap();
+    let curated_root = curated_plugins_repo_path(tmp.path());
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
+    write_openai_curated_marketplace(&curated_root, &["linear"]);
+    let config = load_config(tmp.path(), tmp.path()).await;
+    let manager = PluginsManager::new(tmp.path().to_path_buf());
+    let plugin_ids = |outcome: ConfiguredMarketplaceListOutcome| {
+        outcome
+            .marketplaces
+            .into_iter()
+            .flat_map(|marketplace| marketplace.plugins)
+            .map(|plugin| plugin.id)
+            .collect::<Vec<_>>()
+    };
+
+    let first = manager
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
+        .expect("first unrevisioned read");
+    write_openai_curated_marketplace(&curated_root, &["github"]);
+    let second = manager
+        .list_marketplaces_for_config(&config, &[], /*include_openai_curated*/ true)
+        .expect("second unrevisioned read");
+    assert_eq!(plugin_ids(first), vec!["linear@openai-curated"]);
+    assert_eq!(plugin_ids(second), vec!["github@openai-curated"]);
+
+    write_file(
+        &curated_root.join(".codex-plugin-catalog-revision"),
+        "revision-one\n",
+    );
+    let revision = manager
+        .revisioned_plugin_catalog_revision_for_config(
+            &config, /*include_openai_curated*/ true,
+        )
+        .expect("revisioned curated source");
+
+    let outcome = manager
+        .build_revisioned_plugin_catalog(&revision)
+        .expect("complete revisioned catalog");
+    assert_eq!(outcome.marketplaces.len(), 1);
+    write_openai_curated_marketplace(&curated_root, &["linear"]);
+    let reused = manager
+        .list_marketplaces_for_config_with_revisioned_plugin_catalog(
+            &config,
+            /*include_openai_curated*/ true,
+            (&revision, &outcome),
+        )
+        .expect("reuse revisioned catalog");
+    assert_eq!(plugin_ids(reused), vec!["github@openai-curated"]);
+
+    write_file(
+        &curated_root.join(".codex-plugin-catalog-revision"),
+        "revision-two\n",
+    );
+    assert!(manager.build_revisioned_plugin_catalog(&revision).is_err());
+    let rebuilt = manager
+        .list_marketplaces_for_config_with_revisioned_plugin_catalog(
+            &config,
+            /*include_openai_curated*/ true,
+            (&revision, &outcome),
+        )
+        .expect("rebuild stale catalog");
+    assert_eq!(plugin_ids(rebuilt), vec!["linear@openai-curated"]);
+}
+
+#[tokio::test]
 async fn list_marketplaces_can_skip_openai_curated_before_loading() {
     let tmp = tempfile::tempdir().unwrap();
     let curated_root = curated_plugins_repo_path(tmp.path());

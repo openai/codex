@@ -49,6 +49,7 @@ async fn list_discoverable_plugins_with_manager_and_auth(
         plugins_manager,
         auth,
         loaded_plugin_app_connector_ids,
+        codex_core_plugins::ToolSuggestPluginCatalog::RebuildAll,
     )
     .await
 }

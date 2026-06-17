@@ -115,6 +115,65 @@ fn model_tool_name_len(name: &ToolName) -> usize {
         + name.name.len()
 }
 
+fn manager_with_pending_hosted_tools(tools: Vec<ToolInfo>) -> McpConnectionManager {
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.host_owned_codex_apps_enabled = true;
+    manager.clients.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            cached_tool_info_snapshot: Some(tools),
+            cached_server_info: None,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+    manager
+}
+
+#[tokio::test]
+async fn hosted_revision_covers_refresh_replacement_and_snapshot_tools() {
+    let tool = create_test_tool_with_connector(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "calendar_create_event",
+        "calendar",
+        Some("Calendar"),
+    );
+    let manager = manager_with_pending_hosted_tools(vec![tool.clone()]);
+    let replacement = manager_with_pending_hosted_tools(Vec::new());
+    assert_ne!(
+        manager.hosted_connector_runtime_revision(),
+        replacement.hosted_connector_runtime_revision()
+    );
+    let before_refresh = manager.hosted_connector_runtime_revision();
+    manager.record_successful_hosted_tools_refresh();
+    assert_ne!(before_refresh, manager.hosted_connector_runtime_revision());
+
+    let snapshot = manager
+        .hosted_connector_tools_snapshot()
+        .await
+        .expect("hosted snapshot");
+
+    assert_eq!(
+        snapshot.revision,
+        manager.hosted_connector_runtime_revision().unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(snapshot.tools).expect("serialize snapshot tools"),
+        serde_json::to_value(vec![tool]).expect("serialize expected tools")
+    );
+}
+
 fn is_code_mode_compatible_tool_name(name: &ToolName) -> bool {
     name.namespace
         .as_deref()

@@ -55,6 +55,7 @@ mod mcp_tool_approval_templates;
 mod mcp_tool_exposure;
 mod network_policy_decision;
 pub(crate) mod network_proxy_loader;
+mod runtime_tool_catalog;
 pub use mcp::McpManager;
 pub use network_proxy_loader::MtimeConfigReloader;
 pub use network_proxy_loader::build_network_proxy_state;

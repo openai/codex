@@ -4973,6 +4973,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
                 config.prefix_mcp_tool_names(),
             ),
         )),
+        runtime_tool_catalog_manager: Default::default(),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -7018,6 +7019,7 @@ where
                 config.prefix_mcp_tool_names(),
             ),
         )),
+        runtime_tool_catalog_manager: Default::default(),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,

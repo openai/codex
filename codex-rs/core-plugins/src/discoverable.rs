@@ -9,8 +9,10 @@ use tracing::warn;
 
 use crate::OPENAI_API_CURATED_MARKETPLACE_NAME;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
+use crate::PluginCatalogRevision;
 use crate::PluginsConfigInput;
 use crate::PluginsManager;
+use crate::marketplace::MarketplaceListOutcome;
 use crate::marketplace::MarketplacePluginInstallPolicy;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 
@@ -66,11 +68,34 @@ pub struct ToolSuggestDiscoverablePlugin {
     pub app_connector_ids: Vec<String>,
 }
 
+/// Selects the plugin catalog input used by the legacy tool-suggestion projection.
+pub enum ToolSuggestPluginCatalog<'a> {
+    RebuildAll,
+    Revisioned {
+        revision: &'a PluginCatalogRevision,
+        marketplaces: &'a MarketplaceListOutcome,
+    },
+}
+
 impl PluginsManager {
     pub async fn list_tool_suggest_discoverable_plugins(
         &self,
         input: &ToolSuggestPluginDiscoveryInput,
         auth: Option<&CodexAuth>,
+    ) -> anyhow::Result<Vec<ToolSuggestDiscoverablePlugin>> {
+        self.list_tool_suggest_discoverable_plugins_with_catalog(
+            input,
+            auth,
+            ToolSuggestPluginCatalog::RebuildAll,
+        )
+        .await
+    }
+
+    pub async fn list_tool_suggest_discoverable_plugins_with_catalog(
+        &self,
+        input: &ToolSuggestPluginDiscoveryInput,
+        auth: Option<&CodexAuth>,
+        catalog: ToolSuggestPluginCatalog<'_>,
     ) -> anyhow::Result<Vec<ToolSuggestDiscoverablePlugin>> {
         if !input.plugins.plugins_enabled {
             return Ok(Vec::new());
@@ -78,14 +103,22 @@ impl PluginsManager {
 
         let use_remote_global_catalog =
             input.plugins.remote_plugin_enabled && auth.is_some_and(CodexAuth::uses_codex_backend);
-        let marketplaces = self
-            .list_marketplaces_for_config(
+        let include_openai_curated = !use_remote_global_catalog;
+        let marketplaces = match catalog {
+            ToolSuggestPluginCatalog::RebuildAll => {
+                self.list_marketplaces_for_config(&input.plugins, &[], include_openai_curated)
+            }
+            ToolSuggestPluginCatalog::Revisioned {
+                revision,
+                marketplaces,
+            } => self.list_marketplaces_for_config_with_revisioned_plugin_catalog(
                 &input.plugins,
-                &[],
-                /*include_openai_curated*/ !use_remote_global_catalog,
-            )
-            .context("failed to list plugin marketplaces for tool suggestions")?
-            .marketplaces;
+                include_openai_curated,
+                (revision, marketplaces),
+            ),
+        }
+        .context("failed to list plugin marketplaces for tool suggestions")?
+        .marketplaces;
         let remote_installed_marketplaces = if use_remote_global_catalog {
             self.build_remote_installed_plugin_marketplaces_from_cache(&[
                 REMOTE_GLOBAL_MARKETPLACE_NAME,

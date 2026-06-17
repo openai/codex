@@ -495,6 +495,7 @@ discoverables = [
         Some(&auth),
         &[],
         &[],
+        ToolSuggestPluginCatalog::RebuildAll,
     )
     .await
     .expect("discoverable tools should load");
@@ -533,6 +534,7 @@ apps = true
         Some(&auth),
         &[],
         &loaded_plugin_app_connector_ids,
+        ToolSuggestPluginCatalog::RebuildAll,
     )
     .await
     .expect("discoverable tools should load");

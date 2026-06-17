@@ -32,12 +32,15 @@ use crate::marketplace::MarketplacePluginSource;
 use crate::marketplace::ResolvedMarketplacePlugin;
 use crate::marketplace::find_installable_marketplace_plugin;
 use crate::marketplace::find_marketplace_plugin;
+use crate::marketplace::home_dir;
 use crate::marketplace::list_marketplaces;
+use crate::marketplace::list_marketplaces_with_home;
 use crate::marketplace::plugin_interface_with_marketplace_category;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
 use crate::marketplace_upgrade::configured_git_marketplace_names;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
+use crate::plugin_catalog_revision::PluginCatalogRevision;
 use crate::remote::RecommendedPluginsMode;
 use crate::remote::RemoteInstalledPlugin;
 use crate::remote::RemotePluginCatalogError;
@@ -46,6 +49,7 @@ use crate::remote_legacy::RemotePluginFetchError;
 use crate::remote_legacy::RemotePluginMutationError;
 use crate::startup_sync::curated_plugins_api_marketplace_path;
 use crate::startup_sync::curated_plugins_repo_path;
+use crate::startup_sync::read_curated_plugins_catalog_revision;
 use crate::startup_sync::read_curated_plugins_sha;
 use crate::startup_sync::sync_openai_plugins_repo;
 use crate::store::PluginInstallResult as StorePluginInstallResult;
@@ -1235,10 +1239,96 @@ impl PluginsManager {
             return Ok(ConfiguredMarketplaceListOutcome::default());
         }
 
-        let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
         let marketplace_roots =
             self.marketplace_roots(config, additional_roots, include_openai_curated);
         let marketplace_outcome = list_marketplaces(&marketplace_roots)?;
+        Ok(self.configured_marketplaces_from_outcome(config, marketplace_outcome))
+    }
+
+    pub fn revisioned_plugin_catalog_revision_for_config(
+        &self,
+        config: &PluginsConfigInput,
+        include_openai_curated: bool,
+    ) -> Option<PluginCatalogRevision> {
+        if !config.plugins_enabled
+            || !include_openai_curated
+            || matches!(
+                self.auth_mode(),
+                Some(AuthMode::ApiKey | AuthMode::BedrockApiKey)
+            )
+        {
+            return None;
+        }
+        let curated_repo_root = curated_plugins_repo_path(self.codex_home.as_path());
+        read_curated_plugins_catalog_revision(&curated_repo_root)
+    }
+
+    pub fn build_revisioned_plugin_catalog(
+        &self,
+        revision: &PluginCatalogRevision,
+    ) -> Result<MarketplaceListOutcome, MarketplaceError> {
+        let incomplete = || {
+            MarketplaceError::InvalidPlugin(
+                "revisioned plugin catalog did not load completely".to_string(),
+            )
+        };
+        if !revision.is_current() {
+            return Err(incomplete());
+        }
+        let root = AbsolutePathBuf::try_from(revision.source_root().to_path_buf())
+            .map_err(|_| incomplete())?;
+        let outcome =
+            list_marketplaces_with_home(std::slice::from_ref(&root), /*home_dir*/ None)?;
+        if !revision.is_current() || outcome.marketplaces.is_empty() || !outcome.errors.is_empty() {
+            return Err(incomplete());
+        }
+        Ok(outcome)
+    }
+
+    pub(crate) fn list_marketplaces_for_config_with_revisioned_plugin_catalog(
+        &self,
+        config: &PluginsConfigInput,
+        include_openai_curated: bool,
+        revisioned_catalog: (&PluginCatalogRevision, &MarketplaceListOutcome),
+    ) -> Result<ConfiguredMarketplaceListOutcome, MarketplaceError> {
+        if !config.plugins_enabled {
+            return Ok(ConfiguredMarketplaceListOutcome::default());
+        }
+
+        let Some(current_revision) =
+            self.revisioned_plugin_catalog_revision_for_config(config, include_openai_curated)
+        else {
+            return self.list_marketplaces_for_config(config, &[], include_openai_curated);
+        };
+        let (revision, revisioned_catalog) = revisioned_catalog;
+        if current_revision != *revision || !revision.is_current() {
+            return self.list_marketplaces_for_config(config, &[], include_openai_curated);
+        }
+        let roots = self.marketplace_roots(config, &[], include_openai_curated);
+        let Some(revisioned_index) = roots
+            .iter()
+            .position(|root| root.as_path() == current_revision.source_root())
+        else {
+            return Err(MarketplaceError::InvalidPlugin(
+                "revisioned plugin catalog source is missing".to_string(),
+            ));
+        };
+        let mut marketplace_outcome =
+            list_marketplaces_with_home(&roots[..revisioned_index], home_dir().as_deref())?;
+        extend_marketplace_outcome(&mut marketplace_outcome, revisioned_catalog.clone());
+        let remaining =
+            list_marketplaces_with_home(&roots[revisioned_index + 1..], /*home_dir*/ None)?;
+        extend_marketplace_outcome(&mut marketplace_outcome, remaining);
+
+        Ok(self.configured_marketplaces_from_outcome(config, marketplace_outcome))
+    }
+
+    fn configured_marketplaces_from_outcome(
+        &self,
+        config: &PluginsConfigInput,
+        marketplace_outcome: MarketplaceListOutcome,
+    ) -> ConfiguredMarketplaceListOutcome {
+        let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
         let mut seen_plugin_keys = HashSet::new();
         let marketplaces = marketplace_outcome
             .marketplaces
@@ -1310,10 +1400,10 @@ impl PluginsManager {
             })
             .collect();
 
-        Ok(ConfiguredMarketplaceListOutcome {
+        ConfiguredMarketplaceListOutcome {
             marketplaces,
             errors: marketplace_outcome.errors,
-        })
+        }
     }
 
     pub fn discover_marketplaces_for_config(
@@ -2134,6 +2224,34 @@ fn remote_plugin_install_required_description(source: &MarketplacePluginSource) 
     format!(
         "This is a cross-repo plugin. Install it to view more detailed information. The source of the plugin is {source_description}."
     )
+}
+
+fn extend_marketplace_outcome(
+    aggregate: &mut MarketplaceListOutcome,
+    outcome: MarketplaceListOutcome,
+) {
+    let mut marketplace_paths = aggregate
+        .marketplaces
+        .iter()
+        .map(|marketplace| marketplace.path.clone())
+        .collect::<HashSet<_>>();
+    aggregate.marketplaces.extend(
+        outcome
+            .marketplaces
+            .into_iter()
+            .filter(|marketplace| marketplace_paths.insert(marketplace.path.clone())),
+    );
+    let mut error_paths = aggregate
+        .errors
+        .iter()
+        .map(|error| error.path.clone())
+        .collect::<HashSet<_>>();
+    aggregate.errors.extend(
+        outcome
+            .errors
+            .into_iter()
+            .filter(|error| error_paths.insert(error.path.clone())),
+    );
 }
 
 #[derive(Debug, thiserror::Error)]

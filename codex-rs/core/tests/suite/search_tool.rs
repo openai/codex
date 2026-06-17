@@ -225,6 +225,66 @@ async fn always_defer_feature_hides_small_app_tool_sets() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repeated_built_tools_preserves_visible_and_searchable_tool_identities() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
+    let search_event = |response_id: &str, call_id: &str| {
+        sse(vec![
+            ev_response_created(response_id),
+            ev_tool_search_call(
+                call_id,
+                &json!({"query": "create calendar event", "limit": 2}),
+            ),
+            ev_completed(response_id),
+        ])
+    };
+    let completion_event = |response_id: &str, message_id: &str| {
+        sse(vec![
+            ev_response_created(response_id),
+            ev_assistant_message(message_id, "done"),
+            ev_completed(response_id),
+        ])
+    };
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            search_event("resp-1", "search-1"),
+            completion_event("resp-2", "msg-1"),
+            search_event("resp-3", "search-2"),
+            completion_event("resp-4", "msg-2"),
+        ],
+    )
+    .await;
+    let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
+    let test = builder.build(&server).await?;
+
+    for prompt in ["find the calendar tool", "find it again"] {
+        test.submit_turn_with_approval_and_permission_profile(
+            prompt,
+            AskForApproval::Never,
+            PermissionProfile::Disabled,
+        )
+        .await?;
+    }
+
+    let requests = mock.requests();
+    assert_eq!(
+        requests[0].body_json()["tools"],
+        requests[2].body_json()["tools"]
+    );
+    let first_search_results = tool_search_output_tools(&requests[1], "search-1");
+    assert!(!first_search_results.is_empty());
+    assert_eq!(
+        first_search_results,
+        tool_search_output_tools(&requests[3], "search-2")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_only_tools_are_not_visible_or_runnable_by_direct_model_calls() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

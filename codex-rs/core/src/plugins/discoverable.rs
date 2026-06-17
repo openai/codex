@@ -1,6 +1,7 @@
 use crate::config::Config;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::PluginsManager;
+use codex_core_plugins::ToolSuggestPluginCatalog;
 use codex_core_plugins::ToolSuggestPluginDiscoveryInput;
 use codex_login::CodexAuth;
 use codex_tools::DiscoverablePluginInfo;
@@ -13,6 +14,7 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
     plugins_manager: &PluginsManager,
     auth: Option<&CodexAuth>,
     loaded_plugin_app_connector_ids: &[String],
+    catalog: ToolSuggestPluginCatalog<'_>,
 ) -> anyhow::Result<Vec<DiscoverablePluginInfo>> {
     let input = ToolSuggestPluginDiscoveryInput {
         plugins: config.plugins_config_input(),
@@ -36,7 +38,7 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
             .collect::<HashSet<_>>(),
     };
     plugins_manager
-        .list_tool_suggest_discoverable_plugins(&input, auth)
+        .list_tool_suggest_discoverable_plugins_with_catalog(&input, auth, catalog)
         .await
         .map(|plugins| {
             plugins
