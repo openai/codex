@@ -18,12 +18,21 @@ use thiserror::Error;
 
 const SYSTEM_PROXY_SUCCESS_CACHE_TTL: Duration = Duration::from_secs(60);
 
-/// High-level client path being routed.
+/// Coarse semantic bucket for the HTTP or WebSocket client being constructed.
+///
+/// This is not the selected proxy route or a concrete endpoint. It labels the
+/// product path that owns the client so proxy-resolution diagnostics can
+/// distinguish auth, API, WebSocket, and miscellaneous traffic without exposing
+/// endpoint details.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientRouteClass {
+    /// Login, token refresh/revoke, PAT, and agent identity auth traffic.
     Auth,
+    /// First-party API traffic that is not part of the auth flow.
     Api,
+    /// WebSocket traffic.
     WebSocket,
+    /// Call sites without a more specific route class.
     Other,
 }
 
