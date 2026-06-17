@@ -455,6 +455,7 @@ impl MessageProcessor {
         let search_processor = SearchRequestProcessor::new(outgoing.clone());
         let thread_goal_processor = ThreadGoalRequestProcessor::new(
             Arc::clone(&thread_manager),
+            Arc::clone(&thread_store),
             outgoing.clone(),
             Arc::clone(&config),
             thread_state_manager.clone(),

@@ -33,6 +33,7 @@ use codex_app_server_protocol::ThreadGoalClearResponse;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadReadParams;
@@ -459,6 +460,95 @@ async fn thread_goal_get_rejects_unmaterialized_thread() -> Result<()> {
             .contains("ephemeral thread does not support goals"),
         "unexpected goal/get error: {}",
         goal_err.error.message
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn goal_first_live_thread_appears_in_thread_list() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let codex_home_path = normalized_existing_path(codex_home.path())?;
+    create_config_toml(&codex_home_path, &server.uri())?;
+    let config_path = codex_home_path.join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
+    )?;
+
+    let sqlite_home = codex_home_path
+        .as_path()
+        .to_str()
+        .expect("test codex home should be utf-8");
+    let mut mcp = TestAppServer::new_without_managed_config_with_env(
+        &codex_home_path,
+        &[("CODEX_SQLITE_HOME", Some(sqlite_home))],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, cwd, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let goal_id = mcp
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({
+                "threadId": thread.id.clone(),
+                "objective": "keep the goal-first thread visible",
+                "status": "paused",
+            })),
+        )
+        .await?;
+    let goal_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(goal_id)),
+    )
+    .await??;
+    let _goal: ThreadGoalSetResponse = to_response(goal_resp)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/goal/updated"),
+    )
+    .await??;
+
+    let list_id = mcp
+        .send_raw_request(
+            "thread/list",
+            Some(json!({
+                "limit": 10,
+                "modelProviders": ["mock_provider"],
+                "sourceKinds": ["vscode"],
+                "archived": false,
+                "cwd": cwd.as_path().to_string_lossy().to_string(),
+                "useStateDbOnly": false,
+            })),
+        )
+        .await?;
+    let list_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
+    )
+    .await??;
+    let list: ThreadListResponse = to_response(list_resp)?;
+    assert_eq!(
+        list.data
+            .iter()
+            .map(|thread| &thread.id)
+            .collect::<Vec<_>>(),
+        vec![&thread.id]
     );
 
     Ok(())

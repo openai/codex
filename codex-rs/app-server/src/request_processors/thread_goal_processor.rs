@@ -4,10 +4,13 @@ use codex_goal_extension::GoalService;
 use codex_goal_extension::GoalServiceError;
 use codex_goal_extension::GoalSetRequest;
 use codex_goal_extension::GoalTokenBudgetUpdate;
+use codex_thread_store::AppendThreadItemsParams;
+use codex_thread_store::ThreadStore;
 
 #[derive(Clone)]
 pub(crate) struct ThreadGoalRequestProcessor {
     thread_manager: Arc<ThreadManager>,
+    thread_store: Arc<dyn ThreadStore>,
     outgoing: Arc<OutgoingMessageSender>,
     config: Arc<Config>,
     thread_state_manager: ThreadStateManager,
@@ -18,6 +21,7 @@ pub(crate) struct ThreadGoalRequestProcessor {
 impl ThreadGoalRequestProcessor {
     pub(crate) fn new(
         thread_manager: Arc<ThreadManager>,
+        thread_store: Arc<dyn ThreadStore>,
         outgoing: Arc<OutgoingMessageSender>,
         config: Arc<Config>,
         thread_state_manager: ThreadStateManager,
@@ -26,6 +30,7 @@ impl ThreadGoalRequestProcessor {
     ) -> Self {
         Self {
             thread_manager,
+            thread_store,
             outgoing,
             config,
             thread_state_manager,
@@ -135,6 +140,21 @@ impl ThreadGoalRequestProcessor {
             .await
             .map_err(goal_service_error)?;
         let goal = ThreadGoal::from(outcome.goal.clone());
+
+        // Live goal-first threads can be listed before any user turn is written.
+        // Store the extension's canonical goal event so list repair can recover the preview.
+        if self.thread_manager.get_thread(thread_id).await.is_ok()
+            && let Err(err) = self
+                .thread_store
+                .append_items(AppendThreadItemsParams {
+                    thread_id,
+                    items: vec![outcome.thread_goal_updated_item()],
+                })
+                .await
+        {
+            warn!("failed to persist goal update for live thread {thread_id}: {err}");
+        }
+
         self.outgoing
             .send_response(
                 request_id.clone(),
