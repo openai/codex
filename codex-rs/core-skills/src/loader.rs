@@ -558,8 +558,24 @@ async fn discover_skills_under_root(
             }
 
             let path = dir.join(&file_name);
-            if entry.is_symlink {
-                if follow_symlinks && entry.is_directory {
+            let (is_directory, is_file, is_symlink) = match entry.is_symlink {
+                Some(is_symlink) => (entry.is_directory, entry.is_file, is_symlink),
+                None => {
+                    // Older remote exec servers omit symlink identity from directory entries.
+                    let path_uri = PathUri::from_abs_path(&path);
+                    let metadata = match fs.get_metadata(&path_uri, /*sandbox*/ None).await {
+                        Ok(metadata) => metadata,
+                        Err(e) => {
+                            error!("failed to stat skills path {}: {e:#}", path.display());
+                            continue;
+                        }
+                    };
+                    (metadata.is_directory, metadata.is_file, metadata.is_symlink)
+                }
+            };
+
+            if is_symlink {
+                if follow_symlinks && is_directory {
                     let resolved_dir = canonicalize_for_skill_identity(fs, &path).await;
                     enqueue_dir(
                         &mut queue,
@@ -572,7 +588,7 @@ async fn discover_skills_under_root(
                 continue;
             }
 
-            if entry.is_directory {
+            if is_directory {
                 let resolved_dir = canonicalize_for_skill_identity(fs, &path).await;
                 enqueue_dir(
                     &mut queue,
@@ -584,7 +600,7 @@ async fn discover_skills_under_root(
                 continue;
             }
 
-            if entry.is_file && file_name == SKILLS_FILENAME {
+            if is_file && file_name == SKILLS_FILENAME {
                 match parse_skill_file(fs, &path, scope, plugin_id, plugin_root.as_ref()).await {
                     Ok(skill) => {
                         outcome.skills.push(skill);

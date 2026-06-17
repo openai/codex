@@ -33,6 +33,7 @@ static NEXT_TEST_ROOT_ID: AtomicUsize = AtomicUsize::new(0);
 struct SyntheticFileSystem {
     alias_root: AbsolutePathBuf,
     canonical_root: AbsolutePathBuf,
+    entry_is_symlink: Option<bool>,
 }
 
 impl SyntheticFileSystem {
@@ -60,14 +61,14 @@ impl SyntheticFileSystem {
                 file_name: "skill".to_string(),
                 is_directory: true,
                 is_file: false,
-                is_symlink: false,
+                is_symlink: self.entry_is_symlink,
             }])
         } else if path == self.canonical_root.join("skill") {
             Ok(vec![ReadDirectoryEntry {
                 file_name: "SKILL.md".to_string(),
                 is_directory: false,
                 is_file: true,
-                is_symlink: false,
+                is_symlink: self.entry_is_symlink,
             }])
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "not found"))
@@ -150,7 +151,7 @@ impl ExecutorFileSystem for SyntheticFileSystem {
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         Box::pin(async move {
             let path = path.to_abs_path()?;
-            if path == self.canonical_root {
+            if path == self.canonical_root || self.entry_is_symlink.is_none() {
                 self.metadata(&path)
             } else {
                 Err(io::Error::new(
@@ -206,6 +207,7 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
         file_system: Arc::new(SyntheticFileSystem {
             alias_root,
             canonical_root: canonical_root.clone(),
+            entry_is_symlink: Some(false),
         }),
         plugin_id: None,
         plugin_root: None,
@@ -224,6 +226,41 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
     assert_eq!(
         loaded.read_skill_text(&skill).await.expect("skill body"),
         SKILL_CONTENTS
+    );
+}
+
+#[tokio::test]
+async fn skill_loading_falls_back_for_legacy_directory_entries() {
+    let test_root = std::env::temp_dir().join(format!(
+        "codex-legacy-executor-skill-fs-{}",
+        std::process::id()
+    ));
+    let alias_root = AbsolutePathBuf::from_absolute_path_checked(test_root.join("alias"))
+        .expect("absolute path");
+    let canonical_root = AbsolutePathBuf::from_absolute_path_checked(test_root.join("canonical"))
+        .expect("absolute path");
+
+    let outcome = load_skills_from_roots([SkillRoot {
+        path: alias_root.clone(),
+        scope: SkillScope::User,
+        file_system: Arc::new(SyntheticFileSystem {
+            alias_root,
+            canonical_root,
+            entry_is_symlink: None,
+        }),
+        plugin_id: None,
+        plugin_root: None,
+    }])
+    .await;
+
+    assert_eq!(outcome.errors, Vec::new());
+    assert_eq!(
+        outcome
+            .skills
+            .iter()
+            .map(|skill| skill.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["synthetic"]
     );
 }
 

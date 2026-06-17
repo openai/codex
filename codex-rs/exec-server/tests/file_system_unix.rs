@@ -111,13 +111,13 @@ async fn file_system_read_directory_reports_symlink_target_kind(
                 file_name: "directory-link".to_string(),
                 is_directory: true,
                 is_file: false,
-                is_symlink: true,
+                is_symlink: Some(true),
             },
             ReadDirectoryEntry {
                 file_name: "file-link".to_string(),
                 is_directory: false,
                 is_file: true,
-                is_symlink: true,
+                is_symlink: Some(true),
             },
         ]
     );

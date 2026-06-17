@@ -320,8 +320,8 @@ pub struct FsReadDirectoryEntry {
     pub file_name: String,
     pub is_directory: bool,
     pub is_file: bool,
-    #[serde(default)]
-    pub is_symlink: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_symlink: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -496,12 +496,48 @@ mod base64_bytes {
 
 #[cfg(test)]
 mod tests {
+    use super::FsReadDirectoryEntry;
     use super::FsReadFileParams;
     use super::HttpRequestParams;
     use codex_file_system::FileSystemSandboxContext;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn read_directory_entry_preserves_unknown_legacy_symlink_state() {
+        let entry: FsReadDirectoryEntry = serde_json::from_value(serde_json::json!({
+            "fileName": "skill",
+            "isDirectory": true,
+            "isFile": false,
+        }))
+        .expect("legacy directory entry should deserialize");
+
+        assert_eq!(
+            entry,
+            FsReadDirectoryEntry {
+                file_name: "skill".to_string(),
+                is_directory: true,
+                is_file: false,
+                is_symlink: None,
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(FsReadDirectoryEntry {
+                file_name: "linked-skill".to_string(),
+                is_directory: true,
+                is_file: false,
+                is_symlink: Some(true),
+            })
+            .expect("current directory entry should serialize"),
+            serde_json::json!({
+                "fileName": "linked-skill",
+                "isDirectory": true,
+                "isFile": false,
+                "isSymlink": true,
+            })
+        );
+    }
 
     #[test]
     fn filesystem_protocol_accepts_legacy_absolute_paths_and_serializes_path_uris() {

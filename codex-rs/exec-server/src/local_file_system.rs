@@ -613,7 +613,7 @@ impl DirectFileSystem {
                 file_name: entry.file_name().to_string_lossy().into_owned(),
                 is_directory,
                 is_file,
-                is_symlink,
+                is_symlink: Some(is_symlink),
             });
         }
         Ok(entries)
