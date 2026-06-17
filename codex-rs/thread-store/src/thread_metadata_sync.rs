@@ -16,8 +16,10 @@ use codex_protocol::protocol::UserMessageEvent;
 
 use crate::CreateThreadParams;
 use crate::GitInfoPatch;
+#[cfg(test)]
 use crate::ResumeThreadParams;
 use crate::ThreadMetadataPatch;
+use crate::ThreadPersistenceMetadata;
 
 const IMAGE_ONLY_USER_MESSAGE_PLACEHOLDER: &str = "[Image]";
 #[cfg(not(test))]
@@ -90,11 +92,23 @@ impl ThreadMetadataSync {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn for_resume(params: &ResumeThreadParams) -> Self {
+        Self::for_resume_parts(
+            params.thread_id,
+            &params.metadata,
+            params.history.as_deref(),
+        )
+    }
+
+    pub(crate) fn for_resume_parts(
+        thread_id: ThreadId,
+        metadata: &ThreadPersistenceMetadata,
+        history: Option<&[RolloutItem]>,
+    ) -> Self {
         let mut sync = Self {
-            thread_id: params.thread_id,
-            cwd_seen: params
-                .metadata
+            thread_id,
+            cwd_seen: metadata
                 .cwd
                 .as_ref()
                 .is_some_and(|cwd| !cwd.as_os_str().is_empty()),
@@ -107,7 +121,7 @@ impl ThreadMetadataSync {
             defer_create_update_until_history_exists: false,
             defer_resume_update_until_append: false,
         };
-        if let Some(history) = params.history.as_deref() {
+        if let Some(history) = history {
             let update = sync.observe_resume_history(history);
             sync.merge_pending_update(update);
             sync.defer_resume_update_until_append = sync.pending_update.is_some();

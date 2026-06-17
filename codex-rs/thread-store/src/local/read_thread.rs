@@ -39,12 +39,8 @@ pub(super) async fn read_thread(
                     metadata.rollout_path.as_path(),
                 )))
         && (!params.include_history
-            || sqlite_rollout_path_can_load_history_for_thread(
-                store,
-                &metadata.rollout_path,
-                thread_id,
-            )
-            .await)
+            || sqlite_rollout_path_can_load_history_for_thread(&metadata.rollout_path, thread_id)
+                .await)
     {
         let metadata_sandbox_policy = metadata.sandbox_policy.clone();
         let mut thread = stored_thread_from_sqlite_metadata(store, metadata).await;
@@ -87,7 +83,6 @@ pub(super) async fn read_thread(
 }
 
 async fn sqlite_rollout_path_can_load_history_for_thread(
-    store: &LocalThreadStore,
     path: &std::path::Path,
     thread_id: codex_protocol::ThreadId,
 ) -> bool {
@@ -96,10 +91,11 @@ async fn sqlite_rollout_path_can_load_history_for_thread(
     }
     // SQLite metadata can outlive a moved/recreated rollout path. When history is
     // requested, verify the path still resolves to the requested thread before
-    // trusting it as the source replay.
-    read_thread_from_rollout_path(store, path.to_path_buf())
+    // trusting it as the source replay. The session metadata line is enough for
+    // this identity check and avoids doing a summary scan before full replay.
+    read_session_meta_line(path)
         .await
-        .is_ok_and(|thread| thread.thread_id == thread_id)
+        .is_ok_and(|meta_line| meta_line.meta.id == thread_id)
 }
 
 pub(super) async fn read_thread_by_rollout_path(
@@ -288,6 +284,75 @@ async fn load_history_items(
         .map_err(|err| ThreadStoreError::Internal {
             message: format!("failed to load thread history {}: {err}", path.display()),
         })?;
+    expand_fork_parent_rollout_ref(path, items).await
+}
+
+async fn expand_fork_parent_rollout_ref(
+    path: &std::path::Path,
+    child_items: Vec<codex_protocol::protocol::RolloutItem>,
+) -> ThreadStoreResult<Vec<codex_protocol::protocol::RolloutItem>> {
+    let Some(parent_ref) = codex_rollout::read_fork_parent_rollout_ref(path)
+        .await
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!(
+                "failed to read fork parent reference {}: {err}",
+                path.display()
+            ),
+        })?
+    else {
+        return Ok(child_items);
+    };
+
+    let Some(child_forked_from_id) = child_items.iter().find_map(|item| match item {
+        codex_protocol::protocol::RolloutItem::SessionMeta(meta_line) => {
+            meta_line.meta.forked_from_id
+        }
+        _ => None,
+    }) else {
+        return Err(ThreadStoreError::Internal {
+            message: format!(
+                "failed to load fork parent history for {}: child fork parent missing",
+                path.display()
+            ),
+        });
+    };
+    let Some(parent_path) = codex_rollout::existing_rollout_path(parent_ref.path.as_path()).await
+    else {
+        return Err(ThreadStoreError::Internal {
+            message: format!(
+                "failed to load fork parent history for {}: parent rollout {} does not exist",
+                path.display(),
+                parent_ref.path.display()
+            ),
+        });
+    };
+    let (parent_items, parent_thread_id, _) =
+        RolloutRecorder::load_rollout_items_prefix(parent_path.as_path(), parent_ref.byte_len)
+            .await
+            .map_err(|err| ThreadStoreError::Internal {
+                message: format!(
+                    "failed to load fork parent history {} for {}: {err}",
+                    parent_path.display(),
+                    path.display()
+                ),
+            })?;
+    if parent_thread_id != Some(child_forked_from_id) {
+        return Err(ThreadStoreError::Internal {
+            message: format!(
+                "failed to load fork parent history for {}: parent identity mismatch",
+                path.display()
+            ),
+        });
+    }
+
+    let mut child_items = child_items.into_iter();
+    let Some(child_meta) = child_items.next() else {
+        return Ok(parent_items);
+    };
+    let mut items = Vec::with_capacity(1 + parent_items.len() + child_items.size_hint().0);
+    items.push(child_meta);
+    items.extend(parent_items);
+    items.extend(child_items);
     Ok(items)
 }
 

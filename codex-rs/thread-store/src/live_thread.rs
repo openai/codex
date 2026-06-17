@@ -100,13 +100,28 @@ impl LiveThread {
 
     pub async fn resume(
         thread_store: Arc<dyn ThreadStore>,
-        mut params: ResumeThreadParams,
+        params: ResumeThreadParams,
+    ) -> ThreadStoreResult<Self> {
+        Self::resume_with_observed_history(thread_store, params, None).await
+    }
+
+    pub async fn resume_with_observed_history(
+        thread_store: Arc<dyn ThreadStore>,
+        params: ResumeThreadParams,
+        observed_history: Option<&[RolloutItem]>,
     ) -> ThreadStoreResult<Self> {
         let thread_id = params.thread_id;
-        let should_load_history = params.history.is_none();
         let include_archived = params.include_archived;
-        thread_store.resume_thread(params.clone()).await?;
-        if should_load_history {
+        let metadata = params.metadata.clone();
+        let metadata_sync = observed_history
+            .or(params.history.as_deref())
+            .map(|history| {
+                ThreadMetadataSync::for_resume_parts(thread_id, &metadata, Some(history))
+            });
+        thread_store.resume_thread(params).await?;
+        let metadata_sync = if let Some(metadata_sync) = metadata_sync {
+            metadata_sync
+        } else {
             match thread_store
                 .load_history(LoadThreadHistoryParams {
                     thread_id,
@@ -114,7 +129,11 @@ impl LiveThread {
                 })
                 .await
             {
-                Ok(history) => params.history = Some(history.items),
+                Ok(history) => ThreadMetadataSync::for_resume_parts(
+                    thread_id,
+                    &metadata,
+                    Some(history.items.as_slice()),
+                ),
                 Err(err) => {
                     if let Err(discard_err) = thread_store.discard_thread(thread_id).await {
                         warn!(
@@ -124,8 +143,7 @@ impl LiveThread {
                     return Err(err);
                 }
             }
-        }
-        let metadata_sync = ThreadMetadataSync::for_resume(&params);
+        };
         Ok(Self {
             thread_id,
             thread_store,

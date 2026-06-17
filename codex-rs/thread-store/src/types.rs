@@ -81,6 +81,10 @@ pub struct CreateThreadParams {
     pub dynamic_tools: Vec<DynamicToolSpec>,
     /// Multi-agent runtime selected when the thread was created.
     pub multi_agent_version: Option<MultiAgentVersion>,
+    /// Optional existing rollout JSONL to seed into the new rollout. Local
+    /// stores may persist this as a copy-on-write parent reference when safe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_rollout_copy: Option<PathBuf>,
     /// Metadata captured for the newly created thread.
     pub metadata: ThreadPersistenceMetadata,
 }

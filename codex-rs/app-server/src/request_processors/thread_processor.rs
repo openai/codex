@@ -373,6 +373,33 @@ enum RunningThreadResumeResult {
     NotRunning(Option<Box<StoredThread>>),
 }
 
+enum ResumeHistoryExtent {
+    Full,
+    CompactedCheckpoint,
+}
+
+/// Small resume-history shape retained after the full rollout history is moved
+/// into core session startup.
+enum ResumeResponseHistory {
+    Resumed { conversation_id: ThreadId },
+    Forked { preview: String },
+    Missing,
+}
+
+impl ResumeResponseHistory {
+    fn from_initial_history(history: &InitialHistory) -> Self {
+        match history {
+            InitialHistory::Resumed(resumed) => Self::Resumed {
+                conversation_id: resumed.conversation_id,
+            },
+            InitialHistory::Forked(items) => Self::Forked {
+                preview: preview_from_rollout_items(items),
+            },
+            InitialHistory::New | InitialHistory::Cleared => Self::Missing,
+        }
+    }
+}
+
 impl ThreadRequestProcessor {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -2348,15 +2375,14 @@ impl ThreadRequestProcessor {
         let thread_uuid = ThreadId::from_string(&thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
-        let items = self
-            .load_thread_turns_list_history(thread_uuid)
-            .await
-            .map_err(thread_read_view_error)?;
+        let cursor = cursor.as_deref();
+        let sort_direction = sort_direction.unwrap_or(SortDirection::Desc);
+        let items_view = items_view.unwrap_or(TurnItemsView::Summary);
+
         // This API optimizes network transfer by letting clients page through a
-        // thread's turns incrementally, but it still replays the entire rollout on
-        // every request. Rollback and compaction events can change earlier turns, so
-        // the server has to rebuild the full turn list until turn metadata is indexed
-        // separately.
+        // thread's turns incrementally. The newest notLoaded page can be served
+        // from a rollout suffix because it does not need item payloads or earlier
+        // turn item indexes. Other shapes continue to replay the whole rollout.
         let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
         let has_live_running_thread = match loaded_thread.as_ref() {
             Some(thread) => matches!(thread.agent_status().await, AgentStatus::Running),
@@ -2372,18 +2398,44 @@ impl ThreadRequestProcessor {
         } else {
             None
         };
+        let loaded_status = self
+            .thread_watch_manager
+            .loaded_status_for_thread(&thread_uuid.to_string())
+            .await;
+
+        if loaded_thread.is_none()
+            && !has_live_running_thread
+            && active_turn.is_none()
+            && cursor.is_none()
+            && sort_direction == SortDirection::Desc
+            && items_view == TurnItemsView::NotLoaded
+            && let Some(response) = self
+                .try_build_recent_not_loaded_turns_page_from_store(
+                    thread_uuid,
+                    loaded_status.clone(),
+                    limit,
+                )
+                .await?
+        {
+            return Ok(response);
+        }
+
+        // Rollback and compaction events can change earlier turns, so all other
+        // requests rebuild the full turn list until turn metadata is indexed separately.
+        let items = self
+            .load_thread_turns_list_history(thread_uuid)
+            .await
+            .map_err(thread_read_view_error)?;
         build_thread_turns_page_response(
             &items,
-            self.thread_watch_manager
-                .loaded_status_for_thread(&thread_uuid.to_string())
-                .await,
+            loaded_status,
             has_live_running_thread,
             active_turn,
             ThreadTurnsPageOptions {
-                cursor: cursor.as_deref(),
+                cursor,
                 limit,
-                sort_direction: sort_direction.unwrap_or(SortDirection::Desc),
-                items_view: items_view.unwrap_or(TurnItemsView::Summary),
+                sort_direction,
+                items_view,
             },
         )
     }
@@ -2443,6 +2495,35 @@ impl ThreadRequestProcessor {
             .await
             .map(|history| history.items)
             .map_err(|err| thread_turns_list_history_load_error(thread_id, err))
+    }
+
+    async fn try_build_recent_not_loaded_turns_page_from_store(
+        &self,
+        thread_id: ThreadId,
+        loaded_status: ThreadStatus,
+        limit: Option<u32>,
+    ) -> Result<Option<ThreadTurnsListResponse>, JSONRPCErrorError> {
+        let stored_thread = match self
+            .thread_store
+            .read_thread(StoreReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: false,
+            })
+            .await
+        {
+            Ok(stored_thread) => stored_thread,
+            Err(_) => return Ok(None),
+        };
+        let Some(rollout_path) = stored_thread.rollout_path else {
+            return Ok(None);
+        };
+        try_build_recent_not_loaded_turns_page_from_rollout_path(
+            rollout_path.as_path(),
+            loaded_status,
+            limit,
+        )
+        .await
     }
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
@@ -2599,21 +2680,34 @@ impl ThreadRequestProcessor {
             initial_turns_page,
         } = params;
         let include_turns = !exclude_turns;
+        let prefer_compacted_history = !include_turns
+            && initial_turns_page
+                .as_ref()
+                .is_none_or(thread_resume_initial_page_is_recent_not_loaded);
 
         let resume_result = if let Some(history) = history {
             self.resume_thread_from_history(history.as_slice())
                 .await
-                .map(|thread_history| (thread_history, None))
+                .map(|thread_history| (thread_history, None, ResumeHistoryExtent::Full))
         } else if let Some(stored_thread) = stored_thread_from_running_probe {
-            self.stored_thread_to_initial_history(&stored_thread)
-                .await
-                .map(|thread_history| (thread_history, Some(*stored_thread)))
+            self.resume_thread_from_stored_thread(
+                &thread_id,
+                path.as_ref(),
+                *stored_thread,
+                prefer_compacted_history,
+            )
+            .await
+            .map(|(thread_history, stored_thread, history_extent)| {
+                (thread_history, Some(stored_thread), history_extent)
+            })
         } else {
-            self.resume_thread_from_rollout(&thread_id, path.as_ref())
+            self.resume_thread_from_rollout(&thread_id, path.as_ref(), prefer_compacted_history)
                 .await
-                .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread)))
+                .map(|(thread_history, stored_thread, history_extent)| {
+                    (thread_history, Some(stored_thread), history_extent)
+                })
         };
-        let (thread_history, resume_source_thread) = match resume_result {
+        let (thread_history, resume_source_thread, history_extent) = match resume_result {
             Ok(value) => value,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -2658,7 +2752,54 @@ impl ThreadRequestProcessor {
             }
         };
 
-        let response_history = thread_history.clone();
+        let response_history = ResumeResponseHistory::from_initial_history(&thread_history);
+        let mut initial_turns_recent_items = None;
+        if !include_turns
+            && let Some(params) = initial_turns_page.as_ref()
+            && thread_resume_initial_page_is_recent_not_loaded(params)
+            && let InitialHistory::Resumed(resumed) = &thread_history
+            && let Some(rollout_path) = resumed.rollout_path.as_ref()
+        {
+            match try_read_recent_not_loaded_rollout_items_from_rollout_path(
+                rollout_path.as_path(),
+                params.limit,
+            )
+            .await
+            {
+                Ok(recent) => initial_turns_recent_items = recent,
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return Ok(());
+                }
+            }
+        }
+        let response_history_items = (include_turns
+            || (initial_turns_page.is_some() && initial_turns_recent_items.is_none()))
+        .then(|| {
+            if matches!(history_extent, ResumeHistoryExtent::CompactedCheckpoint) {
+                None
+            } else {
+                Some(thread_history.get_rollout_items())
+            }
+        })
+        .flatten();
+        let response_history_items = if response_history_items.is_none()
+            && initial_turns_page.is_some()
+            && initial_turns_recent_items.is_none()
+        {
+            match self
+                .load_full_resume_history_items(&thread_id, path.as_ref())
+                .await
+            {
+                Ok(items) => Some(items),
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return Ok(());
+                }
+            }
+        } else {
+            response_history_items
+        };
 
         match self
             .thread_manager
@@ -2695,24 +2836,13 @@ impl ThreadRequestProcessor {
                     self.outgoing.send_error(request_id, error).await;
                     return Ok(());
                 };
-                // Auto-attach a thread listener when resuming a thread.
-                log_listener_attach_result(
-                    self.ensure_conversation_listener(
-                        thread_id,
-                        request_id.connection_id,
-                        /*raw_events_enabled*/ false,
-                    )
-                    .await,
-                    thread_id,
-                    request_id.connection_id,
-                    "thread",
-                );
 
                 let mut thread = match self
                     .load_thread_from_resume_source_or_send_internal(
                         thread_id,
                         codex_thread.as_ref(),
                         &response_history,
+                        response_history_items.as_deref(),
                         rollout_path.as_path(),
                         resume_source_thread,
                         include_turns,
@@ -2757,17 +2887,33 @@ impl ThreadRequestProcessor {
                 );
                 let token_usage_thread = include_turns.then(|| thread.clone());
                 let mut initial_turns_page = if let Some(params) = initial_turns_page.as_ref() {
-                    match build_thread_resume_initial_turns_page(
-                        &response_history.get_rollout_items(),
-                        thread.status.clone(),
-                        /*has_live_running_thread*/ false,
-                        /*active_turn*/ None,
-                        params,
-                    ) {
-                        Ok(page) => Some(page),
-                        Err(error) => {
-                            self.outgoing.send_error(request_id, error).await;
-                            return Ok(());
+                    if let Some(recent) = initial_turns_recent_items.take() {
+                        match build_recent_not_loaded_turns_page_response(
+                            recent,
+                            thread.status.clone(),
+                            params.limit,
+                        ) {
+                            Ok(page) => Some(page.into()),
+                            Err(error) => {
+                                self.outgoing.send_error(request_id, error).await;
+                                return Ok(());
+                            }
+                        }
+                    } else {
+                        match build_thread_resume_initial_turns_page(
+                            response_history_items.as_deref().expect(
+                                "response history items loaded for resume initial turns page",
+                            ),
+                            thread.status.clone(),
+                            /*has_live_running_thread*/ false,
+                            /*active_turn*/ None,
+                            params,
+                        ) {
+                            Ok(page) => Some(page),
+                            Err(error) => {
+                                self.outgoing.send_error(request_id, error).await;
+                                return Ok(());
+                            }
                         }
                     }
                 } else {
@@ -2803,7 +2949,9 @@ impl ThreadRequestProcessor {
                 // rebuilding history only to attribute a replayed usage update.
                 if let Some(token_usage_thread) = token_usage_thread {
                     let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-                        &response_history.get_rollout_items(),
+                        response_history_items
+                            .as_deref()
+                            .expect("response history items loaded for resume token usage update"),
                         token_usage_thread.turns.as_slice(),
                     );
                     // The client needs restored usage before it starts another turn.
@@ -2819,6 +2967,21 @@ impl ThreadRequestProcessor {
                     )
                     .await;
                 }
+                tokio::task::yield_now().await;
+                // Auto-attach after the response is queued. The attach is
+                // best-effort logging, and idle resumes do not need it to
+                // construct the response.
+                log_listener_attach_result(
+                    self.ensure_conversation_listener(
+                        thread_id,
+                        connection_id,
+                        /*raw_events_enabled*/ false,
+                    )
+                    .await,
+                    thread_id,
+                    connection_id,
+                    "thread",
+                );
                 self.thread_goal_processor
                     .emit_resume_goal_snapshot_and_continue(thread_id, codex_thread.as_ref())
                     .await;
@@ -2883,16 +3046,33 @@ impl ThreadRequestProcessor {
                 .await?;
             Some((existing_thread_id, existing_thread, source_thread))
         } else {
+            let cold_resume_needs_full_history = !params.exclude_turns
+                || params
+                    .initial_turns_page
+                    .as_ref()
+                    .is_some_and(|params| !thread_resume_initial_page_is_recent_not_loaded(params));
             let source_thread = self
                 .read_stored_thread_for_resume(
                     &params.thread_id,
                     params.path.as_ref(),
-                    /*include_history*/ true,
+                    cold_resume_needs_full_history,
                 )
                 .await?;
             let existing_thread_id = source_thread.thread_id;
             match self.thread_manager.get_thread(existing_thread_id).await {
-                Ok(existing_thread) => Some((existing_thread_id, existing_thread, source_thread)),
+                Ok(existing_thread) => {
+                    let source_thread = if source_thread.history.is_some() {
+                        source_thread
+                    } else {
+                        self.read_stored_thread_for_resume(
+                            &params.thread_id,
+                            params.path.as_ref(),
+                            /*include_history*/ true,
+                        )
+                        .await?
+                    };
+                    Some((existing_thread_id, existing_thread, source_thread))
+                }
                 Err(_) => {
                     return Ok(RunningThreadResumeResult::NotRunning(Some(Box::new(
                         source_thread,
@@ -3059,14 +3239,80 @@ impl ThreadRequestProcessor {
         &self,
         thread_id: &str,
         path: Option<&PathBuf>,
-    ) -> Result<(InitialHistory, StoredThread), JSONRPCErrorError> {
+        prefer_compacted_history: bool,
+    ) -> Result<(InitialHistory, StoredThread, ResumeHistoryExtent), JSONRPCErrorError> {
         let stored_thread = self
-            .read_stored_thread_for_resume(thread_id, path, /*include_history*/ true)
+            .read_stored_thread_for_resume(
+                thread_id,
+                path,
+                /*include_history*/ !prefer_compacted_history,
+            )
             .await?;
-        let history = self
-            .stored_thread_to_initial_history(&stored_thread)
+        self.resume_thread_from_stored_thread(
+            thread_id,
+            path,
+            stored_thread,
+            prefer_compacted_history,
+        )
+        .await
+    }
+
+    async fn resume_thread_from_stored_thread(
+        &self,
+        thread_id: &str,
+        path: Option<&PathBuf>,
+        mut stored_thread: StoredThread,
+        prefer_compacted_history: bool,
+    ) -> Result<(InitialHistory, StoredThread, ResumeHistoryExtent), JSONRPCErrorError> {
+        let mut response_thread = self
+            .read_stored_thread_for_resume(thread_id, path, /*include_history*/ false)
             .await?;
-        Ok((history, stored_thread))
+        response_thread.history = None;
+        let history_extent = if stored_thread.history.is_some() {
+            ResumeHistoryExtent::Full
+        } else if prefer_compacted_history {
+            match stored_thread.rollout_path.clone() {
+                Some(rollout_path) => {
+                    match try_read_compacted_resume_rollout_items_from_rollout_path(
+                        rollout_path.as_path(),
+                        stored_thread.thread_id,
+                    )
+                    .await?
+                    {
+                        Some(items) => {
+                            stored_thread.history = Some(codex_thread_store::StoredThreadHistory {
+                                thread_id: stored_thread.thread_id,
+                                items,
+                            });
+                            ResumeHistoryExtent::CompactedCheckpoint
+                        }
+                        None => {
+                            stored_thread = self
+                                .read_stored_thread_for_resume(
+                                    thread_id, path, /*include_history*/ true,
+                                )
+                                .await?;
+                            ResumeHistoryExtent::Full
+                        }
+                    }
+                }
+                None => {
+                    stored_thread = self
+                        .read_stored_thread_for_resume(
+                            thread_id, path, /*include_history*/ true,
+                        )
+                        .await?;
+                    ResumeHistoryExtent::Full
+                }
+            }
+        } else {
+            stored_thread = self
+                .read_stored_thread_for_resume(thread_id, path, /*include_history*/ true)
+                .await?;
+            ResumeHistoryExtent::Full
+        };
+        let history = self.take_stored_thread_initial_history(&mut stored_thread)?;
+        Ok((history, response_thread, history_extent))
     }
 
     async fn read_stored_thread_for_resume(
@@ -3109,16 +3355,62 @@ impl ThreadRequestProcessor {
         Ok(stored_thread)
     }
 
-    #[tracing::instrument(level = "trace", skip_all)]
-    async fn stored_thread_to_initial_history(
+    async fn read_stored_thread_for_resume_with_compacted_history(
         &self,
-        stored_thread: &StoredThread,
+        thread_id: &str,
+        path: Option<&PathBuf>,
+    ) -> Result<Option<StoredThread>, JSONRPCErrorError> {
+        let mut stored_thread = self
+            .read_stored_thread_for_resume(thread_id, path, /*include_history*/ false)
+            .await?;
+        let Some(rollout_path) = stored_thread.rollout_path.clone() else {
+            return Ok(None);
+        };
+        let Some(items) = try_read_compacted_resume_rollout_items_from_rollout_path(
+            rollout_path.as_path(),
+            stored_thread.thread_id,
+        )
+        .await?
+        else {
+            return Ok(None);
+        };
+        stored_thread.history = Some(codex_thread_store::StoredThreadHistory {
+            thread_id: stored_thread.thread_id,
+            items,
+        });
+        Ok(Some(stored_thread))
+    }
+
+    async fn load_full_resume_history_items(
+        &self,
+        thread_id: &str,
+        path: Option<&PathBuf>,
+    ) -> Result<Vec<RolloutItem>, JSONRPCErrorError> {
+        let mut stored_thread = self
+            .read_stored_thread_for_resume(thread_id, path, /*include_history*/ true)
+            .await?;
+        stored_thread
+            .history
+            .take()
+            .map(|history| history.items)
+            .ok_or_else(|| {
+                internal_error(format!(
+                    "thread {} did not include persisted history",
+                    stored_thread.thread_id
+                ))
+            })
+    }
+
+    #[tracing::instrument(level = "trace", skip_all)]
+    fn take_stored_thread_initial_history(
+        &self,
+        stored_thread: &mut StoredThread,
     ) -> Result<InitialHistory, JSONRPCErrorError> {
         let thread_id = stored_thread.thread_id;
         let history = stored_thread
             .history
-            .as_ref()
-            .map(|history| history.items.clone())
+            .take()
+            .map(|history| history.items)
             .ok_or_else(|| {
                 internal_error(format!(
                     "thread {thread_id} did not include persisted history"
@@ -3168,98 +3460,84 @@ impl ThreadRequestProcessor {
         &self,
         thread_id: ThreadId,
         thread: &CodexThread,
-        thread_history: &InitialHistory,
+        response_history: &ResumeResponseHistory,
+        response_history_items: Option<&[RolloutItem]>,
         rollout_path: &Path,
         resume_source_thread: Option<StoredThread>,
         include_turns: bool,
     ) -> std::result::Result<Thread, String> {
         let config_snapshot = thread.config_snapshot().await;
         let session_id = thread.session_configured().session_id.to_string();
-        let thread = match thread_history {
-            InitialHistory::Resumed(resumed) => {
+        let (mut thread, name_loaded_from_store) = match response_history {
+            ResumeResponseHistory::Resumed { conversation_id } => {
                 let fallback_provider = config_snapshot.model_provider_id.as_str();
-                if let Some(stored_thread) = resume_source_thread {
-                    let stored_thread =
-                        if let Some(rollout_path) = stored_thread.rollout_path.clone() {
-                            self.thread_store
-                                .read_thread_by_rollout_path(StoreReadThreadByRolloutPathParams {
-                                    rollout_path,
-                                    include_archived: true,
-                                    include_history: false,
-                                })
-                                .await
-                                .unwrap_or(StoredThread {
-                                    history: None,
-                                    ..stored_thread
-                                })
-                        } else {
-                            self.thread_store
-                                .read_thread(StoreReadThreadParams {
-                                    thread_id: stored_thread.thread_id,
-                                    include_archived: true,
-                                    include_history: false,
-                                })
-                                .await
-                                .unwrap_or(StoredThread {
-                                    history: None,
-                                    ..stored_thread
-                                })
-                        };
-                    Ok(thread_from_stored_thread(
-                        stored_thread,
-                        fallback_provider,
-                        &self.config.cwd,
-                    )
-                    .0)
+                if let Some(mut stored_thread) = resume_source_thread {
+                    stored_thread.history = None;
+                    Ok((
+                        thread_from_stored_thread(
+                            stored_thread,
+                            fallback_provider,
+                            &self.config.cwd,
+                        )
+                        .0,
+                        true,
+                    ))
                 } else {
                     match self
                         .thread_store
                         .read_thread(StoreReadThreadParams {
-                            thread_id: resumed.conversation_id,
+                            thread_id: *conversation_id,
                             include_archived: true,
                             include_history: false,
                         })
                         .await
                     {
-                        Ok(stored_thread) => Ok(thread_from_stored_thread(
-                            stored_thread,
-                            fallback_provider,
-                            &self.config.cwd,
-                        )
-                        .0),
+                        Ok(stored_thread) => Ok((
+                            thread_from_stored_thread(
+                                stored_thread,
+                                fallback_provider,
+                                &self.config.cwd,
+                            )
+                            .0,
+                            true,
+                        )),
                         Err(read_err) => {
                             Err(format!("failed to read thread from store: {read_err}"))
                         }
                     }
                 }
             }
-            InitialHistory::Forked(items) => {
+            ResumeResponseHistory::Forked { preview } => {
                 let mut thread = build_thread_from_snapshot(
                     thread_id,
                     session_id.clone(),
                     &config_snapshot,
                     Some(rollout_path.into()),
                 );
-                thread.preview = preview_from_rollout_items(items);
-                Ok(thread)
+                thread.preview = preview.clone();
+                Ok((thread, false))
             }
-            InitialHistory::New | InitialHistory::Cleared => Err(format!(
+            ResumeResponseHistory::Missing => Err(format!(
                 "failed to build resume response for thread {thread_id}: initial history missing"
             )),
-        };
-        let mut thread = thread?;
+        }?;
         thread.id = thread_id.to_string();
         thread.session_id = session_id;
         thread.path = Some(rollout_path.to_path_buf());
         if include_turns {
-            let history_items = thread_history.get_rollout_items();
+            let history_items = response_history_items.ok_or_else(|| {
+                "failed to build resume response: history items missing for inline turns"
+                    .to_string()
+            })?;
             populate_thread_turns_from_history(
                 &mut thread,
-                &history_items,
+                history_items,
                 /*active_turn*/ None,
             );
         }
-        self.attach_thread_name(thread_id, &mut thread).await;
+        if !name_loaded_from_store {
+            self.attach_thread_name(thread_id, &mut thread).await;
+        }
         Ok(thread)
     }
 
@@ -3313,18 +3591,57 @@ impl ThreadRequestProcessor {
                 "`permissions` cannot be combined with `sandbox`",
             ));
         }
-        let source_thread = self
-            .read_stored_thread_for_resume(&thread_id, path.as_ref(), /*include_history*/ true)
-            .await?;
+        let optimized_source = if !include_turns && !ephemeral {
+            match self
+                .read_stored_thread_for_resume_with_compacted_history(&thread_id, path.as_ref())
+                .await?
+            {
+                Some(stored_thread) => stored_thread
+                    .rollout_path
+                    .clone()
+                    .map(|rollout_path| (stored_thread, rollout_path)),
+                None => None,
+            }
+        } else {
+            None
+        };
+        let (mut source_thread, initial_rollout_copy) = match optimized_source {
+            Some((source_thread, rollout_path)) => (source_thread, Some(rollout_path)),
+            None => (
+                self.read_stored_thread_for_resume(
+                    &thread_id,
+                    path.as_ref(),
+                    /*include_history*/ true,
+                )
+                .await?,
+                None,
+            ),
+        };
         let source_thread_id = source_thread.thread_id;
         let source_thread_name = source_thread
             .name
             .as_deref()
             .and_then(codex_core::util::normalize_thread_name);
+        let source_thread_preview = source_thread.preview.clone();
+        let response_history_items = if include_turns || ephemeral {
+            Some(
+                source_thread
+                    .history
+                    .as_ref()
+                    .map(|history| history.items.clone())
+                    .ok_or_else(|| {
+                        internal_error(format!(
+                            "thread {source_thread_id} did not include persisted history"
+                        ))
+                    })?,
+            )
+        } else {
+            None
+        };
         let history_items = source_thread
             .history
-            .as_ref()
-            .map(|history| history.items.clone())
+            .take()
+            .map(|history| history.items)
             .ok_or_else(|| {
                 internal_error(format!(
                     "thread {source_thread_id} did not include persisted history"
@@ -3379,33 +3696,50 @@ impl ThreadRequestProcessor {
 
         let fallback_model_provider = config.model_provider_id.clone();
 
+        let initial_history = InitialHistory::Resumed(ResumedHistory {
+            conversation_id: source_thread_id,
+            history: history_items,
+            rollout_path: source_thread.rollout_path.clone(),
+        });
+        let parent_trace = self.request_trace_context(&request_id).await;
+        let thread_source = thread_source.map(Into::into);
+        let fork_result = if let Some(initial_rollout_copy) = initial_rollout_copy {
+            self.thread_manager
+                .fork_thread_from_history_with_initial_rollout_copy(
+                    ForkSnapshot::Interrupted,
+                    config,
+                    initial_history,
+                    thread_source,
+                    parent_trace,
+                    supports_openai_form_elicitation,
+                    initial_rollout_copy,
+                )
+                .await
+        } else {
+            self.thread_manager
+                .fork_thread_from_history(
+                    ForkSnapshot::Interrupted,
+                    config,
+                    initial_history,
+                    thread_source,
+                    parent_trace,
+                    supports_openai_form_elicitation,
+                )
+                .await
+        };
+
         let NewThread {
             thread_id,
             thread: forked_thread,
             session_configured,
             ..
-        } = self
-            .thread_manager
-            .fork_thread_from_history(
-                ForkSnapshot::Interrupted,
-                config,
-                InitialHistory::Resumed(ResumedHistory {
-                    conversation_id: source_thread_id,
-                    history: history_items.clone(),
-                    rollout_path: source_thread.rollout_path.clone(),
-                }),
-                thread_source.map(Into::into),
-                self.request_trace_context(&request_id).await,
-                supports_openai_form_elicitation,
-            )
-            .await
-            .map_err(|err| match err {
-                CodexErr::Io(_) | CodexErr::Json(_) => {
-                    invalid_request(format!("failed to load thread {source_thread_id}: {err}"))
-                }
-                CodexErr::InvalidRequest(message) => invalid_request(message),
-                err => internal_error(format!("error forking thread: {err}")),
-            })?;
+        } = fork_result.map_err(|err| match err {
+            CodexErr::Io(_) | CodexErr::Json(_) => {
+                invalid_request(format!("failed to load thread {source_thread_id}: {err}"))
+            }
+            CodexErr::InvalidRequest(message) => invalid_request(message),
+            err => internal_error(format!("error forking thread: {err}")),
+        })?;
 
         Self::set_app_server_client_info(
             forked_thread.as_ref(),
@@ -3431,31 +3765,38 @@ impl ThreadRequestProcessor {
 
         let instruction_sources = forked_thread.legacy_instruction_sources().await;
 
-        // Auto-attach a conversation listener when forking a thread.
-        log_listener_attach_result(
-            self.ensure_conversation_listener(
-                thread_id,
-                request_id.connection_id,
-                /*raw_events_enabled*/ false,
-            )
-            .await,
-            thread_id,
-            request_id.connection_id,
-            "thread",
-        );
-
-        // Persistent forks materialize their own rollout immediately. Ephemeral forks stay
-        // pathless, so they rebuild their visible history from the copied source history instead.
-        let mut thread = if session_configured.rollout_path.is_some() {
-            let stored_thread = self
-                .read_stored_thread_for_new_fork(thread_id, include_turns)
-                .await?;
-            self.stored_thread_to_api_thread(
-                stored_thread,
-                fallback_model_provider.as_str(),
-                include_turns,
-            )
+        // Persistent forks materialize their own rollout immediately. When inline turns are
+        // excluded, response metadata can be built from the live snapshot without rereading the
+        // child rollout that startup just wrote. Ephemeral forks stay pathless, so they rebuild
+        // their visible history from the copied source history instead.
+        let mut thread = if let Some(rollout_path) = session_configured.rollout_path.clone() {
+            if include_turns {
+                let stored_thread = self
+                    .read_stored_thread_for_new_fork(thread_id, include_turns)
+                    .await?;
+                self.stored_thread_to_api_thread(
+                    stored_thread,
+                    fallback_model_provider.as_str(),
+                    include_turns,
+                )
+            } else {
+                let config_snapshot = forked_thread.config_snapshot().await;
+                let mut thread = build_thread_from_snapshot(
+                    thread_id,
+                    session_configured.session_id.to_string(),
+                    &config_snapshot,
+                    Some(rollout_path),
+                );
+                thread.preview = source_thread_preview.clone();
+                thread.forked_from_id = Some(source_thread_id.to_string());
+                thread
+            }
         } else {
+            let history_items = response_history_items.as_ref().ok_or_else(|| {
+                internal_error(format!(
+                    "thread {source_thread_id} did not retain response history for ephemeral fork"
+                ))
+            })?;
             let config_snapshot = forked_thread.config_snapshot().await;
             let mut thread = build_thread_from_snapshot(
                 thread_id,
@@ -3463,12 +3804,12 @@ impl ThreadRequestProcessor {
                 &config_snapshot,
                 /*path*/ None,
             );
-            thread.preview = preview_from_rollout_items(&history_items);
+            thread.preview = preview_from_rollout_items(history_items);
             thread.forked_from_id = Some(source_thread_id.to_string());
             if include_turns {
                 populate_thread_turns_from_history(
                     &mut thread,
-                    &history_items,
+                    history_items,
                     /*active_turn*/ None,
                 );
             }
@@ -3525,8 +3866,13 @@ impl ThreadRequestProcessor {
         // `excludeTurns` is the cheap fork path, so skip restored usage replay
         // instead of rebuilding history only to attribute a historical update.
         if let Some(token_usage_thread) = token_usage_thread {
+            let history_items = response_history_items.as_deref().ok_or_else(|| {
+                internal_error(format!(
+                    "thread {source_thread_id} did not retain response history for token usage replay"
+                ))
+            })?;
             let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-                &history_items,
+                history_items,
                 token_usage_thread.turns.as_slice(),
             );
             // Mirror the resume contract for forks: the new thread is usable as soon
@@ -3541,6 +3887,22 @@ impl ThreadRequestProcessor {
             )
             .await;
         }
+
+        tokio::task::yield_now().await;
+        // Auto-attach after the response is queued. The attach is still
+        // performed before the follow-up notification, but it no longer sits on
+        // the fork response latency path.
+        log_listener_attach_result(
+            self.ensure_conversation_listener(
+                thread_id,
+                connection_id,
+                /*raw_events_enabled*/ false,
+            )
+            .await,
+            thread_id,
+            connection_id,
+            "thread",
+        );
 
         self.outgoing
             .send_server_notification(ServerNotification::ThreadStarted(notif))
@@ -3742,6 +4104,379 @@ struct ThreadTurnsPage {
     pub(super) backwards_cursor: Option<String>,
 }
 
+struct RecentRolloutItems {
+    initial_rollout_index: usize,
+    items: Vec<RolloutItem>,
+}
+
+fn thread_resume_initial_page_is_recent_not_loaded(
+    params: &ThreadResumeInitialTurnsPageParams,
+) -> bool {
+    params.sort_direction.unwrap_or(SortDirection::Desc) == SortDirection::Desc
+        && params.items_view.unwrap_or(TurnItemsView::Summary) == TurnItemsView::NotLoaded
+}
+
+async fn try_read_recent_not_loaded_rollout_items_from_rollout_path(
+    rollout_path: &Path,
+    limit: Option<u32>,
+) -> Result<Option<RecentRolloutItems>, JSONRPCErrorError> {
+    let Some(existing_path) = codex_rollout::existing_rollout_path(rollout_path).await else {
+        return Ok(None);
+    };
+    if !is_plain_jsonl_rollout_path(existing_path.as_path()) {
+        return Ok(None);
+    }
+    let page_size = thread_turns_page_size(limit);
+    let recent = tokio::task::spawn_blocking(move || {
+        read_recent_not_loaded_rollout_items(existing_path.as_path(), page_size)
+    })
+    .await
+    .map_err(|err| internal_error(format!("failed to join rollout suffix read: {err}")))?;
+    match recent {
+        Ok(recent) => Ok(recent),
+        Err(_) => Ok(None),
+    }
+}
+
+async fn try_build_recent_not_loaded_turns_page_from_rollout_path(
+    rollout_path: &Path,
+    loaded_status: ThreadStatus,
+    limit: Option<u32>,
+) -> Result<Option<ThreadTurnsListResponse>, JSONRPCErrorError> {
+    let Some(recent) =
+        try_read_recent_not_loaded_rollout_items_from_rollout_path(rollout_path, limit).await?
+    else {
+        return Ok(None);
+    };
+    build_recent_not_loaded_turns_page_response(recent, loaded_status, limit).map(Some)
+}
+
+fn is_plain_jsonl_rollout_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".jsonl"))
+}
+
+fn rollout_line_has_fork_parent_rollout_ref(line: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        return false;
+    };
+    let payload = value.get("payload").unwrap_or(&value);
+    payload
+        .get("fork_parent_rollout_path")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|path| !path.is_empty())
+        && payload
+            .get("fork_parent_rollout_byte_len")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|byte_len| byte_len > 0)
+}
+
+async fn try_read_compacted_resume_rollout_items_from_rollout_path(
+    rollout_path: &Path,
+    expected_thread_id: ThreadId,
+) -> Result<Option<Vec<RolloutItem>>, JSONRPCErrorError> {
+    let Some(existing_path) = codex_rollout::existing_rollout_path(rollout_path).await else {
+        return Ok(None);
+    };
+    if !is_plain_jsonl_rollout_path(existing_path.as_path()) {
+        return Ok(None);
+    }
+    let items = tokio::task::spawn_blocking(move || {
+        read_compacted_resume_rollout_items(existing_path.as_path(), expected_thread_id)
+    })
+    .await
+    .map_err(|err| internal_error(format!("failed to join compacted rollout read: {err}")))?;
+    match items {
+        Ok(items) => Ok(items),
+        Err(_) => Ok(None),
+    }
+}
+
+fn read_compacted_resume_rollout_items(
+    path: &Path,
+    expected_thread_id: ThreadId,
+) -> std::io::Result<Option<Vec<RolloutItem>>> {
+    let Some(mut prefix_items) = read_compacted_resume_prefix_items(path, expected_thread_id)?
+    else {
+        return Ok(None);
+    };
+    let Some(mut suffix_items) = read_compacted_resume_suffix_items(path)? else {
+        return Ok(None);
+    };
+
+    suffix_items.reverse();
+    prefix_items.reserve(suffix_items.len());
+    prefix_items.extend(suffix_items);
+    Ok(Some(prefix_items))
+}
+
+fn read_compacted_resume_prefix_items(
+    path: &Path,
+    expected_thread_id: ThreadId,
+) -> std::io::Result<Option<Vec<RolloutItem>>> {
+    use std::io::BufRead;
+
+    let file = std::fs::File::open(path)?;
+    let reader = std::io::BufReader::new(file);
+    let mut prefix_items = Vec::with_capacity(3);
+    let mut saw_session_meta = false;
+    let mut saw_user_event = false;
+    let mut saw_user_response_item = false;
+    let mut checked_first_record_for_fork_parent = false;
+    for line in reader.lines() {
+        let line = line?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !checked_first_record_for_fork_parent {
+            checked_first_record_for_fork_parent = true;
+            if rollout_line_has_fork_parent_rollout_ref(trimmed) {
+                return Ok(None);
+            }
+        }
+        let rollout_line =
+            match serde_json::from_str::<codex_protocol::protocol::RolloutLine>(trimmed) {
+                Ok(rollout_line) => rollout_line,
+                Err(_) => return Ok(None),
+            };
+        match &rollout_line.item {
+            RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == expected_thread_id
+                && !saw_session_meta => {
+                    saw_session_meta = true;
+                    prefix_items.push(rollout_line.item);
+                }
+            RolloutItem::SessionMeta(_) => return Ok(None),
+            RolloutItem::EventMsg(EventMsg::UserMessage(_)) if !saw_user_event => {
+                saw_user_event = true;
+                prefix_items.push(rollout_line.item);
+            }
+            RolloutItem::ResponseItem(codex_protocol::models::ResponseItem::Message {
+                role,
+                ..
+            }) if role == "user" && !saw_user_response_item => {
+                saw_user_response_item = true;
+                prefix_items.push(rollout_line.item);
+            }
+            item if rollout_item_needs_full_resume_load(item) => return Ok(None),
+            _ => {}
+        }
+        if saw_session_meta && saw_user_event && saw_user_response_item {
+            return Ok(Some(prefix_items));
+        }
+    }
+    Ok(saw_session_meta.then_some(prefix_items))
+}
+
+fn read_compacted_resume_suffix_items(path: &Path) -> std::io::Result<Option<Vec<RolloutItem>>> {
+    let mut suffix_items = Vec::new();
+    let mut found_checkpoint = false;
+    let mut should_fallback = false;
+
+    read_rollout_lines_from_end(path, |line| {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Ok(true);
+        }
+        let rollout_line =
+            match serde_json::from_str::<codex_protocol::protocol::RolloutLine>(trimmed) {
+                Ok(rollout_line) => rollout_line,
+                Err(_) => {
+                    should_fallback = true;
+                    return Ok(false);
+                }
+            };
+        if rollout_item_needs_full_resume_load(&rollout_line.item) {
+            should_fallback = true;
+            return Ok(false);
+        }
+        let is_checkpoint = rollout_item_is_reconstruction_checkpoint(&rollout_line.item);
+        suffix_items.push(rollout_line.item);
+        if is_checkpoint {
+            found_checkpoint = true;
+            return Ok(false);
+        }
+        Ok(true)
+    })?;
+
+    if should_fallback || !found_checkpoint {
+        return Ok(None);
+    }
+
+    Ok(Some(suffix_items))
+}
+
+fn read_rollout_lines_from_end<F>(path: &Path, mut visit: F) -> std::io::Result<()>
+where
+    F: FnMut(&str) -> std::io::Result<bool>,
+{
+    use std::io::Read;
+    use std::io::Seek;
+    use std::io::SeekFrom;
+
+    const CHUNK_SIZE: u64 = 64 * 1024;
+
+    let mut file = std::fs::File::open(path)?;
+    let mut position = file.metadata()?.len();
+    let mut pending = Vec::new();
+
+    while position > 0 {
+        let read_len = CHUNK_SIZE.min(position);
+        position -= read_len;
+
+        let mut chunk = vec![0; read_len as usize];
+        file.seek(SeekFrom::Start(position))?;
+        file.read_exact(&mut chunk)?;
+        if !pending.is_empty() {
+            chunk.extend_from_slice(&pending);
+            pending.clear();
+        }
+
+        let mut end = chunk.len();
+        while let Some(newline_index) = chunk[..end].iter().rposition(|byte| *byte == b'\n') {
+            let line = std::str::from_utf8(&chunk[newline_index + 1..end])
+                .map_err(|err| IoError::new(std::io::ErrorKind::InvalidData, err))?;
+            if !visit(line)? {
+                return Ok(());
+            }
+            end = newline_index;
+        }
+        pending.extend_from_slice(&chunk[..end]);
+    }
+
+    if !pending.is_empty() {
+        let line = std::str::from_utf8(&pending)
+            .map_err(|err| IoError::new(std::io::ErrorKind::InvalidData, err))?;
+        let _ = visit(line)?;
+    }
+
+    Ok(())
+}
+
+fn rollout_item_is_reconstruction_checkpoint(item: &RolloutItem) -> bool {
+    matches!(item, RolloutItem::Compacted(compacted) if compacted.replacement_history.is_some())
+}
+
+fn rollout_item_needs_full_resume_load(item: &RolloutItem) -> bool {
+    match item {
+        RolloutItem::ResponseItem(codex_protocol::models::ResponseItem::Other) => true,
+        RolloutItem::Compacted(compacted) => {
+            compacted
+                .replacement_history
+                .as_ref()
+                .is_some_and(|history| {
+                    history
+                        .iter()
+                        .any(|item| matches!(item, codex_protocol::models::ResponseItem::Other))
+                })
+        }
+        _ => false,
+    }
+}
+
+fn read_recent_not_loaded_rollout_items(
+    path: &Path,
+    page_size: usize,
+) -> std::io::Result<Option<RecentRolloutItems>> {
+    let contents = std::fs::read_to_string(path)?;
+    if contents
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .is_some_and(rollout_line_has_fork_parent_rollout_ref)
+    {
+        return Ok(None);
+    }
+    let desired_turns = page_size.saturating_add(1);
+    let mut record_index_after = contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    let mut suffix_start_index = record_index_after;
+    let mut suffix_items = Vec::new();
+    let mut turn_openings = 0usize;
+
+    for line in contents.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        record_index_after = record_index_after.saturating_sub(1);
+        let rollout_line =
+            match serde_json::from_str::<codex_protocol::protocol::RolloutLine>(trimmed) {
+                Ok(rollout_line) => rollout_line,
+                Err(_) => return Ok(None),
+            };
+        if rollout_item_disables_recent_not_loaded_fast_path(&rollout_line.item) {
+            return Ok(None);
+        }
+        if rollout_item_opens_implicit_turn(&rollout_line.item) {
+            turn_openings = turn_openings.saturating_add(1);
+        }
+        suffix_start_index = record_index_after;
+        suffix_items.push(rollout_line.item);
+        if turn_openings >= desired_turns {
+            break;
+        }
+    }
+
+    suffix_items.reverse();
+    Ok(Some(RecentRolloutItems {
+        initial_rollout_index: suffix_start_index,
+        items: suffix_items,
+    }))
+}
+
+fn rollout_item_opens_implicit_turn(item: &RolloutItem) -> bool {
+    matches!(item, RolloutItem::EventMsg(EventMsg::UserMessage(_)))
+}
+
+fn rollout_item_disables_recent_not_loaded_fast_path(item: &RolloutItem) -> bool {
+    matches!(
+        item,
+        RolloutItem::EventMsg(
+            EventMsg::ThreadRolledBack(_)
+                | EventMsg::TurnStarted(_)
+                | EventMsg::TurnComplete(_)
+                | EventMsg::TurnAborted(_)
+        )
+    )
+}
+
+fn build_recent_not_loaded_turns_page_response(
+    recent: RecentRolloutItems,
+    loaded_status: ThreadStatus,
+    limit: Option<u32>,
+) -> Result<ThreadTurnsListResponse, JSONRPCErrorError> {
+    let mut builder =
+        ThreadHistoryBuilder::with_initial_rollout_index(recent.initial_rollout_index);
+    for item in &recent.items {
+        if is_persisted_rollout_item(item) {
+            builder.handle_rollout_item(item);
+        }
+    }
+    let mut turns = builder.finish();
+    normalize_thread_turns_status(
+        &mut turns,
+        loaded_status,
+        /*has_live_in_progress_turn*/ false,
+    );
+    apply_thread_turns_items_view(&mut turns, TurnItemsView::NotLoaded);
+    let page = paginate_thread_turns(turns, None, limit, SortDirection::Desc)?;
+    Ok(ThreadTurnsListResponse {
+        data: page.turns,
+        next_cursor: page.next_cursor,
+        backwards_cursor: page.backwards_cursor,
+    })
+}
+
+fn thread_turns_page_size(limit: Option<u32>) -> usize {
+    limit
+        .map(|value| value as usize)
+        .unwrap_or(THREAD_TURNS_DEFAULT_LIMIT)
+        .clamp(1, THREAD_TURNS_MAX_LIMIT)
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ThreadTurnsCursor {
@@ -3764,10 +4499,7 @@ fn paginate_thread_turns(
     }
 
     let anchor = cursor.map(parse_thread_turns_cursor).transpose()?;
-    let page_size = limit
-        .map(|value| value as usize)
-        .unwrap_or(THREAD_TURNS_DEFAULT_LIMIT)
-        .clamp(1, THREAD_TURNS_MAX_LIMIT);
+    let page_size = thread_turns_page_size(limit);
 
     let anchor_index = anchor
         .as_ref()
